@@ -1,5 +1,74 @@
 # Changelog
 
+## 2.4.0 — 2026-05-05
+
+### New: Add from URL list (bulk import)
+
+FanFicFare's most-cited workflow lands in ffn-dl: paste any list-page
+URL — author profile, AO3 series, AO3 tag, AO3 search, AO3 user
+bookmarks, FFN community, FFN search, Wattpad reading list, Royal
+Road search — and ffn-dl extracts every fic on the page so you can
+pick which ones to download.
+
+- **CLI:** ``ffn-dl --extract URL`` prints a TSV of every fic the
+  page lists (url ⇥ title ⇥ author ⇥ words). ``ffn-dl --bulk URL``
+  downloads every fic the page lists. Both honour ``--max-results
+  N`` to cap (0 = no cap, default).
+
+- **GUI:** new menu item **File → Add from URL list…** (Ctrl+Shift+L).
+  Paste a URL, hit Extract, see a NVDA-friendly checklist of works
+  with title / author / word count, untick anything you don't
+  want, OK enqueues the rest through the same per-site queue a
+  one-off download uses. Reuses the ``wx.CheckListBox`` pattern
+  already validated against NVDA in :class:`MultiPickerDialog`.
+
+- **New URL classifier** (``ffn_dl.url_classifier``): given a URL,
+  picks the right scraper *and* the right extractor method. Public
+  ``classify(url) -> ListPageRef`` and ``extract(ref) -> (label,
+  works)`` for callers that want the same dispatch.
+
+- **New scraper methods** (default raises NotImplementedError on
+  ``BaseScraper`` so unsupported shapes surface a clear error
+  rather than crashing into AttributeError):
+
+  - ``AO3Scraper.scrape_search_works`` / ``scrape_tag_works`` plus
+    ``is_search_url`` / ``is_tag_url`` predicates. Both reuse
+    :meth:`_scrape_ao3_work_list`, which now picks the right
+    ``?page=N``/``&page=N`` separator based on whether the URL
+    already has a query string.
+  - ``FFNScraper.scrape_search_works`` walks ``ppage=N``;
+    ``scrape_community_works`` walks ``p=N`` since C2 communities
+    use a different param name. Both reuse
+    :func:`ffn_dl.search._parse_results` since FFN reuses
+    ``z-list`` row markup across all multi-story pages.
+  - ``WattpadScraper.scrape_reading_list_works`` uses the public
+    ``/v4/lists/<id>`` API (with ``nextUrl`` pagination cursor)
+    rather than the HTML page, which is increasingly rendered
+    client-side and may serve zero server-rendered story links to
+    visitors without a session cookie. Accepts both the
+    ``/user/X/lists/<id>`` and ``/list/<id>`` URL shapes.
+  - ``RoyalRoadScraper.scrape_search_works`` walks
+    ``/fictions/search?...&page=N``; pulls title, author, blurb,
+    and the first eight tag chips per row.
+
+### Internal
+
+- New tests:
+  - ``tests/test_url_classifier.py`` (21 cases): table-driven
+    classification across every list-shape URL ffn-dl supports,
+    plus precedence checks (bookmarks before author, single-story
+    fallback, unknown handling).
+  - ``tests/test_bulk_extractors.py`` (8 cases): per-site extractor
+    behaviour against minimal fixture HTML / stubbed JSON API,
+    plus a pagination-cap regression to mirror the
+    ``fetch_until_limit`` guard from 2.3.3.
+  - ``tests/test_gui_smoke.py`` extended with
+    ``test_add_from_url_list_dialog_constructs`` to pin the new
+    dialog's widget naming so a Bind() refactor that drops a
+    handler reference shows up at test time, not in production.
+
+- Test count: 1305 → 1335 (1328 main + 7 GUI smoke).
+
 ## 2.3.4 — 2026-05-05
 
 ### Tests

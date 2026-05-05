@@ -997,6 +997,100 @@ class BaseScraper:
             "Check is_bookmarks_url(url) before calling."
         )
 
+    # ── List-page predicates and extractors (bulk import) ─────────
+    #
+    # The "Add from URL list" surface lets the user paste any list-shape
+    # URL and pick which fics to download. Each scraper that supports
+    # one of the list shapes overrides the matching ``is_*_url`` /
+    # ``scrape_*_works`` pair below; the rest inherit these defaults
+    # so the URL classifier can interrogate every site without
+    # AttributeError.
+
+    @staticmethod
+    def is_search_url(url):
+        """True if ``url`` is a search-results page on this site.
+
+        Default False. AO3, FFN, and Royal Road override. The classifier
+        uses raw URLs verbatim — site search-URL formats change often
+        enough that rebuilding them from parsed components is fragile.
+        """
+        return False
+
+    @staticmethod
+    def is_tag_url(url):
+        """True if ``url`` is a fandom/tag works listing.
+
+        Default False. AO3 overrides; FFN's category pages are
+        equivalent and could in theory implement this, but the
+        category URL shape is verbose enough that the search surface
+        works better for that site.
+        """
+        return False
+
+    @staticmethod
+    def is_community_url(url):
+        """True if ``url`` is a multi-story community/group page.
+
+        Default False. FFN's C2 communities override.
+        """
+        return False
+
+    @staticmethod
+    def is_reading_list_url(url):
+        """True if ``url`` is a saved reading list a user assembled.
+
+        Default False. Wattpad's reading-lists page overrides.
+        """
+        return False
+
+    def scrape_search_works(self, url):
+        """Walk ``url`` (a raw search-results page) and return
+        ``(query_label, [work_dict, ...])``.
+
+        ``query_label`` is the human-readable query string parsed back
+        out of the URL where possible (e.g. the ``keywords=`` param)
+        so the picker dialog can show "Search: harry/hermione" instead
+        of an opaque slug. Implementations follow ``next``-link
+        pagination until exhausted or a duplicate page is detected.
+        """
+        raise NotImplementedError(
+            f"{type(self).__name__} does not support search-page scraping. "
+            "Check is_search_url(url) before calling."
+        )
+
+    def scrape_tag_works(self, url):
+        """Walk a fandom/tag works page and return
+        ``(tag_label, [work_dict, ...])``.
+
+        AO3-specific at the moment.
+        """
+        raise NotImplementedError(
+            f"{type(self).__name__} does not support tag-page scraping. "
+            "Check is_tag_url(url) before calling."
+        )
+
+    def scrape_community_works(self, url):
+        """Walk a community/group multi-story page and return
+        ``(community_name, [work_dict, ...])``.
+
+        FFN's C2 communities are the only currently supported shape.
+        """
+        raise NotImplementedError(
+            f"{type(self).__name__} does not support community scraping. "
+            "Check is_community_url(url) before calling."
+        )
+
+    def scrape_reading_list_works(self, url):
+        """Walk a user-assembled reading list and return
+        ``(list_name, [work_dict, ...])``.
+
+        Wattpad's reading lists are the only currently supported shape.
+        """
+        raise NotImplementedError(
+            f"{type(self).__name__} does not support reading-list scraping. "
+            "Check is_reading_list_url(url) before calling."
+        )
+
 
 # ── FFN ───────────────────────────────────────────────────────────
 
@@ -1273,6 +1367,31 @@ class FFNScraper(BaseScraper):
             re.search(r"fanfiction\.net/(?:u/\d+|~[\w.-]+)", str(url))
         )
 
+    @staticmethod
+    def is_search_url(url):
+        """Return True if the URL is an FFN search results page.
+
+        FFN's search lives at ``/search/?...`` with a ``keywords=``
+        query param plus zero or more filter params. The path
+        segment is the most reliable anchor — query strings vary
+        wildly between the form-submitted shape and the "load more"
+        shape.
+        """
+        return bool(
+            re.search(r"fanfiction\.net/search/?\?", str(url))
+        )
+
+    @staticmethod
+    def is_community_url(url):
+        """Return True if the URL is an FFN C2 community page.
+
+        URL shape: ``/community/<slug>/<id>/...``. We accept the bare
+        community root and any sub-page (Stories tab is the default).
+        """
+        return bool(
+            re.search(r"fanfiction\.net/community/[^/]+/\d+", str(url))
+        )
+
     def scrape_author_stories(self, url):
         """Fetch an FFN author page and return (author_name, [story_urls]).
 
@@ -1346,6 +1465,105 @@ class FFNScraper(BaseScraper):
                 seen_ids.add(story_id)
                 works.append(_ffn_row_to_work(row, story_id, section))
         return author_name, works
+
+    def scrape_search_works(self, url):
+        """Walk an FFN search results URL and return
+        ``(query_label, [work_dict, ...])``.
+
+        Pagination is via ``ppage=N`` (FFN's quirky parameter name —
+        not ``page``). The user's pasted URL is preserved verbatim
+        and ``ppage`` is appended/replaced; that way every filter the
+        user picked through the form (genre/rating/etc.) survives.
+        ``query_label`` falls back to ``keywords=`` when present so
+        the picker dialog can show the search term.
+        """
+        from urllib.parse import parse_qs, urlencode, urlsplit, urlunsplit
+
+        from .search import _parse_results
+
+        parts = urlsplit(url)
+        params = parse_qs(parts.query)
+        label = params.get("keywords", [""])[0]
+        works = []
+        seen = set()
+        page = 1
+        max_pages = 200
+
+        while page <= max_pages:
+            params["ppage"] = [str(page)]
+            page_url = urlunsplit((
+                parts.scheme, parts.netloc, parts.path,
+                urlencode(params, doseq=True), parts.fragment,
+            ))
+            html = self._fetch(page_url)
+            page_results = _parse_results(html)
+            new_on_page = 0
+            for r in page_results:
+                m = re.search(r"/s/(\d+)", r.get("url", ""))
+                if not m:
+                    continue
+                sid = m.group(1)
+                if sid in seen:
+                    continue
+                seen.add(sid)
+                r.setdefault("section", "search")
+                r.setdefault("updated", "")
+                works.append(r)
+                new_on_page += 1
+            if new_on_page == 0:
+                break
+            page += 1
+            self._delay()
+
+        return label or "Search results", works
+
+    def scrape_community_works(self, url):
+        """Walk an FFN C2 community URL and return
+        ``(community_name, [work_dict, ...])``.
+
+        FFN's community pages reuse the same ``z-list`` row markup
+        as the search results, so :func:`_parse_results` parses
+        each page the same way.
+        """
+        from .search import _parse_results
+
+        community_name = ""
+        works = []
+        seen = set()
+        page = 1
+        max_pages = 200
+
+        while page <= max_pages:
+            sep = "&" if "?" in url else "?"
+            page_url = f"{url}{sep}p={page}"
+            html = self._fetch(page_url)
+            if page == 1:
+                soup = BeautifulSoup(html, "lxml")
+                title = soup.find("title")
+                if title:
+                    text = title.get_text(strip=True)
+                    if "|" in text:
+                        community_name = text.split("|", 1)[0].strip()
+            page_results = _parse_results(html)
+            new_on_page = 0
+            for r in page_results:
+                m = re.search(r"/s/(\d+)", r.get("url", ""))
+                if not m:
+                    continue
+                sid = m.group(1)
+                if sid in seen:
+                    continue
+                seen.add(sid)
+                r.setdefault("section", "community")
+                r.setdefault("updated", "")
+                works.append(r)
+                new_on_page += 1
+            if new_on_page == 0:
+                break
+            page += 1
+            self._delay()
+
+        return community_name or "Community", works
 
     def get_chapter_count(self, url_or_id):
         story_id = self.parse_story_id(url_or_id)

@@ -49,6 +49,20 @@ class RoyalRoadScraper(BaseScraper):
         return bool(re.search(r"royalroad\.com/profile/\d+", str(url)))
 
     @staticmethod
+    def is_search_url(url):
+        """Return True if the URL is a Royal Road fiction search.
+
+        RR's search lives at ``/fictions/search`` with optional
+        ``title``, ``keyword``, ``status_*``, ``tagsAdd`` filters.
+        We don't try to discriminate facets here — anything under
+        the search path qualifies and the user's filter choices
+        survive verbatim.
+        """
+        return bool(
+            re.search(r"royalroad\.com/fictions/search", str(url))
+        )
+
+    @staticmethod
     def _parse_metadata(soup):
         title_tag = soup.find("h1")
         title = title_tag.get_text(strip=True) if title_tag else "Unknown Title"
@@ -221,6 +235,86 @@ class RoyalRoadScraper(BaseScraper):
                 story_urls.append(f"{RR_BASE}/fiction/{match.group(1)}")
 
         return author_name, story_urls
+
+    def scrape_search_works(self, url):
+        """Walk a Royal Road search URL and return
+        ``(query_label, [work_dict, ...])``.
+
+        Pagination is via ``page=N``. Each result row is a
+        ``div.fiction-list-item`` carrying title, author link,
+        a description blurb, and the tag chips.
+        """
+        from urllib.parse import parse_qs, urlencode, urlsplit, urlunsplit
+
+        parts = urlsplit(url)
+        params = parse_qs(parts.query)
+        label = (
+            params.get("title", [""])[0]
+            or params.get("keyword", [""])[0]
+            or ""
+        )
+
+        works = []
+        seen = set()
+        page = 1
+        max_pages = 200
+
+        while page <= max_pages:
+            params["page"] = [str(page)]
+            page_url = urlunsplit((
+                parts.scheme, parts.netloc, parts.path,
+                urlencode(params, doseq=True), parts.fragment,
+            ))
+            html = self._fetch(page_url)
+            soup = BeautifulSoup(html, "lxml")
+            new_on_page = 0
+            for item in soup.find_all("div", class_="fiction-list-item"):
+                title_link = item.find(
+                    "a", href=re.compile(r"^/fiction/\d+(?:/|$)"),
+                )
+                if not title_link:
+                    continue
+                m = re.search(r"/fiction/(\d+)", title_link["href"])
+                if not m:
+                    continue
+                fid = m.group(1)
+                if fid in seen:
+                    continue
+                seen.add(fid)
+                # Author link is an anchor pointing at /profile/<id>
+                author_link = item.find(
+                    "a", href=re.compile(r"^/profile/\d+"),
+                )
+                # Description blurb sits under a `.description` or
+                # `.fiction-description` div depending on listing variant.
+                desc = item.find("div", class_="description") or item.find(
+                    "div", class_="fiction-description",
+                )
+                tags = ", ".join(
+                    a.get_text(strip=True) for a in item.select(
+                        "span.tags a.fiction-tag",
+                    )[:8]
+                )
+                works.append({
+                    "title": title_link.get_text(strip=True) or f"Fiction {fid}",
+                    "url": f"{RR_BASE}/fiction/{fid}",
+                    "author": author_link.get_text(strip=True) if author_link else "",
+                    "summary": desc.get_text(" ", strip=True) if desc else "",
+                    "words": "",
+                    "chapters": "",
+                    "rating": "",
+                    "fandom": tags,
+                    "status": "",
+                    "updated": "",
+                    "section": "search",
+                })
+                new_on_page += 1
+            if new_on_page == 0:
+                break
+            page += 1
+            self._delay()
+
+        return label or "Search results", works
 
     def scrape_author_works(self, url):
         """Return (author_name, [work_dict]) from a RR profile page."""

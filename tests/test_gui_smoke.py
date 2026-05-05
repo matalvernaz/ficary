@@ -146,3 +146,34 @@ def test_idle_event_pumps_clean(wx_app):
         frame.ProcessEvent(wx.IdleEvent())
     finally:
         frame.Destroy()
+
+
+def test_add_from_url_list_dialog_constructs(wx_app):
+    """The 2.4.0 bulk-import dialog has six interactive widgets
+    (URL field, max-results spin, Extract button, list, three
+    select-* buttons, OK/Cancel). Construction without a parent
+    catches the class of regression where a Bind() targets a
+    renamed handler — which on the GUI side never crashes the
+    test suite, only production."""
+    from ffn_dl.gui import MainFrame
+    from ffn_dl.gui_dialogs import AddFromUrlListDialog
+
+    frame = MainFrame()
+    try:
+        dlg = AddFromUrlListDialog(frame)
+        try:
+            assert dlg.GetTitle() == "Add from URL list"
+            # OK is disabled until extraction populates the list
+            assert not dlg.ok_btn.IsEnabled()
+            # SetName landed on every widget the user tabs to —
+            # NVDA reads the name when focus arrives, so a missing
+            # name shows up as a blank announcement.
+            assert dlg.url_ctrl.GetName()
+            assert dlg.max_ctrl.GetName()
+            assert dlg.list_ctrl.GetName()
+            # picked_works on an unpopulated dialog returns []
+            assert dlg.picked_works() == []
+        finally:
+            dlg.Destroy()
+    finally:
+        frame.Destroy()

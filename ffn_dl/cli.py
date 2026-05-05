@@ -220,6 +220,42 @@ def _scrape_series_works(
     return scraper.scrape_series_works(url)
 
 
+def _bulk_extract(
+    url: str, args: argparse.Namespace,
+) -> tuple[str, list[dict]]:
+    """Classify ``url`` and run the matching list-page extractor.
+
+    Returns ``(label, [work_dict, ...])``. The label is the page's
+    human-readable name (author, series title, search keywords, etc.)
+    or "Search results" / similar fallback. Single-story URLs come
+    back as a one-element list so the CLI dispatch is uniform.
+    """
+    from . import url_classifier
+
+    ref = url_classifier.classify(url)
+    if ref is None or ref.kind == "unknown":
+        raise ValueError(
+            f"Could not classify URL as a known list page: {url}"
+        )
+    if ref.kind == "story":
+        # A single-story URL is a degenerate list — return it as one
+        # entry so callers can treat both shapes the same.
+        return url, [{
+            "url": url,
+            "title": "",
+            "author": "",
+            "words": "",
+            "chapters": "",
+            "rating": "",
+            "fandom": "",
+            "status": "",
+            "updated": "",
+        }]
+    scraper = _build_scraper(url, args)
+    method = getattr(scraper, ref.extractor)
+    return method(url)
+
+
 def _merge_stories(series_name: str, series_url: str, stories: list):
     """Combine a series of Story objects into one Story for single-file export.
 
@@ -3081,6 +3117,36 @@ def _build_parser() -> argparse.ArgumentParser:
             "https://ficwad.com/a/Name)"
         ),
     )
+    parser.add_argument(
+        "--extract",
+        metavar="URL",
+        help=(
+            "Print the list of fic URLs found at any list page "
+            "(author profile, AO3 series/tag/search, FFN community, "
+            "Wattpad reading list) as TSV — url, title, author, "
+            "words — to stdout, then exit. No download."
+        ),
+    )
+    parser.add_argument(
+        "--bulk",
+        metavar="URL",
+        help=(
+            "Like --extract, but download every fic the page lists. "
+            "Use --max-results N to cap, e.g. on a popular AO3 tag "
+            "with thousands of works."
+        ),
+    )
+    parser.add_argument(
+        "--max-results",
+        type=int,
+        default=0,
+        metavar="N",
+        help=(
+            "Truncate --extract / --bulk to the first N works (0 "
+            "means no cap). Pagination still walks every page until "
+            "N is reached or results run out."
+        ),
+    )
     all_formats = sorted(EXPORTERS) + ["audio"]
     parser.add_argument(
         "-f",
@@ -4210,8 +4276,47 @@ def main(argv: list[str] | None = None) -> None:
             parser.error("--update and --batch cannot be used together")
         sys.exit(_handle_update_file(args))
 
+    # --- --extract / --bulk: any list-page URL → list of fic URLs ---
+    if args.extract or args.bulk:
+        if args.author or args.batch:
+            parser.error(
+                "--extract / --bulk cannot be combined with "
+                "--author or --batch"
+            )
+        target_url = args.extract or args.bulk
+        try:
+            label, works = _bulk_extract(target_url, args)
+        except (RateLimitError, CloudflareBlockError, StoryNotFoundError, ValueError) as exc:
+            print(f"Error extracting URL list: {exc}", file=sys.stderr)
+            sys.exit(1)
+        if args.max_results and args.max_results > 0:
+            works = works[: args.max_results]
+        if not works:
+            print("No fics found at that URL.", file=sys.stderr)
+            sys.exit(1)
+        if args.extract:
+            # TSV out so callers can pipe through `cut`, `column -t`,
+            # etc. Headerless on purpose — easier to feed back into
+            # `--batch -`. Use \t as the separator, replace any
+            # embedded tabs with a single space defensively.
+            print(f"# {len(works)} works at {label}", file=sys.stderr)
+            for w in works:
+                row = "\t".join(
+                    str(w.get(k, "")).replace("\t", " ")
+                    for k in ("url", "title", "author", "words")
+                )
+                print(row)
+            sys.exit(0)
+        # --bulk: feed the URLs into the regular download path.
+        urls = [w["url"] for w in works if w.get("url")]
+        if not urls:
+            print("Extracted works carried no URLs.", file=sys.stderr)
+            sys.exit(1)
+        print(f"List: {label}")
+        print(f"Found {len(urls)} fics — starting batch download.")
+
     # --- --author: fetch the author's own stories, then batch-download ---
-    if args.author:
+    elif args.author:
         if args.batch:
             parser.error("--author and --batch cannot be used together")
         try:

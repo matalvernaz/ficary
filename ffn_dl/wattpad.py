@@ -51,6 +51,10 @@ _WP_PART_RE = re.compile(
 _WP_USER_RE = re.compile(
     r"wattpad\.com/user/([^/?#]+)", re.IGNORECASE,
 )
+_WP_READING_LIST_RE = re.compile(
+    r"wattpad\.com/(?:user/[^/]+/lists?/(\d+)|list/(\d+))",
+    re.IGNORECASE,
+)
 
 # Bilingual paid-story stub served on paywalled parts — both halves
 # (English + Spanish) appear in the same HTML response.
@@ -149,6 +153,15 @@ class WattpadScraper(BaseScraper):
     @staticmethod
     def is_series_url(url):  # pragma: no cover — no series concept on Wattpad
         return False
+
+    @staticmethod
+    def is_reading_list_url(url):
+        """Return True if the URL points at a Wattpad reading list.
+
+        Two forms exist: ``/user/<name>/lists/<id>`` (canonical) and
+        ``/list/<id>`` (short share link). Both are accepted.
+        """
+        return bool(_WP_READING_LIST_RE.search(_normalise_url(url)))
 
     # ── API helpers ───────────────────────────────────────────
 
@@ -563,6 +576,93 @@ class WattpadScraper(BaseScraper):
         if not m:
             raise ValueError(f"Not a Wattpad user URL: {url}")
         return m.group(1)
+
+    def scrape_reading_list_works(self, url):
+        """Return ``(list_name, [work_dict, ...])`` for a Wattpad
+        reading list URL.
+
+        Uses the public ``/v4/lists/<id>/stories`` endpoint rather
+        than scraping the HTML shell, which is increasingly rendered
+        client-side and may serve zero server-rendered story links
+        for visitors without a session cookie. The API path is
+        documented and stable across Wattpad's web/mobile clients.
+        """
+        m = _WP_READING_LIST_RE.search(_normalise_url(url))
+        if not m:
+            raise ValueError(f"Not a Wattpad reading-list URL: {url}")
+        list_id = m.group(1) or m.group(2)
+
+        # The /v4/lists/<id> endpoint returns the list metadata
+        # (name, owner) plus the first page of stories. We follow the
+        # ``nextUrl`` cursor in the ``stories`` envelope to walk
+        # pagination — Wattpad's offset/limit interface is consistent
+        # across list, user, and search endpoints.
+        endpoint = (
+            f"{WP_API}/v4/lists/{list_id}"
+            "?fields=name,user(name),stories(id,title,url,numParts,"
+            "completed,mature,length,description,user(name)),nextUrl"
+        )
+        data = self._api_get_json(endpoint)
+        list_name = data.get("name") or f"List {list_id}"
+        works: list[dict] = []
+        seen: set[str] = set()
+        story_envelope = data.get("stories")
+        next_url = None
+        if isinstance(story_envelope, dict):
+            next_url = story_envelope.get("nextUrl")
+            stories_iter = story_envelope.get("stories") or []
+        else:
+            stories_iter = story_envelope or []
+
+        def _push(stories):
+            for s in stories:
+                story_id = s.get("id")
+                if not story_id or story_id in seen:
+                    continue
+                seen.add(story_id)
+                length = s.get("length") or 0
+                words = f"{max(1, int(length) // 5):,}" if length else ""
+                user = s.get("user") or {}
+                works.append({
+                    "title": s.get("title") or f"Story {story_id}",
+                    "url": s.get("url") or f"{WP_BASE}/story/{story_id}",
+                    "author": user.get("name") or "",
+                    "summary": (s.get("description") or "")[:400],
+                    "words": words,
+                    "chapters": str(s.get("numParts") or ""),
+                    "rating": "Mature" if s.get("mature") else "",
+                    "fandom": "",
+                    "status": (
+                        "Complete" if s.get("completed") else "In-Progress"
+                    ),
+                    "updated": "",
+                    "section": "reading_list",
+                })
+
+        _push(stories_iter)
+
+        # Walk forward via nextUrl until exhausted. Cap at 200 pages
+        # to match the per-site safety bound elsewhere.
+        for _ in range(200):
+            if not next_url:
+                break
+            self._delay()
+            page_data = self._api_get_json(next_url)
+            page_stories = page_data.get("stories") or []
+            if isinstance(page_data, dict) and isinstance(
+                page_data.get("stories"), dict,
+            ):
+                # Defensive: the cursor-followed endpoint sometimes
+                # nests stories under another envelope.
+                page_stories = page_data["stories"].get("stories") or []
+                next_url = page_data["stories"].get("nextUrl")
+            else:
+                next_url = page_data.get("nextUrl")
+            if not page_stories:
+                break
+            _push(page_stories)
+
+        return list_name, works
 
 
 # ── bracket-matching helper ───────────────────────────────────

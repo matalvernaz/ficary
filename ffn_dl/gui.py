@@ -1562,6 +1562,26 @@ class MainFrame(wx.Frame):
             url, lambda: self._run_download(url),
         )
 
+    def _on_add_from_url_list(self, event):
+        """Open the bulk URL-list picker; enqueue every fic the user
+        ticks through the same per-site queue a single download uses."""
+        from .gui_dialogs import AddFromUrlListDialog
+
+        dlg = AddFromUrlListDialog(self)
+        try:
+            if dlg.ShowModal() != wx.ID_OK:
+                return
+            urls = dlg.picked_urls()
+        finally:
+            dlg.Destroy()
+        if not urls:
+            return
+        self._log(f"Add from URL list: enqueuing {len(urls)} fic(s).")
+        for url in urls:
+            self._enqueue_site_job(
+                url, lambda u=url: self._run_download(u),
+            )
+
     def _on_preview_voices(self, event):
         url = self.url_ctrl.GetValue().strip()
         if not url:
@@ -2362,6 +2382,13 @@ class MainFrame(wx.Frame):
         )
         self.Bind(
             wx.EVT_MENU, self._on_update_refetch_all, update_fresh_item,
+        )
+        file_menu.AppendSeparator()
+        add_from_list_item = file_menu.Append(
+            wx.ID_ANY, "Add from &URL list...\tCtrl+Shift+L",
+        )
+        self.Bind(
+            wx.EVT_MENU, self._on_add_from_url_list, add_from_list_item,
         )
         file_menu.AppendSeparator()
         self._confirm_close_item = file_menu.AppendCheckItem(

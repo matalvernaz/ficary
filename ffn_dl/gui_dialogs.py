@@ -15,6 +15,7 @@ screen readers speak the state as part of the row.
 """
 
 import re
+import threading
 
 import wx
 from pathlib import Path
@@ -1841,3 +1842,262 @@ class LlmSettingsDialog(wx.Dialog):
                 "Ollama daemon is running."
             )
         self._set_busy(False)
+
+
+class AddFromUrlListDialog(wx.Dialog):
+    """Paste any list-shape URL → see a checklist of fics → enqueue
+    the picked ones.
+
+    Reuses the :class:`MultiPickerDialog` keyboard / NVDA pattern
+    (``wx.CheckListBox`` with arrow + space, no ``[x] /[ ]`` text
+    prefix). Layout, top-to-bottom:
+
+    * URL field (the user pastes here).
+    * Detect button + max-results spin.
+    * Status / detection label ("Detected: AO3 series — 17 works").
+    * The CheckListBox (each row "Title — Author — words").
+    * Select All / None / Invert buttons.
+    * OK / Cancel.
+
+    Extraction runs on a worker thread so the GUI stays responsive
+    on a 50-page AO3 bookmarks list. Cancel is honoured between
+    pagination steps via a ``threading.Event``.
+
+    The caller pulls picked URLs out of :meth:`picked_urls` after the
+    dialog returns ``wx.ID_OK``.
+    """
+
+    def __init__(self, parent, *, default_max_results: int = 200):
+        super().__init__(
+            parent,
+            title="Add from URL list",
+            size=(720, 560),
+            style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER,
+        )
+        self._default_max = max(0, int(default_max_results))
+        self._works: list[dict] = []
+        self._cancel_event = None
+        self._build_ui()
+
+    # ── UI ────────────────────────────────────────────────────
+
+    def _build_ui(self):
+        panel = wx.Panel(self)
+        sizer = wx.BoxSizer(wx.VERTICAL)
+
+        # URL row
+        url_row = wx.BoxSizer(wx.HORIZONTAL)
+        url_row.Add(
+            wx.StaticText(panel, label="&URL:"),
+            0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 6,
+        )
+        self.url_ctrl = wx.TextCtrl(panel)
+        self.url_ctrl.SetName(
+            "URL of an author profile, AO3 series, search results, "
+            "tag listing, FFN community, or Wattpad reading list"
+        )
+        url_row.Add(self.url_ctrl, 1, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 8)
+        self.extract_btn = wx.Button(panel, label="&Extract")
+        self.extract_btn.Bind(wx.EVT_BUTTON, self._on_extract)
+        url_row.Add(self.extract_btn, 0)
+        sizer.Add(url_row, 0, wx.EXPAND | wx.ALL, 8)
+
+        # Max-results row
+        max_row = wx.BoxSizer(wx.HORIZONTAL)
+        max_row.Add(
+            wx.StaticText(panel, label="&Max results (0 = all):"),
+            0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 6,
+        )
+        self.max_ctrl = wx.SpinCtrl(
+            panel, min=0, max=10_000, initial=self._default_max,
+        )
+        self.max_ctrl.SetName(
+            "Max results, 0 means no cap. Pagination still walks "
+            "every page until this many works are collected or "
+            "results run out."
+        )
+        max_row.Add(self.max_ctrl, 0)
+        sizer.Add(max_row, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 8)
+
+        # Status line — populated by the extractor as it walks pages.
+        # Plain StaticText so SetLabel triggers an aria/MSAA update
+        # NVDA reads as "live region changed".
+        self.status_ctrl = wx.StaticText(panel, label="")
+        self.status_ctrl.SetName("Extraction status")
+        sizer.Add(self.status_ctrl, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 8)
+
+        # CheckListBox — the heart of the dialog.
+        self.list_ctrl = wx.CheckListBox(panel, choices=[])
+        self.list_ctrl.SetName("Works to enqueue")
+        sizer.Add(self.list_ctrl, 1, wx.EXPAND | wx.ALL, 8)
+
+        # Select-* buttons
+        sel_row = wx.BoxSizer(wx.HORIZONTAL)
+        sel_all = wx.Button(panel, label="Select &All")
+        sel_all.Bind(wx.EVT_BUTTON, self._on_select_all)
+        sel_none = wx.Button(panel, label="Select &None")
+        sel_none.Bind(wx.EVT_BUTTON, self._on_select_none)
+        sel_inv = wx.Button(panel, label="&Invert")
+        sel_inv.Bind(wx.EVT_BUTTON, self._on_select_invert)
+        sel_row.Add(sel_all, 0, wx.RIGHT, 6)
+        sel_row.Add(sel_none, 0, wx.RIGHT, 6)
+        sel_row.Add(sel_inv, 0)
+        sizer.Add(sel_row, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 8)
+
+        hint = wx.StaticText(
+            panel,
+            label=(
+                "Arrow keys to move, space to tick or untick. "
+                "Press Extract again to re-run on a different URL."
+            ),
+        )
+        sizer.Add(hint, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 8)
+
+        # OK / Cancel
+        btn_row = wx.BoxSizer(wx.HORIZONTAL)
+        btn_row.AddStretchSpacer(1)
+        self.ok_btn = wx.Button(panel, id=wx.ID_OK, label="&OK")
+        self.ok_btn.SetDefault()
+        self.ok_btn.Disable()  # nothing to OK until we have a list
+        self.ok_btn.Bind(wx.EVT_BUTTON, self._on_ok)
+        btn_row.Add(self.ok_btn, 0, wx.RIGHT, 8)
+        cancel_btn = wx.Button(panel, id=wx.ID_CANCEL, label="&Cancel")
+        btn_row.Add(cancel_btn, 0)
+        sizer.Add(btn_row, 0, wx.EXPAND | wx.ALL, 8)
+
+        panel.SetSizer(sizer)
+
+    # ── Extraction worker ─────────────────────────────────────
+
+    def _on_extract(self, event):
+        url = (self.url_ctrl.GetValue() or "").strip()
+        if not url:
+            wx.MessageBox(
+                "Paste a URL first.",
+                "Add from URL list",
+                style=wx.OK | wx.ICON_INFORMATION, parent=self,
+            )
+            return
+        from . import url_classifier
+        ref = url_classifier.classify(url)
+        if ref is None or ref.kind == "unknown":
+            wx.MessageBox(
+                f"Could not classify URL: {url}\n\nSupported list "
+                "shapes: author profile, AO3 series, AO3 tag, AO3 "
+                "search, AO3 user bookmarks, FFN community, FFN "
+                "search, Wattpad reading list, Royal Road search.",
+                "Add from URL list",
+                style=wx.OK | wx.ICON_ERROR, parent=self,
+            )
+            return
+        self.extract_btn.Disable()
+        self.ok_btn.Disable()
+        self.list_ctrl.Set([])
+        self._works = []
+        self._cancel_event = threading.Event()
+        self.status_ctrl.SetLabel(
+            f"Detected: {ref.site_name} {ref.kind} — extracting…"
+        )
+        threading.Thread(
+            target=self._extract_worker, args=(ref,), daemon=True,
+        ).start()
+
+    def _extract_worker(self, ref):
+        from . import url_classifier
+        try:
+            label, works = url_classifier.extract(ref)
+        except Exception as exc:
+            wx.CallAfter(self._extract_failed, exc)
+            return
+        wx.CallAfter(self._extract_done, ref, label, works)
+
+    def _extract_failed(self, exc):
+        self.extract_btn.Enable()
+        self.status_ctrl.SetLabel(f"Extraction failed: {exc}")
+        wx.MessageBox(
+            f"Extraction failed:\n\n{exc}",
+            "Add from URL list",
+            style=wx.OK | wx.ICON_ERROR, parent=self,
+        )
+
+    def _extract_done(self, ref, label, works):
+        cap = int(self.max_ctrl.GetValue())
+        if cap > 0:
+            works = list(works)[:cap]
+        self._works = list(works)
+        labels = [_format_work_row(w) for w in self._works]
+        self.list_ctrl.Set(labels)
+        for i in range(len(labels)):
+            self.list_ctrl.Check(i, True)
+        self.status_ctrl.SetLabel(
+            f"{ref.site_name} {ref.kind}: {label} — "
+            f"{len(self._works)} fics found"
+        )
+        self.extract_btn.Enable()
+        self.ok_btn.Enable(bool(self._works))
+        if self._works:
+            self.list_ctrl.SetFocus()
+
+    # ── Selection buttons ──────────────────────────────────────
+
+    def _on_select_all(self, event):
+        for i in range(self.list_ctrl.GetCount()):
+            self.list_ctrl.Check(i, True)
+
+    def _on_select_none(self, event):
+        for i in range(self.list_ctrl.GetCount()):
+            self.list_ctrl.Check(i, False)
+
+    def _on_select_invert(self, event):
+        for i in range(self.list_ctrl.GetCount()):
+            self.list_ctrl.Check(i, not self.list_ctrl.IsChecked(i))
+
+    # ── OK ─────────────────────────────────────────────────────
+
+    def _on_ok(self, event):
+        if not any(
+            self.list_ctrl.IsChecked(i)
+            for i in range(self.list_ctrl.GetCount())
+        ):
+            wx.MessageBox(
+                "Tick at least one fic to enqueue.",
+                "Add from URL list",
+                style=wx.OK | wx.ICON_INFORMATION, parent=self,
+            )
+            return
+        self.EndModal(wx.ID_OK)
+
+    # ── Public accessors ───────────────────────────────────────
+
+    def picked_works(self) -> list[dict]:
+        """Return the work dicts the user kept ticked."""
+        return [
+            self._works[i]
+            for i in range(self.list_ctrl.GetCount())
+            if self.list_ctrl.IsChecked(i)
+        ]
+
+    def picked_urls(self) -> list[str]:
+        """Return just the URLs of the picked works."""
+        return [
+            w["url"] for w in self.picked_works() if w.get("url")
+        ]
+
+
+def _format_work_row(work: dict) -> str:
+    """Compact one-line label for a work in the picker.
+
+    Title, author, and word count are the three signals readers
+    actually use when picking from a long list. Keep them on one
+    line so NVDA reads each row as a single utterance instead of
+    a multi-line stutter.
+    """
+    title = (work.get("title") or work.get("url") or "").strip()
+    author = (work.get("author") or "").strip()
+    words = (work.get("words") or "").strip()
+    bits = [title]
+    if author:
+        bits.append(author)
+    if words:
+        bits.append(f"{words} words")
+    return " — ".join(bits)

@@ -87,6 +87,38 @@ class AO3Scraper(BaseScraper):
         )
 
     @staticmethod
+    def is_search_url(url):
+        """Return True if the URL is an AO3 work search page.
+
+        Matches both the front-end form (``/works/search?work_search[...]``)
+        and the AJAX-y short form (``/works?work_search[...]``).
+        Filtered tag pages also surface as ``/tags/<name>/works`` —
+        ``is_tag_url`` covers those.
+        """
+        text = str(url)
+        return bool(
+            re.search(
+                r"archiveofourown\.org/(?:works/search\?|works\?[^/]*work_search)",
+                text,
+            )
+        )
+
+    @staticmethod
+    def is_tag_url(url):
+        """Return True if the URL is an AO3 tag works listing.
+
+        Examples: ``/tags/Harry%20Potter/works``,
+        ``/tags/<id>/works``. The trailing ``/works`` segment is
+        what distinguishes a works listing from a tag info page.
+        """
+        return bool(
+            re.search(
+                r"archiveofourown\.org/tags/[^/]+/works(?:[/?]|$)",
+                str(url),
+            )
+        )
+
+    @staticmethod
     def _parse_metadata(soup):
         """Extract title, author, summary, and stats from a work page."""
         title_tag = soup.find("h2", class_="title")
@@ -400,10 +432,61 @@ class AO3Scraper(BaseScraper):
             raise ValueError(f"Not an AO3 bookmarks URL: {url}")
         user = match.group(1)
         return self._scrape_ao3_work_list(
-            f"{AO3_BASE}/users/{user}/bookmarks", fallback_name=user,
+            f"{AO3_BASE}/users/{user}/bookmarks",
+            fallback_name=user,
+            section="bookmarks",
         )
 
-    def _scrape_ao3_work_list(self, base_url, *, fallback_name):
+    def scrape_search_works(self, url):
+        """Return (query_label, [work_dict]) from an AO3 search URL.
+
+        The user's pasted URL is passed through to ``_fetch`` verbatim;
+        AO3's search-form URL shape changes shape often enough that
+        rebuilding from parsed components would invite drift. We just
+        walk pagination and let AO3 redirect if needed.
+
+        ``query_label`` is best-effort — pulled from
+        ``work_search[query]`` if present, otherwise the URL's tag
+        segment, otherwise an empty string.
+        """
+        from urllib.parse import parse_qs, urlsplit
+
+        parts = urlsplit(url)
+        params = parse_qs(parts.query)
+        label = (
+            params.get("work_search[query]", [""])[0]
+            or params.get("query", [""])[0]
+            or ""
+        )
+        return self._scrape_ao3_work_list(
+            url, fallback_name=label or "Search results", section="search",
+        )
+
+    def scrape_tag_works(self, url):
+        """Return (tag_label, [work_dict]) from an AO3 tag works listing.
+
+        ``tag_label`` is the ``<name>`` portion of ``/tags/<name>/works``
+        URL-decoded — that's what the AO3 page shows in its heading
+        too, so picker output stays consistent with what the user
+        pasted.
+        """
+        from urllib.parse import unquote, urlsplit
+
+        parts = urlsplit(url)
+        match = re.search(r"/tags/([^/]+)/works", parts.path)
+        label = unquote(match.group(1)).replace("*s*", "/") if match else ""
+        return self._scrape_ao3_work_list(
+            url, fallback_name=label or "Tag works", section="tag",
+        )
+
+    def _scrape_ao3_work_list(
+        self,
+        base_url,
+        *,
+        fallback_name,
+        section="own",
+        max_pages=200,
+    ):
         from .search import _parse_ao3_results
 
         author_name = fallback_name
@@ -411,8 +494,14 @@ class AO3Scraper(BaseScraper):
         seen = set()
         page = 1
 
-        while True:
-            page_url = f"{base_url}?page={page}"
+        # AO3 paginates via either ``?page=N`` or ``&page=N`` depending
+        # on whether the URL already has a query string. Search URLs
+        # come pre-loaded with ``?work_search[...]=...`` filters, so
+        # the pagination segment must use ``&``.
+        sep = "&" if "?" in base_url else "?"
+
+        while page <= max_pages:
+            page_url = f"{base_url}{sep}page={page}"
             html = self._fetch(page_url)
             if page == 1:
                 soup = BeautifulSoup(html, "lxml")
@@ -432,8 +521,8 @@ class AO3Scraper(BaseScraper):
                 if wid in seen:
                     continue
                 seen.add(wid)
-                r["section"] = "own" if "/works" in base_url else "bookmarks"
-                r["updated"] = ""
+                r["section"] = section
+                r["updated"] = r.get("updated", "")
                 works.append(r)
                 new_on_page += 1
             soup = BeautifulSoup(html, "lxml")
