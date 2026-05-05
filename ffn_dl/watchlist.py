@@ -41,6 +41,7 @@ from pathlib import Path
 from typing import Any, Callable, Optional
 
 from . import portable, sites
+from .atomic import atomic_write_text
 from .notifications import Notification, dispatch as dispatch_notification
 from .scraper import BaseScraper
 
@@ -304,20 +305,18 @@ class WatchlistStore:
     def save(self) -> None:
         """Write the watchlist atomically.
 
-        Stages JSON to ``<path>.tmp`` and then renames over ``path`` so
-        a crash between open and write never leaves the file truncated.
+        Delegates to :func:`atomic.atomic_write_text` so the temp file
+        is fsync'd before the rename — a crash between write and
+        rename can't leave the on-disk watchlist truncated or empty.
         """
         payload = {
             "version": SCHEMA_VERSION,
             "watches": [_watch_to_dict(w) for w in self._watches],
         }
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        tmp_path = self.path.with_suffix(self.path.suffix + ".tmp")
-        tmp_path.write_text(
+        atomic_write_text(
+            self.path,
             json.dumps(payload, indent=2, sort_keys=True),
-            encoding="utf-8",
         )
-        tmp_path.replace(self.path)
 
     def _quarantine_corrupt_file(self) -> None:
         """Rename the corrupt file aside so the next save starts clean."""

@@ -112,8 +112,16 @@ def load_cached(host: str, *, now: Optional[float] = None) -> Optional[SolveResu
         data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return None
-    fetched_at = float(data.get("fetched_at") or 0.0)
+    raw_fetched = data.get("fetched_at")
+    if not isinstance(raw_fetched, (int, float)):
+        return None
+    fetched_at = float(raw_fetched)
     current = time.time() if now is None else now
+    # A future timestamp (clock skew, manually edited cache) would
+    # otherwise pin the entry as "always fresh" and we'd loop on a
+    # cookie the site has already invalidated.
+    if fetched_at <= 0 or fetched_at > current:
+        return None
     if current - fetched_at > COOKIE_CACHE_TTL_S:
         return None
     cookies = data.get("cookies") or []

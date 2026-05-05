@@ -1,5 +1,70 @@
 # Changelog
 
+## 2.3.1 — 2026-05-05
+
+### Bug fixes
+
+- **Watchlist save now actually fsyncs.** `WatchlistStore.save`
+  staged JSON to a `.tmp` file with `Path.write_text` and renamed
+  it over the target. The rename is atomic but the bytes weren't
+  fsync'd first, so a power loss between the rename committing and
+  the data hitting the platter could leave the on-disk watchlist
+  pointing at empty extents — the docstring already promised
+  whole-or-nothing semantics. Now delegates to
+  `atomic.atomic_write_text`, which fsyncs the temp file before the
+  rename, matching every other persist path in the project
+  (`LibraryIndex.save`, scraper meta/chapter caches, exporters).
+
+- **Discord webhook URL no longer leaks into log files.** The
+  `_post` helper embedded the full target URL in every
+  `NotificationError` message — fine for Pushover (constant
+  endpoint) but Discord webhook URLs end `/webhooks/<id>/<token>`
+  and the token IS the publish credential. The dispatcher then
+  logged the exception verbatim at line `logger.warning("Notification
+  channel %s failed: %s", channel, exc)`, so a transient network
+  blip would write the token into ffn-dl.log. Errors now use a
+  `_safe_endpoint_label` helper that returns the host (and a
+  "Discord webhook" tag) so the credential never appears in the
+  log or the GUI's failure list.
+
+- **Piper→ffmpeg conversion now has a timeout.** The
+  `subprocess.run` that pipes Piper's WAV output through ffmpeg
+  had no `timeout=` argument, while the surrounding piper call
+  used `timeout=120`. A wedged or stuck ffmpeg would hang the
+  audiobook render indefinitely; now bounded at 120s like its
+  neighbour.
+
+- **Embedded-Python bootstrap subprocesses are bounded.** The
+  `pip --version` probe and `get-pip.py` execution in
+  `neural_env.py` ran without timeouts. A stalled interpreter or
+  hung dependency resolution would deadlock the GUI's "install
+  neural backends" path; now capped at 60s and 600s respectively.
+
+- **`cf_solve.load_cached` rejects non-numeric and future
+  timestamps.** The TTL check used `float(data.get("fetched_at")
+  or 0.0)`, which raised on a corrupted string value (no try/except
+  around it) and accepted a future timestamp as ever-fresh. Now
+  validates the type first and rejects entries whose `fetched_at`
+  is in the future, so a hand-edited or clock-skewed cache no
+  longer pins a stale `cf_clearance` cookie indefinitely.
+
+- **`self_update._verify_digest` logs when verification is
+  skipped.** Releases without a digest field on the asset (older
+  GitHub uploads, or an asset that bypassed the post-upload hash
+  step) silently skipped the SHA-256 check. The download is still
+  authenticated by HTTPS to api.github.com, but the absence is
+  now `logger.warning`'d so the lack of content verification is
+  auditable rather than invisible.
+
+### Internal
+
+- New `tests/test_notifications.py` covers the redaction helper
+  and the end-to-end "URLError → NotificationError without
+  credential" path.
+
+- New cf_solve regression tests for the non-numeric and future
+  timestamp rejection paths.
+
 ## 2.3.0 — 2026-05-02
 
 ### Internal

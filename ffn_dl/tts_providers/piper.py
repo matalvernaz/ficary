@@ -384,7 +384,7 @@ class PiperProvider:
                     "-codec:a", "libmp3lame", "-qscale:a", "4",
                     str(output_path),
                 ],
-                capture_output=True, text=True,
+                capture_output=True, text=True, timeout=120,
             )
             if convert.returncode != 0:
                 raise RuntimeError(

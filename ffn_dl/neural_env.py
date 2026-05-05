@@ -264,7 +264,7 @@ def ensure_embed_python(log_callback=None) -> bool:
     # ourselves; this is the official approach per python.org docs.
     pip_check = subprocess.run(
         [str(python_exe()), "-m", "pip", "--version"],
-        capture_output=True, text=True,
+        capture_output=True, text=True, timeout=60,
     )
     if pip_check.returncode != 0:
         if log_callback:
@@ -272,9 +272,13 @@ def ensure_embed_python(log_callback=None) -> bool:
         get_pip = PY_DIR / "get-pip.py"
         if not _download(GET_PIP_URL, get_pip, log_callback=log_callback):
             return False
+        # get-pip downloads + installs pip from PyPI on first run; ten
+        # minutes is a generous ceiling for a slow-network bootstrap
+        # while still bounding a hung interpreter so the GUI install
+        # path doesn't deadlock.
         result = subprocess.run(
             [str(python_exe()), str(get_pip), "--no-warn-script-location"],
-            capture_output=True, text=True,
+            capture_output=True, text=True, timeout=600,
         )
         get_pip.unlink(missing_ok=True)
         if result.returncode != 0:

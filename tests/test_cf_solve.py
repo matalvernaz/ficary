@@ -76,6 +76,33 @@ def test_load_honours_injected_now_for_deterministic_ttl_check(cache_dir):
     assert cf_solve.load_cached("futuristic.example", now=future) is None
 
 
+def test_load_rejects_non_numeric_fetched_at(cache_dir, monkeypatch):
+    """A corrupted cache file with a string ``fetched_at`` must be
+    rejected, not coerced — float("garbage") would raise from inside
+    ``load_cached`` and mask the real "no usable cache" answer.
+    """
+    import json
+    path = cf_solve._host_cache_path("corrupt.example")
+    path.write_text(
+        json.dumps({
+            "cookies": [{"name": "x", "value": "y", "domain": ".e", "path": "/"}],
+            "user_agent": "UA",
+            "fetched_at": "not-a-number",
+        }),
+        encoding="utf-8",
+    )
+    assert cf_solve.load_cached("corrupt.example") is None
+
+
+def test_load_rejects_future_fetched_at(cache_dir):
+    """A future timestamp (clock skew or hand-edited cache) would
+    otherwise pin the entry as ever-fresh and we'd loop forever on a
+    cookie the site has already invalidated."""
+    far_future = time.time() + 10 * cf_solve.COOKIE_CACHE_TTL_S
+    cf_solve.persist("future.example", _sample_result(fetched_at=far_future))
+    assert cf_solve.load_cached("future.example") is None
+
+
 def test_persist_sanitises_hostname(cache_dir):
     """Filesystem path must never escape the cache dir even if the
     caller feeds a path-like host. The host sanitiser replaces

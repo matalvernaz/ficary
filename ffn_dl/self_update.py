@@ -112,10 +112,25 @@ def can_self_replace() -> bool:
 
 
 def _verify_digest(path: Path, digest: str) -> None:
+    # No digest on the release asset → log loudly so the absence is
+    # auditable, but don't block: GitHub doesn't always populate the
+    # ``digest`` field, and the download itself happened over HTTPS
+    # against api.github.com so the URL→bytes path is already
+    # authenticated.
     if not digest or ":" not in digest:
+        logger.warning(
+            "Update asset has no SHA-256 digest; skipping content "
+            "verification (URL was HTTPS so the channel is still "
+            "authenticated)."
+        )
         return
     algo, expected = digest.split(":", 1)
     if algo.lower() != "sha256":
+        logger.warning(
+            "Update asset advertises unsupported digest algorithm %r; "
+            "skipping content verification.",
+            algo,
+        )
         return
     h = hashlib.sha256()
     with open(path, "rb") as f:

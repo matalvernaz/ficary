@@ -78,6 +78,25 @@ USER_AGENT = f"ffn-dl/{__version__} (+watchlist)"
 HTTP_ERROR_THRESHOLD = 400
 
 
+def _safe_endpoint_label(endpoint: str) -> str:
+    """Return a log/error-safe label for ``endpoint``.
+
+    Discord webhook URLs end in ``/<id>/<token>`` and the token is the
+    only thing gating posts to that channel — leaking it into a log
+    file or a forwarded error message hands a stranger publish access.
+    Pushover's POST URL is fixed and carries no secret, but normalising
+    it through the same helper keeps the error wording uniform.
+    """
+    try:
+        parts = urlparse.urlsplit(endpoint)
+    except (ValueError, AttributeError):
+        return "<endpoint>"
+    host = parts.netloc or "<endpoint>"
+    if "discord" in host.lower() and "/webhooks/" in parts.path:
+        return f"{host} (Discord webhook)"
+    return host
+
+
 class NotificationError(RuntimeError):
     """Raised when a single channel fails to deliver a notification.
 
@@ -131,22 +150,23 @@ def _post(endpoint: str, data: bytes, content_type: str, timeout: float) -> None
         },
         method="POST",
     )
+    label = _safe_endpoint_label(endpoint)
     try:
         with urlrequest.urlopen(req, timeout=timeout) as resp:
             status = getattr(resp, "status", 200)
             if status >= HTTP_ERROR_THRESHOLD:
-                raise NotificationError(f"HTTP {status} from {endpoint}")
+                raise NotificationError(f"HTTP {status} from {label}")
     except urlerror.HTTPError as exc:
         raise NotificationError(
-            f"HTTP {exc.code} from {endpoint}: {exc.reason}"
+            f"HTTP {exc.code} from {label}: {exc.reason}"
         ) from exc
     except urlerror.URLError as exc:
         raise NotificationError(
-            f"Network error contacting {endpoint}: {exc.reason}"
+            f"Network error contacting {label}: {exc.reason}"
         ) from exc
     except TimeoutError as exc:
         raise NotificationError(
-            f"Timed out contacting {endpoint} after {timeout}s"
+            f"Timed out contacting {label} after {timeout}s"
         ) from exc
 
 
