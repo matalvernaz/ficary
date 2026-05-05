@@ -1,5 +1,23 @@
 # Changelog
 
+## 2.3.4 — 2026-05-05
+
+### Tests
+
+- **New ``tests/test_gui_smoke.py``** (6 cases) brings up MainFrame
+  plus the Search / Watchlist / Library satellite frames under a
+  shared session-scoped ``wx.App`` and tears them down — catching
+  the class of regression that AST checks miss: a renamed event
+  handler, a Bind() pointing at a stale name, an empty menu label
+  that NVDA would read as blank, a satellite-frame constructor
+  signature that drifted from its caller. Skips silently when wx
+  isn't installed or ``DISPLAY`` is unset; on Linux CI the runner
+  is ``xvfb-run pytest``. Validated locally by symlinking apt's
+  ``python3-wxgtk4.0`` into the project venv. Full suite: 1305
+  pass.
+
+No production-code change in this release.
+
 ## 2.3.3 — 2026-05-05
 
 ### Exhaustive bug-sweep round 2
