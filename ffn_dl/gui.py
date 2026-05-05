@@ -12,6 +12,7 @@ import re
 import subprocess
 import sys
 import threading
+import time
 import wx
 import webbrowser
 from collections import deque
@@ -93,6 +94,91 @@ from .gui_search import (
     _royalroad_search_spec,
     _wattpad_search_spec,
 )
+
+
+def _show_update_dialog(
+    parent,
+    *,
+    body: str,
+    primary_label: str,
+    primary_result: str,
+    release_url: str,
+) -> str:
+    """Modal four-button update prompt.
+
+    ``wx.MessageDialog`` only carries three buttons (YES/NO/CANCEL),
+    so this helper rolls a custom :class:`wx.Dialog` to surface a
+    fourth "View Release Notes" action without forcing the user
+    through a yes/no funnel that hides the changelog.
+
+    Returned strings:
+        ``"update"`` / ``"open_release"`` — primary action; the caller
+            decides which by passing ``primary_result``.
+        ``"release_notes"`` — open the release page but defer the
+            install decision (the caller usually re-arms the snooze).
+        ``"later"`` — explicit "Remind Me Later" or ESC/close.
+        ``"skip"`` — pin this tag so it never re-prompts.
+
+    The "View Release Notes" button is omitted entirely when no
+    release URL is available (e.g. the GitHub API call returned an
+    asset without an ``html_url``) so we never present a button that
+    can't do its job.
+    """
+    dlg = wx.Dialog(
+        parent,
+        title="Update Available",
+        style=wx.DEFAULT_DIALOG_STYLE,
+    )
+    panel = wx.Panel(dlg)
+    sizer = wx.BoxSizer(wx.VERTICAL)
+
+    text = wx.StaticText(panel, label=body)
+    text.Wrap(560)
+    # Tag the body text so screen readers (NVDA, VoiceOver) announce
+    # it as the dialog message rather than an unlabelled region.
+    text.SetName("Update details")
+    sizer.Add(text, 0, wx.ALL, 16)
+
+    btn_row = wx.BoxSizer(wx.HORIZONTAL)
+    primary_btn = wx.Button(panel, label=primary_label)
+    primary_btn.Bind(wx.EVT_BUTTON, lambda _e: dlg.EndModal(1))
+
+    notes_btn = None
+    if release_url:
+        notes_btn = wx.Button(panel, label="View &Release Notes")
+        notes_btn.Bind(wx.EVT_BUTTON, lambda _e: dlg.EndModal(2))
+
+    later_btn = wx.Button(panel, label="Re&mind Me Later")
+    later_btn.Bind(wx.EVT_BUTTON, lambda _e: dlg.EndModal(3))
+
+    skip_btn = wx.Button(panel, label="&Skip This Version")
+    skip_btn.Bind(wx.EVT_BUTTON, lambda _e: dlg.EndModal(4))
+
+    btn_row.Add(primary_btn, 0, wx.RIGHT, 8)
+    if notes_btn is not None:
+        btn_row.Add(notes_btn, 0, wx.RIGHT, 8)
+    btn_row.Add(later_btn, 0, wx.RIGHT, 8)
+    btn_row.Add(skip_btn, 0)
+    sizer.Add(btn_row, 0, wx.ALIGN_RIGHT | wx.ALL, 16)
+
+    panel.SetSizerAndFit(sizer)
+    dlg.Fit()
+    dlg.SetAffirmativeId(1)  # ENTER triggers the primary action
+    dlg.SetEscapeId(3)       # ESC = "Remind Me Later"
+    primary_btn.SetDefault()
+    primary_btn.SetFocus()
+
+    try:
+        result = dlg.ShowModal()
+    finally:
+        dlg.Destroy()
+
+    return {
+        1: primary_result,
+        2: "release_notes",
+        3: "later",
+        4: "skip",
+    }.get(result, "later")
 
 
 class MainFrame(wx.Frame):
@@ -1265,6 +1351,16 @@ class MainFrame(wx.Frame):
         if skipped and skipped == info["tag"]:
             return
 
+        # "Remind Me Later" stores a wake-up timestamp; suppress the
+        # prompt until that's elapsed so a user who declined this
+        # morning isn't pestered every relaunch for the same release.
+        try:
+            snoozed_until = float(self.prefs.get(_p.KEY_UPDATE_SNOOZED_UNTIL, 0) or 0)
+        except (TypeError, ValueError):
+            snoozed_until = 0
+        if snoozed_until and time.time() < snoozed_until:
+            return
+
         wx.CallAfter(self._prompt_update, info)
 
     def _prompt_update(self, info):
@@ -1273,61 +1369,68 @@ class MainFrame(wx.Frame):
 
         tag = info["tag"]
         size_mb = (info.get("size") or 0) / 1024 / 1024
+        release_url = info.get("release_url") or ""
 
         if not self_update.can_self_replace():
-            # Linux/Mac/dev install: offer to open the release page
-            msg = (
+            primary_label = "&Open Release Page"
+            primary_result = "open_release"
+            body = (
                 f"Version {tag} is available (you have {__version__}).\n\n"
                 f"Automatic update is only supported in the Windows build. "
                 f"Open the release page to update manually?"
             )
-            dlg = wx.MessageDialog(
-                self, msg, "Update Available",
-                style=wx.YES_NO | wx.CANCEL | wx.YES_DEFAULT,
+        else:
+            primary_label = "&Update Now"
+            primary_result = "update"
+            body = (
+                f"Version {tag} is available. You currently have "
+                f"{__version__}.\n\n"
+                f"What will happen if you update:\n"
+                f"  \u2022 ffn-dl will download the new version (about "
+                f"{size_mb:.0f} MB).\n"
+                f"  \u2022 The app will close, replace itself, and reopen "
+                f"automatically.\n"
+                f"  \u2022 Your settings, cached chapters, and saved files "
+                f"are untouched.\n"
+                f"  \u2022 If the download fails or is cancelled, the "
+                f"current version keeps running \u2014 nothing is changed "
+                f"until the new file is fully downloaded.\n\n"
+                f"Update now?"
             )
-            dlg.SetYesNoCancelLabels(
-                "&Open Release Page", "Re&mind Me Later", "&Skip This Version",
-            )
-            result = dlg.ShowModal()
-            dlg.Destroy()
-            if result == wx.ID_YES and info.get("release_url"):
-                webbrowser.open(info["release_url"])
-            elif result == wx.ID_CANCEL:
-                self.prefs.set(_p.KEY_SKIPPED_VERSION, tag)
-            return
 
-        msg = (
-            f"Version {tag} is available. You currently have {__version__}.\n\n"
-            f"What will happen if you update:\n"
-            f"  \u2022 ffn-dl will download the new version (about "
-            f"{size_mb:.0f} MB).\n"
-            f"  \u2022 The app will close, replace itself, and reopen "
-            f"automatically.\n"
-            f"  \u2022 Your settings, cached chapters, and saved files are "
-            f"untouched.\n"
-            f"  \u2022 If the download fails or is cancelled, the current "
-            f"version keeps running \u2014 nothing is changed until the "
-            f"new file is fully downloaded.\n\n"
-            f"Update now?"
+        result = _show_update_dialog(
+            self,
+            body=body,
+            primary_label=primary_label,
+            primary_result=primary_result,
+            release_url=release_url,
         )
-        dlg = wx.MessageDialog(
-            self, msg, "Update Available",
-            style=wx.YES_NO | wx.CANCEL | wx.YES_DEFAULT,
-        )
-        dlg.SetYesNoCancelLabels(
-            "&Update Now", "Re&mind Me Later", "&Skip This Version",
-        )
-        result = dlg.ShowModal()
-        dlg.Destroy()
 
-        if result == wx.ID_YES:
+        if result == "update":
             self._perform_update(info)
-        elif result == wx.ID_CANCEL:
+        elif result == "open_release":
+            if release_url:
+                webbrowser.open(release_url)
+        elif result == "release_notes":
+            # User wanted to read the changelog before deciding. Open
+            # the page and re-arm the snooze so we don't ambush them
+            # again next launch \u2014 they'll come back to install when
+            # they're ready.
+            if release_url:
+                webbrowser.open(release_url)
+            self.prefs.set(
+                _p.KEY_UPDATE_SNOOZED_UNTIL,
+                int(time.time()) + _p.UPDATE_SNOOZE_S,
+            )
+        elif result == "skip":
             self.prefs.set(_p.KEY_SKIPPED_VERSION, tag)
+        else:  # "later" or dialog dismissed without a button
+            self.prefs.set(
+                _p.KEY_UPDATE_SNOOZED_UNTIL,
+                int(time.time()) + _p.UPDATE_SNOOZE_S,
+            )
 
     def _perform_update(self, info):
-        import time
-
         from . import self_update
 
         # Save prefs now so they're on disk before the swap
@@ -2531,9 +2634,13 @@ class MainFrame(wx.Frame):
                     wx.OK | wx.ICON_INFORMATION, self,
                 )
                 return
-            # User asked explicitly — clear any previously-skipped version.
+            # User asked explicitly — clear any previously-skipped
+            # version and any in-flight snooze so the prompt actually
+            # shows up regardless of how recently they hit "Remind Me
+            # Later" or "Skip This Version".
             from . import prefs as _p
             self.prefs.set(_p.KEY_SKIPPED_VERSION, "")
+            self.prefs.set(_p.KEY_UPDATE_SNOOZED_UNTIL, 0)
             wx.CallAfter(self._prompt_update, info)
 
         threading.Thread(target=worker, daemon=True).start()

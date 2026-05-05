@@ -1,5 +1,42 @@
 # Changelog
 
+## 2.3.2 — 2026-05-05
+
+### Auto-updater UX
+
+- **Console window no longer hangs behind the GUI on Windows.**
+  PyInstaller builds the exe with ``--console`` so CLI usage from
+  cmd or PowerShell still gets stdout/stderr in the parent shell,
+  but a double-click GUI launch was leaving a black console window
+  attached for the whole session. ``__main__`` now calls
+  ``kernel32.FreeConsole`` immediately before importing wx when
+  the GUI path is taken on a frozen Windows build, so the console
+  closes within milliseconds of launch. CLI invocations (any argv
+  past argv[0]) skip the call and keep their attached terminal.
+
+- **"Remind Me Later" actually waits.** Clicking it used to be a
+  no-op — the prompt re-fired at the next launch, which trained
+  users into reflex-clicking "Skip This Version" just to make the
+  modal go away. Now stores a wake-up timestamp in prefs
+  (``update_snoozed_until``) and gates the prompt on it for three
+  days. A user who chose "later" this morning won't be asked again
+  this week.
+
+- **Update dialog has a fourth button: View Release Notes.**
+  Replaces the three-button ``wx.MessageDialog`` with a custom
+  four-button dialog so the user can read the changelog before
+  deciding. Clicking it opens the GitHub release page and re-arms
+  the snooze; the prompt comes back when the user is done reading
+  rather than re-firing the same launch. ESC = "Remind Me Later",
+  ENTER = the primary action (Update Now / Open Release Page),
+  matching the existing screen-reader-friendly pattern used in the
+  optional-features and TTS-providers dialogs.
+
+- **Manual Help → Check for Updates clears any active snooze.**
+  Otherwise hitting the menu inside the snooze window would still
+  see a prompt, but the user has explicitly asked for one — so the
+  click should win over a stale "later" deferral.
+
 ## 2.3.1 — 2026-05-05
 
 ### Bug fixes

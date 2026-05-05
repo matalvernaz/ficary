@@ -41,6 +41,17 @@ KEY_FORMAT = "format"
 KEY_OUTPUT_DIR = "output_dir"
 KEY_CHECK_UPDATES = "check_updates"
 KEY_SKIPPED_VERSION = "skipped_update_version"
+# Unix timestamp (seconds) until which the update prompt is suppressed
+# even when a new version is available. Set when the user clicks
+# "Remind Me Later" — without it, the prompt re-fires at every
+# launch, which trains users into reflex-skipping releases.
+KEY_UPDATE_SNOOZED_UNTIL = "update_snoozed_until"
+
+# How long "Remind Me Later" silences the update prompt for. Three
+# days is short enough that a user who genuinely meant "later today"
+# isn't blocked from updating for a week, but long enough that a user
+# launching the app daily isn't asked again the next morning.
+UPDATE_SNOOZE_S = 3 * 24 * 60 * 60
 KEY_HR_AS_STARS = "hr_as_stars"
 KEY_STRIP_NOTES = "strip_notes"
 # Pair with KEY_STRIP_NOTES: when on, ``strip_an_via_llm`` runs after
