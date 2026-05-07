@@ -56,10 +56,10 @@ def _make_fetcher(pages: dict):
     return fetch
 
 
-def _scraper(cls):
+def _scraper(cls, **kwargs):
     """Build a scraper with cache + delay disabled so tests stay fast
     and don't leave files in the user's cache dir."""
-    return cls(use_cache=False, delay_floor=0.0)
+    return cls(use_cache=False, delay_floor=0.0, **kwargs)
 
 
 # ── Per-scraper download smoke tests ──────────────────────────────
@@ -193,7 +193,12 @@ class TestTGStorytimeDownload:
 
 
 class TestChyoaDownload:
-    def test_single_chapter(self, monkeypatch):
+    def test_tree_walk_default(self, monkeypatch):
+        # The fixture has one branch link (`ship.33`) inside
+        # ``div.question-content``; the substring fetcher returns the
+        # same HTML for every URL, so the walker visits the entry
+        # chapter, follows ``ship.33`` once, hits the visited-set on
+        # the recursive self-link, and stops. Net: 2 chapters.
         html = _load("chyoa_chapter.html")
         scraper = _scraper(ChyoaScraper)
         monkeypatch.setattr(scraper, "_fetch", _make_fetcher({"": html}))
@@ -201,8 +206,22 @@ class TestChyoaDownload:
             "https://chyoa.com/chapter/Ooh-that-s-hot.17"
         )
         assert "Ooh" in story.title  # curly quotes survive the round-trip
-        assert len(story.chapters) == 1
+        assert len(story.chapters) == 2
         assert len(story.chapters[0].html) > 100
+        assert story.chapters[0].number == 1
+        assert story.chapters[1].number == 2
+
+    def test_max_depth_zero_returns_only_entry(self, monkeypatch):
+        # ``max_depth=0`` means "include depth 0 only", i.e. the
+        # entry chapter and nothing else — the pre-tree-walk
+        # behaviour is still expressible.
+        html = _load("chyoa_chapter.html")
+        scraper = _scraper(ChyoaScraper, max_depth=0)
+        monkeypatch.setattr(scraper, "_fetch", _make_fetcher({"": html}))
+        story = scraper.download(
+            "https://chyoa.com/chapter/Ooh-that-s-hot.17"
+        )
+        assert len(story.chapters) == 1
 
 
 class TestDarkWandererDownload:

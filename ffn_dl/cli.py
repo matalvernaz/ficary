@@ -518,11 +518,13 @@ def _apply_library_autosort(args: argparse.Namespace) -> None:
     if args.output is not None:
         return
     from .library.template import (
+        DEFAULT_ADULT_FOLDER,
         DEFAULT_MISC_FOLDER,
         DEFAULT_ORIGINAL_FOLDER,
         DEFAULT_TEMPLATE,
     )
     from .prefs import (
+        KEY_LIBRARY_ADULT_FOLDER,
         KEY_LIBRARY_MISC_FOLDER,
         KEY_LIBRARY_ORIGINAL_FOLDER,
         KEY_LIBRARY_PATH,
@@ -546,6 +548,9 @@ def _apply_library_autosort(args: argparse.Namespace) -> None:
     args._library_original = (
         prefs.get(KEY_LIBRARY_ORIGINAL_FOLDER) or DEFAULT_ORIGINAL_FOLDER
     )
+    args._library_adult = (
+        prefs.get(KEY_LIBRARY_ADULT_FOLDER) or DEFAULT_ADULT_FOLDER
+    )
 
 
 def _library_subdir_for(
@@ -562,27 +567,35 @@ def _library_subdir_for(
         return None
     from .library.identifier import adapter_for_url
     from .library.template import (
+        ADULT_FICTION_ADAPTERS,
         ORIGINAL_FICTION_ADAPTERS,
         parse_category,
         render,
     )
     from .updater import FileMetadata
 
-    # Original-fiction sources: "no fandom" on a Royal Road download
-    # means the book IS original, not that metadata extraction
-    # failed. Route those to the dedicated original-works folder
-    # rather than the misc bucket, so the user's library has a
-    # visible "original novels" subtree alongside the fandom
-    # subtrees. Overridden by an explicit category field (unlikely
-    # on RR but future-proof): if a user tags an RR story with a
-    # fandom manually, honour it as a one-off rather than forcing
-    # the original-works bucket.
+    # Adapter-specific routing: the original-fiction and adult-only
+    # sites get dedicated top-level folders rather than falling
+    # through to per-fandom or misc buckets. Same justification in
+    # both cases — a single visible subtree keeps that category of
+    # work browsable on its own and surfaces "here is what I have
+    # of this kind" without burying it in the fandom list.
+    #
+    # An explicit category on the story metadata still wins (a user
+    # who tags an RR or erotica work with a fandom manually has
+    # asked for it to land under that fandom). The category-absent
+    # path is what the dedicated folder routing covers.
     adapter = adapter_for_url(story.url or "")
     story_category = story.metadata.get("category")
     if adapter in ORIGINAL_FICTION_ADAPTERS and not story_category:
         fandoms: list[str] = [
             getattr(args, "_library_original", None)
             or "Original Works"
+        ]
+    elif adapter in ADULT_FICTION_ADAPTERS and not story_category:
+        fandoms = [
+            getattr(args, "_library_adult", None)
+            or "Adult"
         ]
     else:
         # ``parse_category`` strips FFN's ``Books > `` breadcrumb prefix
@@ -626,6 +639,14 @@ def _build_scraper(url: str, args: argparse.Namespace):
         kwargs["use_wayback"] = True
     if getattr(args, "cf_solve", False):
         kwargs["cf_solve"] = True
+    # Chyoa-specific: tree-walk depth cap. Only forward to the
+    # ChyoaScraper constructor — other scrapers don't accept it and
+    # ``**kwargs`` would surface an unrelated TypeError.
+    from .erotica import ChyoaScraper
+    if scraper_cls is ChyoaScraper:
+        depth = getattr(args, "chyoa_max_depth", None)
+        if depth is not None:
+            kwargs["max_depth"] = depth
     return scraper_cls(**kwargs)
 
 
@@ -3374,6 +3395,19 @@ def _build_parser() -> argparse.ArgumentParser:
         "--no-cache",
         action="store_true",
         help="Disable chapter caching (re-download everything)",
+    )
+    parser.add_argument(
+        "--chyoa-max-depth",
+        type=int,
+        default=None,
+        metavar="N",
+        help=(
+            "For Chyoa (interactive CYOA) downloads, cap how deep the "
+            "tree walker descends from the entry URL. 0 = entry "
+            "chapter only, 1 = entry + immediate children, etc. "
+            "Omit for an unbounded walk. Skipped branches are logged "
+            "by URL so nothing is silently hidden."
+        ),
     )
     parser.add_argument(
         "--hr-as-stars",

@@ -228,6 +228,7 @@ def _autosort_args(**overrides) -> Namespace:
         _library_template="{fandom}/{title} - {author}.{ext}",
         _library_misc="Misc",
         _library_original="Original Works",
+        _library_adult="Adult",
     )
     for k, v in overrides.items():
         setattr(args, k, v)
@@ -396,6 +397,44 @@ def test_library_subdir_non_rr_fanfic_without_fandom_still_misc():
     )
     subdir = _library_subdir_for(ffn_story, _autosort_args())
     assert subdir == Path("Misc")
+
+
+def test_library_subdir_routes_adult_sites_to_adult_folder():
+    """Erotica adapters with no explicit category land in the
+    dedicated Adult folder — same routing pattern as Royal Road →
+    Original Works, distinct top-level subtree so the bucket is
+    visibly its own thing."""
+    for url in (
+        "https://chyoa.com/story/Some-Slug.42",
+        "https://www.literotica.com/s/some-story",
+        "https://www.storiesonline.net/s/12345",
+        "https://nifty.org/nifty/sub/path",
+    ):
+        story = _story(fandom=None, url=url)
+        subdir = _library_subdir_for(story, _autosort_args())
+        assert subdir == Path("Adult"), (
+            f"{url} routed to {subdir!r}, expected Path('Adult')"
+        )
+
+
+def test_library_subdir_adult_folder_honours_override():
+    """The adult-folder name is configurable via the pref."""
+    chyoa_story = _story(fandom=None, url="https://chyoa.com/story/X.1")
+    args = _autosort_args(_library_adult="NSFW")
+    assert _library_subdir_for(chyoa_story, args) == Path("NSFW")
+
+
+def test_library_subdir_adult_site_respects_explicit_category():
+    """If the story metadata carries an explicit category (e.g. the
+    user tagged a chyoa download with a fandom manually), honour
+    it instead of forcing the Adult bucket — same one-off override
+    path the Royal Road routing keeps open."""
+    chyoa_story = _story(
+        fandom="Some Franchise",
+        url="https://chyoa.com/story/X.1",
+    )
+    subdir = _library_subdir_for(chyoa_story, _autosort_args())
+    assert subdir == Path("Some Franchise")
 
 
 def test_apply_library_autosort_noop_when_output_explicit():

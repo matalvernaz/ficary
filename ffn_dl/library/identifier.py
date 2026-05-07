@@ -35,6 +35,20 @@ _URL_MARKERS = [
     ("literotica.com", "literotica"),
     ("wattpad.com", "wattpad"),
     ("fanfiction.net", "ffn"),
+    # Erotica sites — share the routing-by-adapter machinery so
+    # downloads from these sources can be sorted into a dedicated
+    # adult-fiction folder rather than falling through to "Misc".
+    ("adult-fanfiction.org", "aff"),
+    ("storiesonline.net", "storiesonline"),
+    ("nifty.org", "nifty"),
+    ("sexstories.com", "sexstories"),
+    ("mcstories.com", "mcstories"),
+    ("lushstories.com", "lushstories"),
+    ("fictionmania.tv", "fictionmania"),
+    ("tgstorytime.com", "tgstorytime"),
+    ("chyoa.com", "chyoa"),
+    ("darkwanderer.net", "darkwanderer"),
+    ("greatfeet.com", "greatfeet"),
 ]
 
 # Folder names that look like categorisation aids rather than fandoms.

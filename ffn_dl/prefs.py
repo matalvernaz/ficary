@@ -102,6 +102,10 @@ KEY_LIBRARY_MISC_FOLDER = "library_misc_folder"
 # from the misc bucket because "no fandom on an original-fiction
 # site" means "the work IS original", not "we couldn't classify".
 KEY_LIBRARY_ORIGINAL_FOLDER = "library_original_folder"
+# Folder name for adult-only / erotica downloads. Same reasoning as
+# the original-fiction folder: a visible separate subtree keeps
+# adult content out of the general fandom listing.
+KEY_LIBRARY_ADULT_FOLDER = "library_adult_folder"
 # Auto-mark WIP stories (status != Complete) as abandoned when
 # their file mtime is older than this many days. Non-positive
 # disables the auto-mark entirely. Marked stories are skipped by

@@ -35,6 +35,14 @@ so a user's library surfaces "here are the original novels I'm
 reading" as its own visible subtree, rather than burying them
 alongside genuine unclassifiable fic."""
 
+DEFAULT_ADULT_FOLDER = "Adult"
+"""Folder name for downloads from adult-only / erotica sites. Same
+reasoning as the original-fiction folder: a single visible subtree
+keeps adult content separated from general fic and original work,
+both for browsability and so a user pointing a screen reader or a
+shared-screen device at their library can avoid that subtree
+entirely if they want to."""
+
 # Site adapters whose entire catalog is original fiction — "no
 # fandom" on a download from these sites means the work IS original,
 # not that metadata extraction failed. When one of these is the
@@ -43,6 +51,16 @@ alongside genuine unclassifiable fic."""
 # :func:`ffn_dl.library.identifier.adapter_for_url` so the library
 # package doesn't need to import every scraper class.
 ORIGINAL_FICTION_ADAPTERS = frozenset({"royalroad"})
+
+# Site adapters whose entire catalog is adult-only erotica. Routed
+# to the dedicated adult folder by the auto-sorter, mirroring how
+# ORIGINAL_FICTION_ADAPTERS routes Royal Road. Same keying
+# convention (adapter string from identifier.adapter_for_url).
+ADULT_FICTION_ADAPTERS = frozenset({
+    "aff", "storiesonline", "nifty", "sexstories", "mcstories",
+    "lushstories", "fictionmania", "tgstorytime", "chyoa",
+    "darkwanderer", "greatfeet", "literotica",
+})
 
 
 # `/` is included so a title or author containing a slash can't
