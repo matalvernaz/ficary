@@ -98,6 +98,15 @@ class ChyoaScraper(BaseScraper):
             "or https://chyoa.com/chapter/Ooh-that-s-hot.17"
         )
 
+    @classmethod
+    def cache_key_for_url(cls, url_or_id):
+        """Cache writes use ``_slug_id_to_int(slug, numeric)`` — mirror
+        that here so the cache_doctor doesn't orphan every chyoa cache
+        entry on every run (the parsed tuple shape can't match a
+        directory name)."""
+        _kind, slug, numeric = cls.parse_story_id(url_or_id)
+        return _slug_id_to_int(slug, numeric)
+
     @staticmethod
     def _canonical_url(kind: str, slug: str, numeric: int) -> str:
         return f"{CHYOA_BASE}/{kind}/{slug}.{numeric}"

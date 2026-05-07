@@ -99,6 +99,16 @@ class NiftyScraper(BaseScraper):
         id should feed the path through :func:`_path_to_id`."""
         return _story_path(url_or_id)
 
+    @classmethod
+    def cache_key_for_url(cls, url_or_id):
+        """Cache writes use ``_path_to_id(path)`` — mirror that here.
+
+        The raw path contains slashes (``nifty/gay/college``); using it
+        as a cache key directly would also break ``check_cache`` because
+        a directory name can't contain a path separator. The hash sidesteps
+        both problems."""
+        return _path_to_id(cls.parse_story_id(url_or_id))
+
     @staticmethod
     def _story_url(path: str) -> str:
         return f"{NIFTY_BASE}/{path.strip('/')}/"

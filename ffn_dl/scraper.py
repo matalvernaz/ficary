@@ -495,7 +495,44 @@ class BaseScraper:
                 continue
 
             if resp.status_code == 200:
-                self._check_for_blocks(resp.text)
+                # ``_check_for_blocks`` raises if Cloudflare served the
+                # "Just a moment…" challenge as HTTP 200 (the standard
+                # CF interstitial shape). The retry loop is the right
+                # place to handle it: the same browser-rotation /
+                # cookie-cache strategy that resolves a 403 challenge
+                # also resolves the 200 variant. Without this branch
+                # one bad-fingerprint response killed the whole
+                # download, even though the retry path was already
+                # there for the 403 form of the same failure mode.
+                # ``StoryNotFoundError`` and ``AO3LockedError`` (raised
+                # by site-specific overrides of ``_check_for_blocks``)
+                # remain terminal — those describe a definitive answer
+                # from the site, not a fingerprint problem.
+                try:
+                    self._check_for_blocks(resp.text)
+                except CloudflareBlockError:
+                    self._log_fetch_diagnostic(
+                        sess=sess, resp=resp, url=url,
+                        label="200-cloudflare-challenge",
+                    )
+                    if attempt >= self.max_retries - 1:
+                        raise
+                    last_was_403 = True
+                    self._maybe_seed_cf_cookies(sess, url)
+                    self._rotate_browser()
+                    wait = FORBIDDEN_QUICK_RETRY_S + random.uniform(
+                        0, FORBIDDEN_QUICK_RETRY_S,
+                    )
+                    if attempt >= self.max_retries - 2:
+                        wait = FORBIDDEN_SLOW_RETRY_S
+                    logger.warning(
+                        "Cloudflare challenge served as HTTP 200, "
+                        "rotating profile and retrying in %.0fs "
+                        "(attempt %d/%d)",
+                        wait, attempt + 1, self.max_retries,
+                    )
+                    time.sleep(wait)
+                    continue
                 if last_was_403:
                     self._log_fetch_diagnostic(
                         sess=sess, resp=resp, url=url,
@@ -666,7 +703,22 @@ class BaseScraper:
         if not urls:
             return []
         if self.concurrency <= 1 or len(urls) == 1:
-            return [self._fetch(u) for u in urls]
+            # Sequential mode still has to honour the configured pacing
+            # — this path is what FicWad / Royal Road / MediaMiner fall
+            # back to when AIMD halves their concurrency to 1 after a
+            # rate-limit response, and what runs whenever a user passes
+            # ``--delay-min/--delay-max`` to those sites. Without the
+            # ``_delay()`` here the scraper hammered upstream ignoring
+            # the configured floor and the AIMD recovery never paced
+            # anything. ``first`` skips the leading delay so the very
+            # first call after metadata isn't double-throttled by the
+            # caller's own pre-fetch wait.
+            results: list[str] = []
+            for idx, u in enumerate(urls):
+                if idx > 0:
+                    self._delay()
+                results.append(self._fetch(u))
+            return results
 
         import concurrent.futures
 
@@ -674,6 +726,13 @@ class BaseScraper:
         concurrency = self.concurrency
         i = 0
         while i < len(urls):
+            # Pace between batches so the AIMD floor still applies in
+            # parallel mode. Per-request pacing inside a batch would
+            # serialise the threads, defeating the whole point of
+            # ``concurrency``; one ``_delay()`` between batches gives
+            # the scraper a configurable cooldown without that cost.
+            if i > 0:
+                self._delay()
             batch = urls[i:i + concurrency]
             with self._state_lock:
                 delay_before = self._current_delay
@@ -928,6 +987,22 @@ class BaseScraper:
         ``ValueError`` when the input can't be resolved.
         """
         raise NotImplementedError
+
+    @classmethod
+    def cache_key_for_url(cls, url_or_id):
+        """Return the cache directory suffix this scraper writes for ``url_or_id``.
+
+        The on-disk cache layout is ``<cache_root>/<site_name>_<key>/``,
+        where ``<key>`` is whatever the scraper's ``download`` /
+        ``_save_meta_cache`` chose to pass as ``story_id``. For most
+        scrapers that's the ``parse_story_id`` return value verbatim.
+        Scrapers that hash a tuple/slug into an int before writing
+        (Chyoa, Literotica, MCStories, Lushstories, Nifty) override
+        this to mirror that hash so :mod:`ffn_dl.cache_doctor` can
+        match cache directories against the library index without
+        false-orphaning them all on every run.
+        """
+        return cls.parse_story_id(url_or_id)
 
     @staticmethod
     def is_author_url(url):
@@ -1314,13 +1389,31 @@ class FFNScraper(BaseScraper):
         chap_select = soup.find("select", id="chap_select")
         if chap_select:
             options = chap_select.find_all("option")
-            num_chapters = len(options)
             chapter_titles = {}
             for opt in options:
-                num = int(opt["value"])
+                # Guard against ``<option>`` entries without a numeric
+                # ``value`` attribute. FFN serves the chapter dropdown
+                # this way today, but during outages they've returned
+                # the raw fallback page that contains a literal
+                # ``<option>back to top</option>`` — which used to crash
+                # the metadata parse with KeyError/ValueError before
+                # the retry loop ever got a chance.
+                raw_value = opt.get("value")
+                if raw_value is None:
+                    continue
+                try:
+                    num = int(raw_value)
+                except (TypeError, ValueError):
+                    continue
                 label = opt.get_text(strip=True)
                 cleaned = re.sub(r"^\d+\.\s*", "", label)
                 chapter_titles[num] = cleaned if cleaned else f"Chapter {num}"
+            num_chapters = len(chapter_titles) or 1
+            if not chapter_titles:
+                # Fallback when the dropdown was malformed — a single
+                # chapter is the safe assumption (matches the no-select
+                # branch below).
+                chapter_titles = {1: title}
         else:
             num_chapters = 1
             chapter_titles = {1: title}
@@ -1370,11 +1463,30 @@ class FFNScraper(BaseScraper):
                 extra["characters"] = bare[2]
 
             time_spans = meta_span.find_all("span", attrs={"data-xutime": True})
+            # ``data-xutime`` is normally an integer epoch but FFN has
+            # served the literal ``"0"`` and (during one outage) a
+            # malformed value during outages. ``_safe_xutime`` returns
+            # None on anything unparseable so a single bad span doesn't
+            # abort the whole metadata read.
+            def _safe_xutime(span):
+                raw = span.get("data-xutime")
+                if not raw:
+                    return None
+                try:
+                    return int(raw)
+                except (TypeError, ValueError):
+                    return None
             if len(time_spans) >= 2:
-                extra["date_updated"] = int(time_spans[0]["data-xutime"])
-                extra["date_published"] = int(time_spans[1]["data-xutime"])
+                updated = _safe_xutime(time_spans[0])
+                published = _safe_xutime(time_spans[1])
+                if updated is not None:
+                    extra["date_updated"] = updated
+                if published is not None:
+                    extra["date_published"] = published
             elif len(time_spans) == 1:
-                extra["date_published"] = int(time_spans[0]["data-xutime"])
+                published = _safe_xutime(time_spans[0])
+                if published is not None:
+                    extra["date_published"] = published
 
         return {
             "title": title,

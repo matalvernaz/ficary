@@ -73,6 +73,13 @@ class LushStoriesScraper(BaseScraper):
             "Expected e.g. https://www.lushstories.com/stories/feet/foot-worship"
         )
 
+    @classmethod
+    def cache_key_for_url(cls, url_or_id):
+        """Cache writes use ``_slug_to_id(category, slug)`` — mirror that
+        here so cache_doctor matches disk."""
+        category, slug = cls.parse_story_id(url_or_id)
+        return _slug_to_id(category, slug)
+
     @staticmethod
     def is_author_url(url):
         return bool(LUSH_AUTHOR_URL_RE.search(str(url)))

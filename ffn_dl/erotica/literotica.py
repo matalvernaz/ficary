@@ -65,6 +65,12 @@ class LiteroticaScraper(BaseScraper):
             "or a bare slug."
         )
 
+    @classmethod
+    def cache_key_for_url(cls, url_or_id):
+        """Cache writes use ``_slug_to_id`` of the slug — mirror that here
+        so the cache_doctor's orphan match lines up with disk."""
+        return _slug_to_id(cls.parse_story_id(url_or_id))
+
     @staticmethod
     def is_author_url(url):
         return bool(_AUTHOR_RE.search(str(url)))
@@ -373,15 +379,16 @@ class LiteroticaScraper(BaseScraper):
                     tag.decompose()
             return body.decode_contents()
 
-        # Page 1 — use the soup we already parsed
-        page_soups = [soup]
-        for p in range(2, num_pages + 1):
-            if story.chapters:
-                self._delay()
-            page_html = self._fetch_page(slug, p)
-            page_soups.append(BeautifulSoup(page_html, "lxml"))
-
-        for i, page_soup in enumerate(page_soups, 1):
+        # Walk pages and fetch on demand. Earlier versions fetched
+        # *every* page upfront, then walked them applying skip/spec —
+        # so a ``--chapters 1`` request on a 30-page story still hit
+        # the network 30 times, and cached chapters were silently
+        # re-fetched. Going one-page-at-a-time lets us short-circuit
+        # on cache hits and on out-of-range chapters at the cost of
+        # nothing (page 1 is reused via the soup we already have).
+        page_soups: dict[int, BeautifulSoup] = {1: soup}
+        any_fetched = False
+        for i in range(1, num_pages + 1):
             if i <= skip_chapters:
                 continue
             if not chapter_in_spec(i, chapters):
@@ -392,6 +399,14 @@ class LiteroticaScraper(BaseScraper):
                 if progress_callback:
                     progress_callback(i, num_pages, cached.title, True)
                 continue
+            page_soup = page_soups.get(i)
+            if page_soup is None:
+                if any_fetched:
+                    self._delay()
+                page_html = self._fetch_page(slug, i)
+                any_fetched = True
+                page_soup = BeautifulSoup(page_html, "lxml")
+                page_soups[i] = page_soup
             html_body = extract_body(page_soup)
             title = f"Page {i}" if num_pages > 1 else meta["title"]
             ch = Chapter(number=i, title=title, html=html_body)

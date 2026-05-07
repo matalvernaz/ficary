@@ -168,3 +168,118 @@ class TestSummary:
         report = check_cache(tmp_path, index=index)
         summary = report.summary()
         assert "Orphan" in summary
+
+
+class TestNonIntegerCacheKeys:
+    """Regression coverage for the 5 sites where ``parse_story_id`` returns
+    a tuple/slug — :meth:`cache_key_for_url` is what the cache directory
+    is actually named with, and the orphan match has to use it. Without
+    these tests the cache_doctor silently mis-orphans every entry on
+    these sites and ``--prune`` deletes them all.
+    """
+
+    def test_chyoa_cache_entry_indexed_is_not_orphan(self, tmp_path):
+        from ffn_dl.erotica import ChyoaScraper
+
+        url = "https://chyoa.com/chapter/Foo.42"
+        sid = ChyoaScraper.cache_key_for_url(url)
+        _seed_cache_entry(tmp_path, "chyoa", str(sid))
+        lib_root = tmp_path / "lib"
+        lib_root.mkdir()
+        index = _fresh_index(tmp_path)
+        _seed_library_entry(index, lib_root, url, "chyoa")
+        report = check_cache(tmp_path, index=index)
+        assert report.orphan_entries == []
+
+    def test_chyoa_node_entries_never_flagged_as_orphan(self, tmp_path):
+        # Per-node caches (chyoa_node_<id>) outlive any one download
+        # and aren't tied to a library URL — they must never be
+        # treated as orphans regardless of index contents.
+        node_dir = tmp_path / "chyoa_node_abc123"
+        node_dir.mkdir()
+        (node_dir / "node.json").write_text("{}", encoding="utf-8")
+        lib_root = tmp_path / "lib"
+        lib_root.mkdir()
+        index = _fresh_index(tmp_path)  # empty index — would orphan everything
+        report = check_cache(tmp_path, index=index)
+        assert report.orphan_entries == []
+        assert report.total_entries == 0  # node dirs aren't story entries
+
+    def test_literotica_cache_entry_indexed_is_not_orphan(self, tmp_path):
+        from ffn_dl.erotica import LiteroticaScraper
+
+        url = "https://www.literotica.com/s/some-fic"
+        sid = LiteroticaScraper.cache_key_for_url(url)
+        _seed_cache_entry(tmp_path, "literotica", str(sid))
+        lib_root = tmp_path / "lib"
+        lib_root.mkdir()
+        index = _fresh_index(tmp_path)
+        _seed_library_entry(index, lib_root, url, "literotica")
+        report = check_cache(tmp_path, index=index)
+        assert report.orphan_entries == []
+
+    def test_lushstories_cache_entry_indexed_is_not_orphan(self, tmp_path):
+        from ffn_dl.erotica import LushStoriesScraper
+
+        url = "https://www.lushstories.com/stories/feet/foot-worship"
+        sid = LushStoriesScraper.cache_key_for_url(url)
+        _seed_cache_entry(tmp_path, "lushstories", str(sid))
+        lib_root = tmp_path / "lib"
+        lib_root.mkdir()
+        index = _fresh_index(tmp_path)
+        _seed_library_entry(index, lib_root, url, "lushstories")
+        report = check_cache(tmp_path, index=index)
+        assert report.orphan_entries == []
+
+    def test_mcstories_cache_entry_indexed_is_not_orphan(self, tmp_path):
+        from ffn_dl.erotica import MCStoriesScraper
+
+        url = "https://mcstories.com/SomeStory/"
+        sid = MCStoriesScraper.cache_key_for_url(url)
+        _seed_cache_entry(tmp_path, "mcstories", str(sid))
+        lib_root = tmp_path / "lib"
+        lib_root.mkdir()
+        index = _fresh_index(tmp_path)
+        _seed_library_entry(index, lib_root, url, "mcstories")
+        report = check_cache(tmp_path, index=index)
+        assert report.orphan_entries == []
+
+    def test_nifty_cache_entry_indexed_is_not_orphan(self, tmp_path):
+        from ffn_dl.erotica import NiftyScraper
+
+        url = "https://www.nifty.org/nifty/gay/college/the-brotherhood/"
+        sid = NiftyScraper.cache_key_for_url(url)
+        _seed_cache_entry(tmp_path, "nifty", str(sid))
+        lib_root = tmp_path / "lib"
+        lib_root.mkdir()
+        index = _fresh_index(tmp_path)
+        _seed_library_entry(index, lib_root, url, "nifty")
+        report = check_cache(tmp_path, index=index)
+        assert report.orphan_entries == []
+
+    def test_default_cache_key_falls_through_to_parse_story_id(self):
+        # Sites whose parse_story_id already returns the cache-friendly id
+        # (FFN, AO3, RoyalRoad, FicWad, MediaMiner, Wattpad, AFF, SOL,
+        # Sexstories, Fictionmania, TGStorytime, DarkWanderer, GreatFeet)
+        # inherit the default and must not regress.
+        from ffn_dl.scraper import FFNScraper
+
+        assert FFNScraper.cache_key_for_url(
+            "https://www.fanfiction.net/s/12345",
+        ) == 12345
+        assert FFNScraper.cache_key_for_url(12345) == 12345
+
+    def test_non_story_top_level_dirs_are_skipped(self, tmp_path):
+        # ``llm_an``, ``cf-cookies``, ``covers``, ``huggingface`` live
+        # next to the per-story caches but aren't story-keyed; they
+        # must never appear in the orphan list, regardless of index.
+        for name in ("llm_an", "covers", "huggingface", "cf-cookies"):
+            d = tmp_path / name
+            d.mkdir()
+            (d / "junk.json").write_bytes(b"{}")
+        lib_root = tmp_path / "lib"
+        lib_root.mkdir()
+        index = _fresh_index(tmp_path)
+        report = check_cache(tmp_path, index=index)
+        assert report.orphan_entries == []
+        assert report.total_entries == 0

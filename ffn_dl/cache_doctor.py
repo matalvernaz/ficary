@@ -197,10 +197,39 @@ def _dir_size(path: Path) -> int:
     return total
 
 
+_NON_STORY_CACHE_PREFIXES = frozenset({
+    # Top-level subdirs of the cache root that aren't per-story caches.
+    # Anything named exactly one of these — or, for ``chyoa_node``,
+    # named ``chyoa_node_<id>`` — is excluded from the orphan check
+    # because there's no library-index entry to match it against.
+    # ``cf-cookies`` has a hyphen so ``_site_prefix`` wouldn't return
+    # a matching string anyway, but listing it keeps the intent
+    # readable and protects against future renames.
+    "covers",
+    "huggingface",
+    "llm_an",
+    "cf-cookies",
+})
+
+_NON_STORY_CACHE_NAME_PREFIXES = (
+    # ``<site>_node_<id>`` — chyoa's per-node cache layer. These
+    # outlive any single download (cross-tree branches share them)
+    # and aren't tied to a library-index URL. ``_site_prefix`` would
+    # otherwise return the bare site name and the orphan match would
+    # never line up.
+    "chyoa_node_",
+)
+
+
 def _site_prefix(entry_name: str) -> str | None:
     """The cache naming convention is ``<site>_<story_id>``. Extract
     the site prefix, or None if the directory doesn't match the
     expected pattern (e.g. ``covers/`` or user-created scratch dirs)."""
+    if entry_name in _NON_STORY_CACHE_PREFIXES:
+        return None
+    for prefix in _NON_STORY_CACHE_NAME_PREFIXES:
+        if entry_name.startswith(prefix):
+            return None
     if "_" not in entry_name:
         return None
     return entry_name.split("_", 1)[0]
@@ -210,11 +239,15 @@ def _tracked_cache_keys(index: LibraryIndex) -> set[str]:
     """Every cache-dir name (``<site>_<id>``) referenced by any story
     in any library root of ``index``.
 
-    We derive the name from each story's ``adapter`` plus its
-    canonical story id. Cache names use the integer / slug id the
-    scraper wrote — which ``parse_story_id`` produces from the stored
-    URL. This requires a tiny scraper import per site, which is OK
-    because the same imports happen on any real download anyway.
+    We derive the name from each story's ``adapter`` plus the
+    *cache key* the scraper actually wrote — which is what
+    :meth:`~ffn_dl.scraper.BaseScraper.cache_key_for_url` returns.
+    For most sites that's the same as ``parse_story_id`` (an int);
+    for Chyoa, Literotica, MCStories, Lushstories, and Nifty it's a
+    hash of the slug/path because those scrapers can't use the
+    parsed identifier as a directory name (tuples, slashes, mixed
+    case). Without ``cache_key_for_url`` the orphan match would
+    silently flag every cache entry on those sites for deletion.
     """
     keys: set[str] = set()
     for root in index.library_roots():
@@ -226,7 +259,7 @@ def _tracked_cache_keys(index: LibraryIndex) -> set[str]:
             if scraper_cls is None:
                 continue
             try:
-                sid = scraper_cls.parse_story_id(url)
+                sid = scraper_cls.cache_key_for_url(url)
             except Exception:
                 continue
             keys.add(f"{scraper_cls.site_name}_{sid}")

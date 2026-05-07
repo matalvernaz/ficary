@@ -578,7 +578,12 @@ class AO3Scraper(BaseScraper):
         """
         from .models import chapter_in_spec
 
-        chapter_spec = chapters  # don't shadow the parsed list below
+        # Capture the caller's spec under a different name so the local
+        # binding that holds the parsed Chapter list below doesn't
+        # shadow it. Same-name locals + params worked by accident before
+        # because of the early alias, but the next maintainer to add a
+        # branch that read ``chapters`` would silently get the wrong one.
+        chapter_spec = chapters
         work_id = self.parse_story_id(url_or_id)
         work_url = f"{AO3_BASE}/works/{work_id}"
         full_url = f"{work_url}?view_adult=true&view_full_work=true"
@@ -591,11 +596,15 @@ class AO3Scraper(BaseScraper):
             bare_soup = BeautifulSoup(bare_html, "lxml")
             current_count = self._parse_chapter_count_from_stats(bare_soup)
             if current_count is not None and current_count <= skip_chapters:
+                # ``.get`` rather than ``[]`` so an older cached meta
+                # without one of these fields (older schema, partial
+                # write recovered after a crash) still returns a usable
+                # Story instead of crashing the update path.
                 return Story(
                     id=work_id,
-                    title=cached_meta["title"],
-                    author=cached_meta["author"],
-                    summary=cached_meta["summary"],
+                    title=cached_meta.get("title", ""),
+                    author=cached_meta.get("author", ""),
+                    summary=cached_meta.get("summary", ""),
                     url=work_url,
                     author_url=cached_meta.get("author_url", ""),
                     metadata=cached_meta.get("extra", {}),
@@ -617,10 +626,10 @@ class AO3Scraper(BaseScraper):
             metadata=meta.get("extra", {}),
         )
 
-        chapters = self._parse_chapters(fetched_soup, meta["title"])
-        total = len(chapters)
+        parsed_chapters = self._parse_chapters(fetched_soup, meta["title"])
+        total = len(parsed_chapters)
 
-        for ch in chapters:
+        for ch in parsed_chapters:
             if ch.number <= skip_chapters:
                 continue
             if not chapter_in_spec(ch.number, chapter_spec):

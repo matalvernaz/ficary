@@ -207,14 +207,29 @@ EROTICA_SCRAPERS: tuple[type[BaseScraper], ...] = (
 def detect_scraper(url: str) -> type[BaseScraper]:
     """Return the scraper class that handles ``url``.
 
+    Matches against the parsed hostname rather than substring-searching
+    the entire URL — otherwise a URL whose path or query happens to
+    contain a known site's name (``https://example.com/?ref=ao3.org``)
+    misroutes to that scraper, then fails awkwardly inside its parser
+    instead of falling through cleanly. We compare ``host == hostname``
+    or ``host.endswith("." + hostname)`` so subdomains like
+    ``hp.adult-fanfiction.org`` match their root scraper.
+
     Falls back to FFNScraper for bare numeric IDs and unrecognised
     hostnames — FFN has historically been the default "just give me a
     number" behaviour.
     """
-    text = str(url).lower()
-    for hostname, scraper_cls in _HOSTNAME_TO_SCRAPER:
-        if hostname in text:
-            return scraper_cls
+    text = str(url)
+    host = ""
+    try:
+        parsed = urlsplit(text)
+        host = (parsed.hostname or "").lower()
+    except (ValueError, AttributeError):
+        host = ""
+    if host:
+        for hostname, scraper_cls in _HOSTNAME_TO_SCRAPER:
+            if host == hostname or host.endswith("." + hostname):
+                return scraper_cls
     return FFNScraper
 
 
@@ -337,8 +352,11 @@ _CANONICAL_RULES: list[tuple[str, str, re.Pattern[str], str]] = [
         # Chyoa URL shape: /story/<slug>.<id> or /chapter/<slug>.<id>.
         # We canonicalise both to the chapter form because that's what
         # the scraper operates on (the story URL redirects to the root
-        # chapter of the same tree).
-        re.compile(r"^/(?:story|chapter)/([^/?#\s]+\.\d+)/?$"),
+        # chapter of the same tree). ``re.I`` because chyoa serves the
+        # same chapter at /chapter/Foo.99 and /CHAPTER/Foo.99 — without
+        # case-insensitive matching the second form falls through to
+        # the unknown-host fallback and fails to dedupe against the first.
+        re.compile(r"^/(?:story|chapter)/([^/?#\s]+\.\d+)/?$", re.I),
         "/chapter/{}",
     ),
     (

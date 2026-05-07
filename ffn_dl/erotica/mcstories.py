@@ -85,6 +85,12 @@ class MCStoriesScraper(BaseScraper):
             "Expected e.g. https://mcstories.com/AToZeb/ or a bare slug."
         )
 
+    @classmethod
+    def cache_key_for_url(cls, url_or_id):
+        """Cache writes use ``_slug_to_id(slug)`` — mirror that here so
+        cache_doctor matches disk."""
+        return _slug_to_id(cls.parse_story_id(url_or_id))
+
     @staticmethod
     def is_author_url(url):
         return bool(MCS_AUTHOR_URL_RE.search(str(url)))

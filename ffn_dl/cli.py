@@ -2657,7 +2657,13 @@ def _handle_watch(args: argparse.Namespace) -> None:
     downloaded = set()
     last_clip = ""
 
-    print("Watching clipboard... paste a fanfiction.net or ficwad.com URL to download")
+    print(
+        "Watching clipboard... paste any fanfiction URL "
+        "(FFN, AO3, Royal Road, Wattpad, FicWad, MediaMiner, Literotica, "
+        "AFF, StoriesOnline, Nifty, SexStories, MCStories, Lushstories, "
+        "Fictionmania, TGStorytime, Chyoa, Dark Wanderer, GreatFeet) "
+        "to download."
+    )
     print("Press Ctrl+C to stop.\n")
 
     try:
@@ -2708,11 +2714,14 @@ def _build_parser() -> argparse.ArgumentParser:
     """
     parser = argparse.ArgumentParser(
         prog="ffn-dl",
-        description="Download fanfiction from fanfiction.net and ficwad.com",
+        description="Cross-platform fanfiction + erotica downloader",
         epilog=(
             "Supported sites: fanfiction.net, ficwad.com, "
             "archiveofourown.org, royalroad.com, mediaminer.org, "
-            "literotica.com, wattpad.com\n"
+            "literotica.com, wattpad.com, adult-fanfiction.org, "
+            "storiesonline.net, nifty.org, sexstories.com, mcstories.com, "
+            "lushstories.com, fictionmania.tv, tgstorytime.com, chyoa.com, "
+            "darkwanderer.net, greatfeet.com\n"
             "Name template placeholders: "
             "{title} {author} {id} {words} {status} {rating} {language} {chapters}"
         ),
@@ -3815,8 +3824,33 @@ def _is_search_mode(args: argparse.Namespace) -> bool:
 def _handle_update_file(args: argparse.Namespace) -> int:
     """Single-file --update: read source URL, download new chapters, re-export."""
     update_path = Path(args.update)
-    url = extract_source_url(update_path)
-    existing_chapters = count_chapters(update_path)
+    # ``extract_source_url`` raises ``FileNotFoundError`` for a missing
+    # path and ``ValueError`` when the file isn't an ffn-dl export. Both
+    # were uncaught before, so a typo or a non-ffn-dl file produced a
+    # raw traceback instead of a one-line error. ``count_chapters``
+    # can raise ``OSError`` on a corrupt EPUB. Surface each as a
+    # structured one-liner and exit non-zero so scripts can branch.
+    try:
+        url = extract_source_url(update_path)
+    except FileNotFoundError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+    except ValueError as exc:
+        print(
+            f"Error: could not read source URL from "
+            f"{update_path.name}: {exc}",
+            file=sys.stderr,
+        )
+        return 1
+    try:
+        existing_chapters = count_chapters(update_path)
+    except (OSError, ValueError) as exc:
+        print(
+            f"Error: could not count chapters in "
+            f"{update_path.name}: {exc}",
+            file=sys.stderr,
+        )
+        return 1
     if args.format is None:
         args.format = _FMT_MAP.get(update_path.suffix.lower(), "epub")
     if args.output is None:

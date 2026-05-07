@@ -1,5 +1,73 @@
 # Changelog
 
+## 2.4.5 — 2026-05-07
+
+### Deep audit fixes — cache, routing, scraper sweep
+
+A full read of every source module surfaced eleven bugs this release
+patches. The destructive one (cache pruning) is first; the rest are
+ordered roughly by user impact.
+
+- **Cache-doctor key mismatch (DESTRUCTIVE).** ``check_cache``
+  computed the orphan key as ``f"{site}_{parse_story_id(url)}"``, but
+  for Chyoa, Lushstories, Literotica, MCStories, and Nifty
+  ``parse_story_id`` returns a tuple, slug, or path — *not* the int
+  hash the cache directory is actually named with. Every entry on
+  those five sites was flagged as orphan on every run, and
+  ``--cache-doctor --prune`` deleted them all. Fixed by adding
+  ``BaseScraper.cache_key_for_url`` which mirrors the on-disk
+  shape; the five affected sites override it. Also stops counting
+  ``chyoa_node_<id>`` / ``llm_an`` / ``covers`` / ``cf-cookies`` /
+  ``huggingface`` as story caches.
+- **``detect_scraper`` was substring-matching the entire URL.** A URL
+  like ``https://example.com/?ref=ao3.org`` got routed to the AO3
+  scraper. Now matches against the parsed hostname (``host == name``
+  or ``host.endswith("." + name)``) so a decoy substring can't
+  hijack routing.
+- **Chyoa canonical URL was case-sensitive.** ``/CHAPTER/Foo.99``
+  fell through to the unknown-host fallback instead of canonicalising
+  to ``/chapter/Foo.99``, so two URL variants for the same chapter
+  could appear as separate library entries. Added ``re.I``.
+- **``_fetch_parallel`` ignored ``_delay()``.** Both the sequential
+  fast-path and the threaded path called ``_fetch`` directly, so
+  FicWad / Royal Road / MediaMiner downloads ran without the
+  configured inter-chapter pacing — and the AIMD floor never
+  applied after a rate-limit response halved concurrency to 1.
+  Sequential mode now sleeps between fetches; threaded mode sleeps
+  between batches.
+- **Literotica fetched every page even when most would be skipped.**
+  ``--chapters 1`` on a 30-page story still hit the network 30
+  times, and a warm cache wasn't consulted before fetching.
+  Restructured to walk pages on demand, short-circuit on cache
+  hits, and respect ``skip_chapters`` / ``chapter_in_spec``.
+- **Cloudflare challenge as HTTP 200 killed the download.**
+  ``_check_for_blocks`` raised ``CloudflareBlockError`` straight
+  through the retry loop on the first 200-with-CF response, while
+  the 403 form of the same failure already had retry + browser
+  rotation. Now treated symmetrically.
+- **AO3 ``download`` shadowed its ``chapters`` parameter mid-function.**
+  A future maintainer reading ``chapters`` would have got the
+  parsed list instead of the spec. Renamed the local.
+- **AO3 cached-meta probe used ``[]`` lookups on the cached dict.**
+  An older cached meta missing one of those keys (post-crash
+  partial write, schema change) crashed the update path. Switched
+  to ``.get(..., "")``.
+- **FFN metadata parser had unguarded ``int()`` on optional values.**
+  ``int(opt["value"])`` and ``int(time_spans[0]["data-xutime"])``
+  blew up the whole metadata parse on malformed responses (FFN
+  has served pages with a literal ``<option>back to top</option>``
+  during outages). Both now skip individual bad entries rather
+  than aborting.
+- **CLI ``--update FILE`` produced raw tracebacks on bad input.**
+  ``extract_source_url`` and ``count_chapters`` were called
+  without try/except, so a missing file or non-ffn-dl export
+  showed an opaque traceback. Now surfaces a one-line error and
+  exits non-zero.
+- **CLI help text was out of date.** The clipboard watcher told
+  users to "paste a fanfiction.net or ficwad.com URL" even though
+  the codebase supports 19 sites; the parser epilog's Supported
+  sites list named seven. Both updated to the full set.
+
 ## 2.4.4 — 2026-05-06
 
 ### Audit sweep + Lushstories series grouping
