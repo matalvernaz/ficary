@@ -33,6 +33,7 @@ from __future__ import annotations
 import dataclasses
 import json
 import logging
+import os
 import threading
 import time
 import uuid
@@ -320,12 +321,23 @@ class WatchlistStore:
         )
 
     def _quarantine_corrupt_file(self) -> None:
-        """Rename the corrupt file aside so the next save starts clean."""
+        """Rename the corrupt file aside so the next save starts clean.
+
+        The suffix carries both an epoch timestamp *and* a uniqueness
+        token so two corruption events within the same second don't
+        collide on Windows (``Path.rename`` raises ``FileExistsError``
+        rather than overwriting). A collision used to fall through to
+        the next ``save()``, which atomic-replaced the corrupt file with
+        the new state — destroying the only forensic copy. ``os.replace``
+        is also overwrite-safe across platforms so a stale quarantine
+        from a previous run can never block the new one.
+        """
         try:
+            token = uuid.uuid4().hex[:6]
             quarantine = self.path.with_suffix(
-                f".corrupt-{int(time.time())}{self.path.suffix}"
+                f".corrupt-{int(time.time())}-{token}{self.path.suffix}"
             )
-            self.path.rename(quarantine)
+            os.replace(self.path, quarantine)
         except OSError as exc:
             # If we can't even rename it (permissions, read-only FS),
             # log and move on — the overwrite on next save() will fix it.

@@ -1319,6 +1319,137 @@ def collapse_literotica_series(results):
     return collapsed
 
 
+# Lushstories' multi-part convention (per the
+# ``ffn_dl.erotica.lushstories`` module docstring): part 1 lives at
+# the bare slug, parts 2+ append ``-2``, ``-3``, … to the slug. The
+# search scrape returns each part as its own row with no series
+# metadata, so we recover the grouping from URL shape alone.
+_LUSH_SLUG_URL_RE = re.compile(
+    r"lushstories\.com/stories/[^/?#]+/([^/?#]+?)/?(?:\?|#|$)",
+    re.IGNORECASE,
+)
+# Trailing ``-N`` part suffix on a slug. ``N`` ≥ 2 so ``part==1`` is
+# only ever introduced by the bare-slug "adopt as part 1" pass below;
+# ``N <= 99`` so we don't fold a year-tagged annual story
+# (``new-years-eve-2024``) into a phantom 2024-part series.
+_LUSH_PART_SUFFIX_RE = re.compile(r"^(.+?)-(\d{1,2})$")
+
+
+def _lushstories_series_key(result):
+    """Return ``(base_slug, part)`` for a Lushstories ``-N`` part URL,
+    else None. ``part`` is the integer suffix (≥ 2)."""
+    url = result.get("url") or ""
+    if "lushstories.com" not in url.lower():
+        return None
+    m = _LUSH_SLUG_URL_RE.search(url)
+    if not m:
+        return None
+    slug = m.group(1).lower()
+    part_m = _LUSH_PART_SUFFIX_RE.match(slug)
+    if not part_m:
+        return None
+    base = part_m.group(1)
+    part = int(part_m.group(2))
+    if part < 2:
+        return None
+    return base, part
+
+
+def _lushstories_bare_slug(result):
+    """Return the URL slug from a lushstories result, lowercased; None
+    when the URL isn't a lushstories story page."""
+    url = result.get("url") or ""
+    if "lushstories.com" not in url.lower():
+        return None
+    m = _LUSH_SLUG_URL_RE.search(url)
+    return m.group(1).lower() if m else None
+
+
+def collapse_lushstories_series(results):
+    """Group Lushstories results that are ``-2``/``-3``/… siblings of a
+    base story slug into one series row.
+
+    Mirrors :func:`collapse_literotica_series` in shape — the search
+    scrape doesn't surface author or series metadata, so the group key
+    is the base slug alone. The per-site URL prefix in
+    :data:`_LUSH_SLUG_URL_RE` keeps this from matching non-lush rows.
+    """
+    groups: dict[str, list] = {}  # base_slug → [(index, result, part)]
+    seen_indices: set[int] = set()
+    for i, r in enumerate(results):
+        key = _lushstories_series_key(r)
+        if key is None:
+            continue
+        base_slug, part = key
+        groups.setdefault(base_slug, []).append((i, r, part))
+        seen_indices.add(i)
+
+    # Adopt a bare-slugged Lushstories result as part 1 when its slug
+    # matches an existing group's base — Lush's convention is that part
+    # 1 lives at the bare slug. Same guard as Literotica: only adopt
+    # when the group doesn't *already* have an explicit part 1.
+    for i, r in enumerate(results):
+        if i in seen_indices:
+            continue
+        slug = _lushstories_bare_slug(r)
+        if not slug or slug not in groups:
+            continue
+        if any(part == 1 for _, _, part in groups[slug]):
+            continue
+        groups[slug].append((i, r, 1))
+
+    to_collapse: dict[int, dict] = {}
+    hide: set[int] = set()
+    for base_slug, members in groups.items():
+        if len(members) < 2:
+            continue
+        members.sort(key=lambda m: m[2])
+        anchor_i, anchor_r, _ = members[0]
+        parts = [m[1] for m in members]
+        for i, *_ in members:
+            hide.add(i)
+        to_collapse[anchor_i] = {
+            "title": anchor_r.get("title", "") or base_slug,
+            "author": anchor_r.get("author", ""),
+            "url": anchor_r.get("url", ""),
+            "summary": anchor_r.get("summary", ""),
+            "words": "?",
+            "chapters": str(len(parts)),
+            "rating": anchor_r.get("rating", "?"),
+            "fandom": anchor_r.get("fandom", ""),
+            "status": "Series",
+            "site": "lushstories",
+            "is_series": True,
+            "series_id": f"lush:{base_slug}",
+            "series_parts": parts,
+            "parts_only": True,
+        }
+
+    collapsed = []
+    for i, r in enumerate(results):
+        if i in to_collapse:
+            collapsed.append(to_collapse[i])
+        elif i in hide:
+            continue
+        else:
+            collapsed.append(r)
+    return collapsed
+
+
+def collapse_erotica_series(results):
+    """Run every per-site erotica series collapser over the merged
+    fan-out batch.
+
+    Each per-site collapser scopes its URL pattern to its own host so
+    chaining them is order-independent: a Literotica row never reaches
+    the Lushstories matcher and vice versa. Adding a new site means
+    appending one more call here.
+    """
+    out = collapse_literotica_series(results)
+    out = collapse_lushstories_series(out)
+    return out
+
+
 LIT_CATEGORIES = {
     "any": None,
     # Literotica's top-level category slugs also exist as tag slugs on

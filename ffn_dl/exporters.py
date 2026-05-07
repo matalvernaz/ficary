@@ -45,9 +45,36 @@ def _emit(progress: Callable[[str], None] | None, line: str) -> None:
         logger.info("%s", line.lstrip())
 
 
+# Win32 reserved device names. Any filename whose stem (case-insensitive)
+# matches one of these is rejected by CreateFile with ERROR_INVALID_NAME
+# regardless of extension, so a fic titled "CON" or "Aux" can't be saved
+# unless we rewrite the stem. Source:
+# learn.microsoft.com/en-us/windows/win32/fileio/naming-a-file
+_WIN_RESERVED_NAMES = frozenset({
+    "con", "prn", "aux", "nul",
+    *(f"com{n}" for n in range(1, 10)),
+    *(f"lpt{n}" for n in range(1, 10)),
+})
+
+
 def _safe_filename(name):
-    """Strip characters that are illegal in filenames on Windows/macOS/Linux."""
-    return re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", name).strip(". ")
+    """Strip characters illegal in filenames on Windows/macOS/Linux and
+    escape Windows reserved device names.
+
+    The trailing-`.`/`-space` strip is also Windows-specific: Win32
+    silently drops them on save, so the on-disk name wouldn't match
+    what the caller asked for and library de-duplication would later
+    re-export the same fic.
+    """
+    cleaned = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", name).strip(". ")
+    if not cleaned:
+        return cleaned
+    # Split off an extension so "CON.txt" → "_CON.txt" rather than
+    # "_CON" (which would lose the export format on disk).
+    stem, dot, ext = cleaned.partition(".")
+    if stem.lower() in _WIN_RESERVED_NAMES:
+        stem = "_" + stem
+    return stem + dot + ext
 
 
 def format_filename(story: Story, template: str = DEFAULT_TEMPLATE) -> str:

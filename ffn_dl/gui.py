@@ -1990,7 +1990,19 @@ class MainFrame(wx.Frame):
             prompt()
         else:
             wx.CallAfter(prompt)
-            done.wait()
+            # Bound the wait so the worker can't park forever if the
+            # frame is destroyed between the CallAfter dispatch and the
+            # wx event loop servicing it (e.g. user closes the main
+            # window while a metadata fetch is in flight). Two minutes
+            # is well past any human "click yes/no" reaction time, so a
+            # timeout that long virtually never fires for real users —
+            # but it guarantees the worker thread eventually unblocks
+            # so a Quit-during-download can finish cleanly.
+            if not done.wait(timeout=120):
+                logger.debug(
+                    "Fandom-folder prompt timed out (frame likely "
+                    "destroyed); treating as 'no'."
+                )
         return answer["value"]
 
     def _maybe_offer_library_as_default(self) -> None:

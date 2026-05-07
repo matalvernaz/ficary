@@ -1,5 +1,49 @@
 # Changelog
 
+## 2.4.4 — 2026-05-06
+
+### Audit sweep + Lushstories series grouping
+
+Eight bugs surfaced in a focused review of the update flow, scrapers,
+GUI, and library export — plus a long-standing gap in the erotica
+search where Lushstories multi-part stories never grouped into series.
+
+- **Update truncation guard.** ``self_update._download`` now raises
+  when a connection drops mid-stream and the byte count doesn't match
+  ``Content-Length``. Without this a partial zip could land on disk
+  and either fail extraction or — worse — half-replace the install.
+- **Faster update Abort.** Per-read timeout dropped from 60 s to 12 s
+  so clicking Abort during a stalled HTTPS read is observed quickly
+  instead of hanging up to a minute.
+- **Chyoa walk no longer recurses.** The DFS over the chyoa CYOA tree
+  is iterative; deep user-generated trees no longer raise
+  ``RecursionError`` mid-download.
+- **Watchlist quarantine collision.** Two corruption events in the
+  same second on Windows used to lose the second file silently. The
+  quarantine name now carries a uuid suffix and uses ``os.replace``.
+- **Windows reserved filenames.** Stories titled ``CON``, ``NUL``,
+  ``AUX``, ``PRN``, ``COM1``..``COM9``, ``LPT1``..``LPT9`` now save
+  as ``_CON.epub`` etc. instead of failing with
+  ``OSError: Invalid argument``.
+- **AO3 page-walk caps.** ``scrape_series_works`` and
+  ``scrape_author_stories`` cap at 200 pages, matching the existing
+  cap on the tag/work-list sibling. A site-side pagination glitch
+  can no longer freeze the GUI under the busy lock.
+- **Bounded fandom-folder prompt wait.** Closing the main window
+  during a metadata fetch no longer parks the worker thread forever
+  on ``done.wait()``; a 120 s timeout treats the missing answer as
+  "no" so Quit-during-download finishes cleanly.
+- **Chapter cache extension.** Cache files are now ``ch_NNNN.json``
+  (they always held JSON, never raw HTML); legacy ``.html`` caches
+  are still read so existing on-disk caches aren't orphaned.
+
+### New: Lushstories series grouping in erotica search
+
+Erotica search now collapses Lushstories multi-part stories
+(``foo-tale``, ``foo-tale-2``, ``foo-tale-3``, …) into a single series
+row alongside the existing Literotica collapse. Adding more sites is a
+one-line append in ``collapse_erotica_series``.
+
 ## 2.4.3 — 2026-05-06
 
 ### Fix: Windows update loop on 2.4.2

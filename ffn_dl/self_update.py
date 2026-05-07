@@ -174,8 +174,16 @@ def cleanup_old_exe() -> None:
 
 
 def _download(url: str, dest: Path, progress_cb=None, expected_size: int = 0) -> None:
-    """Stream ``url`` to ``dest``; raises on HTTP errors."""
-    resp = curl_requests.get(url, impersonate="chrome", timeout=60, stream=True)
+    """Stream ``url`` to ``dest``; raises on HTTP errors or truncation.
+
+    A short per-read timeout (12 s) is preferred over the previous 60 s
+    so a user clicking Abort during a stalled HTTPS read sees the
+    cancellation observed within ~12 s instead of up to a minute. The
+    download itself routinely takes longer than that — the timeout is
+    *per recv*, not per request — so a healthy slow connection still
+    completes.
+    """
+    resp = curl_requests.get(url, impersonate="chrome", timeout=12, stream=True)
     resp.raise_for_status()
     total = int(resp.headers.get("content-length") or expected_size or 0)
     done = 0
@@ -187,6 +195,17 @@ def _download(url: str, dest: Path, progress_cb=None, expected_size: int = 0) ->
             done += len(chunk)
             if progress_cb:
                 progress_cb(done, total)
+    # Catch truncation on connection drops where the underlying stream
+    # ended cleanly (no exception) but Content-Length wasn't satisfied.
+    # Without this guard a partial zip lands on disk and either fails
+    # extraction or — worse — extracts a half-installed app over the
+    # user's existing install. Skip when total is 0 (chunked transfer
+    # without Content-Length and no expected_size from the release JSON).
+    if total > 0 and done != total:
+        raise RuntimeError(
+            f"Update download truncated: got {done} bytes, expected {total}. "
+            "The current version is unchanged; please retry."
+        )
 
 
 def _is_writable(path: Path) -> bool:

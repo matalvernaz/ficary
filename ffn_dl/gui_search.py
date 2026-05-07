@@ -664,7 +664,7 @@ class SearchFrame(wx.Frame):
     def _populate_results(self, new_results, next_page, append):
         if not self._alive:
             return
-        from .search import collapse_ao3_series, collapse_literotica_series
+        from .search import collapse_ao3_series, collapse_erotica_series
 
         # Erotica fan-out ships a list subclass carrying per-site
         # stats + which archives are exhausted. Pull those off before
@@ -686,13 +686,14 @@ class SearchFrame(wx.Frame):
         if self.site_key == "ao3":
             processed = collapse_ao3_series(raw)
         elif self.site_key == "erotica":
-            # The erotica fan-out mixes rows from every archive.
-            # Literotica is still the site most likely to return
-            # numbered chapters as individual rows (``Ch. 02``, ``Pt.
-            # 03`` …), so Literotica's series collapse runs over the
-            # full merged batch — the function matches on Literotica
-            # URL shapes and leaves every other site's rows untouched.
-            processed = collapse_literotica_series(raw)
+            # The erotica fan-out mixes rows from every archive. Each
+            # per-site collapser scopes its URL pattern to its own
+            # host so chaining them is safe — a Literotica row never
+            # reaches the Lushstories matcher and vice versa. Today we
+            # cover Literotica (``Ch. 02`` / ``Pt. 03`` numbered parts)
+            # and Lushstories (``-2`` / ``-3`` slug suffixes); add new
+            # sites by appending to ``collapse_erotica_series``.
+            processed = collapse_erotica_series(raw)
         else:
             processed = list(raw)
 

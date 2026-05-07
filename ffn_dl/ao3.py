@@ -24,6 +24,13 @@ AO3_BASE = "https://archiveofourown.org"
 # read a larger prefix here than BaseScraper's default.
 _BLOCK_CHECK_PREFIX_BYTES = 4000
 
+# Hard ceiling on multi-page list walks (series page, user works page,
+# tag-work list, …). 200 pages × 20 works = 4 000 works which is more
+# than any sane series or author has, but keeps a misbehaving site —
+# pagination param ignored, ``rel="next"`` always present, ``seen``
+# never grows — from spinning the GUI's busy lock indefinitely.
+_AO3_LIST_MAX_PAGES = 200
+
 
 class AO3LockedError(Exception):
     """Raised when a work requires an AO3 login to view."""
@@ -316,7 +323,7 @@ class AO3Scraper(BaseScraper):
         seen = set()
         work_urls = []
         page = 1
-        while True:
+        while page <= _AO3_LIST_MAX_PAGES:
             page_url = f"{AO3_BASE}/series/{series_id}?page={page}"
             html = self._fetch(page_url)
             soup = BeautifulSoup(html, "lxml")
@@ -352,6 +359,13 @@ class AO3Scraper(BaseScraper):
                 break
             page += 1
             self._delay()
+        else:
+            logger.warning(
+                "AO3 series %s walk hit the %d-page safety cap; the "
+                "work list may be incomplete. This usually indicates "
+                "AO3 returned the same page repeatedly or pagination "
+                "is broken.", series_id, _AO3_LIST_MAX_PAGES,
+            )
 
         return series_name, work_urls
 
@@ -369,7 +383,7 @@ class AO3Scraper(BaseScraper):
         seen = set()
         page = 1
 
-        while True:
+        while page <= _AO3_LIST_MAX_PAGES:
             page_url = f"{AO3_BASE}/users/{user}/works?page={page}"
             html = self._fetch(page_url)
             soup = BeautifulSoup(html, "lxml")
@@ -403,6 +417,12 @@ class AO3Scraper(BaseScraper):
                 break
             page += 1
             self._delay()
+        else:
+            logger.warning(
+                "AO3 user %s works walk hit the %d-page safety cap; "
+                "the story list may be incomplete.",
+                user, _AO3_LIST_MAX_PAGES,
+            )
 
         return author_name, story_urls
 

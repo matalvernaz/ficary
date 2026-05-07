@@ -266,25 +266,35 @@ class ChyoaScraper(BaseScraper):
         cache hit. Cold cache costs one HTTP request per node, same
         as a full ``download``."""
         kind, slug, numeric = self.parse_story_id(url_or_id)
-        visited: set[tuple[str, int]] = set()
-        return self._count_recursive(kind, slug, numeric, 0, visited)
+        return self._count_iterative(kind, slug, numeric)
 
-    def _count_recursive(
-        self, kind: str, slug: str, numeric: int,
-        depth: int, visited: set[tuple[str, int]],
-    ) -> int:
-        key = (slug, numeric)
-        if key in visited:
-            return 0
-        visited.add(key)
-        _title, _body, children, _soup = self._fetch_node(kind, slug, numeric)
-        total = 1
-        if self.max_depth is not None and depth >= self.max_depth:
-            return total
-        for cslug, cnum, _ctitle in children:
-            total += self._count_recursive(
-                "chapter", cslug, cnum, depth + 1, visited,
-            )
+    def _count_iterative(self, kind: str, slug: str, numeric: int) -> int:
+        """Iterative preorder DFS over the chyoa tree.
+
+        Uses an explicit stack rather than Python recursion because
+        chyoa CYOA trees are user-generated and routinely deeper than
+        Python's default ~1000-frame recursion limit. A pure-recursive
+        implementation raised ``RecursionError`` mid-walk on popular
+        long branching fics, killing the download with no recovery.
+        """
+        visited: set[tuple[str, int]] = set()
+        stack: list[tuple[str, str, int, int]] = [(kind, slug, numeric, 0)]
+        total = 0
+        while stack:
+            k, s, n, depth = stack.pop()
+            key = (s, n)
+            if key in visited:
+                continue
+            visited.add(key)
+            _title, _body, children, _soup = self._fetch_node(k, s, n)
+            total += 1
+            if self.max_depth is not None and depth >= self.max_depth:
+                continue
+            # Push in reverse so the leftmost child pops first — keeps
+            # traversal order identical to the previous recursive
+            # version and matches how download() numbers chapters.
+            for cslug, cnum, _ctitle in reversed(children):
+                stack.append(("chapter", cslug, cnum, depth + 1))
         return total
 
     def download(
@@ -327,15 +337,19 @@ class ChyoaScraper(BaseScraper):
         # Depth-first preorder walk. Each node gets a sequential
         # chapter number; ``visited`` dedups the rare case of a
         # chyoa cross-link pointing back into the subtree we already
-        # visited (treats the tree as a DAG to be safe).
+        # visited (treats the tree as a DAG to be safe). Iterative —
+        # see ``_count_iterative`` for the rationale.
         chapters_out: list[tuple[int, str, str]] = []  # (depth, title, html)
         skipped: list[tuple[int, str, int, str]] = []  # at depth cap
         visited: set[tuple[str, int]] = set()
-
-        def walk(kind: str, slug: str, numeric: int, depth: int) -> None:
+        stack: list[tuple[str, str, int, int]] = [
+            (entry_kind, entry_slug, entry_numeric, 0),
+        ]
+        while stack:
+            kind, slug, numeric, depth = stack.pop()
             key = (slug, numeric)
             if key in visited:
-                return
+                continue
             visited.add(key)
             if (slug, numeric) == (entry_slug, entry_numeric):
                 title, body, children = entry_title, entry_body, entry_children
@@ -347,11 +361,10 @@ class ChyoaScraper(BaseScraper):
             if self.max_depth is not None and depth >= self.max_depth:
                 for cslug, cnum, ctitle in children:
                     skipped.append((depth + 1, cslug, cnum, ctitle))
-                return
-            for cslug, cnum, _ctitle in children:
-                walk("chapter", cslug, cnum, depth + 1)
-
-        walk(entry_kind, entry_slug, entry_numeric, 0)
+                continue
+            # Reversed so the leftmost child pops first → preorder.
+            for cslug, cnum, _ctitle in reversed(children):
+                stack.append(("chapter", cslug, cnum, depth + 1))
 
         if skipped:
             # Transparency: list every branch the depth cap blocked

@@ -855,7 +855,13 @@ class BaseScraper:
         if not self.use_cache:
             return
         from .atomic import atomic_write_text
-        path = self._story_cache_dir(story_id) / f"ch_{chapter.number:04d}.html"
+        # The cache file is JSON ({"title": ..., "html": ...}), not raw
+        # HTML. The pre-2.4.4 ``.html`` extension was a labelling bug
+        # that mis-classified the file for any external tool that walks
+        # the cache by extension. Old caches with the ``.html`` name
+        # are still picked up by ``_load_chapter_cache`` until a fresh
+        # download replaces them.
+        path = self._story_cache_dir(story_id) / f"ch_{chapter.number:04d}.json"
         # Chapters are the expensive thing to refetch (rate-limits,
         # Cloudflare challenges on FFN, etc.). A partial write here
         # costs a full chapter re-download on the next run.
@@ -867,9 +873,16 @@ class BaseScraper:
     def _load_chapter_cache(self, story_id, chap_num: int) -> Optional[Chapter]:
         if not self.use_cache:
             return None
-        path = self._story_cache_dir(story_id) / f"ch_{chap_num:04d}.html"
+        cache_dir = self._story_cache_dir(story_id)
+        # Prefer the new .json name; fall back to the legacy .html so
+        # users don't lose their existing cache on the version where the
+        # extension changed.
+        path = cache_dir / f"ch_{chap_num:04d}.json"
         if not path.exists():
-            return None
+            legacy = cache_dir / f"ch_{chap_num:04d}.html"
+            if not legacy.exists():
+                return None
+            path = legacy
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
             return Chapter(number=chap_num, title=data["title"], html=data["html"])
