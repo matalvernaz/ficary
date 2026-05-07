@@ -1,5 +1,17 @@
 # Changelog
 
+## 2.4.3 — 2026-05-06
+
+### Fix: Windows update loop on 2.4.2
+
+The v2.4.2 binary was built from a tree where ``pyproject.toml`` was
+bumped to 2.4.2 but ``ffn_dl/__init__.py`` still declared
+``__version__ = "2.4.1"``. The running app reported itself as 2.4.1,
+saw the GitHub release tag ``v2.4.2``, declared an update available,
+swapped itself for the same broken binary, and looped forever. 2.4.3
+ships from a tree where both files agree, so the running version
+finally matches the release tag and the update prompt stops firing.
+
 ## 2.4.0 — 2026-05-05
 
 ### New: Add from URL list (bulk import)
