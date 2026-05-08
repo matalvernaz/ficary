@@ -1477,9 +1477,16 @@ class FFNScraper(BaseScraper):
                 if not raw:
                     return None
                 try:
-                    return int(raw)
+                    value = int(raw)
                 except (TypeError, ValueError):
                     return None
+                # FFN occasionally serves a literal ``"0"`` for a story
+                # whose database row lacks the timestamp (early imports,
+                # delete-then-restore, malformed export). Treat as missing
+                # rather than rendering "Updated: 1 Jan 1970" downstream.
+                if value <= 0:
+                    return None
+                return value
             if len(time_spans) >= 2:
                 updated = _safe_xutime(time_spans[0])
                 published = _safe_xutime(time_spans[1])

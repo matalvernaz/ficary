@@ -1341,11 +1341,18 @@ class VoiceMapper:
             logger.info("Loaded voice map with %d characters", len(self.mapping))
 
     def save(self):
+        """Persist the per-character voice map atomically.
+
+        Why atomic: a Ctrl-C or OOM kill mid-write leaves a truncated
+        JSON that the next run's ``json.loads`` rejects — silently
+        discarding every learned mapping. ``atomic_write_text`` (temp +
+        fsync + rename) keeps the previous map on disk if the new one
+        didn't make it.
+        """
         if self.map_path:
+            from .atomic import atomic_write_text
             self.map_path.parent.mkdir(parents=True, exist_ok=True)
-            self.map_path.write_text(
-                json.dumps(self.mapping, indent=2), encoding="utf-8"
-            )
+            atomic_write_text(self.map_path, json.dumps(self.mapping, indent=2))
 
     def set_voice_pool(self, per_character: dict[str, list[str]]):
         """Install a per-character voice pool — VoiceMapper consults

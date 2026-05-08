@@ -2469,7 +2469,15 @@ def _handle_update_library(args: argparse.Namespace) -> None:
     # we also carry the per-URL remote chapter count so build_refresh_queue
     # on the next run can spot pending downloads without re-probing.
     _STAMP_FLUSH_EVERY = 25
-    _stamp_lock = threading.Lock()
+    # Single lock guards every read-modify-write of the LibraryIndex on
+    # disk. Previously a separate ``_stamp_lock`` (probe completions) and
+    # ``_hash_lock`` (download completions) each serialised their own RMW
+    # cycle, but neither blocked the other — so a probe-flush and a
+    # hash-write running concurrently both ``LibraryIndex.load()``'d the
+    # same on-disk state, applied disjoint mutations, and saved. The
+    # second save overwrote the first's mutation. Unifying the locks
+    # makes the index update strictly serial.
+    _index_lock = threading.Lock()
     _pending_stamps: dict[str, int | None] = {}
 
     def _flush_stamps_locked() -> None:
@@ -2488,7 +2496,7 @@ def _handle_update_library(args: argparse.Namespace) -> None:
         _pending_stamps.clear()
 
     def _on_probe_complete(url: str, remote_count: int | None = None) -> None:
-        with _stamp_lock:
+        with _index_lock:
             _pending_stamps[url] = remote_count
             if len(_pending_stamps) >= _STAMP_FLUSH_EVERY:
                 _flush_stamps_locked()
@@ -2499,7 +2507,6 @@ def _handle_update_library(args: argparse.Namespace) -> None:
     # current baseline. The hashing is cheap (microseconds per
     # chapter); the index save is batched inside the helper by only
     # saving when something actually changed.
-    _hash_lock = threading.Lock()
 
     def _on_download_complete(url: str, path: "Path") -> None:
         if args.dry_run:
@@ -2517,7 +2524,7 @@ def _handle_update_library(args: argparse.Namespace) -> None:
                 exc_info=True,
             )
             return
-        with _hash_lock:
+        with _index_lock:
             try:
                 idx_local = LibraryIndex.load()
                 if store_hashes(idx_local, root_resolved, url, hashes):
@@ -2543,17 +2550,21 @@ def _handle_update_library(args: argparse.Namespace) -> None:
     # on_probe_complete) still gets its timestamp. The double-stamp
     # is cheap — a touched URL is skipped on the second pass.
     if probe_queue and not args.dry_run:
-        with _stamp_lock:
+        # Hold _index_lock around BOTH the flush and the belt-and-braces
+        # mark_probed. Without this, a download-complete callback firing
+        # from another worker between the two could load + save the index
+        # in the middle of our flush+mark sequence and lose stamps.
+        with _index_lock:
             _flush_stamps_locked()
-        try:
-            from .library.index import LibraryIndex
-            idx = LibraryIndex.load()
-            idx.mark_probed(
-                root_resolved, [item["url"] for item in probe_queue],
-            )
-        except (OSError, ValueError) as exc:
-            logger.debug("Failed to stamp last_probed", exc_info=True)
-            print(f"\nWarning: could not record probe timestamps: {exc}")
+            try:
+                from .library.index import LibraryIndex
+                idx = LibraryIndex.load()
+                idx.mark_probed(
+                    root_resolved, [item["url"] for item in probe_queue],
+                )
+            except (OSError, ValueError) as exc:
+                logger.debug("Failed to stamp last_probed", exc_info=True)
+                print(f"\nWarning: could not record probe timestamps: {exc}")
 
     # Refresh the index so chapter counts reflect any updates we just
     # applied. Cheap compared to the downloads themselves, and keeps

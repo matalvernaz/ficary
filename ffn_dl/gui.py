@@ -213,6 +213,14 @@ class MainFrame(wx.Frame):
         # Re-asked every launch so the user stays in control if they
         # rearrange folders by hand between sessions.
         self._fandom_folder_decisions: dict[str, bool] = {}
+        # Worker threads parked on a wx.MessageBox dispatched via
+        # wx.CallAfter register their ``threading.Event`` here so the
+        # close handler can wake them instantly when the frame is going
+        # away. Without this, a Quit-during-download blocks the worker
+        # for up to two minutes (the wait timeout) because the message
+        # box never gets drawn against a frame that's already destroyed.
+        self._pending_worker_dialogs: set[threading.Event] = set()
+        self._pending_worker_dialogs_lock = threading.Lock()
         self._log_queue = deque()
         self._log_lock = threading.Lock()
         self._build_ui()
@@ -1189,6 +1197,16 @@ class MainFrame(wx.Frame):
         if hasattr(self, "_log_timer"):
             self._log_timer.Stop()
         self._detach_log_handlers()
+        # Wake any worker thread parked on a wx.MessageBox we marshalled
+        # via wx.CallAfter — once we Skip() the event, the frame is
+        # destroyed and the prompt() will never run, so the worker would
+        # otherwise block until the 120s timeout fires. Treat as
+        # "user said no" by leaving ``answer["value"]`` at its False
+        # default and just signalling the event.
+        with self._pending_worker_dialogs_lock:
+            for evt in list(self._pending_worker_dialogs):
+                evt.set()
+            self._pending_worker_dialogs.clear()
         event.Skip()
 
     def _should_confirm_close(self):
@@ -1989,20 +2007,24 @@ class MainFrame(wx.Frame):
         if wx.IsMainThread():
             prompt()
         else:
-            wx.CallAfter(prompt)
-            # Bound the wait so the worker can't park forever if the
-            # frame is destroyed between the CallAfter dispatch and the
-            # wx event loop servicing it (e.g. user closes the main
-            # window while a metadata fetch is in flight). Two minutes
-            # is well past any human "click yes/no" reaction time, so a
-            # timeout that long virtually never fires for real users —
-            # but it guarantees the worker thread eventually unblocks
-            # so a Quit-during-download can finish cleanly.
-            if not done.wait(timeout=120):
-                logger.debug(
-                    "Fandom-folder prompt timed out (frame likely "
-                    "destroyed); treating as 'no'."
-                )
+            with self._pending_worker_dialogs_lock:
+                self._pending_worker_dialogs.add(done)
+            try:
+                wx.CallAfter(prompt)
+                # Two minutes is well past any human "click yes/no"
+                # reaction time. ``_on_close`` also sets ``done`` for
+                # every registered event so a Quit-during-download
+                # wakes us instantly — the timeout is just the ultimate
+                # backstop for the (now extremely rare) case where the
+                # frame is gone but no close handler fired.
+                if not done.wait(timeout=120):
+                    logger.debug(
+                        "Fandom-folder prompt timed out (frame likely "
+                        "destroyed); treating as 'no'."
+                    )
+            finally:
+                with self._pending_worker_dialogs_lock:
+                    self._pending_worker_dialogs.discard(done)
         return answer["value"]
 
     def _maybe_offer_library_as_default(self) -> None:

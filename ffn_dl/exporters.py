@@ -1323,14 +1323,21 @@ def _llm_an_load_cache(path: Path | None) -> dict:
 
 
 def _llm_an_save_cache(path: Path | None, data: dict) -> None:
+    """Persist the LLM A/N classifier cache atomically.
+
+    Why atomic: ``_llm_an_load_cache`` consults this on every export and
+    swallows any ``ValueError`` from a half-written file by returning
+    ``{}`` — silently throwing away every previously cached
+    classification. The temp+fsync+rename pattern via
+    :func:`~ffn_dl.atomic.atomic_write_text` guarantees old-or-new on
+    disk, never partial.
+    """
     if path is None:
         return
     try:
         import json
-        path.write_text(
-            json.dumps(data, separators=(",", ":")),
-            encoding="utf-8",
-        )
+        from .atomic import atomic_write_text
+        atomic_write_text(path, json.dumps(data, separators=(",", ":")))
     except OSError:
         pass
 
