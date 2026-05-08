@@ -403,6 +403,10 @@ class BaseScraper:
             logger.warning(
                 "cf-solve: solver failed for %s: %s", url, exc,
             )
+            # Transient failure: clear the in-flight marker so a later 403
+            # burst on the same host can attempt the solver again.
+            with self._cf_solve_lock:
+                self._cf_solve_host_state.pop(host, None)
             return False
         cf_solve.inject_into_session(sess, result)
         cf_solve.persist(host, result)

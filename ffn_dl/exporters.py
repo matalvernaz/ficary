@@ -1292,11 +1292,11 @@ def _llm_an_cache_path(site_name: str, story_id) -> Path | None:
     return base / f"{site_name}_{safe_id}.json"
 
 
-def _llm_an_cache_key(paragraphs: list[str], model: str) -> str:
-    """Stable cache key for a chapter's paragraph list under a given
-    model. Hashes the joined text so re-classifying re-runs only when
-    the chapter content actually changes (the regex pre-pass is
-    deterministic, so its output is stable for stable inputs)."""
+def _llm_an_cache_key(paragraphs: list[str], llm_config: dict) -> str:
+    """Stable cache key for a chapter's paragraph list under a given LLM
+    config. Hashes the joined text plus the provider, endpoint, and model
+    so that switching any of those forces a re-classify rather than
+    serving a stale entry from a different backend."""
     import hashlib
 
     h = hashlib.sha1(usedforsecurity=False)
@@ -1304,7 +1304,11 @@ def _llm_an_cache_key(paragraphs: list[str], model: str) -> str:
         h.update(p.encode("utf-8", errors="replace"))
         h.update(b"\x1e")  # record separator so neighbouring paras don't blur
     h.update(b"\x1d")
-    h.update((model or "").encode("utf-8", errors="replace"))
+    h.update((llm_config.get("provider") or "").encode("utf-8", errors="replace"))
+    h.update(b"\x1d")
+    h.update((llm_config.get("endpoint") or "").encode("utf-8", errors="replace"))
+    h.update(b"\x1d")
+    h.update((llm_config.get("model") or "").encode("utf-8", errors="replace"))
     return h.hexdigest()
 
 
@@ -1454,7 +1458,7 @@ def strip_an_via_llm(
         else None
     )
     cache = _llm_an_load_cache(cache_path)
-    cache_key = _llm_an_cache_key(paragraph_texts, model)
+    cache_key = _llm_an_cache_key(paragraph_texts, llm_config)
     chapter_label = (
         f"chapter {chapter_number}" if chapter_number is not None else "chapter"
     )
@@ -1654,9 +1658,6 @@ def export_epub(
     if len(story.chapters) > 1:
         book.add_metadata(
             None, "meta", "", {"name": "calibre:series", "content": story.title}
-        )
-        book.add_metadata(
-            None, "meta", "", {"name": "calibre:series_index", "content": "1"}
         )
 
     cover_url = meta.get("cover_url")

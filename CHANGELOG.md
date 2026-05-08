@@ -1,5 +1,29 @@
 # Changelog
 
+## 2.4.6 — 2026-05-08
+
+### Three correctness fixes (Gemini-assisted review)
+
+- **LLM A/N cache key was too narrow.** ``_llm_an_cache_key`` only hashed
+  the paragraph text and model name. Switching provider (e.g. ollama →
+  openai) or endpoint while keeping the same model name silently reused
+  stale cached classifications from the previous backend. The key now
+  includes ``provider`` and ``endpoint`` so any change to the LLM
+  configuration forces a re-classify.
+- **``calibre:series_index`` was set incorrectly on every multi-chapter
+  EPUB.** ``export_epub`` unconditionally wrote ``calibre:series_index=1``
+  for any story with more than one chapter, falsely indicating it was the
+  first entry in a named series. The field has been removed; Calibre users
+  who want series ordering can set it manually or via Calibre's own tools.
+- **CF solver could not retry after a transient solve failure.** When
+  ``_invoke_cf_solver`` caught a generic exception (network hiccup, solver
+  crash), it left the host permanently marked as "in-flight" in
+  ``_cf_solve_host_state``, blocking any future solver invocation for that
+  host in the same process run. The host is now removed from the state dict
+  on transient failure so a later 403 burst can attempt the solver again.
+  ``SolverUnavailable`` (Playwright not installed) still blocks retries
+  permanently, since that failure is not transient.
+
 ## 2.4.5 — 2026-05-07
 
 ### Deep audit fixes — cache, routing, scraper sweep

@@ -416,19 +416,37 @@ class TestExpandAnBlock:
 
 
 class TestLlmAnCacheKey:
+    _cfg = {"provider": "ollama", "model": "model-a", "endpoint": ""}
+
     def test_key_changes_when_paragraph_text_changes(self):
-        a = exporters._llm_an_cache_key(["one", "two"], "model-a")
-        b = exporters._llm_an_cache_key(["one", "two changed"], "model-a")
+        a = exporters._llm_an_cache_key(["one", "two"], self._cfg)
+        b = exporters._llm_an_cache_key(["one", "two changed"], self._cfg)
         assert a != b
 
     def test_key_changes_when_model_changes(self):
-        a = exporters._llm_an_cache_key(["one", "two"], "model-a")
-        b = exporters._llm_an_cache_key(["one", "two"], "model-b")
+        cfg_a = {**self._cfg, "model": "model-a"}
+        cfg_b = {**self._cfg, "model": "model-b"}
+        a = exporters._llm_an_cache_key(["one", "two"], cfg_a)
+        b = exporters._llm_an_cache_key(["one", "two"], cfg_b)
         assert a != b, "different models must not share cache entries"
 
+    def test_key_changes_when_provider_changes(self):
+        cfg_a = {**self._cfg, "provider": "ollama"}
+        cfg_b = {**self._cfg, "provider": "openai"}
+        a = exporters._llm_an_cache_key(["x", "y"], cfg_a)
+        b = exporters._llm_an_cache_key(["x", "y"], cfg_b)
+        assert a != b, "different providers must not share cache entries"
+
+    def test_key_changes_when_endpoint_changes(self):
+        cfg_a = {**self._cfg, "endpoint": "http://host-a:11434"}
+        cfg_b = {**self._cfg, "endpoint": "http://host-b:11434"}
+        a = exporters._llm_an_cache_key(["x", "y"], cfg_a)
+        b = exporters._llm_an_cache_key(["x", "y"], cfg_b)
+        assert a != b, "different endpoints must not share cache entries"
+
     def test_key_stable_for_same_inputs(self):
-        a = exporters._llm_an_cache_key(["x", "y"], "m")
-        b = exporters._llm_an_cache_key(["x", "y"], "m")
+        a = exporters._llm_an_cache_key(["x", "y"], self._cfg)
+        b = exporters._llm_an_cache_key(["x", "y"], self._cfg)
         assert a == b
 
 
