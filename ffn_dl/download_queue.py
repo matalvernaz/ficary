@@ -246,3 +246,42 @@ class DownloadQueues:
         with cls._lock:
             q = cls._queues.get(site_name)
         return q.pending if q is not None else 0
+
+    @classmethod
+    def cancel_site(cls, site_name: str) -> int:
+        """Cancel every queued (not-yet-running) job for ``site_name``.
+
+        Returns the number of jobs cancelled. The currently-running job
+        (if any) keeps going — Python ``Future`` cancellation only
+        applies to pending work, and the scraper's own download path
+        doesn't accept a cooperative cancel token. Anything still queued
+        behind the current job is drained and its ``Future`` flipped to
+        cancelled, which the worker's ``set_running_or_notify_cancel``
+        check honours when it pulls the next item.
+
+        Use case: GUI user clicks "cancel queue" on a stuck site
+        without nuking the rest of the application's queued work.
+        """
+        with cls._lock:
+            q = cls._queues.get(site_name)
+        if q is None:
+            return 0
+        cancelled = 0
+        # Drain the queue in one pass under the queue's own lock so a
+        # racing enqueue can't slip a job past us between the qsize
+        # check and the cancel call.
+        with q._lock:
+            try:
+                while True:
+                    fut, _job_fn = q._q.get_nowait()
+                    if fut.cancel():
+                        cancelled += 1
+            except queue.Empty:
+                pass
+        q._fire_state_change()
+        if cancelled:
+            logger.info(
+                "DownloadQueues.cancel_site: cancelled %d job(s) for %s",
+                cancelled, site_name,
+            )
+        return cancelled

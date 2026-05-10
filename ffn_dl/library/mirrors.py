@@ -34,6 +34,7 @@ the "possible mirror" signal.
 
 from __future__ import annotations
 
+import logging
 import re
 import unicodedata
 from dataclasses import dataclass, field
@@ -42,6 +43,8 @@ from typing import Iterable
 
 from .fulltext import chapter_text
 from .index import LibraryIndex
+
+logger = logging.getLogger(__name__)
 
 
 TITLE_JACCARD_THRESHOLD = 0.85
@@ -272,7 +275,22 @@ def _collect_records(
 
     records: list[_StoryRecord] = []
     for root in root_list:
-        for url, entry in index.stories_in(root):
+        # Per-root try/except so a corrupt index entry, an unmounted
+        # network share, or any other surprise iterating one root
+        # doesn't abort the entire mirror sweep — the user gets the
+        # mirror candidates from the healthy roots and a warning
+        # naming the bad one. Without this, a single OSError on a
+        # detached drive made --library-mirrors return zero results
+        # silently.
+        try:
+            entries = list(index.stories_in(root))
+        except Exception as exc:
+            logger.warning(
+                "mirrors: skipping root %s — could not enumerate stories: %s",
+                root, exc,
+            )
+            continue
+        for url, entry in entries:
             relpath = entry.get("relpath") or ""
             if not relpath:
                 continue

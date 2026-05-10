@@ -722,11 +722,26 @@ def search_chyoa(query: str, *, page: int = 1,
 def search_darkwanderer(query: str, *, page: int = 1,
                         **_: object) -> list[dict]:
     """Dark Wanderer XenForo: forum "New Posts" listing gives recent
-    story threads; we filter client-side by query."""
+    story threads; we filter client-side by query.
+
+    Query encoding mirrors :func:`search_fictionmania` — XenForo's
+    keyword field tolerates only ASCII letters/digits/spaces/dashes,
+    so we NFKD-fold first to degrade accented letters to their ASCII
+    base ("café" → "cafe") instead of stripping them outright. The
+    earlier ``re.sub(r'[^A-Za-z0-9]+', '+', query)`` shape silently
+    erased the entire query for any non-ASCII input — same bug the
+    Fictionmania path was fixed for in 2.3.3.
+    """
     if query:
+        flat = (
+            unicodedata.normalize("NFKD", query)
+            .encode("ascii", "ignore")
+            .decode("ascii")
+        )
+        keywords = re.sub(r"[^A-Za-z0-9]+", "+", flat).strip("+") or "+"
         url = (
             "https://darkwanderer.net/search/search?keywords="
-            f"{re.sub(r'[^A-Za-z0-9]+', '+', query)}&o=relevance"
+            f"{keywords}&o=relevance"
         )
     else:
         url = "https://darkwanderer.net/forums/"

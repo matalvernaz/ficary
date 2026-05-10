@@ -118,10 +118,15 @@ def chapter_text(chapter_html: str | None) -> str:
     stored text doesn't waste space on formatting artefacts. Returns
     ``""`` for ``None`` / empty input so the caller can index an
     empty chapter without a branch.
+
+    Uses ``lxml`` to match the parser the rest of ffn-dl uses
+    (exporters, scrapers, hash extractor) — keeping the parser
+    consistent prevents subtle text-extraction drift between FTS5
+    snippets and the canonical text the silent-edit detector hashes.
     """
     if not chapter_html:
         return ""
-    soup = BeautifulSoup(chapter_html, "html.parser")
+    soup = BeautifulSoup(chapter_html, "lxml")
     raw = soup.get_text(separator="\n")
     return _WS_RE.sub(" ", raw).strip()
 
@@ -258,8 +263,16 @@ class FullTextIndex:
         still drops existing rows — an upstream edit that removed
         every chapter would otherwise leave stale text matchable in
         searches forever.
+
+        Atomicity: the delete-then-insert pair runs in a single SQLite
+        transaction. An earlier shape called :meth:`drop_story` (which
+        commits) and then issued a second commit after the insert, so
+        a crash between the two left the story permanently absent
+        from full-text search even though the library index still
+        knew about it. One transaction means a crash either rolls
+        everything back (old rows preserved) or commits everything
+        (new rows visible) — never the empty middle state.
         """
-        self.drop_story(root, url)
         rows = []
         for ch in sorted(chapters, key=lambda c: c.number):
             rows.append((
@@ -272,17 +285,31 @@ class FullTextIndex:
                 ch.title or "",
                 chapter_text(ch.html),
             ))
-        if rows:
-            self._conn.executemany(
-                """
-                INSERT INTO chapters
-                    (root, url, relpath, title, author,
-                     chapter_number, chapter_title, content)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                rows,
+        try:
+            cur = self._conn.cursor()
+            cur.execute(
+                "DELETE FROM chapters WHERE root = ? AND url = ?",
+                (root, url),
             )
-        self._conn.commit()
+            if rows:
+                cur.executemany(
+                    """
+                    INSERT INTO chapters
+                        (root, url, relpath, title, author,
+                         chapter_number, chapter_title, content)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    rows,
+                )
+            self._conn.commit()
+        except Exception:
+            # Roll back so a failed insert leaves the previously-indexed
+            # rows in place rather than orphaning the story from FTS5.
+            try:
+                self._conn.rollback()
+            except sqlite3.Error:
+                pass
+            raise
         return len(rows)
 
     # ── Read path ─────────────────────────────────────────────────
@@ -414,7 +441,6 @@ def populate_from_library(
     wrapper injects ``print`` for human output.
     """
     from ..updater import read_chapters
-    from .hashes import ChapterHashUnavailable  # noqa: F401 — surface name
     from .index import LibraryIndex
 
     report = BootstrapReport()

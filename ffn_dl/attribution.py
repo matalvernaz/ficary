@@ -1273,6 +1273,32 @@ def _refine_with_booknlp(segments, full_text, model_size="small"):
         model.process(str(infile), str(tmp), "book")
         logger.info("BookNLP: process() returned")
 
+        # BookNLP exposes ``byte_onset`` / ``byte_offset`` columns whose
+        # values are positions inside the UTF-8 encoded source, not
+        # Python codepoint indices. The downstream alignment uses
+        # ``full_text.find()`` (codepoint indices), so a chapter
+        # containing smart quotes, em-dashes, or accented names made
+        # the two desync starting at the first non-ASCII character.
+        # Build a byte→char lookup once so any byte offset BookNLP
+        # emits maps cleanly back to a character index.
+        encoded = full_text.encode("utf-8")
+        byte_to_char: list[int] = [0] * (len(encoded) + 1)
+        bpos = 0
+        for cpos, ch in enumerate(full_text):
+            ch_len = len(ch.encode("utf-8"))
+            for off in range(ch_len):
+                if bpos + off < len(byte_to_char):
+                    byte_to_char[bpos + off] = cpos
+            bpos += ch_len
+        byte_to_char[bpos] = len(full_text)
+
+        def _byte_to_char(b: int) -> int:
+            if b <= 0:
+                return 0
+            if b >= len(byte_to_char):
+                return len(full_text)
+            return byte_to_char[b]
+
         # Token offsets → character offsets
         tokens_file = tmp / "book.tokens"
         tok_char = {}  # token_id → start_char
@@ -1281,11 +1307,22 @@ def _refine_with_booknlp(segments, full_text, model_size="small"):
                 reader = csv.DictReader(f, delimiter="\t")
                 for row in reader:
                     try:
-                        tok_char[int(row["token_ID_within_document"])] = int(
+                        token_id = int(row["token_ID_within_document"])
+                        raw_offset = int(
                             row.get("byte_onset") or row.get("start_token") or 0
                         )
                     except (KeyError, ValueError):
                         continue
+                    # When BookNLP fell back to ``start_token`` (an
+                    # earlier release without byte_onset) the value is
+                    # already a token index, not a byte offset, so the
+                    # mapping is a no-op for that case. For real
+                    # byte_onset values, fold through the byte→char map.
+                    tok_char[token_id] = (
+                        _byte_to_char(raw_offset)
+                        if "byte_onset" in row and row["byte_onset"]
+                        else raw_offset
+                    )
 
         # Entity names per coref ID — pick longest PROP mention per group.
         entities_file = tmp / "book.entities"
@@ -2321,18 +2358,27 @@ def _refine_with_llm(
 
     while pos < total and len(handled) < len(quoted_idx):
         end = min(total, pos + chunk_size)
-        # Quotes whose midpoint falls in this window and aren't done yet.
-        batch: list[tuple[int, int]] = []
+        # Every quote whose midpoint falls in this window and isn't
+        # already done. Earlier code stopped collecting at
+        # ``_LLM_QUOTES_PER_REQUEST`` candidates and advanced the
+        # window, which silently lost quotes 41+ in dialogue-dense
+        # chapters because the overlap region only catches the tail
+        # of the previous window. Collect all candidates first and
+        # then page through them in batches inside this window.
+        window_candidates: list[tuple[int, int]] = []
         for seg_i, qpos in quoted_idx:
             if seg_i in handled:
                 continue
             mid = qpos + len(segments[seg_i].text) // 2
             if pos <= mid < end:
-                batch.append((seg_i, qpos))
-            if len(batch) >= _LLM_QUOTES_PER_REQUEST:
-                break
+                window_candidates.append((seg_i, qpos))
 
-        if batch:
+        for batch_start in range(0, len(window_candidates), _LLM_QUOTES_PER_REQUEST):
+            batch = window_candidates[
+                batch_start:batch_start + _LLM_QUOTES_PER_REQUEST
+            ]
+            if not batch:
+                continue
             window_text = full_text[pos:end]
             numbered = []
             for n, (seg_i, _qpos) in enumerate(batch, 1):
@@ -2657,6 +2703,40 @@ _AN_LIST_KEYS = frozenset({
 })
 
 
+_AN_FALSE_STRINGS = frozenset({
+    "false", "no", "0", "story", "content", "narrative",
+    "not_an_author_note", "not author note", "not", "n",
+})
+"""String values models routinely return for "this is NOT an A/N".
+Compared lowercased and stripped — anything else passes through
+:func:`_an_truthy` to ``bool(value)``."""
+
+
+def _an_truthy(value: object) -> bool:
+    """Return whether ``value`` represents an affirmative A/N flag.
+
+    The earlier shape used a bare ``bool(value)`` which silently
+    treated the string ``"false"`` as truthy (non-empty string), so a
+    model that answered ``{"1": "false", "2": "true"}`` had
+    paragraph 1 destructively stripped from the chapter — a
+    content-removal heuristic firing on a "do not strip" answer.
+    Recognise the common false-string forms explicitly before
+    falling back to Python truthiness.
+    """
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalised = value.strip().lower()
+        if not normalised:
+            return False
+        if normalised in _AN_FALSE_STRINGS:
+            return False
+        # ``"true"``, ``"yes"``, etc. all pass through ``bool`` as True
+        # (non-empty strings) which is what we want.
+        return True
+    return bool(value)
+
+
 def _parse_an_response(parsed, paragraphs: list[str]) -> set[int]:
     """Extract flagged paragraph indices from the LLM's parsed JSON.
 
@@ -2682,7 +2762,7 @@ def _parse_an_response(parsed, paragraphs: list[str]) -> set[int]:
                 idx = int(str(k).strip()) - 1
             except (TypeError, ValueError):
                 continue
-            if 0 <= idx < len(paragraphs) and bool(v):
+            if 0 <= idx < len(paragraphs) and _an_truthy(v):
                 flagged.add(idx)
     if flagged:
         return flagged

@@ -29,6 +29,8 @@ from __future__ import annotations
 import json
 import logging
 import smtplib
+import threading
+import time
 from dataclasses import dataclass
 from typing import Iterable, Optional, Tuple
 from urllib import error as urlerror
@@ -77,6 +79,47 @@ USER_AGENT = f"ffn-dl/{__version__} (+watchlist)"
 # HTTP status codes < 400 are considered success; >= 400 is an error.
 HTTP_ERROR_THRESHOLD = 400
 
+# Per-channel minimum interval between successive sends, in seconds.
+# Discord caps incoming-webhook posts at 5 per 2 seconds (rolling) and
+# returns HTTP 429 with a ``retry_after`` body once exceeded; Pushover
+# caps unsolicited messages at ~1/second per app token. A watchlist
+# poll producing 50 events would burst-send all 50 in a tight loop
+# without these floors and trip both providers' limiters. The floors
+# are conservative — well under each provider's documented cap — so
+# a healthy run never blocks but a pathological burst paces itself.
+_CHANNEL_MIN_INTERVAL_S: dict[str, float] = {
+    "discord": 0.5,
+    "pushover": 1.1,
+    "email": 0.0,
+}
+
+# Tracks the monotonic timestamp of the last successful send per
+# channel so :func:`dispatch` can pace bursts. Module-global because
+# rate-limit credit is a process-wide resource — two watchlist poll
+# threads sharing the same Discord webhook share the same bucket.
+_LAST_SEND_AT: dict[str, float] = {}
+_LAST_SEND_LOCK = threading.Lock()
+
+
+def _wait_for_channel_slot(channel: str) -> None:
+    """Sleep until ``channel``'s next send slot is open.
+
+    Uses :func:`time.monotonic` so a wall-clock jump (NTP sync, daylight
+    saving) doesn't stall the loop. Updates the last-send timestamp
+    after the wait so two callers that hit the lock back-to-back are
+    serialised through the floor rather than racing past it.
+    """
+    interval = _CHANNEL_MIN_INTERVAL_S.get(channel, 0.0)
+    if interval <= 0:
+        return
+    with _LAST_SEND_LOCK:
+        last = _LAST_SEND_AT.get(channel, 0.0)
+        now = time.monotonic()
+        wait = (last + interval) - now
+        if wait > 0:
+            time.sleep(wait)
+        _LAST_SEND_AT[channel] = time.monotonic()
+
 
 def _safe_endpoint_label(endpoint: str) -> str:
     """Return a log/error-safe label for ``endpoint``.
@@ -117,13 +160,19 @@ class Notification:
         message: Longer body. Plain text — no Markdown or HTML — so all
             three channels render it consistently.
         url: Optional link to the thing being announced (story page,
-            author page, etc.). Rendered as a tappable "Open" link on
+            author page, etc.). Rendered as a tappable link on
             Pushover, appended to the body on Discord/email.
+        url_title: Pushover-only — the label shown for the tappable
+            link in the push notification. Watchlist callers pass a
+            descriptive label ("Open story", "Open author page") so a
+            screen-reader user hearing the notification knows what the
+            link points at instead of an unspecific "Open".
     """
 
     title: str
     message: str
     url: Optional[str] = None
+    url_title: str = "Open"
 
 
 # ---------------------------------------------------------------------------
@@ -214,7 +263,7 @@ def send_pushover(token: str, user: str, notification: Notification) -> None:
     }
     if notification.url:
         fields["url"] = notification.url
-        fields["url_title"] = "Open"
+        fields["url_title"] = notification.url_title or "Open"
     _post_form(PUSHOVER_ENDPOINT, fields)
     logger.info("Pushover notification delivered: %s", notification.title)
 
@@ -295,6 +344,11 @@ def dispatch(
     delivered: list[str] = []
     failures: list[Tuple[str, str]] = []
     for channel in channels:
+        # Pace each channel independently so a Pushover-only burst
+        # doesn't unnecessarily wait for Discord's window (and vice
+        # versa). Email's interval is 0 — SMTP servers do their own
+        # rate-limiting and the watchlist volume is too low to matter.
+        _wait_for_channel_slot(channel)
         try:
             if channel == CHANNEL_PUSHOVER:
                 send_pushover(

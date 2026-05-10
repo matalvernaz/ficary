@@ -45,6 +45,17 @@ class VoicePreviewDialog(wx.Dialog):
         self._narrator_voice = narrator_voice
         self._player = None
         self._tmp_dir = None
+        # ``_alive`` gates ``wx.CallAfter`` callbacks fired from the
+        # synthesis worker thread so they don't land on a destroyed
+        # C++ dialog after the user clicks Close mid-render. Without
+        # the gate, MessageBox fires on a dead ``self`` and wx raises
+        # an assertion (or segfaults on Windows). ``_synth_cancel``
+        # signals the worker that we no longer want its output, which
+        # also lets us hold off the temp-dir delete until the worker
+        # has stopped writing files into it.
+        self._alive = True
+        self._synth_cancel = False
+        self._synth_done_event = None
         self._build_ui()
         self.Bind(wx.EVT_CLOSE, self._on_close)
 
@@ -130,6 +141,18 @@ class VoicePreviewDialog(wx.Dialog):
         from . import tts
         import threading
         self._stop_player()
+        # If a previous synth is still in flight, cancel and wait for
+        # it before kicking off the next one — that way the temp dir
+        # only has one writer at a time and the close handler can
+        # cleanly join whichever is current.
+        prior_done = self._synth_done_event
+        self._synth_cancel = True
+        if prior_done is not None and not prior_done.is_set():
+            prior_done.wait(timeout=1.0)
+        self._synth_cancel = False
+        done_event = threading.Event()
+        self._synth_done_event = done_event
+
         sample = self.SAMPLE_TEXT.format(name=name)
         safe_name = re.sub(r"[^A-Za-z0-9_-]", "_", name)[:40] or "sample"
         out_path = self._tmp_dir / f"{safe_name}-{voice}.mp3"
@@ -138,15 +161,29 @@ class VoicePreviewDialog(wx.Dialog):
             try:
                 if not out_path.exists() or out_path.stat().st_size == 0:
                     tts.synthesize_sample(voice, sample, out_path)
+                if self._synth_cancel or not self._alive:
+                    return
                 self._player = tts.play_audio_file(out_path)
             except Exception as exc:
-                wx.CallAfter(
-                    wx.MessageBox,
-                    f"Could not play sample: {exc}",
-                    "Preview error", wx.OK | wx.ICON_ERROR, self,
-                )
+                if not self._alive:
+                    return
+                wx.CallAfter(self._show_play_error, str(exc))
+            finally:
+                done_event.set()
 
         threading.Thread(target=worker, daemon=True).start()
+
+    def _show_play_error(self, message):
+        """Main-thread sink for synthesis-worker errors. Guarded by
+        ``_alive`` so a Close clicked between the wx.CallAfter scheduling
+        and execution doesn't drop a MessageBox on a destroyed dialog.
+        """
+        if not self._alive:
+            return
+        wx.MessageBox(
+            f"Could not play sample: {message}",
+            "Preview error", wx.OK | wx.ICON_ERROR, self,
+        )
 
     def _on_play(self, event):
         idx = self._selected_index()
@@ -208,7 +245,19 @@ class VoicePreviewDialog(wx.Dialog):
         dlg.Destroy()
 
     def _on_close(self, event):
+        # Flip _alive first so any in-flight wx.CallAfter from the
+        # synthesis worker becomes a no-op rather than landing on a
+        # half-destroyed dialog.
+        self._alive = False
+        self._synth_cancel = True
         self._stop_player()
+        # Wait briefly for the synthesis worker to notice the cancel
+        # before we wipe the temp dir it's writing into. Without this
+        # the rmtree races the worker's open file handle and either
+        # fails (Windows: PermissionError) or yanks the file out from
+        # under it (POSIX: FileNotFoundError mid-write).
+        if self._synth_done_event is not None:
+            self._synth_done_event.wait(timeout=2.0)
         import shutil as _shutil
         if self._tmp_dir and self._tmp_dir.exists():
             _shutil.rmtree(self._tmp_dir, ignore_errors=True)

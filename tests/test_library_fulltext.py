@@ -309,6 +309,55 @@ def test_populate_rebuilds_cleanly(tmp_path: Path):
     assert fti.stats()["chapters"] == 2
 
 
+def test_index_story_rolls_back_on_insert_failure(tmp_path: Path):
+    """Crash mid-reindex must not leave the story orphaned from FTS5.
+
+    Regression: an earlier shape called drop_story() (which committed)
+    and then issued a second commit after the insert. A failure
+    between the two left the story permanently absent from full-text
+    search even though the library index still knew about it. Uses a
+    SQLite authorizer to deny INSERT so the second leg of the reindex
+    raises after the DELETE has already issued.
+    """
+    import sqlite3 as _sqlite
+
+    fti = FullTextIndex(_db_path(tmp_path))
+    fti.index_story(
+        root="/lib/a",
+        url="https://example.com/s/1",
+        relpath="story.epub",
+        title="Original",
+        author="A",
+        chapters=[_ch(1, "C1", "the original chapter body")],
+    )
+    assert fti.search("original chapter")  # baseline: present
+
+    def deny_inserts(action, *_args):
+        if action == _sqlite.SQLITE_INSERT:
+            return _sqlite.SQLITE_DENY
+        return _sqlite.SQLITE_OK
+
+    fti._conn.set_authorizer(deny_inserts)
+    try:
+        with pytest.raises(_sqlite.DatabaseError):
+            fti.index_story(
+                root="/lib/a",
+                url="https://example.com/s/1",
+                relpath="story.epub",
+                title="Replacement",
+                author="A",
+                chapters=[_ch(1, "C1", "fresh new content here")],
+            )
+    finally:
+        fti._conn.set_authorizer(None)
+
+    # Original is still searchable — neither lost nor partially replaced.
+    hits = fti.search("original chapter")
+    assert len(hits) == 1
+    assert hits[0].title == "Original"
+    assert not fti.search("fresh new content")
+
+
 def test_bootstrap_report_summary_text():
     r = BootstrapReport(
         indexed=3, skipped_missing=1, skipped_unsupported=2,

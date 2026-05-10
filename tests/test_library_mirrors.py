@@ -454,3 +454,52 @@ def test_ordering_is_stable_and_by_signal_strength(tmp_path: Path):
     # Three-signal pair should come first
     assert candidates[0].signal_count == 3
     assert candidates[1].signal_count == 2
+
+
+def test_find_mirrors_continues_when_one_root_index_raises(tmp_path: Path, caplog):
+    """One unmounted drive / corrupt root mid-iter must not abort the
+    whole sweep — the user gets candidates from healthy roots and a
+    warning naming the bad one. Regression: an earlier shape let the
+    raised exception escape ``_collect_records`` so a single bad root
+    silently returned zero mirror candidates across the whole library.
+    """
+    import logging
+
+    lib = tmp_path / "lib_ok"
+    lib.mkdir()
+    _drabble_epub(
+        lib, title="Healthy Pair",
+        author="Auth",
+        url="https://www.fanfiction.net/s/5000/1/",
+        story_id=5000,
+    )
+    _drabble_epub(
+        lib, title="Healthy Pair",
+        author="Auth",
+        url="https://archiveofourown.org/works/5100",
+        story_id=5100,
+    )
+    scan(lib, index_path=_index_path(tmp_path))
+    idx = LibraryIndex.load(_index_path(tmp_path))
+
+    # Wrap stories_in so it raises for the bad root and behaves
+    # normally for the healthy one.
+    bad_root = tmp_path / "lib_bad"
+    real_stories_in = idx.stories_in
+
+    def selective_raiser(root):
+        if Path(root).resolve() == bad_root.resolve():
+            raise OSError("simulated unmounted-drive error")
+        return real_stories_in(root)
+
+    idx.stories_in = selective_raiser  # type: ignore[assignment]
+
+    with caplog.at_level(logging.WARNING):
+        candidates = find_mirrors(idx, roots=[bad_root, lib])
+
+    # Healthy root's mirror pair was still found.
+    assert len(candidates) == 1
+    assert candidates[0].a_title == "Healthy Pair"
+    # Bad root was logged so the user can see what was skipped.
+    assert any("lib_bad" in rec.message or "unmounted" in rec.message
+               for rec in caplog.records)

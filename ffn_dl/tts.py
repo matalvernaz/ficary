@@ -1330,7 +1330,14 @@ class VoiceMapper:
         self._fallback_female = [_namespace_legacy(v) for v in FEMALE_VOICES]
         self._fallback_neutral = [_namespace_legacy(v) for v in NEUTRAL_VOICES]
         self._per_character_pool: dict[str, list[str]] = {}
-        self._per_character_idx: dict[str, int] = {}
+        # Round-robin cursor keyed by *pool identity* rather than by
+        # character. Earlier shape used per-character indices that all
+        # started at 0, so two characters sharing the same locale/gender
+        # filter collapsed onto the same first voice — every male en-GB
+        # speaker came out as the same Edge voice. Keying by the tuple
+        # of voices in the pool means characters sharing a pool advance
+        # through it together, distinct pools advance independently.
+        self._pool_idx: dict[tuple[str, ...], int] = {}
         if self.map_path and self.map_path.exists():
             try:
                 raw = json.loads(self.map_path.read_text(encoding="utf-8"))
@@ -1367,7 +1374,11 @@ class VoiceMapper:
             for name, voices in per_character.items()
             if voices
         }
-        self._per_character_idx = {name: 0 for name in self._per_character_pool}
+        # Reset the pool cursors. Any previously-loaded mapping in
+        # ``self.mapping`` is honoured by ``assign``'s early-return,
+        # so distinct characters with the same pool will pick up where
+        # their pool last advanced rather than racing back to index 0.
+        self._pool_idx = {}
 
     def assign(self, name, gender="neutral"):
         existing = self.mapping.get(name)
@@ -1376,9 +1387,7 @@ class VoiceMapper:
 
         pool = self._per_character_pool.get(name)
         if pool:
-            idx = self._per_character_idx.get(name, 0)
-            voice = pool[idx % len(pool)]
-            self._per_character_idx[name] = idx + 1
+            voice = self._next_from_pool(pool)
         elif gender == "male":
             voice = self._fallback_male[self._male_idx % len(self._fallback_male)]
             self._male_idx += 1
@@ -1404,13 +1413,42 @@ class VoiceMapper:
             candidates = pool or self._fallback_male
             non_narrator = [v for v in candidates if v != narrator_ns]
             if non_narrator:
-                voice = non_narrator[0] if not pool else non_narrator[
-                    self._per_character_idx.get(name, 0) % len(non_narrator)
-                ]
+                voice = self._next_from_pool(non_narrator) if pool else non_narrator[0]
             # else: no alternative voice exists; accept the collision
             # rather than spin forever.
 
         self.mapping[name] = voice
+        return voice
+
+    def _next_from_pool(self, pool: list[str]) -> str:
+        """Return the next voice from ``pool`` and advance its cursor.
+
+        The cursor is keyed by the pool's own contents (as a tuple),
+        so two characters whose pools happen to be identical round-
+        robin through it together rather than both starting at index
+        0 and colliding on the first voice. When a voice is already
+        committed in ``self.mapping`` (e.g. carried over from a
+        loaded voice map), prefer an as-yet-unused voice if any
+        remain — that way a refreshed render adding a new character
+        doesn't immediately collide with an existing assignment.
+        """
+        if not pool:
+            return ""
+        key = tuple(pool)
+        used = set(self.mapping.values())
+        unused = [v for v in pool if v not in used]
+        if unused:
+            chosen = unused[0]
+            # Advance the cursor past this position so the next caller
+            # doesn't pick the same unused voice twice in a row.
+            try:
+                self._pool_idx[key] = pool.index(chosen) + 1
+            except ValueError:
+                self._pool_idx[key] = self._pool_idx.get(key, 0) + 1
+            return chosen
+        idx = self._pool_idx.get(key, 0)
+        voice = pool[idx % len(pool)]
+        self._pool_idx[key] = idx + 1
         return voice
 
     def get(self, name, default=None):
@@ -1439,21 +1477,38 @@ def _rate_str(pct):
     return f"{pct:+d}%"
 
 
+_RATE_CLAMP_MIN = -95
+_RATE_CLAMP_MAX = 100
+"""Provider-safe percent-delta range for combined rate strings. Edge-tts
+silently rejects sub-100 rates and (less consistently) very large
+positive ones with "No audio was received". The clamp keeps a user
+override + emotion shift inside the range — e.g. ``-100`` user combined
+with ``-20`` "sad" emotion would otherwise emit ``-120%`` and the
+segment would come back empty."""
+
+
 def _combine_rate(base_pct, emotion_rate):
     """Combine a user rate override with an emotion's own rate shift.
 
     emotion_rate comes from EMOTION_PROSODY as a string like '+10%' or
     '-20%'. If either is absent the other wins; if both are present the
-    deltas sum.
+    deltas sum, then clamp to the provider-safe range so an aggressive
+    user setting plus an emotion delta can't push the request below
+    edge-tts's silent-rejection floor.
     """
     if not emotion_rate:
-        return _rate_str(base_pct)
+        return _rate_str(_clamp_rate(base_pct or 0)) if base_pct else None
     try:
         emo_pct = int(emotion_rate.rstrip("%"))
     except ValueError:
-        return _rate_str(base_pct) or emotion_rate
-    total = (base_pct or 0) + emo_pct
+        return _rate_str(_clamp_rate(base_pct or 0)) if base_pct else emotion_rate
+    total = _clamp_rate((base_pct or 0) + emo_pct)
     return _rate_str(total) if total else None
+
+
+def _clamp_rate(pct: int) -> int:
+    """Clamp a percent rate delta to the provider-safe range."""
+    return max(_RATE_CLAMP_MIN, min(_RATE_CLAMP_MAX, int(pct)))
 
 
 def _tts_kwargs_for_segment(segment, voice, speech_rate=0):
@@ -1485,8 +1540,14 @@ async def _generate_segment_audio(segment, voice, output_path, speech_rate=0):
     both.
     """
     text = segment.text.strip()
-    # Skip fragments too short to be meaningful speech
-    if not text or len(text) < 3 or text.strip(".,;:!?-–—' \"") == "":
+    # Skip only fragments that contain no actual speech — punctuation
+    # alone, or empty after stripping. The earlier ``len(text) < 3``
+    # gate silently dropped one- and two-character utterances, which
+    # erased real dialogue ("No.", "Hi.", "OK", "I —", "Go!"). For a
+    # blind audiobook listener that drop is direct content loss, so
+    # the bar is now "is there any letter or digit in here?" rather
+    # than a length threshold.
+    if not text or text.strip(".,;:!?-–—' \"") == "":
         return False
 
     kwargs = _tts_kwargs_for_segment(segment, voice, speech_rate=speech_rate)
@@ -1781,9 +1842,23 @@ def _llm_strip_an_paragraphs(text: str, llm_config: dict | None) -> str:
         return text
     from . import attribution
 
-    flagged = attribution.classify_authors_notes_via_llm(
-        paragraphs, llm_config=llm_config,
-    )
+    # Catch LLM-side failures here so a flaky Ollama / unreachable
+    # cloud endpoint downgrades to "regex-only A/N stripping" rather
+    # than aborting the whole audiobook render. The exporter path
+    # already does this; mirroring the behaviour keeps audiobook
+    # listeners no worse off than EPUB readers when the backend
+    # blinks. Any non-LLM exception still propagates — those are
+    # unexpected and worth surfacing.
+    try:
+        flagged = attribution.classify_authors_notes_via_llm(
+            paragraphs, llm_config=llm_config,
+        )
+    except attribution.LLMUnavailable as exc:
+        logger.warning(
+            "LLM A/N strip skipped (LLM unavailable): %s — falling back "
+            "to regex-only output", exc,
+        )
+        return text
     if not flagged:
         return text
 
@@ -2638,19 +2713,31 @@ def play_audio_file(path):
 
 
 def _check_ffmpeg():
-    """Verify ffmpeg is available, raise a helpful error if not."""
-    try:
-        subprocess.run(
-            [FFMPEG, "-version"], capture_output=True, check=True, timeout=10,
-        )
-    except FileNotFoundError:
-        raise RuntimeError(
-            "ffmpeg is required for audiobook generation but was not found.\n"
-            "Install it from https://ffmpeg.org/download.html\n"
-            "On Windows: winget install ffmpeg\n"
-            "On macOS: brew install ffmpeg\n"
-            "On Linux: sudo apt install ffmpeg"
-        )
+    """Verify ffmpeg AND ffprobe are available, raise a helpful error if not.
+
+    The mux step at the end of audiobook generation calls ``ffprobe``
+    to read each chapter MP3's duration before stitching the M4B; an
+    earlier shape only checked ``ffmpeg`` here, so a system that had
+    ffmpeg installed without ffprobe (some distro-stripped builds,
+    minimal Docker images) would synthesise every chapter — minutes
+    or hours of work — and only fail at the very last step. Probing
+    both up-front gives the user the install instruction before any
+    synthesis starts.
+    """
+    for tool, label in ((FFMPEG, "ffmpeg"), (FFPROBE, "ffprobe")):
+        try:
+            subprocess.run(
+                [tool, "-version"], capture_output=True, check=True, timeout=10,
+            )
+        except FileNotFoundError:
+            raise RuntimeError(
+                f"{label} is required for audiobook generation but was not found.\n"
+                "Install ffmpeg (which bundles ffprobe) from "
+                "https://ffmpeg.org/download.html\n"
+                "On Windows: winget install ffmpeg\n"
+                "On macOS: brew install ffmpeg\n"
+                "On Linux: sudo apt install ffmpeg"
+            )
 
 
 # ── Attribution cache ─────────────────────────────────────────────

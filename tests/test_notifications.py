@@ -61,3 +61,77 @@ def test_post_redacts_webhook_in_urlerror_message(monkeypatch):
             timeout=1.0,
         )
     assert secret not in str(excinfo.value)
+
+
+# ── Rate-limiter regression ────────────────────────────────────────
+
+
+def test_dispatch_paces_burst_per_channel(monkeypatch):
+    """A watchlist update producing many events in one tick must
+    pace its sends so Discord/Pushover don't 429. Regression: an
+    earlier shape fired every event back-to-back in a tight loop.
+    """
+    # Reset the module-level send-time tracker so prior tests don't
+    # bleed minimum-interval credit into this one.
+    monkeypatch.setattr(notifications, "_LAST_SEND_AT", {})
+    sleeps: list[float] = []
+
+    def record_sleep(s):
+        sleeps.append(s)
+
+    monkeypatch.setattr(notifications.time, "sleep", record_sleep)
+    # Fake monotonic clock advances only when the test asks it to.
+    fake_now = {"t": 1000.0}
+    monkeypatch.setattr(
+        notifications.time, "monotonic", lambda: fake_now["t"],
+    )
+
+    # First call to a channel: no sleep, sets baseline.
+    notifications._wait_for_channel_slot("discord")
+    assert sleeps == []
+
+    # Immediate second call (no clock advance): expect a sleep up to
+    # the channel's minimum interval.
+    notifications._wait_for_channel_slot("discord")
+    assert sleeps and sleeps[-1] > 0
+    assert sleeps[-1] <= notifications._CHANNEL_MIN_INTERVAL_S["discord"] + 1e-6
+
+    # Pushover is paced independently from Discord — pushover's first
+    # call doesn't wait for Discord's window.
+    sleeps.clear()
+    notifications._wait_for_channel_slot("pushover")
+    assert sleeps == []  # first pushover send → no wait
+
+
+def test_notification_url_title_is_settable():
+    """Pushover senders must consume Notification.url_title rather
+    than hardcoding "Open" — for accessibility, watch-type-specific
+    labels ("Open story", "Open author") read better via NVDA."""
+    n = notifications.Notification(
+        title="t", message="m", url="https://x", url_title="Open story",
+    )
+    assert n.url_title == "Open story"
+
+    sent: dict = {}
+
+    def record(endpoint, fields, timeout=10):
+        sent.update(fields)
+
+    # send_pushover routes through _post_form; intercept that.
+    import ffn_dl.notifications as nm
+
+    real_post_form = nm._post_form
+    try:
+        nm._post_form = record
+        nm.send_pushover("tok", "user", n)
+    finally:
+        nm._post_form = real_post_form
+    assert sent.get("url_title") == "Open story"
+
+
+def test_notification_url_title_default_is_open():
+    """Backwards compatibility: callers that don't set url_title
+    keep the old "Open" label rather than blowing up on a missing
+    attribute."""
+    n = notifications.Notification(title="t", message="m", url="https://x")
+    assert n.url_title == "Open"
