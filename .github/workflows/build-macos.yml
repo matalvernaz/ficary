@@ -38,11 +38,20 @@ jobs:
         # ffprobe with no runtime dependencies beyond the macOS
         # system libs. Same "bundle it, don't require users to
         # brew install" philosophy the Windows build uses.
+        # evermeet.cx is a small single-server host like John Van
+        # Sickle's; same retry rationale as build-linux.yml — one
+        # transient connection timeout shouldn't fail the release.
         run: |
           set -e
           mkdir -p ffmpeg_bin
-          curl -L -o ffmpeg.zip https://evermeet.cx/ffmpeg/getrelease/zip
-          curl -L -o ffprobe.zip https://evermeet.cx/ffmpeg/getrelease/ffprobe/zip
+          curl -L --fail \
+            --retry 5 --retry-delay 15 --retry-all-errors \
+            --connect-timeout 30 --max-time 300 \
+            -o ffmpeg.zip https://evermeet.cx/ffmpeg/getrelease/zip
+          curl -L --fail \
+            --retry 5 --retry-delay 15 --retry-all-errors \
+            --connect-timeout 30 --max-time 300 \
+            -o ffprobe.zip https://evermeet.cx/ffmpeg/getrelease/ffprobe/zip
           unzip -o ffmpeg.zip -d ffmpeg_bin/
           unzip -o ffprobe.zip -d ffmpeg_bin/
           chmod +x ffmpeg_bin/ffmpeg ffmpeg_bin/ffprobe

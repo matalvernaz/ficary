@@ -47,10 +47,21 @@ jobs:
         # dep on system libraries, so the bundle works on any
         # desktop Linux without requiring the user to apt-get
         # install ffmpeg separately.
+        #
+        # The download host is a single small server that
+        # occasionally times out — without retry flags one bad
+        # network minute kills the whole release build. ``curl
+        # --retry 5 --retry-delay 15 --retry-all-errors`` covers
+        # both connection-level and HTTP-level transients;
+        # ``--connect-timeout`` keeps a stuck SYN from burning
+        # the full 130s timeout we hit on 2026-05-10.
         run: |
           set -e
           mkdir -p ffmpeg_bin
-          curl -L -o ffmpeg.tar.xz \
+          curl -L --fail \
+            --retry 5 --retry-delay 15 --retry-all-errors \
+            --connect-timeout 30 --max-time 300 \
+            -o ffmpeg.tar.xz \
             https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz
           tar -xf ffmpeg.tar.xz
           dir=$(find . -maxdepth 1 -type d -name "ffmpeg-*-amd64-static" | head -1)
