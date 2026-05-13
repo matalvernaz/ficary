@@ -11,7 +11,7 @@ from typing import Callable
 from bs4 import BeautifulSoup, NavigableString, Tag
 
 from .atomic import atomic_path, atomic_write_text
-from .models import Story
+from .models import Story, format_chapter_heading
 
 logger = logging.getLogger(__name__)
 
@@ -406,7 +406,7 @@ def export_txt(
     buf.write("=" * 60 + "\n")
     consecutive_timeouts = 0
     for ch in story.chapters:
-        buf.write(f"\n\n--- {ch.title} ---\n\n")
+        buf.write(f"\n\n--- {format_chapter_heading(ch.number, ch.title)} ---\n\n")
         html, llm_disabled, consecutive_timeouts = (
             _prepare_chapter_html_with_llm_fallback(
                 ch.html, hr_as_stars=False, strip_notes=strip_notes,
@@ -494,14 +494,15 @@ def export_html(
     buf.write('<nav id="toc">\n<h2>Table of Contents</h2>\n<ol>\n')
     for i, ch in enumerate(story.chapters, 1):
         anchor_n = ch.number if ch.number else i
+        heading = format_chapter_heading(ch.number, ch.title)
         buf.write(
-            f'<li><a href="#chapter-{anchor_n}">{escape(ch.title)}</a></li>\n'
+            f'<li><a href="#chapter-{anchor_n}">{escape(heading)}</a></li>\n'
         )
     buf.write("</ol>\n</nav>\n<hr>\n")
 
     consecutive_timeouts = 0
     for i, ch in enumerate(story.chapters, 1):
-        ch_title = escape(ch.title)
+        ch_title = escape(format_chapter_heading(ch.number, ch.title))
         anchor_n = ch.number if ch.number else i
         buf.write(
             f'<div class="chapter" id="chapter-{anchor_n}"><h2>{ch_title}</h2>\n'
@@ -1733,12 +1734,13 @@ def export_epub(
     epub_chapters = []
     consecutive_timeouts = 0
     for ch in story.chapters:
+        ch_heading = format_chapter_heading(ch.number, ch.title)
         ec = epub.EpubHtml(
-            title=ch.title,
+            title=ch_heading,
             file_name=f"chapter_{ch.number}.xhtml",
             lang="en",
         )
-        heading = escape(ch.title)
+        heading = escape(ch_heading)
         chapter_html, llm_disabled, consecutive_timeouts = (
             _prepare_chapter_html_with_llm_fallback(
                 ch.html, hr_as_stars, strip_notes,

@@ -23,6 +23,43 @@ class Story:
     metadata: dict = field(default_factory=dict)
 
 
+# Structural labels that name their own place in the book. When the
+# author's chapter title *is* one of these (optionally with a
+# subtitle, e.g. "Prologue: Before the Fall"), we render it verbatim —
+# "Chapter 1. Prologue" reads wrong.
+STRUCTURAL_LABELS = (
+    "prologue", "prelude", "preface", "foreword", "introduction",
+    "epilogue", "afterword", "postscript", "coda",
+    "interlude", "intermission", "intermezzo",
+    "author's note", "authors note", "a/n",
+)
+
+
+def format_chapter_heading(n, title):
+    """Render a chapter heading from its number and raw title.
+
+    A missing/generic title collapses to ``Chapter N``; a title that
+    already starts with "Chapter" or names a structural section
+    (Prologue, Epilogue, Interlude, …) is preserved verbatim;
+    otherwise the number is prepended so the reader always sees a
+    clear chapter marker. Shared between the text/HTML/EPUB exporters
+    and the TTS audiobook builder so the spoken and printed forms
+    stay in sync.
+    """
+    title = (title or "").strip()
+    if not title:
+        return f"Chapter {n}"
+    if re.match(r"^chapter\b", title, re.I):
+        return title
+    low = title.lower()
+    for label in STRUCTURAL_LABELS:
+        if low == label or low.startswith(label + ":") or low.startswith(label + " -"):
+            return title
+    if re.match(r"^\d+\s*[.\-:)]*\s*$", title):
+        return f"Chapter {n}"
+    return f"Chapter {n}. {title}"
+
+
 def parse_chapter_spec(spec):
     """Parse a chapter-range expression into a list of (lo, hi) tuples.
 

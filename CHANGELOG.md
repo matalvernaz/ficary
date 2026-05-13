@@ -1,5 +1,20 @@
 # Changelog
 
+## 2.4.10 — 2026-05-13
+
+- **Chapter headings now show the chapter number even when the author
+  gave the chapter a name.** Previously, a chapter titled "The
+  Beginning" rendered exactly as "The Beginning" in the TXT/HTML/EPUB
+  output, with no indication of where it sat in the story. The
+  exporters now share the TTS audiobook builder's heading formatter:
+  named chapters become "Chapter N. The Beginning", titles that
+  already start with "Chapter" or name a structural section
+  (Prologue, Epilogue, Interlude, Foreword, Author's Note, …) are
+  preserved verbatim, and empty/pure-number titles fall back to
+  "Chapter N". The HTML TOC entries and EPUB navigation labels are
+  updated to match, so a reader can see exactly which chapter they're
+  jumping to.
+
 ## 2.4.6 — 2026-05-08
 
 ### Three correctness fixes (Gemini-assisted review)
