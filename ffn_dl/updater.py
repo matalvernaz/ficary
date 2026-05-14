@@ -5,7 +5,7 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from .models import Chapter
+from .models import Chapter, parse_chapter_heading
 
 logger = logging.getLogger(__name__)
 
@@ -990,7 +990,12 @@ def _read_html_chapters(path: Path) -> list[Chapter]:
         body = match.group("body")
         title_match = _HTML_CHAPTER_TITLE_RE.search(body)
         if title_match:
-            title = re.sub(r"\s+", " ", title_match.group("title")).strip()
+            heading = re.sub(r"\s+", " ", title_match.group("title")).strip()
+            # Strip the "Chapter N. " prefix that the exporter writes
+            # so the round-trip recovers the *raw* ch.title — otherwise
+            # the prefix piles up on re-export and merged stories mix
+            # raw/prefixed titles.
+            title = parse_chapter_heading(number, heading)
             # Chapter body used on re-export is everything *after* the
             # h2 — the exporter writes the h2 itself from ch.title, so
             # leaving it in would duplicate the heading.
@@ -1047,7 +1052,8 @@ def _read_epub_chapters(path: Path) -> list[Chapter]:
 
         title_match = _HTML_CHAPTER_TITLE_RE.search(body)
         if title_match:
-            title = re.sub(r"\s+", " ", title_match.group("title")).strip()
+            heading = re.sub(r"\s+", " ", title_match.group("title")).strip()
+            title = parse_chapter_heading(number, heading)
             body_html = body[title_match.end():].lstrip()
         else:
             title = _DEFAULT_CHAPTER_TITLE_FMT.format(n=number)

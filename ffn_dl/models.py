@@ -60,6 +60,31 @@ def format_chapter_heading(n, title):
     return f"Chapter {n}. {title}"
 
 
+def parse_chapter_heading(n, heading):
+    """Inverse of :func:`format_chapter_heading`: recover the raw title.
+
+    The merge-in-place updater reads chapter ``<h2>`` text back out of
+    an existing export, but the exporter writes the *formatted* heading
+    there ("Chapter 3. The Beginning"). Without stripping the prefix
+    the recovered title would survive into a re-export and merged
+    stories would mix raw and prefixed titles. We strip exactly the
+    "Chapter N. " (or "Chapter N") prefix matching this chapter's
+    number; anything else — including titles that legitimately start
+    with "Chapter " from the author — is returned verbatim so the
+    round-trip is idempotent.
+    """
+    heading = (heading or "").strip()
+    if not heading:
+        return ""
+    bare = re.match(rf"^Chapter\s+{n}\s*$", heading, re.I)
+    if bare:
+        return ""
+    prefixed = re.match(rf"^Chapter\s+{n}\.\s+(?P<rest>.+)$", heading, re.I)
+    if prefixed:
+        return prefixed.group("rest").strip()
+    return heading
+
+
 def parse_chapter_spec(spec):
     """Parse a chapter-range expression into a list of (lo, hi) tuples.
 

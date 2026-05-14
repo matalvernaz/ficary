@@ -1,5 +1,25 @@
 # Changelog
 
+## 2.4.11 — 2026-05-13
+
+- **Merge-in-place updates no longer mix raw and prefixed chapter
+  titles.** The 2.4.10 heading change made the HTML/EPUB exporters
+  write "Chapter N. Title" into the chapter ``<h2>``, which is what
+  the updater reads back when merging freshly downloaded chapters
+  into an existing export. Previously the recovered titles kept the
+  "Chapter N. " prefix while the newly downloaded ones did not, so
+  the merged story rendered with inconsistent formatting on re-export
+  and the prefix could pile up over successive updates. The updater
+  now strips the matching "Chapter N. " (or "Chapter N") prefix when
+  reading exported HTML and EPUB chapters, restoring the raw
+  ``ch.title`` round-trip. Author-written titles that legitimately
+  start with "Chapter " are still preserved verbatim.
+- **Version-consistency guard was tripping CI.** ``ffn_dl/__init__.py``
+  still read ``__version__ = "2.4.9"`` after the 2.4.10 bump, which the
+  ``test_init_version_matches_pyproject`` guard catches because the
+  self-updater compares GitHub's latest release tag against
+  ``__version__``. Both files now move together.
+
 ## 2.4.10 — 2026-05-13
 
 - **Chapter headings now show the chapter number even when the author
