@@ -13,6 +13,7 @@ redesigns periodically. Structure as of the current layout:
 
 import logging
 import re
+from urllib.parse import urljoin
 
 from bs4 import BeautifulSoup
 
@@ -135,8 +136,7 @@ class MediaMinerScraper(BaseScraper):
             )
             if author_link:
                 author = author_link.get_text(strip=True)
-                href = author_link["href"]
-                author_url = MM_BASE + href if href.startswith("/") else href
+                author_url = urljoin(MM_BASE, author_link["href"])
 
             # Summary: text nodes between the author <br> and the first
             # <b>Anime/Manga:</b>-style label. Walk the direct children
@@ -219,8 +219,12 @@ class MediaMinerScraper(BaseScraper):
             return []
         chapters = []
         seen = set()
+        # Accept query/fragment after the chapter id ("…/12345/2?index=1")
+        # in addition to ``/`` or end-of-string. The previous regex only
+        # tolerated ``/`` or ``$``, so a link with a tracking parameter
+        # was silently skipped.
         for a in article.find_all(
-            "a", href=re.compile(r"/fanfic/c/[^?#]+?/\d+/\d+(?:/|$)")
+            "a", href=re.compile(r"/fanfic/c/[^?#]+?/\d+/\d+(?:[/?#]|$)")
         ):
             href = a["href"]
             match = re.search(r"/fanfic/c/([^?#]+?)/(\d+)/(\d+)", href)
@@ -232,18 +236,20 @@ class MediaMinerScraper(BaseScraper):
             seen.add(cid)
             label = a.get_text(" ", strip=True)
             # Label shapes we've seen: "Story Title Chapter N ( Chapter N )",
-            # "Chapter 1 - Awakening", bare "Chapter 12", or the occasional
-            # "Ch. 3". Strip the parenthesised self-reference, pull the
-            # Chapter-N slug if present, and fall back to the whole label
-            # for named-chapter sites so titles like "The Beginning"
-            # still land in the metadata.
+            # "Chapter 1 - Awakening", bare "Chapter 12", "Chapter 2: The
+            # Return", or the occasional "Ch. 3". Strip the parenthesised
+            # self-reference at the end; if the *whole* label is a bare
+            # "Chapter N" / "Ch. N", keep just that — but if there's more
+            # text after the chapter slug (the actual name), keep the full
+            # cleaned label so titles like "Chapter 2: The Return" don't
+            # collapse to "Chapter 2:".
             clean = re.sub(r"\s*\([^)]*\)\s*$", "", label).strip()
-            chapter_m = _MM_CHAPTER_LABEL_RE.search(clean)
+            chapter_m = _MM_CHAPTER_LABEL_RE.fullmatch(clean)
             title = (
                 chapter_m.group(0) if chapter_m
                 else (clean or f"Chapter {len(chapters) + 1}")
             )
-            full_url = MM_BASE + href if href.startswith("/") else href
+            full_url = urljoin(MM_BASE, href)
             chapters.append({"id": int(cid), "url": full_url, "title": title})
         return chapters
 
@@ -254,47 +260,98 @@ class MediaMinerScraper(BaseScraper):
             raise ValueError("Could not locate #fanfic-text on MediaMiner page.")
         return body.decode_contents()
 
+    @staticmethod
+    def _read_link_fallback(soup, fallback_title):
+        """Return a single-entry chapter list built from the "Read" link
+        on a story landing page, or ``[]`` if no such link is present.
+
+        Used by both ``download`` and ``get_chapter_count`` so the two
+        agree on whether a oneshot has 0 or 1 chapter — previously only
+        ``download`` knew about the read-link fallback, so the count
+        method understated chapter counts for oneshots.
+        """
+        read_link = soup.find("a", href=re.compile(r"/fanfic/c/"))
+        if not read_link:
+            return []
+        full = read_link["href"]
+        match = re.search(r"/(\d+)$", full.split("?")[0].split("#")[0])
+        if not match:
+            return []
+        return [{
+            "id": int(match.group(1)),
+            "url": urljoin(MM_BASE, full),
+            "title": fallback_title,
+        }]
+
     def get_chapter_count(self, url_or_id):
         story_id = self.parse_story_id(url_or_id)
         html = self._fetch(f"{MM_BASE}/fanfic/view_st.php/{story_id}")
         soup = BeautifulSoup(html, "lxml")
-        return len(self._parse_chapter_list(soup))
+        chapter_list = self._parse_chapter_list(soup)
+        if chapter_list:
+            return len(chapter_list)
+        return len(self._read_link_fallback(soup, fallback_title=""))
 
-    def scrape_author_stories(self, url):
-        match = re.search(r"/user_info\.php/(\d+)", str(url))
-        if match:
-            # /user_info.php/<uid> redirects to /fanfic/src.php/u/<name>
-            html = self._fetch(str(url))
+    def _fetch_author_listing(self, url):
+        """Resolve a MediaMiner author URL to (author_name, soup) for the
+        page that actually contains the story listing.
+
+        ``/user_info.php/<uid>`` redirects to ``/fanfic/src.php/u/<name>``;
+        we follow that hop here so callers see the listing page directly
+        rather than the placeholder. Returning the resolved soup lets
+        ``scrape_author_works`` derive titles from the same page that
+        ``scrape_author_stories`` discovered URLs on — without that,
+        title lookup misses and every work shows as "Story <id>".
+        """
+        text = str(url)
+        if re.search(r"/user_info\.php/\d+", text):
+            html = self._fetch(text)
             soup = BeautifulSoup(html, "lxml")
             name_link = soup.find("a", href=re.compile(r"/fanfic/src\.php/u/"))
             if name_link:
-                url = MM_BASE + name_link["href"]
-                html = self._fetch(url)
+                self._delay()
+                resolved = urljoin(MM_BASE, name_link["href"])
+                html = self._fetch(resolved)
                 soup = BeautifulSoup(html, "lxml")
         else:
-            html = self._fetch(str(url))
+            html = self._fetch(text)
             soup = BeautifulSoup(html, "lxml")
 
-        # Author display name from the heading
         author_name = "Unknown Author"
         h = soup.find(["h1", "h2", "h3"])
         if h:
             txt = h.get_text(strip=True)
             if txt:
                 author_name = re.sub(r"^Fan Fiction by\s+", "", txt, flags=re.I) or txt
+        return author_name, soup
 
-        # Pattern matches both /fanfic/s/<cat>/<slug>/<sid> forms and
-        # /fanfic/view_st.php/<sid>.
+    @staticmethod
+    def _extract_story_ids(soup):
+        """Yield ``(story_id, anchor_text)`` for every story link on the
+        author listing soup, deduplicating by id and preserving order.
+
+        Matches both ``/fanfic/view_st.php/<sid>`` and the slugged
+        ``/fanfic/s/<cat>/<slug>/<sid>`` forms.
+        """
         seen = set()
-        story_urls = []
+        results = []
         for a in soup.find_all("a", href=True):
             href = a["href"]
             m1 = re.search(r"/fanfic/view_st\.php/(\d+)", href)
             m2 = re.search(r"/fanfic/s/[^?#]+?/(\d+)(?:/|$)", href)
             sid = (m1.group(1) if m1 else None) or (m2.group(1) if m2 else None)
-            if sid and sid not in seen:
-                seen.add(sid)
-                story_urls.append(f"{MM_BASE}/fanfic/view_st.php/{sid}")
+            if not sid or sid in seen:
+                continue
+            seen.add(sid)
+            results.append((sid, a.get_text(strip=True)))
+        return results
+
+    def scrape_author_stories(self, url):
+        author_name, soup = self._fetch_author_listing(url)
+        story_urls = [
+            f"{MM_BASE}/fanfic/view_st.php/{sid}"
+            for sid, _ in self._extract_story_ids(soup)
+        ]
         return author_name, story_urls
 
     def scrape_author_works(self, url):
@@ -303,28 +360,13 @@ class MediaMinerScraper(BaseScraper):
         MediaMiner's listings don't carry much per-row metadata; we take
         the title from the link text and leave word/chapter counts blank.
         """
-        name, urls = self.scrape_author_stories(url)
-        html = self._fetch(str(url))
-        soup = BeautifulSoup(html, "lxml")
-        titles_by_id = {}
-        for a in soup.find_all("a", href=True):
-            href = a["href"]
-            m1 = re.search(r"/fanfic/view_st\.php/(\d+)", href)
-            m2 = re.search(r"/fanfic/s/[^?#]+?/(\d+)(?:/|$)", href)
-            sid = (m1.group(1) if m1 else None) or (m2.group(1) if m2 else None)
-            if not sid or sid in titles_by_id:
-                continue
-            text = a.get_text(strip=True)
-            if text:
-                titles_by_id[sid] = text
+        author_name, soup = self._fetch_author_listing(url)
         works = []
-        for u in urls:
-            sid_m = re.search(r"view_st\.php/(\d+)", u)
-            sid = sid_m.group(1) if sid_m else ""
+        for sid, text in self._extract_story_ids(soup):
             works.append({
-                "title": titles_by_id.get(sid, f"Story {sid}"),
-                "url": u,
-                "author": name,
+                "title": text or f"Story {sid}",
+                "url": f"{MM_BASE}/fanfic/view_st.php/{sid}",
+                "author": author_name,
                 "words": "",
                 "chapters": "",
                 "rating": "",
@@ -333,7 +375,7 @@ class MediaMinerScraper(BaseScraper):
                 "updated": "",
                 "section": "own",
             })
-        return name, works
+        return author_name, works
 
     def download(self, url_or_id, progress_callback=None, skip_chapters=0, chapters=None):
         story_id = self.parse_story_id(url_or_id)
@@ -350,16 +392,7 @@ class MediaMinerScraper(BaseScraper):
             # Single-chapter story: the "chapter" is the story page itself.
             # Follow the "Read" link if present — MediaMiner still renders
             # the chapter body on a /fanfic/c/ URL even for oneshots.
-            read_link = soup.find("a", href=re.compile(r"/fanfic/c/"))
-            if read_link:
-                full = read_link["href"]
-                match = re.search(r"/(\d+)$", full.split("?")[0])
-                if match:
-                    chapter_list = [{
-                        "id": int(match.group(1)),
-                        "url": MM_BASE + full if full.startswith("/") else full,
-                        "title": meta["title"],
-                    }]
+            chapter_list = self._read_link_fallback(soup, fallback_title=meta["title"])
         if not chapter_list:
             raise StoryNotFoundError(
                 f"No chapters found for MediaMiner story {story_id}."

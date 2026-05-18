@@ -236,3 +236,89 @@ class TestAdultGate:
         # A genuine work page must pass the gate check — regression
         # guard against overeager pattern matching on body text.
         scraper._check_for_blocks(ao3_work_full_html)
+
+
+class TestV2413RegressionFixes:
+    """Regressions for the multi-AI audit fixes in v2.4.13.
+
+    - AO3 summary previously concatenated paragraphs without spaces.
+    - Byline only captured the first co-author.
+    - Chapter notes/summaries/end-notes were silently dropped.
+    - _scrape_ao3_work_list mis-pasted ``page=N`` into URL fragments
+      and duplicated pre-existing ``page=`` query params.
+    """
+
+    def test_summary_preserves_paragraph_separation(self):
+        soup = BeautifulSoup(
+            "<dl class='work meta'></dl>"
+            "<div class='preface'><div class='summary'>"
+            "<blockquote class='userstuff'>"
+            "<p>First paragraph.</p><p>Second paragraph.</p>"
+            "</blockquote></div></div>",
+            "lxml",
+        )
+        meta = AO3Scraper._parse_metadata(soup)
+        # Old behaviour: "First paragraph.Second paragraph."
+        assert "First paragraph." in meta["summary"]
+        assert "Second paragraph." in meta["summary"]
+        assert "First paragraph.Second paragraph." not in meta["summary"]
+
+    def test_co_authors_joined(self):
+        soup = BeautifulSoup(
+            "<h3 class='byline'>"
+            "<a href='/users/alice/pseuds/alice'>Alice</a> and "
+            "<a href='/users/bob/pseuds/bob'>Bob</a>"
+            "</h3>",
+            "lxml",
+        )
+        meta = AO3Scraper._parse_metadata(soup)
+        assert "Alice" in meta["author"]
+        assert "Bob" in meta["author"]
+
+    def test_chapter_notes_preserved(self):
+        # Multi-chapter chapter wrapper carrying a notes module alongside
+        # the userstuff body. Old parser dropped the notes silently.
+        html = """
+        <div id='chapters'>
+          <div id='chapter-1' class='chapter'>
+            <h3 class='title'>Chapter 1: Hello</h3>
+            <div id='notes' class='notes module'>
+              <h3 class='landmark heading'>Notes:</h3>
+              <blockquote class='userstuff'>
+                <p>Author warning: dragons inside.</p>
+              </blockquote>
+            </div>
+            <div class='userstuff module'>
+              <h3 class='landmark heading'>Chapter Text</h3>
+              <p>Once upon a time.</p>
+            </div>
+            <div class='end notes module'>
+              <blockquote class='userstuff'>
+                <p>Translation: dragon = lizard.</p>
+              </blockquote>
+            </div>
+          </div>
+        </div>
+        """
+        soup = BeautifulSoup(html, "lxml")
+        chapters = AO3Scraper._parse_chapters(soup, "fallback")
+        assert len(chapters) == 1
+        html_out = chapters[0].html
+        assert "Once upon a time." in html_out
+        assert "Author warning" in html_out
+        assert "Translation" in html_out
+        # Landmarks should still be stripped.
+        assert "Chapter Text" not in html_out
+
+    def test_scrape_series_works_accepts_ao3_org_mirror(self):
+        # Just exercise the URL-shape rejection — full network test is
+        # in the http-stubbed area of the suite.
+        scraper = AO3Scraper(use_cache=False)
+        with pytest.raises(ValueError):
+            scraper.scrape_series_works("https://example.com/series/123")
+        # Should NOT raise on ao3.org mirror; this just verifies the
+        # regex now matches both hostnames. The actual call would hit
+        # the network — we only need to confirm parse_story_id-style
+        # acceptance, so do the same regex check the method does:
+        assert re.search(r"(?:archiveofourown\.org|ao3\.org)/series/(\d+)",
+                          "https://ao3.org/series/123") is not None

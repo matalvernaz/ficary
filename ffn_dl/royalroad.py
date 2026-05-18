@@ -153,13 +153,27 @@ class RoyalRoadScraper(BaseScraper):
     # Aivean/royalroad-downloader both solve this the same way: collect
     # the hidden classes from CSS, drop elements that use them. That's
     # survived ~2 years of RR rotating both class names and phrasing.
-    # Capture the entire selector group so multi-selector rules like
-    # ``.foo, .bar { display:none }`` produce both ``foo`` and ``bar``.
-    # The previous single-class regex only captured the first selector,
-    # so RR's comma-separated hidden rules silently leaked the rest of
-    # the tagged paragraphs into the EPUB.
+    #
+    # We only honour *simple* class selectors and comma-grouped simple
+    # class selectors here: ``.foo { display:none }`` and ``.foo, .bar
+    # { display:none }``. A descendant selector like ``.outer .inner
+    # { display:none }`` only hides ``.inner`` *inside* ``.outer``, not
+    # any element with class ``outer``, so blindly removing every
+    # ``.outer`` element (as the previous "extract every class name"
+    # logic would) could delete a visible container — and with it the
+    # entire chapter body.
+    # Anchor at a rule boundary (start-of-text or right after the
+    # previous rule's closing ``}``) so a descendant selector like
+    # ``.outer .inner { display:none }`` doesn't backtrack into
+    # ``.inner { display:none }`` and incorrectly flag every ``.inner``
+    # element on the page as hidden. The boundary is matched with a
+    # zero-width lookbehind so consecutive rules in the same <style>
+    # block each anchor cleanly without the previous match swallowing
+    # the next rule's ``}`` separator.
     _HIDDEN_RULE_RE = re.compile(
-        r"((?:\s*\.[A-Za-z0-9_-]+\s*,?)+)\s*\{[^}]*"
+        r"(?:^|(?<=\}))\s*"
+        r"(?P<selectors>\.[A-Za-z0-9_-]+(?:\s*,\s*\.[A-Za-z0-9_-]+)*)\s*\{"
+        r"[^}]*"
         r"(?:display\s*:\s*none|visibility\s*:\s*hidden|opacity\s*:\s*0|"
         r"font-size\s*:\s*0|speak\s*:\s*never)"
         r"[^}]*\}",
@@ -182,7 +196,7 @@ class RoyalRoadScraper(BaseScraper):
             if not css:
                 continue
             for match in cls._HIDDEN_RULE_RE.finditer(css):
-                selector_block = match.group(1)
+                selector_block = match.group("selectors")
                 for name_match in cls._CLASS_NAME_RE.finditer(selector_block):
                     classes.add(name_match.group(1))
         return classes

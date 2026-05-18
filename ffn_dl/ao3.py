@@ -135,12 +135,19 @@ class AO3Scraper(BaseScraper):
         author = "Unknown Author"
         author_url = ""
         if byline:
-            author_link = byline.find(
+            # Co-authored works carry one ``/users/<name>/pseuds/<pseud>``
+            # link per author. Picking only the first via ``find`` would
+            # silently drop the remaining authors. Collect all and join
+            # with " & " so the metadata reflects the real attribution;
+            # author_url stays pointed at the first author's pseud.
+            author_links = byline.find_all(
                 "a", href=re.compile(r"^/users/[^/]+/pseuds/")
             )
-            if author_link:
-                author = author_link.get_text(strip=True)
-                author_url = AO3_BASE + author_link["href"]
+            if author_links:
+                names = [a.get_text(strip=True) for a in author_links if a.get_text(strip=True)]
+                if names:
+                    author = " & ".join(names)
+                    author_url = AO3_BASE + author_links[0]["href"]
             else:
                 # Anonymous or orphan_account works
                 author = byline.get_text(strip=True) or "Anonymous"
@@ -152,7 +159,9 @@ class AO3Scraper(BaseScraper):
         if summary_mod:
             bq = summary_mod.find("blockquote")
             summary_tag = bq or summary_mod
-        summary = summary_tag.get_text(strip=True) if summary_tag else ""
+        # Use a newline separator so AO3 multi-paragraph summaries
+        # (``<p>One</p><p>Two</p>``) don't collapse into ``"OneTwo"``.
+        summary = summary_tag.get_text("\n", strip=True) if summary_tag else ""
 
         extra = {}
         meta_dl = soup.select_one("dl.work.meta")
@@ -232,12 +241,69 @@ class AO3Scraper(BaseScraper):
         }
 
     @staticmethod
-    def _parse_chapters(soup, fallback_title):
+    def _strip_landmarks(node):
+        """Drop AO3's screen-reader landmark headings so they don't leak
+        into the chapter body. AO3 sticks ``<h3 class="landmark heading">
+        Chapter Text</h3>`` (and the matching "Notes" landmark) into the
+        markup as accessibility hints; in an EPUB those just look like
+        random in-line headings."""
+        for landmark in node.find_all("h3", class_="landmark heading"):
+            landmark.decompose()
+
+    @classmethod
+    def _chapter_extras_html(cls, wrapper, *, kind):
+        """Return rendered HTML for a chapter ``summary`` / ``notes`` /
+        ``end notes`` block, or empty string if absent. ``wrapper`` is
+        the chapter ``<div>`` for multi-chapter works or the surrounding
+        ``#workskin`` for oneshots.
+
+        AO3 puts chapter notes in sibling modules outside the
+        ``div.userstuff`` body. Dropping them silently loses content
+        that authors frequently use for warnings, glossaries, or
+        translation footnotes.
+        """
+        # AO3 markup: <div id="summary" class="summary module"><h3>Summary</h3><blockquote class="userstuff">...</blockquote></div>
+        # Same shape for #notes (pre-chapter notes) and .end.notes.module.
+        if kind == "summary":
+            block = wrapper.find("div", id=re.compile(r"^summary"))
+        elif kind == "notes":
+            block = wrapper.find("div", id=re.compile(r"^notes"))
+        elif kind == "end_notes":
+            block = wrapper.find("div", class_=re.compile(r"\bend\b.*\bnotes\b"))
+        else:
+            return ""
+        if not block:
+            return ""
+        bq = block.find("blockquote", class_=re.compile(r"\buserstuff\b"))
+        if not bq:
+            return ""
+        cls._strip_landmarks(bq)
+        rendered = bq.decode_contents().strip()
+        if not rendered:
+            return ""
+        label = {
+            "summary": "Chapter Summary",
+            "notes": "Notes",
+            "end_notes": "End Notes",
+        }[kind]
+        return (
+            f'<aside class="ao3-chapter-{kind.replace("_", "-")}">'
+            f"<h4>{label}</h4>{rendered}</aside>"
+        )
+
+    @classmethod
+    def _parse_chapters(cls, soup, fallback_title):
         """Extract chapters from the full-work page.
 
         Multi-chapter works have <div id="chapter-N"> blocks with an
-        inner h3.title and a div.userstuff. Single-chapter works have
-        a single div.userstuff under #workskin with no chapter wrapper.
+        inner h3.title, optional summary/notes modules, the
+        div.userstuff body, and a trailing end-notes module. Single-
+        chapter works have those modules under #workskin with no
+        per-chapter wrapper.
+
+        Chapter summaries, pre-chapter notes, and end-of-chapter notes
+        are kept and rendered as ``<aside>`` blocks alongside the body
+        so authors' commentary isn't silently dropped from the EPUB.
         """
         chapters = []
         numbered = soup.find_all(
@@ -255,12 +321,12 @@ class AO3Scraper(BaseScraper):
                 userstuff = div.find("div", class_="userstuff")
                 if userstuff is None:
                     continue
-                # Strip the "Chapter Text" landmark AO3 injects
-                for landmark in userstuff.find_all(
-                    "h3", class_="landmark heading"
-                ):
-                    landmark.decompose()
-                html = userstuff.decode_contents()
+                cls._strip_landmarks(userstuff)
+                body = userstuff.decode_contents()
+                summary_html = cls._chapter_extras_html(div, kind="summary")
+                notes_html = cls._chapter_extras_html(div, kind="notes")
+                end_notes_html = cls._chapter_extras_html(div, kind="end_notes")
+                html = summary_html + notes_html + body + end_notes_html
                 chapters.append(Chapter(number=idx, title=title, html=html))
         else:
             # Single-chapter work
@@ -270,12 +336,16 @@ class AO3Scraper(BaseScraper):
                 raise ValueError(
                     "Could not locate chapter content on AO3 work page."
                 )
-            for landmark in userstuff.find_all(
-                "h3", class_="landmark heading"
-            ):
-                landmark.decompose()
+            cls._strip_landmarks(userstuff)
+            body = userstuff.decode_contents()
+            # Oneshot notes/summaries live in the preface module rather
+            # than #workskin, so look one level up.
+            preface = soup.find("div", class_="preface") or workskin
+            notes_html = cls._chapter_extras_html(preface, kind="notes")
+            end_notes_html = cls._chapter_extras_html(soup, kind="end_notes")
+            html = notes_html + body + end_notes_html
             chapters.append(
-                Chapter(number=1, title=fallback_title, html=userstuff.decode_contents())
+                Chapter(number=1, title=fallback_title, html=html)
             )
 
         return chapters
@@ -313,8 +383,12 @@ class AO3Scraper(BaseScraper):
         AO3 paginates series at 20 works per page via ``?page=N``;
         walking `rel="next"` picks up the full list — without pagination,
         a series of 30 works would silently drop the last 10.
+
+        Accepts both ``archiveofourown.org/series/<id>`` and the
+        ``ao3.org`` mirror — ``parse_story_id`` already does, so the
+        series-walk path stays consistent with the work-id path.
         """
-        match = re.search(r"archiveofourown\.org/series/(\d+)", url)
+        match = re.search(r"(?:archiveofourown\.org|ao3\.org)/series/(\d+)", url)
         if not match:
             raise ValueError(f"Not an AO3 series URL: {url}")
         series_id = match.group(1)
@@ -507,6 +581,7 @@ class AO3Scraper(BaseScraper):
         section="own",
         max_pages=200,
     ):
+        from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
         from .search import _parse_ao3_results
 
         author_name = fallback_name
@@ -514,20 +589,33 @@ class AO3Scraper(BaseScraper):
         seen = set()
         page = 1
 
-        # AO3 paginates via either ``?page=N`` or ``&page=N`` depending
-        # on whether the URL already has a query string. Search URLs
-        # come pre-loaded with ``?work_search[...]=...`` filters, so
-        # the pagination segment must use ``&``.
-        sep = "&" if "?" in base_url else "?"
+        # Rebuild the URL through urlsplit so a fragment in the user's
+        # input ("…/works#main") doesn't push our ``page=N`` *into* the
+        # fragment ("…/works#main?page=1"), and a pre-existing
+        # ``page=...`` param in their input gets overwritten instead of
+        # duplicated ("…?page=3&page=1"). Both of those degenerate URLs
+        # cause the walk to fetch page 1 repeatedly and stop after the
+        # first page's worth of works.
+        parts = urlsplit(base_url)
+        existing_params = [
+            (k, v) for (k, v) in parse_qsl(parts.query, keep_blank_values=True)
+            if k != "page"
+        ]
+
+        def _page_url(n):
+            new_query = urlencode(existing_params + [("page", str(n))])
+            # Drop fragment — AO3 doesn't care, and keeping it in the
+            # rebuilt URL would just waste bytes.
+            return urlunsplit((parts.scheme, parts.netloc, parts.path, new_query, ""))
 
         while page <= max_pages:
-            page_url = f"{base_url}{sep}page={page}"
+            page_url = _page_url(page)
             html = self._fetch(page_url)
             if page == 1:
                 soup = BeautifulSoup(html, "lxml")
                 h2 = soup.find("h2", class_="heading")
                 if h2:
-                    heading = h2.get_text(strip=True)
+                    heading = h2.get_text(" ", strip=True)
                     m = re.search(r"(?:Works|Bookmarks) by (.+)$", heading)
                     if m:
                         author_name = m.group(1).strip()
@@ -551,6 +639,14 @@ class AO3Scraper(BaseScraper):
                 break
             page += 1
             self._delay()
+        else:
+            # Match scrape_series_works / scrape_author_stories: log when
+            # the safety cap is the reason we stopped, so a misbehaving
+            # pagination doesn't fail silently.
+            logger.warning(
+                "AO3 work-list walk for %s hit the %d-page safety cap; "
+                "results may be incomplete.", base_url, max_pages,
+            )
 
         return author_name, works
 

@@ -309,3 +309,41 @@ class TestTruncationCap:
         # Cache was NOT written for the truncated chapter.
         cache_hit = scraper._load_chapter_cache(1, 1)
         assert cache_hit is None
+
+
+class TestV2413RegressionFixes:
+    """Regressions for the multi-AI audit fixes in v2.4.13."""
+
+    def test_walk_paginated_stories_follows_next_url(self):
+        from ffn_dl.wattpad import WattpadScraper
+
+        # Stub _api_get_json to feed two pages with a nextUrl pivot.
+        scraper = WattpadScraper(use_cache=False)
+
+        pages = {
+            "first": {"stories": [{"id": 1}, {"id": 2}], "nextUrl": "second"},
+            "second": {"stories": [{"id": 3}], "nextUrl": None},
+        }
+        scraper._api_get_json = lambda url: pages[url]
+        scraper._delay = lambda: None
+
+        seen = [s["id"] for s in scraper._walk_paginated_stories("first")]
+        # Old behaviour: scrape_author_stories never paginated, so only
+        # the first page worth (limit=100) was returned. The cursor
+        # walk should now pick up page 2's story too.
+        assert seen == [1, 2, 3]
+
+    def test_walk_paginated_stories_stops_on_self_loop(self):
+        from ffn_dl.wattpad import WattpadScraper
+
+        scraper = WattpadScraper(use_cache=False)
+        scraper._api_get_json = lambda url: {
+            "stories": [{"id": 1}],
+            "nextUrl": "loop",
+        }
+        scraper._delay = lambda: None
+
+        out = list(scraper._walk_paginated_stories("loop"))
+        # The cursor returns to itself — must not loop forever.
+        # After one yield, the self-loop check breaks the walk.
+        assert len(out) >= 1

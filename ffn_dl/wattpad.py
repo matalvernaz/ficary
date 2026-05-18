@@ -524,20 +524,55 @@ class WattpadScraper(BaseScraper):
 
     # ── Author pages ──────────────────────────────────────────
 
+    def _walk_paginated_stories(self, first_url):
+        """Yield every story dict from a Wattpad ``stories(...)`` envelope,
+        following the ``nextUrl`` cursor. Stops on first absence of
+        ``nextUrl`` rather than first empty page so an intermediate
+        empty/filter-skipped page doesn't truncate the walk.
+
+        Cap at 200 hops to match the per-site safety bound elsewhere.
+        """
+        url = first_url
+        for _ in range(200):
+            if not url:
+                return
+            data = self._api_get_json(url)
+            stories = data.get("stories") or []
+            # Some Wattpad endpoints nest stories under another envelope
+            # ({"stories": {"stories": [...], "nextUrl": "..."}}).
+            if isinstance(stories, dict):
+                next_url = stories.get("nextUrl")
+                stories = stories.get("stories") or []
+            else:
+                next_url = data.get("nextUrl")
+            for s in stories:
+                yield s
+            if not next_url:
+                return
+            if next_url == url:
+                # Defensive: cursor stuck on itself shouldn't loop forever.
+                return
+            self._delay()
+            url = next_url
+
     def scrape_author_stories(self, url):
-        """Return ``(author_name, [story_urls])`` for a Wattpad user page."""
+        """Return ``(author_name, [story_urls])`` for a Wattpad user page.
+
+        Walks ``nextUrl`` so authors with >100 published stories aren't
+        silently truncated to the first page.
+        """
         name = self._author_from_url(url)
-        endpoint = (
+        first = (
             f"{WP_API}/v4/users/{name}/stories/published"
-            "?fields=stories(id,title,url)&limit=100"
+            "?fields=stories(id,title,url),nextUrl&limit=100"
         )
-        data = self._api_get_json(endpoint)
-        stories = data.get("stories") or []
         urls = []
-        for s in stories:
+        seen = set()
+        for s in self._walk_paginated_stories(first):
             story_id = s.get("id")
-            if not story_id:
+            if not story_id or story_id in seen:
                 continue
+            seen.add(story_id)
             urls.append(s.get("url") or f"{WP_BASE}/story/{story_id}")
         return name, urls
 
@@ -547,20 +582,22 @@ class WattpadScraper(BaseScraper):
         The published-stories endpoint doesn't expose rating or status
         per story so most fields come out empty. Word count is derived
         from Wattpad's character ``length`` using the same 5-char/word
-        heuristic as ``_build_metadata``.
+        heuristic as ``_build_metadata``. Pagination follows ``nextUrl``
+        so prolific authors aren't capped at 100 works.
         """
         name = self._author_from_url(url)
-        endpoint = (
+        first = (
             f"{WP_API}/v4/users/{name}/stories/published"
-            "?fields=stories(id,title,url,numParts,completed,mature,length,description)"
+            "?fields=stories(id,title,url,numParts,completed,mature,length,description),nextUrl"
             "&limit=100"
         )
-        data = self._api_get_json(endpoint)
         works = []
-        for s in data.get("stories") or []:
+        seen = set()
+        for s in self._walk_paginated_stories(first):
             story_id = s.get("id")
-            if not story_id:
+            if not story_id or story_id in seen:
                 continue
+            seen.add(story_id)
             length = s.get("length") or 0
             words = f"{max(1, int(length) // 5):,}" if length else ""
             works.append({
@@ -651,9 +688,16 @@ class WattpadScraper(BaseScraper):
 
         # Walk forward via nextUrl until exhausted. Cap at 200 pages
         # to match the per-site safety bound elsewhere.
+        #
+        # Authoritatively follow ``nextUrl`` rather than breaking on an
+        # empty intermediate page: Wattpad's cursor endpoints can return
+        # an empty ``stories`` array on a page that still advertises
+        # more results (filtering/caching artefact), and stopping there
+        # would silently drop the rest of the list.
         for _ in range(200):
             if not next_url:
                 break
+            last_url = next_url
             self._delay()
             page_data = self._api_get_json(next_url)
             page_stories = page_data.get("stories") or []
@@ -666,9 +710,10 @@ class WattpadScraper(BaseScraper):
                 next_url = page_data["stories"].get("nextUrl")
             else:
                 next_url = page_data.get("nextUrl")
-            if not page_stories:
-                break
             _push(page_stories)
+            # Cursor not advancing → stop, otherwise we'd loop forever.
+            if next_url == last_url:
+                break
 
         return list_name, works
 

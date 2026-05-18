@@ -236,3 +236,35 @@ class TestAntiPiracyStripping:
         soup = BeautifulSoup(html, "lxml")
         classes = RoyalRoadScraper._hidden_classes(soup)
         assert classes == {"bbb", "ccc", "ddd"}
+
+
+class TestV2413RegressionFixes:
+    """Regressions for the multi-AI audit fixes in v2.4.13."""
+
+    def test_descendant_selector_does_not_taint_outer_or_inner(self):
+        """``.outer .inner { display:none }`` only hides ``.inner`` *inside*
+        ``.outer``. The old regex extracted both class names and would
+        remove every element with class ``inner`` (and ``outer``)
+        anywhere on the page — including the chapter body if it
+        happened to use those names. Verify both are now skipped.
+        """
+        html = (
+            "<style>.outer .inner { display:none }"
+            " .actually_hidden { display:none }</style>"
+        )
+        soup = BeautifulSoup(html, "lxml")
+        classes = RoyalRoadScraper._hidden_classes(soup)
+        assert "actually_hidden" in classes
+        assert "outer" not in classes
+        assert "inner" not in classes
+
+    def test_consecutive_simple_rules_each_anchored(self):
+        # Regression for an earlier intermediate fix where the trailing
+        # ``\}`` was consumed and the next rule's anchor failed: this
+        # input contains three back-to-back rules with no separator.
+        html = (
+            "<style>.aaa{display:none}.bbb{opacity:0}.ccc{speak:never}</style>"
+        )
+        soup = BeautifulSoup(html, "lxml")
+        classes = RoyalRoadScraper._hidden_classes(soup)
+        assert classes == {"aaa", "bbb", "ccc"}

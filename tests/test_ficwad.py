@@ -149,3 +149,78 @@ class TestChapterDropdown:
         assert meta["title"] == "The time has come"
         assert meta["author"] == "Vanir"
         assert len(chapters) == 4
+
+
+class TestV2413RegressionFixes:
+    """Regressions for the multi-AI audit fixes in v2.4.13."""
+
+    def test_author_name_starting_with_by_is_not_truncated(self):
+        soup = BeautifulSoup(
+            "<div class='storylist'>"
+            "<h4>T</h4>"
+            "<span class='author'>Byron</span>"
+            "<blockquote class='summary'>s</blockquote>"
+            "<div class='meta'></div>"
+            "</div>",
+            "lxml",
+        )
+        meta = FicWadScraper._parse_metadata(soup, 1)
+        # Old behaviour: "Byron" → "ron"
+        assert meta["author"] == "Byron"
+
+    def test_author_url_does_not_double_when_absolute(self):
+        soup = BeautifulSoup(
+            "<div class='storylist'>"
+            "<h4>T</h4>"
+            "<span class='author'><a href='https://ficwad.com/a/example'>Example</a></span>"
+            "<blockquote class='summary'>s</blockquote>"
+            "<div class='meta'></div>"
+            "</div>",
+            "lxml",
+        )
+        meta = FicWadScraper._parse_metadata(soup, 1)
+        # Old behaviour: "https://ficwad.comhttps://ficwad.com/a/example"
+        assert meta["author_url"] == "https://ficwad.com/a/example"
+
+    def test_summary_preserves_inline_word_boundaries(self):
+        soup = BeautifulSoup(
+            "<div class='storylist'>"
+            "<h4>T</h4>"
+            "<span class='author'>A</span>"
+            "<blockquote class='summary'>Hello <i>there</i> friend</blockquote>"
+            "<div class='meta'></div>"
+            "</div>",
+            "lxml",
+        )
+        meta = FicWadScraper._parse_metadata(soup, 1)
+        # Old behaviour: "Hellotherefriend"
+        assert "Hello" in meta["summary"] and "there" in meta["summary"]
+        assert "friend" in meta["summary"]
+        assert "Hellotherefriend" not in meta["summary"]
+
+    def test_status_not_complete_not_marked_complete(self):
+        soup = BeautifulSoup(
+            "<div class='storylist'>"
+            "<h4>T</h4>"
+            "<span class='author'>A</span>"
+            "<blockquote class='summary'>s</blockquote>"
+            "<div class='meta'>Status: Not Complete - Rating: G</div>"
+            "</div>",
+            "lxml",
+        )
+        meta = FicWadScraper._parse_metadata(soup, 1)
+        # Old behaviour: substring match on "Complete" → marked Complete
+        assert meta["extra"].get("status") != "Complete"
+
+    def test_status_complete_marker_still_recognised(self):
+        soup = BeautifulSoup(
+            "<div class='storylist'>"
+            "<h4>T</h4>"
+            "<span class='author'>A</span>"
+            "<blockquote class='summary'>s</blockquote>"
+            "<div class='meta'>Rating: G - Complete</div>"
+            "</div>",
+            "lxml",
+        )
+        meta = FicWadScraper._parse_metadata(soup, 1)
+        assert meta["extra"].get("status") == "Complete"

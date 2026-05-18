@@ -1,5 +1,127 @@
 # Changelog
 
+## 2.4.13 — 2026-05-18
+
+### Site-adapter audit (round 1 of multi-AI deep debug)
+
+Joint Gemini + OpenAI + Claude review of `ao3.py`, `wattpad.py`,
+`royalroad.py`, `ficwad.py`, `mediaminer.py`. Each finding was verified
+against the actual code (some AI claims were rejected after
+verification — e.g. the proposed `and → or` change to Wattpad's
+bilingual paid-stub detection, which a real fixture confirms is
+correct).
+
+#### AO3
+
+- **Summary preserves paragraph separation.** `get_text(strip=True)`
+  with no separator collapsed `<p>First.</p><p>Second.</p>` into
+  `"First.Second."` in the work metadata. Now uses `"\n"` as
+  separator.
+- **Co-authored works keep all bylines.** The byline parser used
+  `find()` and silently dropped every author after the first. We now
+  collect all `/users/<name>/pseuds/<pseud>` links and join with
+  `" & "`.
+- **Chapter summaries, notes, and end-of-chapter notes are no longer
+  dropped.** AO3 stores chapter-level commentary in sibling
+  `notes`/`end notes` modules outside `div.userstuff`; the old parser
+  serialised only the body. Each kept block is rendered as a labelled
+  `<aside>` alongside the chapter HTML.
+- **Work-list pagination is fragment- and duplicate-`page=`-safe.**
+  `_scrape_ao3_work_list` was doing `f"{base_url}{sep}page={page}"`
+  with naive string concatenation. A pasted URL with a trailing
+  `#fragment` pushed `page=N` into the fragment (so the server saw
+  page 1 on every iteration) and a pre-existing `page=` query param
+  was duplicated. Both degenerate URLs caused the de-dup guard to
+  break the loop after one page. URLs are now rebuilt via `urlsplit`
+  / `urlencode` so the `page` param is set authoritatively.
+- **`_scrape_ao3_work_list` now logs when the 200-page safety cap
+  fires**, matching the existing `scrape_series_works` /
+  `scrape_author_stories` behaviour.
+- **`ao3.org` mirror domain accepted for series URLs.**
+  `parse_story_id` already accepted both `archiveofourown.org` and
+  `ao3.org`; `scrape_series_works` only accepted the former, so the
+  mirror domain raised `ValueError`.
+
+#### FicWad
+
+- **Author names beginning with `By` (Byron, Byakko, …) are no longer
+  truncated.** The old code did
+  ``if author.lower().startswith("by"): author = author[2:].strip()``,
+  which ate the first two characters of any name starting with `by`.
+  Now we strip only a real `"by\s+"` prefix word.
+- **Absolute author URLs no longer get the FicWad host doubled.**
+  `FICWAD_BASE + a_tag["href"]` produced
+  `"https://ficwad.comhttps://ficwad.com/a/example"` when `href` was
+  already absolute. Switched to `urllib.parse.urljoin`.
+- **Summaries preserve inline word boundaries.** `get_text(strip=True)`
+  collapsed `Hello <i>there</i> friend` into `"Hellotherefriend"`.
+  Now uses `" "` as separator.
+- **Completion status no longer flips on negated text.** A naive
+  `"Complete" in meta_text` substring check matched `"Status: Not
+  Complete"` and `"Complete: No"`, falsely marking incomplete stories
+  as complete. Replaced with a labelled match.
+- **`get_chapter_count` now follows the same chapter-discovery
+  fallback as `download`.** When a story's chapter dropdown is only
+  available on the first-chapter URL (rather than `/story/<id>/1`),
+  `get_chapter_count` previously returned `0` or `1` while `download`
+  happily walked the full table. The two now agree.
+
+#### MediaMiner
+
+- **Chapter links with query strings or fragments are recognised.**
+  The chapter regex required `/` or end-of-string after the chapter
+  id, so a link like `/fanfic/c/cat/slug/12345/2?from=index` was
+  silently skipped. Loosened to `(?:[/?#]|$)`.
+- **Named chapter titles like "Chapter 2: The Return" no longer
+  collapse to "Chapter 2:".** The chapter-label regex used `.search`
+  and returned just its slug, discarding the actual chapter name.
+  Switched to `.fullmatch` so the regex is used only for bare
+  "Chapter N" labels; named chapters keep their full text.
+- **Absolute author/listing/read-link URLs no longer get the
+  MediaMiner host doubled.** Three sites in the file built URLs by
+  concatenation, mangling already-absolute hrefs. All now go through
+  `urljoin`.
+- **`scrape_author_works` keeps real story titles.** After resolving
+  a `/user_info.php/<uid>` link, `scrape_author_stories` already
+  followed the redirect to `/fanfic/src.php/u/<name>` for URL
+  discovery — but `scrape_author_works` then refetched the *original*
+  `user_info.php` URL for titles, which doesn't contain them. Every
+  work showed up as `"Story <id>"`. Factored out a shared
+  `_fetch_author_listing` helper so both methods see the resolved
+  listing page.
+- **`get_chapter_count` reaches read-link oneshots.** When
+  `_parse_chapter_list` came up empty, only `download` knew to fall
+  back to following the page's "Read" link. The two now share
+  `_read_link_fallback`, so counts agree with downloads on oneshots.
+
+#### Royal Road
+
+- **Hidden-CSS-stripping no longer mass-deletes elements caught in
+  descendant selectors.** The anti-piracy class collector treated
+  `.outer .inner { display:none }` as if both classes were hidden,
+  so any element with class `outer` or `inner` anywhere on the page
+  was removed — potentially including the chapter body. The regex
+  now only honours simple class selectors and comma-grouped simple
+  selectors (`.foo, .bar { display:none }`), and uses a zero-width
+  lookbehind so consecutive rules in the same `<style>` block each
+  anchor cleanly.
+
+#### Wattpad
+
+- **Authors with more than 100 stories are no longer silently
+  truncated.** `scrape_author_stories` and `scrape_author_works`
+  requested `limit=100` and never paginated. A shared
+  `_walk_paginated_stories` helper now follows the `nextUrl` cursor
+  to walk the full list, with a 200-page safety cap and a
+  cursor-self-loop guard.
+- **Reading-list walks don't bail on intermediate empty pages.**
+  `scrape_reading_list_works` was breaking the cursor walk if a page
+  returned an empty `stories` array, even if it still advertised a
+  `nextUrl`. The walk now follows the cursor authoritatively and
+  only stops when `nextUrl` is gone or doesn't advance.
+
++18 regression tests; full suite 1388 passed, 1 skipped.
+
 ## 2.4.12 — 2026-05-14
 
 ### Multi-AI deep-debug audit fixes (Gemini + OpenAI + Explore agents)

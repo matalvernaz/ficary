@@ -248,3 +248,61 @@ class TestChapterLabelParsing:
         chapters = MediaMinerScraper._parse_chapter_list(soup)
         assert len(chapters) == 1
         assert "Beginning" in chapters[0]["title"]
+
+
+class TestV2413RegressionFixes:
+    """Regressions for the multi-AI audit fixes in v2.4.13."""
+
+    def test_chapter_link_with_query_string_is_recognised(self):
+        soup = BeautifulSoup(
+            "<article>"
+            "<a href='/fanfic/c/cat/slug/12345/2?from=index'>Chapter 2</a>"
+            "</article>",
+            "lxml",
+        )
+        chapters = MediaMinerScraper._parse_chapter_list(soup)
+        # Old behaviour: regex required ``/`` or end-of-string after
+        # the chapter id, so ``?from=…`` was skipped.
+        assert len(chapters) == 1
+        assert chapters[0]["id"] == 2
+
+    def test_named_chapter_title_preserved(self):
+        soup = BeautifulSoup(
+            "<article>"
+            "<a href='/fanfic/c/cat/slug/12345/2'>Chapter 2: The Return</a>"
+            "</article>",
+            "lxml",
+        )
+        chapters = MediaMinerScraper._parse_chapter_list(soup)
+        # Old behaviour: regex .search() returned just "Chapter 2:".
+        assert chapters[0]["title"] == "Chapter 2: The Return"
+
+    def test_bare_chapter_label_kept(self):
+        soup = BeautifulSoup(
+            "<article>"
+            "<a href='/fanfic/c/cat/slug/12345/2'>Chapter 2</a>"
+            "</article>",
+            "lxml",
+        )
+        chapters = MediaMinerScraper._parse_chapter_list(soup)
+        assert chapters[0]["title"] == "Chapter 2"
+
+    def test_read_link_fallback_shared_with_count(self):
+        # Verify _read_link_fallback exists and returns a 1-element list.
+        soup = BeautifulSoup(
+            "<article><a href='/fanfic/c/cat/slug/12345/9'>Read</a></article>",
+            "lxml",
+        )
+        out = MediaMinerScraper._read_link_fallback(soup, fallback_title="t")
+        assert len(out) == 1
+        assert out[0]["id"] == 9
+        assert out[0]["url"].startswith("https://www.mediaminer.org/")
+
+    def test_read_link_fallback_handles_absolute_href(self):
+        # urljoin must not double the host even for absolute hrefs.
+        soup = BeautifulSoup(
+            "<article><a href='https://www.mediaminer.org/fanfic/c/cat/slug/12345/9'>Read</a></article>",
+            "lxml",
+        )
+        out = MediaMinerScraper._read_link_fallback(soup, fallback_title="t")
+        assert out[0]["url"] == "https://www.mediaminer.org/fanfic/c/cat/slug/12345/9"

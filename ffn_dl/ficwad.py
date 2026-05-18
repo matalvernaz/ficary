@@ -2,6 +2,7 @@
 
 import logging
 import re
+from urllib.parse import urljoin
 
 from bs4 import BeautifulSoup
 
@@ -75,13 +76,20 @@ class FicWadScraper(BaseScraper):
         if author_span:
             a_tag = author_span.find("a")
             author = a_tag.get_text(strip=True) if a_tag else author_span.get_text(strip=True)
-            if author.lower().startswith("by"):
-                author = author[2:].strip()
+            # Strip only a real "by " prefix word, not the first two
+            # characters of names like "Byron" or "Byakko".
+            author = re.sub(r"^by\s+", "", author, flags=re.IGNORECASE)
             if a_tag and a_tag.get("href"):
-                author_url = FICWAD_BASE + a_tag["href"]
+                # ``urljoin`` keeps absolute hrefs absolute; the old
+                # ``FICWAD_BASE + href`` doubled the scheme/host when the
+                # link was already absolute.
+                author_url = urljoin(FICWAD_BASE, a_tag["href"])
 
         summary_bq = storylist.find("blockquote", class_="summary")
-        summary = summary_bq.get_text(strip=True) if summary_bq else ""
+        # Use a separator so inline ``<i>``/``<em>`` siblings don't fuse:
+        # ``<p>Hello <i>there</i> friend</p>`` should not become
+        # ``"Hellotherefriend"``.
+        summary = summary_bq.get_text(" ", strip=True) if summary_bq else ""
 
         meta_div = storylist.find("div", class_="meta")
         extra = {}
@@ -111,7 +119,16 @@ class FicWadScraper(BaseScraper):
             if words_match:
                 extra["words"] = words_match.group(1)
 
-            if "Complete" in meta_text:
+            # A naive ``"Complete" in meta_text`` substring check mis-fires
+            # on negated forms like ``"Status: Not Complete"`` /
+            # ``"Complete: No"`` — both contain the word "Complete" but
+            # mean the opposite. Match the actual FicWad labelling
+            # ("- Complete" between fields, ``Status: Complete``).
+            if re.search(
+                r"(?:^|[-|])\s*Complete\b|(?:Status|Complete)\s*:\s*(?:Yes|Y\b|Complete\b)",
+                meta_text,
+                re.IGNORECASE,
+            ):
                 extra["status"] = "Complete"
 
             # Pair each data-ts span with its label instead of trusting
@@ -289,6 +306,25 @@ class FicWadScraper(BaseScraper):
         chapter_list = self._discover_chapters_from_dropdown(soup)
         if chapter_list:
             return len(chapter_list)
+        # Mirror ``download``'s fallback: stories with the chapter
+        # dropdown only available on the first-chapter URL (rather than
+        # /story/<id>/1) would otherwise report 0 or 1 here while
+        # ``download`` happily walks the full table. Following the first
+        # listed chapter link picks those up.
+        chapters_div = soup.find(id="chapters")
+        if chapters_div:
+            first_link = chapters_div.find("a", href=re.compile(r"/story/\d+"))
+            if first_link:
+                match = re.search(r"/story/(\d+)", first_link["href"])
+                if match:
+                    self._delay()
+                    ch1_soup = BeautifulSoup(
+                        self._fetch(f"{FICWAD_BASE}/story/{match.group(1)}"),
+                        "lxml",
+                    )
+                    discovered = self._discover_chapters_from_dropdown(ch1_soup)
+                    if discovered:
+                        return len(discovered)
         # Single-chapter work: fall back to presence of storytext on the page
         return 1 if soup.find(id="storytext") else 0
 
