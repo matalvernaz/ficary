@@ -1,5 +1,6 @@
 """Update mode — count chapters in existing files, detect new chapters."""
 
+import html as _html_module
 import logging
 import re
 from dataclasses import dataclass, field
@@ -909,7 +910,14 @@ def extract_metadata(filepath: Path | str) -> "FileMetadata":
 _HTML_CHAPTER_BLOCK_RE = re.compile(
     r'<div\b[^>]*\sclass\s*=\s*"[^"]*\bchapter\b[^"]*"[^>]*>'
     r'(?P<body>.*?)'
-    r'</div>\s*<hr\s*/?>',
+    r'</div>\s*<hr\s*/?>\s*'
+    # Lookahead: the ``</div><hr>`` we matched must be followed by the
+    # next chapter wrapper, the closing body, or end-of-file. Without
+    # this anchor, an author whose prose contained a literal
+    # ``</div><hr>`` sequence (rare, but happens on AO3 cross-posts and
+    # in some FFN imports) would cause the non-greedy ``.*?`` to stop
+    # early and silently truncate the rest of the chapter body.
+    r'(?=<div\b[^>]*\sclass\s*=\s*"[^"]*\bchapter\b|</body|\Z)',
     re.IGNORECASE | re.DOTALL,
 )
 """Match one ``<div class="chapter" id="chapter-N">...</div><hr>`` block.
@@ -917,7 +925,8 @@ _HTML_CHAPTER_BLOCK_RE = re.compile(
 Anchored on the trailing ``</div><hr>`` because chapter divs can contain
 nested blockquotes/divs — a simple ``.*?</div>`` would stop at the first
 inner closing tag. The ``<hr>`` terminator is stable in the exporter
-output and never appears inside chapter prose.
+output, and the trailing lookahead pins the match to a real chapter
+boundary so authored prose can't accidentally close it early.
 """
 
 _HTML_CHAPTER_ID_RE = re.compile(
@@ -991,6 +1000,11 @@ def _read_html_chapters(path: Path) -> list[Chapter]:
         title_match = _HTML_CHAPTER_TITLE_RE.search(body)
         if title_match:
             heading = re.sub(r"\s+", " ", title_match.group("title")).strip()
+            # Unescape HTML entities in the recovered title. The
+            # exporter HTML-escapes the title on write (``A &amp; B``);
+            # without unescape here the entity round-trips as raw text
+            # and the *next* export re-escapes it to ``A &amp;amp; B``.
+            heading = _html_module.unescape(heading)
             # Strip the "Chapter N. " prefix that the exporter writes
             # so the round-trip recovers the *raw* ch.title — otherwise
             # the prefix piles up on re-export and merged stories mix
@@ -1041,6 +1055,16 @@ def _read_epub_chapters(path: Path) -> list[Chapter]:
     chapters: list[Chapter] = []
     filename_number_re = re.compile(r"chapter_(\d+)\.xhtml$", re.IGNORECASE)
 
+    # ebooklib returns the full XHTML document for each chapter item
+    # (``<?xml…?><html…><head>…</head><body>…</body></html>``). Pull
+    # just the ``<body>`` inner HTML before chapter-splitting; without
+    # this, the body slice below kept the trailing ``</body></html>``
+    # tags as part of the recovered chapter HTML, corrupting the
+    # round-tripped EPUB on re-export.
+    body_extract_re = re.compile(
+        r"<body[^>]*>(?P<inner>.*?)</body>", re.IGNORECASE | re.DOTALL,
+    )
+
     for item in book.get_items():
         if not hasattr(item, "file_name"):
             continue
@@ -1048,11 +1072,17 @@ def _read_epub_chapters(path: Path) -> list[Chapter]:
         if not m:
             continue
         number = int(m.group(1))
-        body = item.content.decode("utf-8", errors="replace")
+        raw_xhtml = item.content.decode("utf-8", errors="replace")
+        body_match = body_extract_re.search(raw_xhtml)
+        body = body_match.group("inner") if body_match else raw_xhtml
 
         title_match = _HTML_CHAPTER_TITLE_RE.search(body)
         if title_match:
             heading = re.sub(r"\s+", " ", title_match.group("title")).strip()
+            # See _read_html_chapters for the entity-unescape rationale:
+            # without it, ``&amp;`` round-trips and gets double-escaped on
+            # re-export.
+            heading = _html_module.unescape(heading)
             title = parse_chapter_heading(number, heading)
             body_html = body[title_match.end():].lstrip()
         else:

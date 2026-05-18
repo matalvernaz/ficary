@@ -185,10 +185,25 @@ class TestReadChapters:
         ]
         path = export_html(s, str(tmp_path))
         back = read_chapters(path)
-        # The exporter writes &amp; etc.; read_chapters returns the
-        # escaped form so the next export's escape() doesn't double-up.
-        assert "&amp;" in back[0].title
-        assert "&lt;" in back[1].title
+        # Recovered titles match the original raw text — entities are
+        # unescaped so the next ``escape()`` on re-export is the *only*
+        # one applied. Pre-2.4.16 the reader returned the escaped form,
+        # so every merge-in-place re-export compounded the escape
+        # (``&amp;`` → ``&amp;amp;`` → ``&amp;amp;amp;`` …).
+        assert back[0].title == 'Amy & Bob "Run"'
+        assert back[1].title == "A < B"
+        # Re-export round-trip — produces single-escaped HTML.
+        s2 = Story(
+            id=2, title="T2", author="A", summary="S",
+            url="https://www.fanfiction.net/s/2",
+        )
+        s2.metadata["status"] = "In-Progress"
+        s2.chapters = back
+        path2 = export_html(s2, str(tmp_path))
+        content2 = path2.read_text(encoding="utf-8")
+        assert "Amy &amp; Bob &quot;Run&quot;" in content2
+        assert "&amp;amp;" not in content2
+        assert "&amp;quot;" not in content2
 
     def test_html_chapter_body_with_nested_divs(self, tmp_path):
         """Chapter bodies containing nested ``<div>`` blocks (authors
@@ -227,3 +242,113 @@ class TestReadChapters:
         # _story() has 3 chapters — anything else (nav, title, cover)
         # must be filtered out.
         assert len(back) == 3
+
+
+class TestV2416FinalAuditFixes:
+    """Regressions for the v2.4.16 audit-final-pass fixes."""
+
+    def test_epub_chapter_body_strips_trailing_html_close(self, tmp_path):
+        """ebooklib returns the full XHTML document per chapter item.
+        The reader used to slice from after ``<h2>`` to end-of-string,
+        keeping the trailing ``</body></html>`` as part of body_html
+        — corrupting the round-tripped EPUB on re-export."""
+        from ffn_dl.exporters import export_epub
+        from ffn_dl.models import Chapter, Story
+        from ffn_dl.updater import read_chapters
+
+        s = Story(
+            id=1, title="T", author="A", summary="S",
+            url="https://www.fanfiction.net/s/1",
+        )
+        s.metadata["status"] = "In-Progress"
+        s.chapters = [Chapter(number=1, title="Ch", html="<p>body prose</p>")]
+        path = export_epub(s, str(tmp_path))
+        back = read_chapters(path)
+        # Recovered body is just the chapter content — no stray
+        # closing tags from the surrounding XHTML.
+        assert "</body>" not in back[0].html
+        assert "</html>" not in back[0].html
+        assert "<p>" in back[0].html  # but the real content is still there
+
+    def test_html_chapter_block_terminator_lookahead(self, tmp_path):
+        """The non-greedy ``</div><hr>`` block terminator used to match
+        the FIRST such pair, so author prose containing ``</div><hr>``
+        mid-body (rare but real on AO3 cross-posts) silently truncated.
+        The lookahead forces a real chapter-boundary anchor."""
+        from ffn_dl.exporters import export_html
+        from ffn_dl.models import Chapter, Story
+        from ffn_dl.updater import read_chapters
+
+        # The chapter body itself contains a stray ``</div><hr>`` — the
+        # exporter writes it verbatim. The reader must NOT take that as
+        # the chapter's terminator, since the actual terminator is the
+        # next chapter's wrapper.
+        s = Story(
+            id=1, title="T", author="A", summary="S",
+            url="https://www.fanfiction.net/s/1",
+        )
+        s.metadata["status"] = "In-Progress"
+        s.chapters = [
+            Chapter(
+                number=1, title="Ch 1",
+                html='<p>before</p><div class="x">inner</div><hr><p>after</p>',
+            ),
+            Chapter(number=2, title="Ch 2", html="<p>second</p>"),
+        ]
+        path = export_html(s, str(tmp_path))
+        back = read_chapters(path)
+        assert len(back) == 2
+        # The first chapter must contain *both* halves of the prose.
+        assert "before" in back[0].html
+        assert "after" in back[0].html
+
+    def test_watchlist_notifier_exception_does_not_abort_poll(self, tmp_path):
+        """A misbehaving notifier (e.g. a webhook URL parser bug) must
+        not silence the rest of the watchlist by raising out of
+        ``run_once``."""
+        import time
+        from ffn_dl.watchlist import (
+            Watch, WatchlistStore, PollResult, run_once,
+            WATCH_TYPE_STORY,
+        )
+        from ffn_dl.notifications import Notification
+
+        store = WatchlistStore(tmp_path / "watchlist.json")
+        w1 = Watch(
+            type=WATCH_TYPE_STORY, site="ao3", target="A",
+            label="watch-1", channels=["x"], last_seen=1,
+        )
+        w2 = Watch(
+            type=WATCH_TYPE_STORY, site="ao3", target="B",
+            label="watch-2", channels=["x"], last_seen=1,
+        )
+        store._watches = [w1, w2]
+        store.save()
+
+        # Each story watch fires a notification.
+        def fake_factory(url):
+            class FakeScraper:
+                def get_chapter_count(self, u):
+                    return 5  # +4 new chapters since last_seen=1
+            return FakeScraper()
+
+        call_log = []
+        def bad_notifier(channels, notif, prefs):
+            call_log.append(notif.title)
+            raise RuntimeError("webhook URL broken")
+
+        results = run_once(
+            store, prefs=None,
+            scraper_factory=fake_factory,
+            notifier=bad_notifier,
+            now=lambda: time.time(),
+        )
+        # Both watches polled successfully; the notifier raised on both
+        # but the run_once loop kept going.
+        assert len(results) == 2
+        assert all(r.ok for r in results)
+        assert len(call_log) == 2
+        # The watches now carry the dispatch failure as last_error so
+        # the user sees the broken webhook in the GUI/CLI listing.
+        for w in store.all():
+            assert "notification dispatch failed" in w.last_error

@@ -1,5 +1,54 @@
 # Changelog
 
+## 2.4.16 — 2026-05-18
+
+### Watchlist + merge-in-place audit (round 4 of multi-AI deep debug)
+
+Final round of the multi-AI audit. Each finding was verified against
+the actual code; one Gemini claim (`store.update()` doesn't persist)
+was rejected after grepping the file — the existing `update()` calls
+`self.save()` on every change.
+
+- **EPUB merge-in-place doesn't drag `</body></html>` into chapter
+  HTML.** `_read_epub_chapters` decoded the item's full XHTML document
+  and then sliced from after the `<h2>` to end-of-string. That kept
+  the trailing `</body></html>` as part of the recovered chapter
+  body, which the next export wrote verbatim — over a few update
+  cycles the merged EPUB accumulated nested broken markup. Now the
+  reader extracts just the `<body>` inner HTML before chapter-
+  splitting.
+- **HTML chapter blocks survive `</div><hr>` inside chapter prose.**
+  The block regex was anchored only on the non-greedy `</div><hr>`
+  terminator. If author HTML happened to contain a literal
+  `</div><hr>` sequence (rare but real on AO3 cross-posts and some
+  FFN imports), the match stopped early and silently truncated the
+  rest of the chapter body. Added a trailing lookahead so the
+  terminator must be followed by the next chapter wrapper, the
+  closing `<body>`, or end-of-file.
+- **Recovered chapter titles unescape HTML entities.** The exporter
+  HTML-escapes titles on write (`A &amp; B`); the reader used to
+  preserve the escaped form so the *next* export's `escape()` ran a
+  second time and produced `A &amp;amp; B`. Every merge-in-place
+  cycle compounded the escape level. Recovered titles now go through
+  `html.unescape()` so the next export's escape is the only one
+  applied. (An existing test enshrined the old buggy behavior; it's
+  been updated to assert the correct round-trip.)
+- **Watchlist runner survives a misbehaving notifier.** The default
+  `dispatch_notification` never raises, but custom notifiers passed
+  in for tests or experimental channels might. An unhandled exception
+  there would abort the whole `run_once` loop and leave every
+  remaining watch's `last_checked_at` / cooldown stale. The dispatch
+  call is now wrapped; failures are logged + surfaced on the watch's
+  `last_error` and the loop continues.
+
++3 regression tests; full suite 1408 passed, 1 skipped.
+
+The multi-AI audit thread (v2.4.13 → v2.4.16) shipped 30+ verified
+correctness fixes across the most leveraged parts of the codebase
+(scraper, exporters, every site adapter, watchlist runner, merge-in-
+place reader). Both Gemini and OpenAI report no further bugs after
+this round on the audited surface.
+
 ## 2.4.15 — 2026-05-18
 
 ### Convergence pass on v2.4.14 (audit round 3)

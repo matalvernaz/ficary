@@ -543,9 +543,31 @@ def run_once(
                         "until %s", watch.display_label(), watch.cooldown_until,
                     )
                 else:
-                    # dispatch_notification never raises — it returns
-                    # (delivered, failures) and logs each failure itself.
-                    notifier(watch.channels, result.notification, prefs)
+                    # The default ``dispatch_notification`` never raises;
+                    # it returns (delivered, failures) and logs each
+                    # failure itself. Custom notifiers passed in for
+                    # tests or experimental channels may not honour
+                    # that contract, though, and an unhandled exception
+                    # here would abort the whole poll run — every
+                    # subsequent watch would be skipped and its
+                    # ``last_checked_at`` / cooldown stays stale.
+                    # Catch defensively so one bad notifier can't
+                    # silence the rest of the watchlist.
+                    try:
+                        notifier(watch.channels, result.notification, prefs)
+                    except Exception as exc:  # noqa: BLE001 — runner stability
+                        logger.exception(
+                            "Notifier raised for %s; treating as a delivery "
+                            "failure and continuing the poll loop.",
+                            watch.display_label(),
+                        )
+                        # Surface the failure on the watch's last_error
+                        # so the user sees it in the GUI/CLI listing
+                        # rather than the alert just silently vanishing.
+                        watch.last_error = (
+                            f"notification dispatch failed: "
+                            f"{exc.__class__.__name__}: {exc}"
+                        )
                     watch.cooldown_until = datetime.fromtimestamp(
                         now() + NOTIFICATION_COOLDOWN_S, tz=timezone.utc,
                     ).isoformat(timespec="seconds")
