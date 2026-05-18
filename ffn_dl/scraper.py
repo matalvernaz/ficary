@@ -239,12 +239,22 @@ class BaseScraper:
         self.session = self._new_session()
         self._tls.session = self.session
 
-    def _new_session(self):
-        """Construct a curl_cffi Session with the current impersonation
+    def _new_session(self, browser: Optional[str] = None):
+        """Construct a curl_cffi Session with the requested impersonation
         and any extra headers the profile needs to look like the real
-        browser to a strict Cloudflare deployment (client hints)."""
-        sess = curl_requests.Session(impersonate=self._browser)
-        if self._browser in ("chrome", "edge"):
+        browser to a strict Cloudflare deployment (client hints).
+
+        ``browser`` is snapshotted from ``self._browser`` under the
+        state lock when omitted, so a concurrent ``_rotate_browser``
+        can't half-mutate the new session into a "Safari fingerprint +
+        Chromium client hints" mismatch that would scream "bot" at
+        Cloudflare on first contact.
+        """
+        if browser is None:
+            with self._state_lock:
+                browser = self._browser
+        sess = curl_requests.Session(impersonate=browser)
+        if browser in ("chrome", "edge"):
             sess.headers.update(_CHROMIUM_CLIENT_HINTS)
         return sess
 
@@ -258,19 +268,29 @@ class BaseScraper:
             self._tls.session = sess
         return sess
 
-    def _rotate_browser(self) -> None:
-        # Pick a new impersonation profile (shared state) and swap out
-        # the *current thread's* session. Other threads keep their
-        # existing sessions until they naturally create a fresh one —
-        # rotating every thread in lockstep would throw away useful
-        # HTTP/2 connection reuse on threads that weren't rate-limited.
+    def _rotate_browser(self):
+        """Pick a new impersonation profile (shared state) and swap out
+        the *current thread's* session. Returns the new session so
+        callers inside ``_fetch`` can rebind their local ``sess`` —
+        previously the rotation only updated ``_tls.session``, so the
+        in-flight retry loop kept hitting Cloudflare with the same
+        flagged fingerprint and the rotation was effectively a no-op
+        for the request that triggered it.
+
+        Other threads keep their existing sessions until they naturally
+        create a fresh one — rotating every thread in lockstep would
+        throw away useful HTTP/2 connection reuse on threads that
+        weren't rate-limited.
+        """
         with self._state_lock:
-            self._browser = random.choice(BROWSERS)
-        new_sess = self._new_session()
+            browser = random.choice(BROWSERS)
+            self._browser = browser
+        new_sess = self._new_session(browser)
         self._tls.session = new_sess
         if threading.current_thread() is threading.main_thread():
             self.session = new_sess
-        logger.debug("Rotated to browser impersonation: %s", self._browser)
+        logger.debug("Rotated to browser impersonation: %s", browser)
+        return new_sess
 
     def _check_for_blocks(self, html: str) -> None:
         lower = html[:BLOCK_CHECK_PREFIX_BYTES].lower()
@@ -479,6 +499,15 @@ class BaseScraper:
         backoff = INITIAL_BACKOFF_S
         hit_rate_limit = False
         last_was_403 = False
+        # Snapshot of ``_current_delay`` taken when entering the
+        # rate-limit branch. ``_bump_delay_up`` only bumps the shared
+        # delay if the shared value is still ``delay_at_throttle`` on
+        # success; this prevents a thundering-herd of parallel workers
+        # each doubling the delay once for the same 429 window
+        # (concurrency=5 would otherwise yield a 32× multiplication
+        # before the first retry settled). ``None`` while no throttle
+        # has been seen on this call.
+        delay_at_throttle: Optional[float] = None
         for attempt in range(self.max_retries):
             try:
                 resp = sess.get(url, timeout=self.timeout)
@@ -523,7 +552,11 @@ class BaseScraper:
                         raise
                     last_was_403 = True
                     self._maybe_seed_cf_cookies(sess, url)
-                    self._rotate_browser()
+                    # Rebind ``sess`` to the new session: ``_rotate_browser``
+                    # used to only update thread-local state, so the
+                    # current loop kept retrying with the same fingerprint
+                    # that just got challenged.
+                    sess = self._rotate_browser()
                     wait = FORBIDDEN_QUICK_RETRY_S + random.uniform(
                         0, FORBIDDEN_QUICK_RETRY_S,
                     )
@@ -544,11 +577,14 @@ class BaseScraper:
                     )
                     record_transient_403()
                 if hit_rate_limit:
-                    self._bump_delay_up()
+                    self._bump_delay_up(snapshot=delay_at_throttle)
                 return resp.text
 
             if resp.status_code in (429, 503):
                 hit_rate_limit = True
+                if delay_at_throttle is None:
+                    with self._state_lock:
+                        delay_at_throttle = self._current_delay
                 jitter = random.uniform(0, backoff * RATE_LIMIT_JITTER_FRAC)
                 wait = backoff + jitter
                 logger.warning(
@@ -557,7 +593,7 @@ class BaseScraper:
                 )
                 time.sleep(wait)
                 backoff = min(backoff * 2, MAX_BACKOFF_S)
-                self._rotate_browser()
+                sess = self._rotate_browser()
                 continue
 
             if resp.status_code == 404:
@@ -590,7 +626,7 @@ class BaseScraper:
                     0, FORBIDDEN_QUICK_RETRY_S,
                 )
                 if attempt >= self.max_retries - 2:
-                    self._rotate_browser()
+                    sess = self._rotate_browser()
                     wait = FORBIDDEN_SLOW_RETRY_S
                 # The first 403 is dominated by the "FFN behind Cloudflare
                 # served from origin" pattern that resolves on the very next
@@ -629,12 +665,28 @@ class BaseScraper:
                 return archived
         raise RateLimitError(f"Failed after {self.max_retries} retries: {url}")
 
-    def _delay(self) -> None:
+    def _delay(self, fetches: int = 1) -> None:
+        """Sleep between fetches, honouring chunk pauses and AIMD decay.
+
+        ``fetches`` is the number of HTTP requests the caller is about
+        to issue (or just issued). In serial mode it's always 1; in
+        ``_fetch_parallel`` the inter-batch ``_delay()`` is called once
+        per batch but represents ``len(batch)`` fetches — passing the
+        batch size keeps ``chunk_size`` measured in URLs rather than
+        in batches (with ``concurrency=5``/``chunk_size=10`` the chunk
+        pause used to fire every 50 chapters instead of every 10).
+        """
         with self._state_lock:
-            self._fetch_count += 1
-            chunk_hit = (
+            prev_count = self._fetch_count
+            self._fetch_count = prev_count + fetches
+            new_count = self._fetch_count
+            # Chunk boundary: did adding ``fetches`` cross a multiple of
+            # ``chunk_size``? (``prev_count // chunk_size < new_count //
+            # chunk_size``.) Works for any batch size, not just one.
+            chunk_hit = bool(
                 self.chunk_size
-                and self._fetch_count % self.chunk_size == 0
+                and (prev_count // self.chunk_size)
+                < (new_count // self.chunk_size)
             )
             current = self._current_delay
             if not chunk_hit and self.delay_range is None:
@@ -658,8 +710,19 @@ class BaseScraper:
             jitter = random.uniform(0, current * 0.2)
             time.sleep(current + jitter)
 
-    def _bump_delay_up(self) -> None:
-        """AIMD multiplicative increase after a rate-limit hit."""
+    def _bump_delay_up(self, snapshot: Optional[float] = None) -> None:
+        """AIMD multiplicative increase after a rate-limit hit.
+
+        ``snapshot`` is the value of ``_current_delay`` captured at the
+        moment the throttle was observed. Each worker passes its own
+        snapshot; the bump only fires if the shared delay still matches
+        (i.e. nobody else has already doubled it for the same throttle
+        window). Without this guard, N parallel workers each hitting a
+        single 429 burst would each call ``_bump_delay_up`` on recovery
+        and double the shared delay N times — concurrency=5 would
+        produce a 32× delay multiplication and pin to ``delay_ceiling``
+        from one rate-limit window.
+        """
         if self.delay_range is not None:
             # Static-delay mode (--delay-min/--delay-max). _delay() ignores
             # _current_delay in that mode, so mutating it here would just
@@ -669,6 +732,10 @@ class BaseScraper:
             return
         with self._state_lock:
             prev = self._current_delay
+            if snapshot is not None and prev != snapshot:
+                # A sibling worker already bumped the delay for this
+                # throttle window — don't compound the increase.
+                return
             new_delay = max(prev * 2, AIMD_BUMP_FLOOR_S)
             self._current_delay = min(self.delay_ceiling, new_delay)
             bumped = self._current_delay != prev
@@ -729,15 +796,20 @@ class BaseScraper:
         results = [None] * len(urls)
         concurrency = self.concurrency
         i = 0
+        prev_batch_size = 0
         while i < len(urls):
             # Pace between batches so the AIMD floor still applies in
             # parallel mode. Per-request pacing inside a batch would
             # serialise the threads, defeating the whole point of
             # ``concurrency``; one ``_delay()`` between batches gives
             # the scraper a configurable cooldown without that cost.
+            # Pass the *previous* batch size so chunk_size accounting
+            # measures URLs rather than batches — otherwise concurrency=5
+            # with chunk_size=10 only paused every 50 chapters.
             if i > 0:
-                self._delay()
+                self._delay(fetches=prev_batch_size)
             batch = urls[i:i + concurrency]
+            prev_batch_size = len(batch)
             with self._state_lock:
                 delay_before = self._current_delay
 
@@ -908,10 +980,22 @@ class BaseScraper:
         if not path.exists():
             return None
         try:
-            return json.loads(path.read_text(encoding="utf-8"))
-        except (ValueError, UnicodeDecodeError, OSError) as exc:
+            data = json.loads(path.read_text(encoding="utf-8"))
+            if not isinstance(data, dict):
+                # A corrupt cache file truncated to ``null`` or ``[]``
+                # would otherwise be returned as-is and crash callers
+                # that ``meta.get(...)``.
+                raise TypeError(f"expected JSON object, got {type(data).__name__}")
+            return data
+        except (ValueError, UnicodeDecodeError, OSError, TypeError) as exc:
             logger.warning("Corrupt meta cache %s (%s); will refetch", path, exc)
-            path.unlink(missing_ok=True)
+            try:
+                path.unlink(missing_ok=True)
+            except OSError:
+                logger.warning(
+                    "Could not remove corrupt cache %s; refetch will still proceed",
+                    path,
+                )
             return None
 
     def _save_chapter_cache(self, story_id, chapter: Chapter) -> None:
@@ -946,12 +1030,29 @@ class BaseScraper:
             if not legacy.exists():
                 return None
             path = legacy
+        # ``data`` may be a non-dict if a cache file got truncated to a
+        # bare JSON literal (``null``, ``""``, ``[]``); guard with an
+        # ``isinstance`` check so the subsequent ``data["title"]`` doesn't
+        # leak a ``TypeError`` out of the cache load. Both ``KeyError``
+        # (missing field) and ``TypeError`` (wrong shape) fall through
+        # to the same corruption-handling branch.
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
+            if not isinstance(data, dict):
+                raise TypeError(f"expected JSON object, got {type(data).__name__}")
             return Chapter(number=chap_num, title=data["title"], html=data["html"])
-        except (ValueError, UnicodeDecodeError, OSError, KeyError) as exc:
+        except (ValueError, UnicodeDecodeError, OSError, KeyError, TypeError) as exc:
             logger.warning("Corrupt chapter cache %s (%s); will refetch", path, exc)
-            path.unlink(missing_ok=True)
+            # ``missing_ok=True`` only suppresses FileNotFoundError; a
+            # permission error on the unlink would otherwise escape
+            # this handler and prevent the refetch the caller expects.
+            try:
+                path.unlink(missing_ok=True)
+            except OSError:
+                logger.warning(
+                    "Could not remove corrupt cache %s; refetch will still proceed",
+                    path,
+                )
             return None
 
     def clean_cache(self, story_id) -> None:

@@ -857,3 +857,72 @@ class TestRoyalRoadDates:
         soup = BeautifulSoup(html, "lxml")
         rows = RoyalRoadScraper._parse_chapter_list(soup)
         assert [r["unixtime"] for r in rows] == [1600000000, 1700000000]
+
+
+class TestV2414EpubMetadataResilience:
+    """EPUB export must not crash on stored-but-``None`` metadata or on
+    non-string fields. Pre-2.4.14 these would AttributeError mid-export
+    and leave the user with no file."""
+
+    def _story_with(self, **meta_overrides):
+        from ffn_dl.models import Chapter, Story
+        story = Story(
+            id=1, title="T", author="A", summary="s",
+            url="https://archiveofourown.org/works/1",
+            author_url="", metadata={},
+        )
+        story.metadata.update(meta_overrides)
+        story.chapters.append(Chapter(number=1, title="Ch", html="<p>body</p>"))
+        return story
+
+    def test_language_none_does_not_crash(self, tmp_path):
+        from ffn_dl.exporters import export_epub
+        story = self._story_with(language=None)
+        path = export_epub(story, output_dir=str(tmp_path))
+        assert path.exists()
+
+    def test_genre_none_does_not_crash(self, tmp_path):
+        from ffn_dl.exporters import export_epub
+        story = self._story_with(genre=None)
+        path = export_epub(story, output_dir=str(tmp_path))
+        assert path.exists()
+
+    def test_characters_none_does_not_crash(self, tmp_path):
+        from ffn_dl.exporters import export_epub
+        story = self._story_with(characters=None)
+        path = export_epub(story, output_dir=str(tmp_path))
+        assert path.exists()
+
+    def test_date_updated_none_does_not_crash(self, tmp_path):
+        from ffn_dl.exporters import export_epub
+        story = self._story_with(date_updated=None)
+        path = export_epub(story, output_dir=str(tmp_path))
+        assert path.exists()
+
+    def test_date_published_string_does_not_crash(self, tmp_path):
+        # A scraper that wrote the published date as ``"2024-01-01"``
+        # rather than an epoch shouldn't crash the export — the field
+        # is best-effort metadata.
+        from ffn_dl.exporters import export_epub
+        story = self._story_with(date_published="not-an-int")
+        path = export_epub(story, output_dir=str(tmp_path))
+        assert path.exists()
+
+    def test_no_duplicate_dcterms_modified(self, tmp_path):
+        """ebooklib emits its own ``dcterms:modified``; we must not add
+        a second one (the OPF spec allows exactly one)."""
+        import zipfile
+        from ffn_dl.exporters import export_epub
+        story = self._story_with(date_updated=1700000000)
+        path = export_epub(story, output_dir=str(tmp_path))
+        with zipfile.ZipFile(path) as z:
+            for name in z.namelist():
+                if name.endswith(".opf"):
+                    opf = z.read(name).decode("utf-8")
+                    break
+            else:
+                raise AssertionError("no .opf in EPUB")
+        count = opf.count('property="dcterms:modified"')
+        assert count == 1, f"expected exactly one dcterms:modified, got {count}"
+        # And we never emit the invalid ``<dc:modified>``.
+        assert "<dc:modified>" not in opf

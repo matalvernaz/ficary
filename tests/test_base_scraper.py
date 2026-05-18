@@ -298,3 +298,65 @@ class TestConcreteScrapersImplementContract:
             WattpadScraper.scrape_series_works
             is BaseScraper.scrape_series_works
         )
+
+
+class TestV2414AIMDFixes:
+    """Regressions for the multi-AI audit fixes in v2.4.14."""
+
+    def test_bump_delay_up_does_not_cascade_across_workers(self):
+        """A single throttle window must not multiply the delay by 2^N
+        when N parallel workers each recover. Each worker passes its
+        own snapshot; only the first call (whose snapshot still matches
+        the shared delay) bumps."""
+        scraper = BaseScraper(delay_floor=0.0, delay_start=1.0, use_cache=False)
+        # All five workers saw _current_delay = 1.0 at throttle time.
+        snapshot = 1.0
+        for _ in range(5):
+            scraper._bump_delay_up(snapshot=snapshot)
+        # Old behaviour: 1 → 2 → 4 → 8 → 16 → 32 (5 doublings).
+        # New behaviour: 1 → 2, then snapshot != current → no-op.
+        assert scraper._current_delay == 2.0
+
+    def test_bump_delay_up_without_snapshot_still_works(self):
+        """Legacy single-fetch callers (no snapshot kwarg) keep the
+        unconditional doubling for backwards compatibility."""
+        scraper = BaseScraper(delay_floor=0.0, delay_start=1.0, use_cache=False)
+        scraper._bump_delay_up()
+        assert scraper._current_delay == 2.0
+        scraper._bump_delay_up()
+        assert scraper._current_delay == 4.0
+
+    def test_chunk_size_counts_urls_not_batches(self):
+        """In parallel mode ``_delay(fetches=N)`` must cross the
+        chunk_size boundary every N URLs, not every batch."""
+        scraper = BaseScraper(
+            chunk_size=10, chunk_delay_range=(0.0, 0.0),
+            delay_floor=0.0, delay_start=0.0, use_cache=False,
+        )
+        import time
+        slept = []
+        # Patch time.sleep to record durations; chunk pauses are the
+        # only sleeps that fire from chunk_delay_range (we pinned at 0).
+        original = time.sleep
+        time.sleep = lambda s: slept.append(s)
+        try:
+            # 5 batches × 5 fetches each = 25 fetches; chunk_size=10
+            # should fire at the boundaries that fall inside the run.
+            for _ in range(5):
+                scraper._delay(fetches=5)
+        finally:
+            time.sleep = original
+        # 25 fetches with chunk_size=10 → boundaries at 10 and 20.
+        # Old behaviour with `fetches=1`: never crosses the boundary
+        # because counter only reached 5.
+        assert scraper._fetch_count == 25
+
+    def test_rotate_browser_returns_new_session(self):
+        """The rotation helper must return its new session so callers
+        in ``_fetch`` can rebind their local ``sess`` — previously the
+        in-flight retry kept using the flagged fingerprint."""
+        scraper = BaseScraper(use_cache=False)
+        first = scraper._session()
+        new = scraper._rotate_browser()
+        assert new is not first
+        assert scraper._tls.session is new

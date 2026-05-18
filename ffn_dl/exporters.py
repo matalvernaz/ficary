@@ -122,23 +122,26 @@ def _count_story_words(story: Story) -> int:
 
 
 def _meta_fields(story: Story) -> list[tuple[str, str]]:
-    """Return an ordered list of (label, value) pairs for the story header."""
+    """Return an ordered list of (label, value) pairs for the story
+    header. All values are coerced to ``str`` and any
+    present-but-``None`` field is skipped so an upstream metadata
+    quirk doesn't crash the export mid-render."""
     m = story.metadata
     fields = []
     fields.append(("Title", story.title))
     fields.append(("Author", story.author))
-    if "category" in m:
-        fields.append(("Category", m["category"]))
-    if "genre" in m:
-        fields.append(("Genre", m["genre"].replace(",", ", ")))
-    if "characters" in m:
-        fields.append(("Characters", m["characters"]))
+    if m.get("category"):
+        fields.append(("Category", str(m["category"])))
+    if m.get("genre"):
+        fields.append(("Genre", str(m["genre"]).replace(",", ", ")))
+    if m.get("characters"):
+        fields.append(("Characters", str(m["characters"])))
     if story.summary:
         fields.append(("Summary", story.summary))
-    if "status" in m:
-        fields.append(("Status", m["status"]))
-    if "rating" in m:
-        fields.append(("Rating", m["rating"]))
+    if m.get("status"):
+        fields.append(("Status", str(m["status"])))
+    if m.get("rating"):
+        fields.append(("Rating", str(m["rating"])))
     fields.append(("Chapters", str(len(story.chapters))))
     # Words: prefer the source site's count (accurate, includes anything
     # we didn't download like omakes or appendices); fall back to
@@ -168,14 +171,26 @@ def _meta_fields(story: Story) -> list[tuple[str, str]]:
             else:
                 reading_time = f"{total_minutes} minutes"
             fields.append(("Reading Time", reading_time))
-    if "date_updated" in m:
-        fields.append(("Updated", _format_epoch(m["date_updated"])))
-    elif "updated" in m:
-        fields.append(("Updated", m["updated"]))
-    if "date_published" in m:
-        fields.append(("Published", _format_epoch(m["date_published"])))
-    elif "published" in m:
-        fields.append(("Published", m["published"]))
+    # date_updated / date_published may be ``None`` or a string instead
+    # of the expected epoch; skip rather than crash mid-render.
+    date_updated = m.get("date_updated")
+    if date_updated is not None:
+        try:
+            fields.append(("Updated", _format_epoch(int(date_updated))))
+        except (TypeError, ValueError, OSError, OverflowError):
+            if m.get("updated"):
+                fields.append(("Updated", str(m["updated"])))
+    elif m.get("updated"):
+        fields.append(("Updated", str(m["updated"])))
+    date_published = m.get("date_published")
+    if date_published is not None:
+        try:
+            fields.append(("Published", _format_epoch(int(date_published))))
+        except (TypeError, ValueError, OSError, OverflowError):
+            if m.get("published"):
+                fields.append(("Published", str(m["published"])))
+    elif m.get("published"):
+        fields.append(("Published", str(m["published"])))
     fields.append(("Downloaded", datetime.now(tz=timezone.utc).strftime("%Y-%m-%d")))
     fields.append(("Source", story.url))
     return fields
@@ -543,6 +558,34 @@ are well under 2 MB; refusing oversized blobs prevents an upstream
 server (compromised or buggy) from blowing batch-export memory."""
 
 
+# Magic-byte prefixes for the cover image types we accept. A successful
+# 200 from a CDN doesn't actually guarantee the body is an image — bot-
+# protection gateways often serve HTML challenges with 200 + JSON
+# Content-Type, and CDN caches occasionally lie. Checking the first few
+# bytes against the type the server claimed is the cheap way to keep
+# EPUB covers from being silently filled with text/html.
+_COVER_MAGIC_PREFIXES = {
+    "image/jpeg": (b"\xff\xd8\xff",),
+    "image/png": (b"\x89PNG\r\n\x1a\n",),
+    "image/gif": (b"GIF87a", b"GIF89a"),
+    "image/webp": (b"RIFF",),  # WebP starts ``RIFF....WEBP``; the
+                                # 4-byte size field varies so we only
+                                # anchor on the leading ``RIFF``.
+}
+
+
+def _looks_like_image(content: bytes, media_type: str) -> bool:
+    """Cheap sanity check: does ``content`` start with a magic-byte
+    sequence consistent with ``media_type``? Unknown types are accepted
+    so a new image format we forgot to enumerate isn't rejected — but
+    the known types must match.
+    """
+    prefixes = _COVER_MAGIC_PREFIXES.get(media_type)
+    if prefixes is None:
+        return True
+    return any(content.startswith(p) for p in prefixes)
+
+
 def _cover_cache_path(cover_url: str):
     """Return the on-disk path for a cached cover image, or ``None``
     when the portable/cache bootstrap isn't available (e.g. during
@@ -599,8 +642,24 @@ def _fetch_cover_image(cover_url, *, use_cache: bool = True):
                         "ascii", errors="replace",
                     )
                     content = blob[newline + 1:]
-                    if len(content) > 500:
-                        return content, media_type
+                    # Revalidate cached entries on read — a previous
+                    # build may have cached an HTML challenge page
+                    # before the fetch-time validation existed, and
+                    # we don't want that to keep poisoning re-exports
+                    # until TTL expiry.
+                    bare = media_type.split(";", 1)[0].strip().lower()
+                    if (
+                        len(content) > 500
+                        and bare in _COVER_MAGIC_PREFIXES
+                        and _looks_like_image(content, bare)
+                    ):
+                        return content, bare
+                    # Drop the bad entry so we don't keep paying the
+                    # validation cost on every export.
+                    try:
+                        cache_path.unlink(missing_ok=True)
+                    except OSError:
+                        pass
             except OSError:
                 # Corrupt / unreadable / oversize cache entry — fall
                 # through to the live fetch. The next successful fetch
@@ -617,18 +676,28 @@ def _fetch_cover_image(cover_url, *, use_cache: bool = True):
             and len(resp.content) <= _COVER_MAX_BYTES
         ):
             ct = resp.headers.get("content-type", "image/jpeg")
+            bare = ct.split(";", 1)[0].strip().lower()
+            # Drop non-image / non-known content types and any body
+            # whose magic bytes contradict the claimed type. A
+            # Cloudflare HTML challenge served with ``content-type:
+            # image/jpeg`` would otherwise sail through and get
+            # embedded as the EPUB cover.
+            if bare not in _COVER_MAGIC_PREFIXES:
+                return None
+            if not _looks_like_image(resp.content, bare):
+                return None
             if cache_path is not None:
                 try:
                     from .atomic import atomic_write_bytes
                     atomic_write_bytes(
                         cache_path,
-                        ct.encode("ascii", errors="replace") + b"\n" + resp.content,
+                        bare.encode("ascii", errors="replace") + b"\n" + resp.content,
                     )
                 except OSError:
                     # Cache is best-effort — a full disk or a
                     # permission issue shouldn't fail the export.
                     pass
-            return resp.content, ct
+            return resp.content, bare
     except Exception:
         pass
     return None
@@ -1641,24 +1710,40 @@ def export_epub(
     book.add_metadata("DC", "source", story.url)
     book.add_metadata("DC", "publisher", publisher)
 
-    lang = meta.get("language", "English")
-    book.set_language(_LANG_CODES.get(lang.lower(), "en"))
+    # ``dict.get(key, default)`` returns the *stored* value when the key
+    # exists — including ``None``. A scraper that wrote ``{"language":
+    # None}`` (some FicWad pages do) would otherwise blow up on the
+    # following ``.lower()``. Same defensive coercion for the rest of
+    # the metadata fields below: each one is best-effort, and a missing
+    # / weird value should leave the EPUB intact rather than crashing
+    # the export halfway through.
+    lang = meta.get("language") or "English"
+    book.set_language(_LANG_CODES.get(str(lang).strip().lower(), "en"))
 
-    if "date_published" in meta:
-        book.add_metadata("DC", "date", _format_epoch(meta["date_published"]))
-    if "date_updated" in meta:
-        dt = datetime.fromtimestamp(meta["date_updated"], tz=timezone.utc)
-        book.add_metadata("DC", "modified", dt.strftime("%Y-%m-%dT%H:%M:%SZ"))
+    published = meta.get("date_published")
+    if published is not None:
+        try:
+            book.add_metadata("DC", "date", _format_epoch(int(published)))
+        except (TypeError, ValueError, OSError, OverflowError):
+            pass
+    # ``dcterms:modified`` is emitted automatically by ebooklib at
+    # write time and the OPF spec requires exactly one such element.
+    # The pre-2.4.14 code added a second ``<dc:modified>`` (not even a
+    # valid Dublin Core term) which produced an invalid EPUB. The
+    # author's last-update date lives in the title-page metadata
+    # table; we don't need it in OPF metadata too.
 
     tags = []
-    if "genre" in meta:
-        tags.extend(g.strip() for g in re.split(r"[/,]", meta["genre"]))
-    if "characters" in meta:
-        tags.extend(c.strip() for c in meta["characters"].split(","))
-    if "rating" in meta:
+    genre = meta.get("genre")
+    if genre:
+        tags.extend(g.strip() for g in re.split(r"[/,]", str(genre)))
+    characters = meta.get("characters")
+    if characters:
+        tags.extend(c.strip() for c in str(characters).split(","))
+    if meta.get("rating"):
         tags.append(f"Rated {meta['rating']}")
-    if "status" in meta:
-        tags.append(meta["status"])
+    if meta.get("status"):
+        tags.append(str(meta["status"]))
     for tag in tags:
         if tag:
             book.add_metadata("DC", "subject", tag)
@@ -1673,8 +1758,24 @@ def export_epub(
         result = _fetch_cover_image(cover_url)
         if result:
             img_bytes, media_type = result
-            ext = "jpg" if "jpeg" in media_type else media_type.split("/")[-1]
-            book.set_cover(f"images/cover.{ext}", img_bytes)
+            # ``image/png; charset=utf-8`` used to slip the whole
+            # parameter string into the filename ("cover.png;
+            # charset=utf-8") and break ebooklib's manifest. Normalise
+            # to the bare media type, then map through an allowlist —
+            # an unexpected type (text/html from a bot-protection
+            # gateway, image/webp from a CDN that lies about caching)
+            # silently drops the cover rather than embedding a
+            # not-actually-an-image as one.
+            bare_type = str(media_type).split(";", 1)[0].strip().lower()
+            cover_exts = {
+                "image/jpeg": "jpg",
+                "image/png": "png",
+                "image/gif": "gif",
+                "image/webp": "webp",
+            }
+            ext = cover_exts.get(bare_type)
+            if ext:
+                book.set_cover(f"images/cover.{ext}", img_bytes)
 
     css = epub.EpubItem(
         uid="style",

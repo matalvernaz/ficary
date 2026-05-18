@@ -29,8 +29,15 @@ def cover_cache_dir(tmp_path, monkeypatch):
 
 def _png_bytes(size=2048):
     # Enough bytes to pass the >500 threshold and not be rejected as a
-    # probable error page.
+    # probable error page. Includes the real PNG magic prefix so the
+    # post-2.4.14 magic-byte validation accepts the body.
     return b"\x89PNG\r\n\x1a\n" + b"\x00" * size
+
+
+def _jpeg_bytes(size=2048):
+    """JPEG magic + filler. Used in tests that need an image whose
+    bytes match the claimed ``image/jpeg`` content-type."""
+    return b"\xff\xd8\xff\xe0" + b"\x00" * size
 
 
 class TestCacheHit:
@@ -68,11 +75,11 @@ class TestCacheHit:
         with patch(
             "curl_cffi.requests.get",
             return_value=_FakeResp(
-                200, _png_bytes(), {"content-type": "image/jpeg"},
+                200, _jpeg_bytes(), {"content-type": "image/jpeg"},
             ),
         ):
             exporters._fetch_cover_image(url)
-        # Second call should read from cache with same CT.
+        # Second call should read from cache with the same CT.
         result = exporters._fetch_cover_image(url)
         assert result is not None
         content, ct = result
@@ -169,3 +176,74 @@ class TestFailureHandling:
             result = exporters._fetch_cover_image(url)
         assert result is not None
         assert m.call_count == 1
+
+
+class TestV2414CoverValidation:
+    """Magic-byte/content-type validation added in v2.4.14 — protects
+    against bot-protection HTML pages being silently embedded as EPUB
+    covers."""
+
+    def test_lying_content_type_is_rejected(self, cover_cache_dir):
+        """Server returns HTML body but claims ``image/jpeg`` — must be
+        rejected at fetch time and not cached."""
+        url = "https://example.invalid/lying.jpg"
+        html_body = b"<html><body>Just a moment...</body></html>" + b"\x00" * 600
+        with patch(
+            "curl_cffi.requests.get",
+            return_value=_FakeResp(200, html_body, {"content-type": "image/jpeg"}),
+        ):
+            result = exporters._fetch_cover_image(url)
+        assert result is None
+        # And nothing got cached.
+        assert not list(cover_cache_dir.glob("covers/*"))
+
+    def test_unknown_content_type_dropped(self, cover_cache_dir):
+        """``text/html`` content-type must not pass the cover gate even
+        if the body coincidentally has more than 500 bytes."""
+        url = "https://example.invalid/html.jpg"
+        with patch(
+            "curl_cffi.requests.get",
+            return_value=_FakeResp(
+                200, b"<html>" + b"a" * 600, {"content-type": "text/html"},
+            ),
+        ):
+            result = exporters._fetch_cover_image(url)
+        assert result is None
+
+    def test_content_type_with_charset_normalised(self, cover_cache_dir):
+        """``image/png; charset=utf-8`` must normalise to ``image/png``
+        — used to leak the parameter string into the EPUB cover
+        filename and break ebooklib's manifest."""
+        url = "https://example.invalid/charset.png"
+        with patch(
+            "curl_cffi.requests.get",
+            return_value=_FakeResp(
+                200, _png_bytes(), {"content-type": "image/png; charset=utf-8"},
+            ),
+        ):
+            result = exporters._fetch_cover_image(url)
+        assert result is not None
+        _content, ct = result
+        assert ct == "image/png"
+
+    def test_old_poisoned_cache_entry_dropped_on_read(self, cover_cache_dir):
+        """An entry cached by a prior build before fetch-time validation
+        existed (HTML body in a file labelled ``image/jpeg``) must be
+        evicted on read rather than poisoning re-exports until TTL."""
+        url = "https://example.invalid/poison.jpg"
+        # Manually plant a bad cache entry to simulate the prior bug.
+        cache_path = exporters._cover_cache_path(url)
+        assert cache_path is not None
+        bad_html = b"<html>not an image</html>" + b"\x00" * 600
+        from ffn_dl.atomic import atomic_write_bytes
+        atomic_write_bytes(cache_path, b"image/jpeg\n" + bad_html)
+        # Cache read should reject + evict; fetch path should be invoked.
+        with patch(
+            "curl_cffi.requests.get",
+            return_value=_FakeResp(
+                200, _jpeg_bytes(), {"content-type": "image/jpeg"},
+            ),
+        ) as m:
+            result = exporters._fetch_cover_image(url)
+        assert result is not None
+        assert m.call_count == 1  # the bad cache entry forced a refetch

@@ -1,5 +1,86 @@
 # Changelog
 
+## 2.4.14 — 2026-05-18
+
+### Scraper core + EPUB exporter audit (round 2 of multi-AI deep debug)
+
+Joint Gemini + OpenAI + Claude review of `scraper.py` (HTTP retry +
+AIMD pacing + parallel-fetch + chapter cache) and `exporters.py` (EPUB
+metadata + cover image handling). Findings were cross-checked against
+the code; some AI claims were rejected after verification (e.g. the
+"legacy `.html` cache file will JSON-fail and self-delete" hypothesis
+— the legacy file already contained JSON, just with the wrong
+extension, and v2.4.12 tests already proved it loads fine).
+
+#### scraper.py
+
+- **Browser rotation now actually reaches the in-flight retry.**
+  `_fetch` captured a local `sess` once at entry. Calls to
+  `_rotate_browser` swapped the *thread-local* session but the loop
+  kept using the original — so the retry that triggered the rotation
+  re-hit Cloudflare with the same flagged TLS fingerprint, defeating
+  the evasion layer. `_rotate_browser` now returns the new session
+  and `_fetch` rebinds `sess` on every rotation point (200-CF-
+  challenge, 429/503, late 403).
+- **`_new_session` snapshots `_browser` under the lock.** Reading
+  `_browser` twice without a lock could produce a session that
+  impersonates one browser but carries another browser's client
+  hints if a concurrent rotation slipped between the reads —
+  exactly the "obvious bot" fingerprint Cloudflare scores against.
+- **AIMD bump no longer cascades 2× per parallel worker.** When N
+  parallel workers hit a single 429 burst and all recover with 200,
+  each one used to call `_bump_delay_up` and double the shared
+  delay; concurrency=5 produced a 32× jump that pinned the scraper
+  at `delay_ceiling` from one rate-limit window. Each call now
+  passes a snapshot of `_current_delay` taken at throttle time, and
+  the bump no-ops if a sibling already doubled the shared value.
+- **`chunk_size` is measured in URLs in parallel mode.** Pre-2.4.14
+  the inter-batch `_delay()` incremented `_fetch_count` once per
+  batch, so `concurrency=5`/`chunk_size=10` only paused every 50
+  chapters instead of every 10. `_delay()` now accepts a `fetches=N`
+  kwarg that `_fetch_parallel` passes (with the previous batch size)
+  so the chunk boundary is crossed cleanly.
+- **Cache load tolerates corrupt-shape JSON without crashing.**
+  `_load_chapter_cache` / `_load_meta_cache` now catch `TypeError`
+  and assert `isinstance(data, dict)` — a cache file truncated to
+  `null` / `[]` used to leak a `TypeError` past the corruption
+  handler. The unlink that follows is also wrapped so a permission
+  error on cleanup doesn't prevent the refetch.
+
+#### exporters.py (EPUB + cover)
+
+- **EPUB export survives present-but-`None` metadata.** Several
+  fields are read with `dict.get(key, default)`, which returns the
+  stored value when the key exists — including `None`. Pre-2.4.14
+  `meta["language"]=None` (scraped from some FicWad pages) would
+  `AttributeError: 'NoneType' has no attribute 'lower'` halfway
+  through the export, leaving the user with no file. `language`,
+  `genre`, `characters`, `status`, `date_updated`, `date_published`
+  all now coerce defensively.
+- **`<dc:modified>` no longer emitted.** That tag isn't a valid
+  Dublin Core element, and ebooklib already emits the correct
+  `<meta property="dcterms:modified">` automatically at write time
+  — the old code produced an invalid EPUB with both the bogus tag
+  and a duplicate of the valid one. (Updated date stays in the
+  title-page metadata table.)
+- **Cover content-type validated at fetch and on cache read.** A
+  Cloudflare HTML challenge page served with
+  `Content-Type: image/jpeg` used to sail straight into
+  `book.set_cover` and end up as the EPUB cover. Fetch now checks
+  the normalised content-type against an allowlist
+  (`image/{jpeg,png,gif,webp}`) and the magic-byte prefix; bad
+  responses return `None` rather than caching the lie. The cache
+  read path also revalidates, so entries written by a pre-2.4.14
+  build that got poisoned with HTML get evicted on next access
+  instead of waiting out the 7-day TTL.
+- **Cover filename no longer leaks content-type parameters.**
+  `media_type.split("/")[-1]` on `"image/png; charset=utf-8"`
+  used to produce `"images/cover.png; charset=utf-8"`, which broke
+  ebooklib's manifest. The fetcher now strips parameters before
+  the lookup.
+
++10 regression tests; full suite 1402 passed, 1 skipped.
+
 ## 2.4.13 — 2026-05-18
 
 ### Site-adapter audit (round 1 of multi-AI deep debug)
