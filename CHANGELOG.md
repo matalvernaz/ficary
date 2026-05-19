@@ -1,5 +1,17 @@
 # Changelog
 
+## 2.4.25 — 2026-05-19
+
+### TtsProvidersDialog Save/Cancel bypass fix
+
+The `EVT_CLOSE` handler was the only path that flipped `_alive` to
+`False`. Save (`wx.ID_OK`) and Cancel (`wx.ID_CANCEL`) ended the
+modal directly, leaving `_alive == True` while background Piper
+install / voice-download workers were still running — letting
+`_after_install_piper` / `_after_download_voices` touch destroyed
+controls. Both button paths now flip `_alive` before ending the
+modal.
+
 ## 2.4.24 — 2026-05-19
 
 ### LLM dialog: stale completions can't leak into wrong provider

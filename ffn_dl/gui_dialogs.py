@@ -1134,6 +1134,7 @@ class TtsProvidersDialog(wx.Dialog):
         save.SetDefault()
         save.Bind(wx.EVT_BUTTON, self._on_save)
         cancel = wx.Button(root, wx.ID_CANCEL, "Cancel")
+        cancel.Bind(wx.EVT_BUTTON, self._on_cancel)
         btns.Add(save, 0, wx.RIGHT, 4)
         btns.Add(cancel, 0)
         sizer.Add(btns, 0, wx.EXPAND | wx.ALL, pad)
@@ -1218,6 +1219,13 @@ class TtsProvidersDialog(wx.Dialog):
     def _on_tts_close(self, event):
         self._alive = False
         event.Skip()
+
+    def _on_cancel(self, event):
+        # Default wx.ID_CANCEL handling ends the modal without flipping
+        # ``_alive``, so background install / download workers could
+        # land on a destroyed dialog.
+        self._alive = False
+        self.EndModal(wx.ID_CANCEL)
 
     def _set_piper_buttons(self, enabled: bool) -> None:
         self._busy = not enabled
@@ -1322,6 +1330,10 @@ class TtsProvidersDialog(wx.Dialog):
         else:
             value = ",".join(enabled)
         self._prefs.set(self._p.KEY_TTS_PROVIDERS, value)
+        # Save bypasses ``EVT_CLOSE`` by default, so background Piper
+        # install / voice-download workers could still land on a
+        # destroyed dialog. Flip ``_alive`` before ending the modal.
+        self._alive = False
         self.EndModal(wx.ID_OK)
 
 
