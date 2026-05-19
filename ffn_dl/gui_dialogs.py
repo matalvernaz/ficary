@@ -314,6 +314,12 @@ class StoryPickerDialog(wx.Dialog):
         self._sort_key = self._load_saved_sort_key()
         self._section_filter = "all"
         self._picked = []
+        # Authoritative set of checked URLs. Refresh and OK derive
+        # from this rather than the visible widget state, so checked
+        # works hidden by a section filter aren't quietly dropped on
+        # the next refresh (the previous code only saw currently-
+        # visible ticks).
+        self._checked_urls: set[str] = set()
         self._apply_sort()
         self._build_ui()
 
@@ -481,15 +487,26 @@ class StoryPickerDialog(wx.Dialog):
 
     def _refresh(self):
         idxs = self._visible_indices()
-        # Preserve ticks across re-sort/filter by URL
-        ticked_urls = {
-            self._works[self._visible_map[j]]["url"]
-            for j in self.list_ctrl.GetCheckedItems()
-        } if getattr(self, "_visible_map", None) else set()
+        # Sync the authoritative checked-URLs set with whatever the
+        # widget shows BEFORE the refresh: visible rows ticked in the
+        # widget belong in the set; visible rows that aren't ticked
+        # are removed from the set. Rows hidden by the filter stay
+        # untouched so they don't lose their tick across filter
+        # changes.
+        if getattr(self, "_visible_map", None):
+            checked_now = set(self.list_ctrl.GetCheckedItems())
+            for j, src in enumerate(self._visible_map):
+                url = self._works[src].get("url") or ""
+                if not url:
+                    continue
+                if j in checked_now:
+                    self._checked_urls.add(url)
+                else:
+                    self._checked_urls.discard(url)
         labels = [
             self._label(
                 self._works[i],
-                checked=self._works[i].get("url") in ticked_urls,
+                checked=(self._works[i].get("url") or "") in self._checked_urls,
             )
             for i in idxs
         ]
@@ -497,7 +514,7 @@ class StoryPickerDialog(wx.Dialog):
         self._visible_map = idxs
         restored = [
             j for j, i in enumerate(idxs)
-            if self._works[i].get("url") in ticked_urls
+            if (self._works[i].get("url") or "") in self._checked_urls
         ]
         if restored:
             self.list_ctrl.SetCheckedItems(restored)
@@ -525,7 +542,18 @@ class StoryPickerDialog(wx.Dialog):
         self.summary_ctrl.SetValue(summary)
 
     def _on_item_toggled(self, event):
-        self._update_label_at(event.GetSelection())
+        row = event.GetSelection()
+        self._update_label_at(row)
+        # Mirror the toggle into the authoritative set so a later
+        # filter/sort refresh doesn't drop the tick if the user
+        # hides the row by section.
+        if 0 <= row < len(self._visible_map):
+            url = self._works[self._visible_map[row]].get("url") or ""
+            if url:
+                if self.list_ctrl.IsChecked(row):
+                    self._checked_urls.add(url)
+                else:
+                    self._checked_urls.discard(url)
         event.Skip()
 
     def _on_item_focus_changed(self, event):
@@ -586,11 +614,38 @@ class StoryPickerDialog(wx.Dialog):
         # Rewrite every label so the "[x] / [ ]" prefix reflects the new state.
         for row in indices:
             self._update_label_at(row)
+        # Keep the authoritative set in sync with the visible bulk
+        # toggle. Select All under a filter ticks every visible row
+        # (which is the user's expectation); rows hidden by the
+        # filter are left as-is.
+        for j, src in enumerate(self._visible_map):
+            url = self._works[src].get("url") or ""
+            if not url:
+                continue
+            if checked:
+                self._checked_urls.add(url)
+            else:
+                self._checked_urls.discard(url)
 
     def _on_ok(self, event):
-        ticked = self.list_ctrl.GetCheckedItems()
+        # Sync the visible-widget state into the authoritative set
+        # one last time, then return the full authoritative set
+        # (which may include rows hidden by an active section filter).
+        ticked_now = set(self.list_ctrl.GetCheckedItems())
+        for j, src in enumerate(self._visible_map):
+            url = self._works[src].get("url") or ""
+            if not url:
+                continue
+            if j in ticked_now:
+                self._checked_urls.add(url)
+            else:
+                self._checked_urls.discard(url)
+        # Preserve original visible order in the returned list for
+        # callers that iterate URLs in download order.
         self._picked = [
-            self._works[self._visible_map[j]]["url"] for j in ticked
+            (self._works[i].get("url") or "")
+            for i in self._order
+            if (self._works[i].get("url") or "") in self._checked_urls
         ]
         self.EndModal(wx.ID_OK)
 

@@ -1,5 +1,18 @@
 # Changelog
 
+## 2.4.27 — 2026-05-19
+
+### StoryPickerDialog preserves ticks across filter changes
+
+The dialog derived its "preserved ticks" set from the
+currently-visible widget state. Toggling the section filter
+(``All`` → ``Own only`` → ``All``) dropped every favorites tick
+because favorites weren't visible during the intermediate refresh.
+Now an authoritative ``_checked_urls`` set tracks every checked
+URL whether visible or not; refresh, Select All, and OK all sync
+the visible widget into the set rather than re-reading the visible
+state as authoritative.
+
 ## 2.4.26 — 2026-05-19
 
 ### LlmSettingsDialog Save also bypassed _alive
