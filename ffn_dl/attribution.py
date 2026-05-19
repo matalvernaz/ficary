@@ -895,14 +895,34 @@ def _refine_with_fastcoref(segments, full_text):
         if not needs_refine:
             continue
 
-        # Find the pronoun that attributed this segment — look at the
-        # next 60 chars past the dialogue for "he said" / "said he"
-        # patterns, and pick up the pronoun's position.
+        # Find the pronoun that attributed this segment. Look in BOTH
+        # directions: trailing-tag patterns (``"Hi," he said.``) put
+        # the pronoun after the quote, leading-tag patterns
+        # (``He smiled and said, "Hi."``) put it before. Pick the
+        # nearest match to the quote boundary; whichever side it
+        # comes from, its cluster gives us the canonical name.
         tail = full_text[cursor : cursor + 80]
-        pronoun_match = re.search(r"\b(he|she|they|it)\b", tail, flags=re.IGNORECASE)
-        if not pronoun_match:
+        head = full_text[max(0, idx - 80) : idx]
+        # Tail match goes left-to-right (so the nearest tail pronoun
+        # is the first); head match needs to go right-to-left.
+        tail_match = re.search(r"\b(he|she|they|it)\b", tail, flags=re.IGNORECASE)
+        head_match = None
+        for m in re.finditer(r"\b(he|she|they|it)\b", head, flags=re.IGNORECASE):
+            head_match = m  # last match in head = nearest to quote
+        tail_distance = tail_match.start() if tail_match else None
+        head_distance = (len(head) - head_match.end()) if head_match else None
+        pronoun_match = None
+        abs_pos = None
+        if tail_distance is not None and (
+            head_distance is None or tail_distance <= head_distance
+        ):
+            pronoun_match = tail_match
+            abs_pos = cursor + tail_match.start()
+        elif head_match is not None:
+            pronoun_match = head_match
+            abs_pos = max(0, idx - 80) + head_match.start()
+        if pronoun_match is None or abs_pos is None:
             continue
-        abs_pos = cursor + pronoun_match.start()
         cluster_idx = pos_to_cluster.get(abs_pos)
         if cluster_idx is None:
             continue
@@ -1532,6 +1552,16 @@ def _max_output_tokens_for_model(model: str) -> int:
 # ConnectionRefused/URLError synchronously, not via timeout).
 _LLM_REQUEST_TIMEOUT_DEFAULT_S = 300
 
+# HTTP statuses that warrant a bounded retry rather than aborting the
+# whole render. 429 (rate-limit) is the load-bearing one for cloud
+# providers; 5xx covers transient provider overload. The retry budget
+# is small on purpose — three attempts with capped backoff so a wedged
+# provider can't stall a 50-chapter audiobook for hours.
+_LLM_HTTP_RETRY_STATUSES = frozenset({408, 425, 429, 500, 502, 503, 504})
+_LLM_HTTP_RETRY_MAX = 3
+_LLM_HTTP_RETRY_BASE_S = 2.0
+_LLM_HTTP_RETRY_MAX_DELAY_S = 30.0
+
 
 def _llm_request_timeout_s(override: int | None = None) -> int:
     """Active per-request LLM timeout, in seconds.
@@ -1830,51 +1860,112 @@ def _llm_call(
 
     data = _json.dumps(payload).encode("utf-8")
     req = urllib.request.Request(url, data=data, headers=headers, method="POST")
-    try:
-        request_timeout = _llm_request_timeout_s(request_timeout_s)
-        with urllib.request.urlopen(req, timeout=request_timeout) as resp:
-            body = resp.read().decode("utf-8", errors="replace")
-    except urllib.error.HTTPError as exc:
-        # Surface server-provided error text — most providers ship the
-        # underlying reason in the body and the bare status line is useless.
-        detail = ""
-        try:
-            detail = exc.read().decode("utf-8", errors="replace")[:500]
-        except Exception:
-            pass
-        raise RuntimeError(
-            f"LLM HTTP {exc.code} from {provider}: {detail or exc.reason}"
-        ) from exc
-    except TimeoutError as exc:
-        # Endpoint accepted the connection but the model didn't reply
-        # in time. Surfaced as the LLMTimeout subclass so the chapter
-        # loop can apply a consecutive-failure threshold instead of
-        # tripping on one slow chapter.
-        raise LLMTimeout(
-            f"LLM endpoint {url} timed out after {request_timeout}s"
-        ) from exc
-    except (urllib.error.URLError, OSError) as exc:
-        # ``URLError`` wraps a transport failure; its ``reason`` may
-        # itself be a ``socket.timeout``, in which case we promote to
-        # LLMTimeout so the loop applies the timeout threshold rather
-        # than the unreachable-endpoint one-strike rule.
-        if isinstance(exc, urllib.error.URLError) and isinstance(
-            getattr(exc, "reason", None), TimeoutError,
-        ):
-            raise LLMTimeout(
-                f"LLM endpoint {url} timed out after "
-                f"{request_timeout}s"
-            ) from exc
-        # Connection refused, DNS failure — the endpoint isn't
-        # reachable at all. Distinct from HTTPError above (which
-        # means the server replied) because per-chapter loops want
-        # to give up after one of these instead of retrying 100+
-        # times.
-        raise LLMUnavailable(
-            f"LLM endpoint {url} unreachable: {exc}"
-        ) from exc
-
+    request_timeout = _llm_request_timeout_s(request_timeout_s)
+    body = _llm_http_with_retry(
+        req, provider=provider, url=url, request_timeout=request_timeout,
+    )
     return _extract_llm_text(body, provider)
+
+
+def _llm_http_with_retry(
+    req, *, provider: str, url: str, request_timeout: int,
+) -> str:
+    """Execute ``req`` with bounded retries on transient statuses.
+
+    Without retry, a single 429 mid-render disabled LLM attribution
+    for every subsequent chapter — even though the provider would
+    happily serve the same request a few seconds later. ``Retry-After``
+    is honoured when present (bounded to ``_LLM_HTTP_RETRY_MAX_DELAY_S``
+    so one bad chapter can't stall the whole render); otherwise
+    exponential backoff with jitter.
+    """
+    import urllib.error
+    import urllib.request
+
+    last_exc = None
+    for attempt in range(_LLM_HTTP_RETRY_MAX):
+        try:
+            with urllib.request.urlopen(req, timeout=request_timeout) as resp:
+                return resp.read().decode("utf-8", errors="replace")
+        except urllib.error.HTTPError as exc:
+            if (
+                exc.code in _LLM_HTTP_RETRY_STATUSES
+                and attempt < _LLM_HTTP_RETRY_MAX - 1
+            ):
+                try:
+                    detail = exc.read().decode("utf-8", errors="replace")[:200]
+                except Exception:
+                    detail = ""
+                retry_after = (
+                    exc.headers.get("Retry-After") if exc.headers else None
+                )
+                delay = _LLM_HTTP_RETRY_BASE_S * (2 ** attempt)
+                if retry_after:
+                    try:
+                        delay = min(
+                            _LLM_HTTP_RETRY_MAX_DELAY_S,
+                            max(delay, float(retry_after.strip())),
+                        )
+                    except (TypeError, ValueError):
+                        pass
+                # Jitter so concurrent batches don't synchronise on the
+                # same retry slot.
+                import random as _random
+                delay += _random.uniform(0, 0.5)
+                logger.info(
+                    "LLM HTTP %d from %s; retry %d/%d in %.1fs (%s)",
+                    exc.code, provider, attempt + 1,
+                    _LLM_HTTP_RETRY_MAX, delay,
+                    detail.strip() or exc.reason,
+                )
+                import time as _time
+                _time.sleep(delay)
+                last_exc = exc
+                continue
+            # Non-retryable status (or final attempt exhausted) —
+            # surface server-provided error text.
+            detail = ""
+            try:
+                detail = exc.read().decode("utf-8", errors="replace")[:500]
+            except Exception:
+                pass
+            raise RuntimeError(
+                f"LLM HTTP {exc.code} from {provider}: {detail or exc.reason}"
+            ) from exc
+        except TimeoutError as exc:
+            # Endpoint accepted the connection but the model didn't
+            # reply in time. Surfaced as the LLMTimeout subclass so
+            # the chapter loop can apply a consecutive-failure
+            # threshold instead of tripping on one slow chapter.
+            raise LLMTimeout(
+                f"LLM endpoint {url} timed out after {request_timeout}s"
+            ) from exc
+        except (urllib.error.URLError, OSError) as exc:
+            # ``URLError`` wraps a transport failure; its ``reason``
+            # may itself be a ``socket.timeout``, in which case we
+            # promote to LLMTimeout so the loop applies the timeout
+            # threshold rather than the unreachable-endpoint
+            # one-strike rule.
+            if isinstance(exc, urllib.error.URLError) and isinstance(
+                getattr(exc, "reason", None), TimeoutError,
+            ):
+                raise LLMTimeout(
+                    f"LLM endpoint {url} timed out after "
+                    f"{request_timeout}s"
+                ) from exc
+            # Connection refused, DNS failure — the endpoint isn't
+            # reachable at all. Distinct from HTTPError above (which
+            # means the server replied) because per-chapter loops
+            # want to give up after one of these instead of retrying
+            # 100+ times.
+            raise LLMUnavailable(
+                f"LLM endpoint {url} unreachable: {exc}"
+            ) from exc
+    # Exhausted retries on a transient status.
+    raise RuntimeError(
+        f"LLM HTTP {last_exc.code} from {provider} after "
+        f"{_LLM_HTTP_RETRY_MAX} attempts: {last_exc.reason}"
+    ) from last_exc
 
 
 def _extract_llm_text(body: str, provider: str) -> str:
@@ -2419,7 +2510,15 @@ def _refine_with_llm(
             ]
             if not batch:
                 continue
-            window_text = full_text[pos:end]
+            # Expand the passage by ``overlap`` on each side so a quote
+            # whose midpoint lies near the chunk boundary still appears
+            # in full inside the prompt. With the bare ``full_text[pos:end]``
+            # slice, the LLM could be asked to attribute a quote whose
+            # opening or closing words were trimmed off the passage —
+            # which reliably caused refusal or speaker hallucination.
+            slice_start = max(0, pos - overlap)
+            slice_end = min(total, end + overlap)
+            window_text = full_text[slice_start:slice_end]
             numbered = []
             for n, (seg_i, _qpos) in enumerate(batch, 1):
                 numbered.append(f"{n}. {segments[seg_i].text}")

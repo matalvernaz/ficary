@@ -853,3 +853,91 @@ def test_llm_normalise_emotion_clear_sentinel_overrides_existing():
     assert attribution._llm_normalise_emotion("shout") == "shout"
     # Unrecognised labels remain None (no signal).
     assert attribution._llm_normalise_emotion("contemplative") is None
+
+
+def test_llm_http_retries_transient_status(monkeypatch):
+    """A single 429 mid-render used to disable attribution for every
+    remaining chapter. The retry helper now backs off and retries
+    transient statuses (429/5xx) so a rate-limit blip doesn't tank
+    the whole render."""
+    import urllib.error
+    import urllib.request
+
+    calls = []
+
+    class _FakeHTTPError(urllib.error.HTTPError):
+        def __init__(self):
+            super().__init__(
+                "https://example.com", 429, "Too Many Requests",
+                {"Retry-After": "0"}, None,
+            )
+
+        def read(self):
+            return b"rate limit"
+
+    class _FakeResponse:
+        def __init__(self, body):
+            self._body = body
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def read(self):
+            return self._body.encode("utf-8")
+
+    def fake_urlopen(req, timeout=0):
+        calls.append(req)
+        if len(calls) < 3:
+            raise _FakeHTTPError()
+        return _FakeResponse('{"ok": true}')
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    # Patch time.sleep to keep the test fast (also kept in the retry
+    # path so the bounded backoff is the only delay).
+    import time as _time
+    monkeypatch.setattr(_time, "sleep", lambda _s: None)
+
+    body = attribution._llm_http_with_retry(
+        urllib.request.Request("https://example.com", b""),
+        provider="openai",
+        url="https://example.com",
+        request_timeout=5,
+    )
+    assert body == '{"ok": true}'
+    assert len(calls) == 3, "expected two retries before success"
+
+
+def test_llm_http_exhausted_retries_raises(monkeypatch):
+    """If the provider keeps returning 429 past the retry budget, the
+    call surfaces a RuntimeError so the dispatcher records the failure
+    and the rest of the render falls back to builtin."""
+    import urllib.error
+    import urllib.request
+
+    class _FakeHTTPError(urllib.error.HTTPError):
+        def __init__(self):
+            super().__init__(
+                "https://example.com", 429, "Too Many Requests",
+                {"Retry-After": "0"}, None,
+            )
+
+        def read(self):
+            return b"rate limit"
+
+    def fake_urlopen(req, timeout=0):
+        raise _FakeHTTPError()
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    import time as _time
+    monkeypatch.setattr(_time, "sleep", lambda _s: None)
+
+    with pytest.raises(RuntimeError):
+        attribution._llm_http_with_retry(
+            urllib.request.Request("https://example.com", b""),
+            provider="openai",
+            url="https://example.com",
+            request_timeout=5,
+        )

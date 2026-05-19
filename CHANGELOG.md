@@ -1,5 +1,35 @@
 # Changelog
 
+## 2.4.19 — 2026-05-19
+
+### Round 5 follow-up — three of the deferred attribution items
+
+Three of the items flagged as "deferred" in 2.4.18 were tractable
+enough to land in the same session:
+
+- **LLM HTTP 429 / 5xx now retries with bounded backoff.** A single
+  rate-limit response used to record an "llm" failure and disable
+  attribution for every remaining chapter. The new
+  `_llm_http_with_retry` honours `Retry-After` (capped at 30 s so a
+  malicious header can't stall the render), falls back to exponential
+  backoff + jitter otherwise, and gives up after 3 attempts. The
+  recoverable status set is `{408, 425, 429, 500, 502, 503, 504}`.
+- **LLM window slicing now expands by `overlap` on both sides.** Quotes
+  whose midpoint lay near a chunk boundary could be passed to the
+  prompt with their opening or closing words trimmed off, which
+  reliably caused refusal or speaker hallucination on the affected
+  quote. The slice is now `full_text[max(0, pos-overlap) :
+  min(total, end+overlap)]`.
+- **fastcoref pronoun resolution searches in both directions.** The
+  previous tail-only lookup missed every leading-tag pattern
+  (`He smiled and said, "Hi."`) — about half of natural dialogue
+  attribution. Now finds the nearest pronoun within 80 chars on
+  either side of the quote boundary and resolves the cluster from
+  whichever side wins.
+
++2 regression tests for the retry helper (success-after-retry and
+exhausted-retries-raises). Full suite: **1416 passed**.
+
 ## 2.4.18 — 2026-05-19
 
 ### Round 5 audit cont. — tts / attribution / gui (13 fixes)
