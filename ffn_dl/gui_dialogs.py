@@ -935,7 +935,15 @@ class OptionalFeaturesDialog(wx.Dialog):
 
         btn_row = wx.StdDialogButtonSizer()
         close_btn = wx.Button(panel, wx.ID_CLOSE, "&Close")
-        close_btn.Bind(wx.EVT_BUTTON, lambda evt: self.EndModal(wx.ID_CLOSE))
+
+        def _on_close_btn(evt):
+            # Set ``_alive = False`` *before* ending the modal so a
+            # background install's queued ``wx.CallAfter`` becomes a
+            # no-op instead of landing on the destroyed dialog.
+            self._alive = False
+            self.EndModal(wx.ID_CLOSE)
+
+        close_btn.Bind(wx.EVT_BUTTON, _on_close_btn)
         btn_row.AddButton(close_btn)
         btn_row.Realize()
         outer.Add(btn_row, 0, wx.EXPAND | wx.ALL, 8)
@@ -2146,10 +2154,23 @@ class AddFromUrlListDialog(wx.Dialog):
         self.ok_btn.Bind(wx.EVT_BUTTON, self._on_ok)
         btn_row.Add(self.ok_btn, 0, wx.RIGHT, 8)
         cancel_btn = wx.Button(panel, id=wx.ID_CANCEL, label="&Cancel")
+        # The default ``wx.ID_CANCEL`` handler ends the modal without
+        # flipping ``_alive`` or signalling ``_cancel_event``, so a
+        # running extractor worker can still call ``_extract_done`` /
+        # ``_extract_failed`` against a destroyed dialog. Bind so
+        # Cancel routes through the same shutdown path as the X
+        # button.
+        cancel_btn.Bind(wx.EVT_BUTTON, self._on_cancel_btn)
         btn_row.Add(cancel_btn, 0)
         sizer.Add(btn_row, 0, wx.EXPAND | wx.ALL, 8)
 
         panel.SetSizer(sizer)
+
+    def _on_cancel_btn(self, event):
+        self._alive = False
+        if getattr(self, "_cancel_event", None) is not None:
+            self._cancel_event.set()
+        self.EndModal(wx.ID_CANCEL)
 
     # ── Extraction worker ─────────────────────────────────────
 

@@ -1,5 +1,20 @@
 # Changelog
 
+## 2.4.21 — 2026-05-19
+
+### gui_dialogs.py audit follow-up — two more cancel/close races
+
+- **`OptionalFeaturesDialog` Close button now flips `_alive` before
+  ending the modal.** The previous one-liner closed the dialog
+  without signalling the alive flag, so a background install (cf-solve
+  pulls Playwright + chromium ~400 MB) could still drop log-line
+  CallAfters on destroyed widgets.
+- **`AddFromUrlListDialog` Cancel button signals the worker.** The
+  default `wx.ID_CANCEL` handler ended the modal without flipping
+  `_alive` or signalling `_cancel_event`, so a running URL-list
+  extractor could call `_extract_done` / `_extract_failed` against a
+  destroyed dialog.
+
 ## 2.4.20 — 2026-05-19
 
 ### gui_dialogs.py audit — four fixes
