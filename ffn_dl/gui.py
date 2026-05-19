@@ -1689,11 +1689,31 @@ class MainFrame(wx.Frame):
         if not url:
             self._log("Error: Enter a story URL or ID first.")
             return
+        if self._global_busy:
+            self._log("Already busy; finish the current job before previewing.")
+            return
         self._log(f"Preview: fetching metadata for {url}")
-        self._enqueue_site_job(
-            url, lambda: self._run_preview_voices(url),
-            kind="preview",
-        )
+        # Voice preview is a global-busy operation: it runs one off-
+        # queue worker, opens a modal dialog at completion, and
+        # populates the per-story voice map that the audiobook
+        # generator reads back. The previous wiring routed it through
+        # the per-site queue with ``kind="preview"``, but
+        # ``_enqueue_site_job`` ignores ``kind`` — so close-confirmation
+        # never showed the preview-specific prompt, the main buttons
+        # stayed enabled, and concurrent previews on different sites
+        # could pop overlapping dialogs. Now matches the
+        # voice-dialog-driven semantics described in the close-
+        # confirmation branch.
+        self._set_busy(True, kind="preview")
+        threading.Thread(
+            target=self._run_preview_voices_with_busy, args=(url,), daemon=True,
+        ).start()
+
+    def _run_preview_voices_with_busy(self, url):
+        try:
+            self._run_preview_voices(url)
+        finally:
+            self._set_busy(False)
 
     def _run_preview_voices(self, url):
         try:

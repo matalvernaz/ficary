@@ -1,5 +1,19 @@
 # Changelog
 
+## 2.4.22 — 2026-05-19
+
+### Voice preview is now actually global-busy
+
+`_on_preview_voices` used to route through `_enqueue_site_job(...,
+kind="preview")`, but `_enqueue_site_job` ignores the `kind`
+parameter — so close-confirmation never reached the
+`"Voice preview in progress"` branch (existing dead code), main
+buttons stayed enabled during preview, and concurrent previews on
+different sites could pop overlapping dialogs. Voice preview now
+spawns a daemon thread under `_set_busy(True, kind="preview")` /
+`_set_busy(False)`, matching the semantics the close-confirmation
+branch already assumed.
+
 ## 2.4.21 — 2026-05-19
 
 ### gui_dialogs.py audit follow-up — two more cancel/close races
