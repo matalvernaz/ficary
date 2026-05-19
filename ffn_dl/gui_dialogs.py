@@ -1894,10 +1894,11 @@ class LlmSettingsDialog(wx.Dialog):
                     endpoint=endpoint,
                     api_key=api_key,
                 )
-                wx.CallAfter(self._on_test_done, result)
+                wx.CallAfter(self._on_test_done, provider, result)
             except Exception as exc:  # noqa: BLE001 — surface any bug
                 wx.CallAfter(
                     self._on_test_done,
+                    provider,
                     attribution.LLMProbeResult(
                         ok=False,
                         detail=f"Internal error during probe: {exc}",
@@ -1907,20 +1908,23 @@ class LlmSettingsDialog(wx.Dialog):
         import threading
         threading.Thread(target=worker, daemon=True).start()
 
-    def _on_test_done(self, result) -> None:
+    def _on_test_done(self, requested_provider, result) -> None:
         if not self._alive:
             return
         prefix = "OK" if result.ok else "FAIL"
         self._append_status(f"  {prefix}: {result.detail}")
         # Successful probe → fold the discovered model names into the
-        # Model dropdown so the user can pick from what's actually
-        # installed/available without retyping. "Available" means:
-        # already-pulled for Ollama, on-account for cloud providers.
+        # Model dropdown — but ONLY when the user is still on the
+        # provider whose test was running. Otherwise an Ollama probe
+        # that finishes after the user switched to OpenAI would merge
+        # Ollama model names into the OpenAI dropdown.
         if result.ok and result.models:
-            self._populate_model_choices(
-                self._selected_provider(),
-                extra=result.models,
-            )
+            current_provider = self._selected_provider()
+            if current_provider == requested_provider:
+                self._populate_model_choices(
+                    current_provider,
+                    extra=result.models,
+                )
         self._set_busy(False)
 
     def _on_install_ollama(self, event):
@@ -2008,13 +2012,14 @@ class LlmSettingsDialog(wx.Dialog):
                 f"  '{model}' is now installed. Save the dialog to use "
                 "it as your LLM model."
             )
-            # Make sure the freshly-pulled model is in the dropdown
-            # for the next time the user opens it (it would already be
-            # there if they typed/picked it, but this also catches the
-            # case of a pull invoked via some future automation path).
-            self._populate_model_choices(
-                self._selected_provider(), extra=[model],
-            )
+            # Only merge into the dropdown if the user is still on
+            # Ollama — pull is Ollama-only, so if they switched to
+            # OpenAI/Anthropic mid-pull we'd otherwise inject the
+            # Ollama model name into a cloud provider's dropdown.
+            if self._selected_provider() == "ollama":
+                self._populate_model_choices(
+                    "ollama", extra=[model],
+                )
         else:
             self._append_status(
                 f"  Pull of '{model}' did not complete. Check the model "

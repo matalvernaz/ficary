@@ -1,5 +1,18 @@
 # Changelog
 
+## 2.4.24 — 2026-05-19
+
+### LLM dialog: stale completions can't leak into wrong provider
+
+`LlmSettingsDialog._on_test_done` and `_on_pull_done` used the
+*current* selected provider when merging discovered model names into
+the dropdown. If the user switched provider mid-flight — started an
+Ollama probe, switched to OpenAI before it finished — Ollama model
+names ended up in the OpenAI dropdown. Each callback now validates
+the provider matches the one the worker was started for, and the
+Ollama-only pull explicitly checks for `provider == "ollama"` before
+merging.
+
 ## 2.4.23 — 2026-05-19
 
 ### Picker flow no longer clears busy while the modal is open
