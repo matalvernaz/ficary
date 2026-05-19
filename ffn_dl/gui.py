@@ -2386,6 +2386,13 @@ class MainFrame(wx.Frame):
         """Fetch a work list (author page or AO3 bookmarks) and open the
         picker so the user can choose which works to download before we
         start pulling chapters.
+
+        Blocks the worker thread on a ``threading.Event`` until the
+        modal picker resolves. Without that block, the worker's outer
+        ``finally`` clause cleared ``_global_busy`` while the picker
+        was still on screen, briefly leaving the app in an "idle"
+        state — clipboard watcher and double-clicks could fire a
+        second download into the gap.
         """
         from .scraper import FFNScraper
 
@@ -2419,19 +2426,35 @@ class MainFrame(wx.Frame):
             return
         self._log(f"Loaded {len(works)} entries. Showing picker...")
 
+        picker_done = threading.Event()
+        with self._pending_worker_dialogs_lock:
+            self._pending_worker_dialogs.add(picker_done)
+
         def _handle_selection(selected_urls):
-            if not selected_urls:
-                self._log("(No selections — nothing downloaded.)")
-                return
-            self._log(f"Downloading {len(selected_urls)} selected...")
-            self._set_busy(True, kind="download")
-            threading.Thread(
-                target=self._run_picked_batch,
-                args=(selected_urls, kind),
-                daemon=True,
-            ).start()
+            try:
+                if not selected_urls:
+                    self._log("(No selections — nothing downloaded.)")
+                    return
+                self._log(f"Downloading {len(selected_urls)} selected...")
+                # Stay global-busy through the batch — the worker
+                # thread we spawn here will clear it on exit.
+                self._set_busy(True, kind="download")
+                threading.Thread(
+                    target=self._run_picked_batch,
+                    args=(selected_urls, kind),
+                    daemon=True,
+                ).start()
+            finally:
+                picker_done.set()
 
         wx.CallAfter(self._open_picker, title, works, _handle_selection)
+        # Block here so the worker's outer ``finally`` doesn't clear
+        # ``_global_busy`` while the picker is still on screen. The
+        # event is also registered in ``_pending_worker_dialogs`` so
+        # ``_on_close`` can wake us instantly on app shutdown.
+        picker_done.wait()
+        with self._pending_worker_dialogs_lock:
+            self._pending_worker_dialogs.discard(picker_done)
 
     def _open_picker(self, title, works, on_ok):
         dlg = StoryPickerDialog(self, title, works, prefs=self.prefs)

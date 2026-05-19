@@ -1,5 +1,18 @@
 # Changelog
 
+## 2.4.23 — 2026-05-19
+
+### Picker flow no longer clears busy while the modal is open
+
+`_run_picker_download` (bookmarks / author-page batch dispatch)
+scheduled the picker via `wx.CallAfter` and returned immediately,
+which let `_run_download`'s outer `finally` clear `_global_busy`
+while the modal picker was still on screen — clipboard watcher and
+double-clicks could fire a second download into that gap. Worker
+now blocks on a `threading.Event` until the picker resolves, with
+the event also registered in `_pending_worker_dialogs` so app close
+wakes it instantly.
+
 ## 2.4.22 — 2026-05-19
 
 ### Voice preview is now actually global-busy
