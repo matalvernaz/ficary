@@ -58,14 +58,16 @@ def _announce_label(ctrl: "wx.Window", text: str) -> None:
         ctrl.SetName(text)
     except Exception:
         return
+    # ``GetAccessible()`` returns ``None`` for every stock wx control
+    # that hasn't had a custom accessible object attached — which is
+    # essentially all of them for this app. The old code bailed at
+    # that point, meaning the immediate MSAA name-change wake-up
+    # never fired and NVDA only picked up the change on the next focus
+    # poll. ``wx.Accessible.NotifyEvent`` itself is a stand-alone
+    # static-style notifier that works on the control directly, no
+    # custom accessible object required.
     try:
-        acc = ctrl.GetAccessible()
-    except Exception:
-        return
-    if acc is None:
-        return
-    try:
-        acc.NotifyEvent(
+        wx.Accessible.NotifyEvent(
             wx.ACC_EVENT_OBJECT_NAMECHANGE,
             ctrl,
             wx.ACC_SELF,
@@ -73,8 +75,8 @@ def _announce_label(ctrl: "wx.Window", text: str) -> None:
         )
     except Exception:
         # NotifyEvent isn't wired on every platform/version; failure
-        # just means the reader won't be poked, not that the label
-        # didn't update.
+        # just means the reader won't be poked immediately, not that
+        # the label didn't update.
         return
 
 
@@ -253,6 +255,13 @@ class MainFrame(wx.Frame):
         # Re-asked every launch so the user stays in control if they
         # rearrange folders by hand between sessions.
         self._fandom_folder_decisions: dict[str, bool] = {}
+        # Attribution backends with a background ``pip install`` worker
+        # still running. ``_on_install_attribution`` refuses to spawn a
+        # second install for an already-running backend; without this
+        # guard, switching the backend dropdown re-enables the Install
+        # button mid-flight and a second click races the first installer
+        # over the same venv.
+        self._installing_attribution: set[str] = set()
         # Worker threads parked on a wx.MessageBox dispatched via
         # wx.CallAfter register their ``threading.Event`` here so the
         # close handler can wake them instantly when the frame is going
@@ -872,6 +881,14 @@ class MainFrame(wx.Frame):
         if is_llm:
             _announce_label(self.attribution_status, self._llm_status_label())
             return
+        # If a previous install is still running for this backend, keep
+        # the button locked and surface that state to the screen reader
+        # rather than re-enabling it on every dropdown change.
+        if backend in self._installing_attribution:
+            _announce_label(self.attribution_status, "(installing...)")
+            self.attribution_install_btn.Enable(False)
+            self.attribution_install_btn.SetLabel("&Install...")
+            return
         if backend == "builtin":
             _announce_label(self.attribution_status, "(built-in)")
             self.attribution_install_btn.Enable(False)
@@ -1033,6 +1050,15 @@ class MainFrame(wx.Frame):
         backend = self._selected_attribution_backend()
         if backend == "builtin":
             return
+        # Switching the backend dropdown re-enables the Install button
+        # in ``_refresh_attribution_status``, which lets the user click
+        # Install a second time on a backend whose previous install
+        # thread is still running — two concurrent pip-install workers
+        # against the same backend will race over the same venv. Track
+        # in-progress installs and refuse to spawn a second one.
+        if backend in self._installing_attribution:
+            self._log(f"{backend} install already in progress; ignoring.")
+            return
         info = self._attribution_module.BACKENDS[backend]
         size = info.get("size_hint", "?")
         # In the frozen .exe we warn about the total on-disk cost
@@ -1060,6 +1086,7 @@ class MainFrame(wx.Frame):
         self._log(f"\nInstalling {backend} in the background...")
         self.attribution_install_btn.Enable(False)
         _announce_label(self.attribution_status, "(installing...)")
+        self._installing_attribution.add(backend)
 
         def run():
             def cb(line):
@@ -1071,6 +1098,7 @@ class MainFrame(wx.Frame):
         threading.Thread(target=run, daemon=True).start()
 
     def _after_install(self, backend, ok, frozen):
+        self._installing_attribution.discard(backend)
         if ok:
             self._log(f"Installed {backend} successfully.")
             if frozen:
@@ -1237,6 +1265,15 @@ class MainFrame(wx.Frame):
         if hasattr(self, "_log_timer"):
             self._log_timer.Stop()
         self._detach_log_handlers()
+        # Unregister the DownloadQueues listener so the global queue
+        # singleton stops holding a reference to this MainFrame after
+        # shutdown. Without this the listener can keep the destroyed
+        # frame alive (and scheduling stale ``wx.CallAfter``s) for as
+        # long as the process is alive.
+        try:
+            DownloadQueues.remove_listener(self._on_site_queue_change)
+        except (KeyError, ValueError, RuntimeError, AttributeError):
+            logger.debug("DownloadQueues listener removal failed", exc_info=True)
         # Wake any worker thread parked on a wx.MessageBox we marshalled
         # via wx.CallAfter — once we Skip() the event, the frame is
         # destroyed and the prompt() will never run, so the worker would
@@ -1919,16 +1956,19 @@ class MainFrame(wx.Frame):
             return
         if url in self._watch_seen:
             return
-        self._watch_seen.add(url)
 
         if self._is_batch_url(url):
             # Batch URLs still pop a picker on the main thread; the
             # clipboard watcher firing one mid-poll would be jarring.
-            # Queue semantically, visibly, and wait until the next
-            # clipboard hit (or the user clicks Download) to start.
+            # Don't mark the URL as seen yet — if we drop it because
+            # the app is busy, a subsequent clipboard hit (or the user
+            # re-copying after the download finishes) needs to be able
+            # to re-trigger it. Marking pre-busy permanently blacklisted
+            # the URL for the rest of the watch session.
             if self._global_busy:
-                self._log(f"Queued (busy): {url}")
+                self._log(f"Skipped (busy): {url}")
                 return
+            self._watch_seen.add(url)
             self._log(f"Clipboard detected: {url}")
             self.url_ctrl.SetValue(url)
             self._set_busy(True, kind="download")
@@ -1936,6 +1976,8 @@ class MainFrame(wx.Frame):
                 target=self._run_download, args=(url,), daemon=True,
             ).start()
             return
+
+        self._watch_seen.add(url)
 
         self._log(f"Clipboard detected: {url}")
         self.url_ctrl.SetValue(url)

@@ -1344,7 +1344,27 @@ class VoiceMapper:
             try:
                 raw = json.loads(self.map_path.read_text(encoding="utf-8"))
             except (OSError, json.JSONDecodeError) as exc:
-                logger.warning("Voice map unreadable (%s); ignoring", exc)
+                # Quarantine the unreadable file rather than letting the
+                # next save() silently overwrite a user-edited map that
+                # had a typo. Voice consistency across a long fic is
+                # part of how a listener tracks who's speaking, so
+                # losing the map is a real regression — leaving a
+                # ``.corrupt-<ts>.json`` sidecar lets the user (or
+                # support) recover whatever survived the corruption.
+                logger.warning("Voice map unreadable (%s); quarantining", exc)
+                try:
+                    quarantine = self.map_path.with_name(
+                        f"{self.map_path.stem}.corrupt-{int(__import__('time').time())}"
+                        f"{self.map_path.suffix}"
+                    )
+                    self.map_path.rename(quarantine)
+                    logger.warning("Original voice map preserved at %s", quarantine)
+                except OSError as rename_exc:
+                    logger.warning(
+                        "Could not quarantine corrupt voice map (%s); "
+                        "starting fresh anyway",
+                        rename_exc,
+                    )
                 raw = {}
             self.mapping = {k: _namespace_legacy(v) for k, v in raw.items()}
             logger.info("Loaded voice map with %d characters", len(self.mapping))
@@ -1912,7 +1932,14 @@ def _html_to_audiobook_text(html, strip_notes=False, hr_as_stars=False):
             if child.name == "hr":
                 parts.append(_SCENE_BREAK_MARKER if hr_as_stars else "* * *")
                 continue
-            text = child.get_text().strip()
+            # ``separator="\n"`` so nested block elements (paragraphs
+            # inside a wrapper ``<div>``, lists, blockquotes) stay
+            # split on word boundaries. The default empty-string
+            # separator concatenates "Harry opened the door." and
+            # "\"Hello,\" Hermione said." into one run-on string,
+            # which mangles dialogue attribution and forces TTS to
+            # smush words together.
+            text = child.get_text(separator="\n").strip()
             if not text:
                 continue
             if hr_as_stars:
@@ -2332,6 +2359,13 @@ def _escape_ffmeta(value) -> str:
     and values. Fanfic titles routinely carry `=`, `;`, or newlines from
     HTML-stripping edge cases, and ffmpeg silently fails to parse the
     whole file when any one value trips the grammar.
+
+    Lone ``\\r`` (without a following ``\\n``) shows up in scraped HTML
+    that was authored on legacy DOS-tooling and is normally invisible to
+    the user, but FFMETADATA1's line-based parser can prematurely
+    terminate a value when one slips through — silently dropping every
+    subsequent chapter marker. Normalising lone CRs to ``\\n`` before
+    the newline-escape pass keeps the value intact.
     """
     s = "" if value is None else str(value)
     return (
@@ -2341,6 +2375,7 @@ def _escape_ffmeta(value) -> str:
         .replace(";", "\\;")
         .replace("#", "\\#")
         .replace("\r\n", "\n")
+        .replace("\r", "\n")
         .replace("\n", "\\\n")
     )
 
@@ -2522,6 +2557,11 @@ def _build_m4b_inner(
     )
 
     def _probe_ms(path):
+        # Fail closed: a chapter marker with START==END (or stale offset
+        # because every subsequent marker inherited a 0-ms slot) is
+        # actively harmful for a blind listener relying on M4B chapter
+        # navigation. Better to surface the bad probe than write a
+        # poisoned ToC.
         try:
             probe = subprocess.run(
                 [
@@ -2532,13 +2572,37 @@ def _build_m4b_inner(
                 text=True,
                 timeout=_FFPROBE_TIMEOUT_S,
             )
-        except subprocess.TimeoutExpired:
-            logger.warning(
-                "ffprobe timed out probing %s after %ds; treating as 0ms",
-                path, _FFPROBE_TIMEOUT_S,
+        except subprocess.TimeoutExpired as exc:
+            raise RuntimeError(
+                f"ffprobe timed out probing {path} after {_FFPROBE_TIMEOUT_S}s"
+            ) from exc
+        if probe.returncode != 0:
+            tail = _decode_stderr(probe.stderr).strip()[-400:]
+            raise RuntimeError(
+                f"ffprobe failed probing {path} (exit {probe.returncode}): "
+                f"{tail or '(no stderr)'}"
             )
-            return 0
-        return int(float(probe.stdout.strip() or "0") * 1000)
+        raw = probe.stdout.strip()
+        # ffprobe emits ``N/A`` for streams whose duration it can't read
+        # (occasionally observed on concat'd MP3 outputs with missing
+        # Xing headers). ``float('N/A')`` raises ValueError, which
+        # would otherwise abort the build at the very end of synthesis.
+        if not raw or raw.upper() == "N/A":
+            raise RuntimeError(
+                f"ffprobe returned unusable duration for {path}: {raw!r}"
+            )
+        try:
+            seconds = float(raw)
+        except ValueError as exc:
+            raise RuntimeError(
+                f"ffprobe returned non-numeric duration for {path}: {raw!r}"
+            ) from exc
+        ms = int(round(seconds * 1000))
+        if ms <= 0:
+            raise RuntimeError(
+                f"ffprobe returned non-positive duration for {path}: {raw!r}"
+            )
+        return ms
 
     # Get chapter durations for metadata
     chapters_meta = tmp_dir / "chapters_meta.txt"
@@ -3258,6 +3322,32 @@ def generate_audiobook(
     cache_root.mkdir(parents=True, exist_ok=True)
     build_tmp = Path(tempfile.mkdtemp(prefix="ffn-audiobook-", dir=output_dir))
 
+    try:
+        return _generate_audiobook_inner(
+            story=story,
+            output_dir=output_dir,
+            build_tmp=build_tmp,
+            cache_root=cache_root,
+            mapper=mapper,
+            narrator=narrator,
+            speech_rate=speech_rate,
+            progress_callback=progress_callback,
+            all_segments=all_segments,
+        )
+    finally:
+        # Single cleanup point — any exception before the original
+        # build_m4b's finally clause (cover fetch raise, intro TTS
+        # bug, progress_callback raise mid-loop) used to leak the
+        # per-run scratch dir holding assembled chapter MP3s. Cache
+        # under ``portable.cache_dir()`` is intentionally left alone.
+        shutil.rmtree(build_tmp, ignore_errors=True)
+
+
+def _generate_audiobook_inner(
+    *,
+    story, output_dir, build_tmp, cache_root,
+    mapper, narrator, speech_rate, progress_callback, all_segments,
+):
     chapter_files = []
     total = len(story.chapters)
     cache_hits = 0
@@ -3326,7 +3416,6 @@ def generate_audiobook(
             progress_callback(i, total, ch.title)
 
     if not chapter_files:
-        shutil.rmtree(build_tmp, ignore_errors=True)
         raise RuntimeError("No chapter audio was generated.")
 
     logger.info(
@@ -3374,15 +3463,9 @@ def generate_audiobook(
     m4b_path = output_dir / filename
 
     logger.info("Building M4B with %d chapters...", len(chapter_files))
-    try:
-        build_m4b(chapter_files, story, m4b_path, cover_path, intro_file=intro_path)
-    finally:
-        # Per-run scratch (assembled chapter files, heading clips, intro,
-        # cover) is disposable. The body-audio cache lives under
-        # portable.cache_dir() and is deliberately left untouched so the
-        # next run can reuse it. The voice map (.ffn-voices-<id>.json) is
-        # persistent and user-editable — leaving it in place is what makes
-        # "edits survive re-renders" true.
-        shutil.rmtree(build_tmp, ignore_errors=True)
+    # build_tmp cleanup is handled by the outer ``generate_audiobook``
+    # finally clause so any exception path before this point also clears
+    # the per-run scratch dir.
+    build_m4b(chapter_files, story, m4b_path, cover_path, intro_file=intro_path)
 
     return m4b_path

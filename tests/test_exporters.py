@@ -788,6 +788,19 @@ class TestFFMetaEscaping:
         from ffn_dl.tts import _escape_ffmeta
         assert _escape_ffmeta("A Simple Title") == "A Simple Title"
 
+    def test_orphan_carriage_return_normalised(self):
+        """Lone ``\\r`` (without a following ``\\n``) — common on
+        legacy DOS-authored HTML — must not leak through unescaped.
+        FFMETADATA1's line-based parser can prematurely terminate a
+        value when a raw CR slips through, silently dropping every
+        subsequent chapter marker.
+        """
+        from ffn_dl.tts import _escape_ffmeta
+        # Just a CR mid-string → treated as a newline (escaped).
+        assert _escape_ffmeta("first\rsecond") == "first\\\nsecond"
+        # CR at end of string.
+        assert _escape_ffmeta("trailing\r") == "trailing\\\n"
+
 
 class TestFetchParallel:
     def test_returns_results_in_input_order(self):

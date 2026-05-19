@@ -622,9 +622,18 @@ def test_llm_normalise_emotion_aliases_to_prosody_keys():
     assert attribution._llm_normalise_emotion("sobbing") == "sad"
 
 
-def test_llm_normalise_emotion_neutral_collapses_to_none():
-    assert attribution._llm_normalise_emotion("neutral") is None
-    assert attribution._llm_normalise_emotion("calm") is None
+def test_llm_normalise_emotion_neutral_returns_clear_sentinel():
+    """An explicit ``neutral`` from the LLM must be distinct from "no
+    label" so the caller can clear a wrong regex-tagged emotion. The
+    previous behaviour collapsed both cases to ``None`` and silently
+    discarded the LLM's correction.
+    """
+    assert attribution._llm_normalise_emotion("neutral") == (
+        attribution._LLM_EMOTION_SENTINEL_CLEAR
+    )
+    assert attribution._llm_normalise_emotion("calm") == (
+        attribution._LLM_EMOTION_SENTINEL_CLEAR
+    )
     assert attribution._llm_normalise_emotion("") is None
     assert attribution._llm_normalise_emotion(None) is None
 
@@ -789,3 +798,58 @@ def test_install_reactivates_deps_dir_after_pip_install(monkeypatch):
     ok = attribution.install("booknlp", log_callback=lambda _l: None)
     assert ok is True
     assert activate_calls, "install() must re-activate neural_env after pip_install"
+
+
+def test_looks_quoted_rejects_lone_smart_apostrophe():
+    """``’`` is overwhelmingly used as an apostrophe in modern prose;
+    ``_looks_quoted`` must not treat narration with contractions as
+    dialogue, otherwise non-dialogue segments are dragged into the
+    LLM attribution batch."""
+    assert attribution._looks_quoted("Harry didn’t know what to do.") is False
+    assert attribution._looks_quoted("It’s cold today.") is False
+    assert attribution._looks_quoted("The wizard's wand snapped.") is False
+
+
+def test_looks_quoted_accepts_paired_single_curly():
+    """Genuine single-quoted utterances should still register."""
+    assert attribution._looks_quoted("‘Hello there,’ she said.") is True
+
+
+def test_looks_quoted_accepts_double_quotes():
+    assert attribution._looks_quoted('"Hi," he said.') is True
+    assert attribution._looks_quoted("“Hi,” she said.") is True
+
+
+def test_llm_failure_key_distinguishes_providers(monkeypatch):
+    """A failed OpenAI run must not disable a follow-up Ollama run.
+    Previously the failure key collapsed to ``("llm", None)`` for every
+    LLM config, so one bad API key permanently muted attribution for
+    the rest of the process even after the user fixed the config."""
+    monkeypatch.setattr(attribution, "is_installed", lambda backend: True)
+
+    def boom(*a, **kw):
+        raise RuntimeError("OpenAI backend requires an API key")
+    monkeypatch.setattr(attribution, "_refine_with_llm", boom)
+
+    seg = Segment("placeholder", speaker="X")
+    attribution.refine_speakers(
+        [seg], "placeholder", backend="llm",
+        llm_config={"provider": "openai", "model": "gpt-4o-mini"},
+    )
+    # OpenAI failure recorded.
+    assert any(k[0] == "llm" and "openai" in (k[1] or "")
+               for k in attribution._failed_runs)
+    # Ollama should NOT be considered failed.
+    assert not any(k[0] == "llm" and "ollama" in (k[1] or "")
+                   for k in attribution._failed_runs)
+
+
+def test_llm_normalise_emotion_clear_sentinel_overrides_existing():
+    """The neutral sentinel must allow the caller to clear a
+    regex-tagged emotion, not just be discarded as 'no signal'."""
+    sentinel = attribution._LLM_EMOTION_SENTINEL_CLEAR
+    assert attribution._llm_normalise_emotion("neutral") == sentinel
+    # Real prosody labels still pass through.
+    assert attribution._llm_normalise_emotion("shout") == "shout"
+    # Unrecognised labels remain None (no signal).
+    assert attribution._llm_normalise_emotion("contemplative") is None

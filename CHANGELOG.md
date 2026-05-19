@@ -1,5 +1,136 @@
 # Changelog
 
+## 2.4.18 — 2026-05-19
+
+### Round 5 audit cont. — tts / attribution / gui (13 fixes)
+
+Three more roundtable threads (Gemini Pro + GPT-5 + me) on the bigger
+files: `tts.py`, `attribution.py`, `gui.py`. Each finding verified
+against actual code before applying. Gemini's "cumulative timestamp
+drift" claim was rejected after GPT-5 pushed back without a repro.
+
+TTS (`ffn_dl/tts.py`):
+
+- **`_probe_ms` now fails closed.** `subprocess.run` didn't check
+  returncode and accepted ffprobe's `"N/A"` (float() raises ValueError
+  on it) — both paths emitted `0`-ms chapter durations or crashed at
+  the very end of the m4b build. A 0-ms chapter has START==END and
+  later chapters all share the same offset; an M4B with broken
+  chapter markers is actively hostile to NVDA's chapter navigation,
+  so a clean RuntimeError is strictly better than poisoned ToC.
+- **FFMETADATA1 escaping handles lone `\\r`.** Previously only
+  `\\r\\n` was normalised; an orphan CR in a scraped title could
+  prematurely terminate the value at the ffmpeg parser, silently
+  dropping every subsequent chapter marker. Now CRs are normalised
+  to `\\n` before the newline-escape pass.
+- **`_html_to_audiobook_text` uses `separator="\\n"` on nested blocks.**
+  Default empty-separator `get_text()` mashed `<div><p>A.</p><p>B.</p></div>`
+  into `A.B.`, mangling dialogue boundaries and TTS prosody. Block
+  children now keep their boundaries.
+- **`VoiceMapper` quarantines a corrupt voice map.** An unreadable
+  JSON used to be silently treated as empty, and the next `save()`
+  overwrote the only copy. Now the corrupt file is renamed
+  `.corrupt-<ts>.json` so users (or support) can recover whatever
+  was salvageable. Voice consistency across a long fic is part of
+  how a listener tracks who's speaking, so silently losing the map
+  is a real regression.
+- **`generate_audiobook` cleans up `build_tmp` on every exit path.**
+  Cleanup was bolted to the final `build_m4b` `try/finally`, so any
+  exception before that point (progress callback raise, cover-fetch
+  error, intro-synth crash) leaked the per-run scratch dir holding
+  assembled chapter MP3s — potentially hundreds of MB per failed
+  run. Refactored into an inner function with one outer `try/finally`.
+
+Attribution (`ffn_dl/attribution.py`):
+
+- **LLM circuit-breaker key includes provider/model.** Was always
+  `("llm", None)` because `normalize_size("llm", *)` returns None, so
+  a failed OpenAI run permanently disabled every other LLM config
+  (Ollama, Anthropic, etc.) for the rest of the process. Now uses
+  `llm_cache_token(provider, model)` as the discriminator.
+- **`_looks_quoted` no longer treats lone smart apostrophes as
+  dialogue.** `’` (U+2019) is overwhelmingly the modern English
+  apostrophe; the previous predicate flagged every contraction-laden
+  narration segment as quoted, dragging non-dialogue into the LLM
+  attribution batch and inflating cost/latency. Single curly quotes
+  now require the `‘…’` pair.
+- **Ollama speaker attribution pins `temperature=0`.** The A/N
+  classifier had this fix; speaker attribution didn't. Ollama's stock
+  0.8 default made the same chapter come back with different speakers
+  on consecutive renders, scrambling voice consistency.
+- **LLM `neutral` emotion now actually overrides regex tags.** The
+  normaliser collapsed "neutral" and "no label" both to `None`, so an
+  LLM correcting a wrongly-tagged `angry` to `neutral` was silently
+  discarded. Introduced an explicit `_LLM_EMOTION_SENTINEL_CLEAR` so
+  the caller can distinguish "clear existing" from "no signal". A
+  test that enshrined the old buggy behaviour was updated to assert
+  the corrected semantics.
+
+GUI (`ffn_dl/gui.py`):
+
+- **`_announce_label` no longer skips NotifyEvent on stock widgets.**
+  `ctrl.GetAccessible()` returns `None` for every stock wx control
+  with no custom accessible object — which is essentially all of
+  them in this app. The old code bailed there, so NVDA's
+  name-change wake-up only fired on widgets with a custom accessible
+  (basically never). Now calls `wx.Accessible.NotifyEvent` directly
+  on the ctrl regardless. Status updates ("(installing...)",
+  download progress, install failure reasons) now actually wake the
+  screen reader on the spot instead of waiting for next focus poll.
+- **Clipboard auto-download no longer permanently drops busy URLs.**
+  `_on_clip_timer` added the URL to `_watch_seen` *before* the
+  `_global_busy` check, so a URL detected during an active download
+  was logged as "Queued (busy)" (a lie — there is no queue) and then
+  permanently blacklisted from re-detection. Now `_watch_seen.add`
+  happens only after the URL is actually claimed for processing; the
+  busy log message is reworded from "Queued" to "Skipped" so the
+  user knows to re-copy.
+- **Attribution backend install can't double-start.** Switching the
+  dropdown re-enabled the Install button via
+  `_refresh_attribution_status` even while a background pip-install
+  thread was still running, letting the user spawn a second installer
+  that raced the first over the same venv. Added
+  `_installing_attribution: set[str]`; the install handler refuses
+  to spawn a second worker for the same backend, and the status
+  refresher shows "(installing...)" instead of re-enabling the
+  button on backend change.
+- **`DownloadQueues` listener is removed on close.** The class-level
+  listener registry kept a reference to the destroyed `MainFrame`
+  alive for the rest of the process, scheduling stale
+  `wx.CallAfter` against a frame that was already gone. Now
+  `_on_close` calls `DownloadQueues.remove_listener` before the
+  frame tears down.
+
++6 regression tests (`_looks_quoted`, LLM failure key,
+`_llm_normalise_emotion` clear sentinel, `_escape_ffmeta` lone CR).
+Full suite 1414 passed (was 1408 in 2.4.17). GUI smoke tests pass
+under xvfb.
+
+Known open findings deferred to a future round (each verified real,
+each non-trivial to fix safely):
+
+- Worker threads in `gui.py` read several wx widgets directly
+  (`_export_story`, `_resolve_output_dir`, `_run_preview_voices`) —
+  needs a snapshot-on-main-thread refactor across multiple call sites.
+- `_perform_update` calls `progress.WasCancelled()` from the worker
+  thread; needs a wx.Timer polling pattern instead.
+- Picker flows (`_run_picker_download`) clear busy state while the
+  modal picker is still open, briefly allowing overlapping clipboard
+  triggers. Needs `threading.Event` synchronisation.
+- Voice preview enqueues with `kind="preview"` but the queue
+  worker doesn't propagate `kind`, so close-confirmation never shows
+  the preview-specific message.
+- HTTP 429 from LLM providers has no retry / `Retry-After` handling —
+  one rate-limit on chapter 3 disables LLM attribution for the rest
+  of the render.
+- LLM speaker-attribution window-slicing can pass a partial quote to
+  the prompt when a quote spans a chunk boundary; expanding the slice
+  by `overlap` on both sides fixes it but wants a regression test.
+- fastcoref pronoun-resolution only searches forward of the quote, so
+  "He smiled and said, 'Hi.'" patterns are missed under that backend.
+- `_update_succeeded` calls `sys.exit(0)`, bypassing close-confirmation
+  for active downloads / Ollama pulls / preview jobs.
+
 ## 2.4.17 — 2026-05-19
 
 ### Round 5 multi-AI audit (self_update + search)

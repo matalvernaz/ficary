@@ -396,6 +396,18 @@ def refine_speakers(
     if backend in (None, "", "builtin"):
         return segments
     size = normalize_size(backend, model_size)
+    # For the LLM backend, ``normalize_size`` is always None because
+    # LLM has no size variants — so without this discriminator one
+    # bad ``(provider, model, api_key)`` combination would disable
+    # every other LLM config (Ollama + GPT + Claude all sharing one
+    # ``("llm", None)`` failure key) for the rest of the process.
+    # Encoding (provider, model) into the failure key means a failed
+    # OpenAI run doesn't poison a follow-up Ollama run.
+    if backend == "llm" and llm_config:
+        size = llm_cache_token(
+            llm_config.get("provider", ""),
+            llm_config.get("model", ""),
+        )
     key = (backend, size)
     if key in _failed_runs:
         return segments  # already reported; stay silent for remaining chapters
@@ -1569,11 +1581,22 @@ _LLM_QUOTES_PER_REQUEST = 40
 
 def _looks_quoted(text: str) -> bool:
     """True for segments that read as direct dialogue. Used to decide
-    which segments to send to the LLM — narration we leave alone."""
+    which segments to send to the LLM — narration we leave alone.
+
+    ``’`` (U+2019 RIGHT SINGLE QUOTATION MARK) is the overwhelming
+    apostrophe character in modern English prose (``didn’t``, ``it’s``);
+    treating it as a stand-alone quote mark drags every narration
+    segment with a contraction into the dialogue batch. Accept it only
+    when it pairs with ``‘`` (a real single-quoted utterance). Same
+    treatment for the straight ``'`` — single curly quotes only count
+    when paired."""
     if not text:
         return False
-    quote_chars = ('"', '“', '”', '‘', '’')
-    return any(ch in text for ch in quote_chars)
+    if '"' in text or '“' in text or '”' in text:
+        return True
+    if '‘' in text and '’' in text:
+        return True
+    return False
 
 
 def _llm_provider_supported(provider: str) -> bool:
@@ -2230,20 +2253,37 @@ _LLM_EMOTION_ALIASES = {
 }
 
 
+_LLM_EMOTION_SENTINEL_CLEAR = "__clear__"
+"""Sentinel returned by :func:`_llm_normalise_emotion` when the LLM
+explicitly classified the line as ``neutral``. The caller treats this
+as "clear any existing emotion", distinct from ``None`` which means
+"the LLM didn't give us a usable label — keep the existing emotion".
+"""
+
+
 def _llm_normalise_emotion(raw: str | None) -> str | None:
-    """Map a free-form LLM emotion label to a prosody-table key, or
-    None for a label we don't recognise / care about. Empty / neutral
-    labels collapse to None so we don't override an already-detected
-    emotion with a no-op."""
+    """Map a free-form LLM emotion label to a prosody-table key, the
+    sentinel :data:`_LLM_EMOTION_SENTINEL_CLEAR` for an explicit
+    ``neutral`` classification, or ``None`` for a label we don't
+    recognise. The sentinel is required because ``""`` / ``None`` /
+    "neutral" used to collapse together, which silently discarded the
+    LLM's correction of a regex-tagged emotion (e.g. parser tagged
+    ``angry`` but the LLM correctly read it as ``neutral`` — the
+    correction was thrown away)."""
     if not raw or not isinstance(raw, str):
         return None
     low = raw.strip().lower()
     if not low:
         return None
-    mapped = _LLM_EMOTION_ALIASES.get(low)
-    if mapped is None:
+    if low not in _LLM_EMOTION_ALIASES:
         return None
-    return mapped or None
+    mapped = _LLM_EMOTION_ALIASES[low]
+    if not mapped:
+        # An empty mapped string means the alias is one of the
+        # "neutral" synonyms — flag as an explicit clear, not "no
+        # signal".
+        return _LLM_EMOTION_SENTINEL_CLEAR
+    return mapped
 
 
 def _llm_canonicalise_name(
@@ -2394,6 +2434,14 @@ def _refine_with_llm(
                 endpoint=endpoint_url,
                 system_prompt=system_prompt, user_prompt=user_prompt,
                 request_timeout_s=request_timeout_s,
+                # Pin Ollama to temperature=0 the same way the A/N
+                # classifier does — speaker attribution is a labelling
+                # task and Ollama's stock 0.8 default would make the
+                # same chapter come back with different speakers on
+                # consecutive renders, blowing voice consistency.
+                # Cloud providers already get ``temperature: 0`` from
+                # ``_llm_call`` directly.
+                options=_AN_LLM_OPTIONS if provider == "ollama" else None,
             )
             mapping = _llm_parse_speaker_map(reply)
             for n, (seg_i, _qpos) in enumerate(batch, 1):
@@ -2407,12 +2455,17 @@ def _refine_with_llm(
                     raw_name, char_list, cast_tokens,
                 )
                 segments[seg_i].speaker = canonical
-                # Emotion is optional — only override the segment's
-                # existing emotion (which the regex parser may have
-                # already set) when the LLM emitted a tag we know.
+                # Emotion is optional. The LLM can either tag a
+                # recognised emotion, explicitly clear the parser's
+                # guess with ``neutral``, or remain silent. Treat each
+                # case distinctly so an LLM ``neutral`` correctly
+                # overrides a wrong parser tag instead of being
+                # silently discarded.
                 if isinstance(entry, dict):
                     emotion = _llm_normalise_emotion(entry.get("emotion"))
-                    if emotion:
+                    if emotion == _LLM_EMOTION_SENTINEL_CLEAR:
+                        segments[seg_i].emotion = None
+                    elif emotion is not None:
                         segments[seg_i].emotion = emotion
                 handled.add(seg_i)
 
