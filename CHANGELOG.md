@@ -1,5 +1,48 @@
 # Changelog
 
+## 2.4.20 — 2026-05-19
+
+### gui_dialogs.py audit — four fixes
+
+Last roundtable thread of the session (Gemini Pro + GPT-5 + me) on
+`gui_dialogs.py`. Verified fixes:
+
+- **`SeriesPartsDialog` no longer returns `wx.ID_OK` without a
+  selection.** Docstring promised "Returns wx.ID_OK if a part was
+  picked"; the code unconditionally ended the modal as OK regardless,
+  so callers reading `picked_url() is None` would dispatch a no-op
+  download. Now returns `wx.ID_CANCEL` when nothing is selected.
+- **`VoicePreviewDialog` sample filenames sanitise the voice id.**
+  Namespaced voice ids (`edge:en-US-AriaNeural`, `piper:lessac-medium`)
+  contain `:` which is illegal in Windows filenames, and `/` would
+  create unintended subdirectories. Now passed through the same
+  `[^A-Za-z0-9_.-]` filter as the character name.
+- **`VoicePreviewDialog` OK button runs the same shutdown as Close.**
+  The previous wiring bound only `EVT_CLOSE`, so clicking OK / hitting
+  Enter ended the modal without flipping `_alive`, stopping the
+  player, or cleaning up the temp dir — leaving the synthesis worker
+  free to land `wx.CallAfter` on a destroyed dialog and leaking a
+  preview tempdir per dialog open. Extracted `_shutdown` and bound
+  it to both paths.
+- **`LlmSettingsDialog` no longer commits per-provider creds on every
+  dropdown switch.** `_stash_provider_from_fields` used to write
+  directly to prefs, so editing OpenAI creds → switching to Anthropic
+  → hitting Cancel still persisted the OpenAI edits on disk. The
+  stash now lives in an in-memory `_provider_archive` overlay; only
+  the Save handler flushes the whole map to prefs.
+
+Full suite: **1416 passed**, 8 GUI smoke pass under xvfb.
+
+Known follow-ups in gui_dialogs.py still deferred (each verified real,
+each non-trivial): StoryPickerDialog drops checked entries across
+filter changes; `OptionalFeaturesDialog` / `TtsProvidersDialog` /
+`AddFromUrlListDialog` button paths leave `_alive` true while workers
+may still be running; `LlmSettingsDialog` test/pull completions can
+populate the wrong provider's dropdown when the user switches
+provider mid-flight; `AddFromUrlListDialog`'s `max_results` cap
+applies after extraction completes instead of bounding the work
+upstream.
+
 ## 2.4.19 — 2026-05-19
 
 ### Round 5 follow-up — three of the deferred attribution items

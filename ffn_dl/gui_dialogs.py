@@ -104,6 +104,10 @@ class VoicePreviewDialog(wx.Dialog):
         btn_row.AddStretchSpacer(1)
         ok_btn = wx.Button(panel, id=wx.ID_OK, label="&OK")
         ok_btn.SetDefault()
+        # OK bypasses ``EVT_CLOSE`` by default; without an explicit
+        # cleanup hook the temp-dir leaks and the synthesis worker
+        # can still land a ``wx.CallAfter`` on a destroyed dialog.
+        ok_btn.Bind(wx.EVT_BUTTON, self._on_ok)
         btn_row.Add(ok_btn, 0)
 
         sizer.Add(btn_row, 0, wx.EXPAND | wx.ALL, 8)
@@ -155,7 +159,12 @@ class VoicePreviewDialog(wx.Dialog):
 
         sample = self.SAMPLE_TEXT.format(name=name)
         safe_name = re.sub(r"[^A-Za-z0-9_-]", "_", name)[:40] or "sample"
-        out_path = self._tmp_dir / f"{safe_name}-{voice}.mp3"
+        # ``voice`` may be a namespaced id like ``edge:en-US-AriaNeural``
+        # or ``piper:lessac-medium``. The ``:`` is illegal in Windows
+        # filenames and ``/`` would create unintended subdirectories,
+        # so sanitise the same way as ``name``.
+        safe_voice = re.sub(r"[^A-Za-z0-9_.-]", "_", voice)[:80] or "voice"
+        out_path = self._tmp_dir / f"{safe_name}-{safe_voice}.mp3"
 
         def worker():
             try:
@@ -245,6 +254,17 @@ class VoicePreviewDialog(wx.Dialog):
         dlg.Destroy()
 
     def _on_close(self, event):
+        self._shutdown()
+        event.Skip()
+
+    def _on_ok(self, event):
+        # OK by default just calls EndModal(wx.ID_OK), bypassing
+        # EVT_CLOSE — so worker cleanup never ran on the accept path.
+        # Run the same shutdown logic, then end the modal.
+        self._shutdown()
+        self.EndModal(wx.ID_OK)
+
+    def _shutdown(self):
         # Flip _alive first so any in-flight wx.CallAfter from the
         # synthesis worker becomes a no-op rather than landing on a
         # half-destroyed dialog.
@@ -261,7 +281,6 @@ class VoicePreviewDialog(wx.Dialog):
         import shutil as _shutil
         if self._tmp_dir and self._tmp_dir.exists():
             _shutil.rmtree(self._tmp_dir, ignore_errors=True)
-        event.Skip()
 
 
 class StoryPickerDialog(wx.Dialog):
@@ -792,7 +811,13 @@ class SeriesPartsDialog(wx.Dialog):
         idx = self.list_ctrl.GetFirstSelected()
         if 0 <= idx < len(self._parts):
             self._picked = self._parts[idx].get("url")
-        self.EndModal(wx.ID_OK)
+            self.EndModal(wx.ID_OK)
+            return
+        # Honour the docstring contract: ``wx.ID_OK`` means a part was
+        # picked. With no selection (empty list or user hit Enter on
+        # nothing) end the modal as cancelled so callers don't pull
+        # ``picked_url() -> None`` and then dispatch a no-op download.
+        self.EndModal(wx.ID_CANCEL)
 
     def picked_url(self):
         return self._picked
@@ -1534,6 +1559,12 @@ class LlmSettingsDialog(wx.Dialog):
         self._refresh_actions()
 
     def _load_prefs(self):
+        # In-memory overlay of {provider_key: {model, api_key, endpoint}}.
+        # ``_stash_provider_from_fields`` writes here; ``_on_save``
+        # flushes the whole map to prefs at once. Cancel discards the
+        # overlay so editing-then-cancelling no longer permanently
+        # mutates per-provider creds on disk.
+        self._provider_archive: dict[str, dict[str, str]] = {}
         provider = self._prefs.get(self._p.KEY_LLM_PROVIDER) or "ollama"
         try:
             idx = self._PROVIDER_KEYS.index(provider)
@@ -1560,41 +1591,56 @@ class LlmSettingsDialog(wx.Dialog):
         values for ``provider``. Falls back to the legacy single-slot
         prefs the first time a user opens this dialog after the
         per-provider archive was added — so existing creds aren't
-        forgotten on upgrade."""
+        forgotten on upgrade.
+
+        Reads the in-memory ``_provider_archive`` overlay first so
+        unsaved edits to the outgoing provider survive a round-trip
+        through another provider. The overlay only flushes to prefs on
+        Save, so Cancel still discards every change the user made in
+        the dialog (the previous behaviour wrote per-provider creds
+        immediately on every dropdown switch — Cancel was a lie)."""
         from .prefs import llm_provider_pref_keys
-        model_k, api_k, endpoint_k = llm_provider_pref_keys(provider)
-        model = self._prefs.get(model_k) or ""
-        api_key = self._prefs.get(api_k) or ""
-        endpoint = self._prefs.get(endpoint_k) or ""
-        # Migration fallback: only consult the legacy single-slot
-        # keys when the per-provider archive is empty AND the
-        # legacy prefs were saved for THIS provider — otherwise an
-        # OpenAI key would leak into an Anthropic dropdown.
-        legacy_provider = (
-            self._prefs.get(self._p.KEY_LLM_PROVIDER) or ""
-        ).strip()
-        if legacy_provider == provider:
-            if not model:
-                model = self._prefs.get(self._p.KEY_LLM_MODEL) or ""
-            if not api_key:
-                api_key = self._prefs.get(self._p.KEY_LLM_API_KEY) or ""
-            if not endpoint:
-                endpoint = self._prefs.get(self._p.KEY_LLM_ENDPOINT) or ""
+
+        if provider in self._provider_archive:
+            arch = self._provider_archive[provider]
+            model = arch.get("model", "")
+            api_key = arch.get("api_key", "")
+            endpoint = arch.get("endpoint", "")
+        else:
+            model_k, api_k, endpoint_k = llm_provider_pref_keys(provider)
+            model = self._prefs.get(model_k) or ""
+            api_key = self._prefs.get(api_k) or ""
+            endpoint = self._prefs.get(endpoint_k) or ""
+            # Migration fallback: only consult the legacy single-slot
+            # keys when the per-provider archive is empty AND the
+            # legacy prefs were saved for THIS provider — otherwise an
+            # OpenAI key would leak into an Anthropic dropdown.
+            legacy_provider = (
+                self._prefs.get(self._p.KEY_LLM_PROVIDER) or ""
+            ).strip()
+            if legacy_provider == provider:
+                if not model:
+                    model = self._prefs.get(self._p.KEY_LLM_MODEL) or ""
+                if not api_key:
+                    api_key = self._prefs.get(self._p.KEY_LLM_API_KEY) or ""
+                if not endpoint:
+                    endpoint = self._prefs.get(self._p.KEY_LLM_ENDPOINT) or ""
 
         self._populate_model_choices(provider, current=model)
         self.api_key_ctrl.SetValue(api_key)
         self.endpoint_ctrl.SetValue(endpoint)
 
     def _stash_provider_from_fields(self, provider: str) -> None:
-        """Persist the dialog's current field values to ``provider``'s
-        per-provider archive without writing to the legacy active
-        slot. Called when the user is about to switch providers so
-        the outgoing provider's creds are remembered."""
-        from .prefs import llm_provider_pref_keys
-        model_k, api_k, endpoint_k = llm_provider_pref_keys(provider)
-        self._prefs.set(model_k, self.model_ctrl.GetValue().strip())
-        self._prefs.set(api_k, self.api_key_ctrl.GetValue().strip())
-        self._prefs.set(endpoint_k, self.endpoint_ctrl.GetValue().strip())
+        """Capture the dialog's current field values into the in-memory
+        ``_provider_archive`` overlay (NOT prefs). Used both on
+        provider-switch (so the outgoing provider's creds aren't
+        forgotten when the user comes back) and at Save time. Flushing
+        to prefs is the Save handler's job."""
+        self._provider_archive[provider] = {
+            "model": self.model_ctrl.GetValue().strip(),
+            "api_key": self.api_key_ctrl.GetValue().strip(),
+            "endpoint": self.endpoint_ctrl.GetValue().strip(),
+        }
 
     def _populate_model_choices(
         self,
@@ -1721,8 +1767,18 @@ class LlmSettingsDialog(wx.Dialog):
         # Per-provider archive — keeps creds for non-active providers
         # alive across switches. Without this, "I have my OpenAI key
         # AND my Anthropic key" stops working as soon as the user
-        # picks one provider over the other.
+        # picks one provider over the other. We stash the *current*
+        # provider's fields into the in-memory overlay, then flush
+        # every overlay entry to prefs so other providers the user
+        # touched (and stashed) during this dialog session land on
+        # disk too.
         self._stash_provider_from_fields(provider)
+        from .prefs import llm_provider_pref_keys
+        for prov, fields in self._provider_archive.items():
+            model_k, api_k, endpoint_k = llm_provider_pref_keys(prov)
+            self._prefs.set(model_k, fields.get("model", ""))
+            self._prefs.set(api_k, fields.get("api_key", ""))
+            self._prefs.set(endpoint_k, fields.get("endpoint", ""))
         self.EndModal(wx.ID_OK)
 
     # ── Actions: test / install / download ──────────────────────
