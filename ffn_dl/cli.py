@@ -581,10 +581,21 @@ def _library_subdir_for(
     # work browsable on its own and surfaces "here is what I have
     # of this kind" without burying it in the fandom list.
     #
-    # An explicit category on the story metadata still wins (a user
-    # who tags an RR or erotica work with a fandom manually has
-    # asked for it to land under that fandom). The category-absent
-    # path is what the dedicated folder routing covers.
+    # Original-fiction adapters (Royal Road today) keep a category
+    # escape hatch: a user who manually attaches a category to an RR
+    # download still gets that as the fandom. The category there is
+    # a user-supplied override, not site-emitted noise.
+    #
+    # Adult adapters intentionally lose that escape hatch. The
+    # erotica scrapers populate ``metadata['category']`` from URL
+    # slugs (Lushstories' ``"bdsm"`` / ``"celebrity"`` / etc.) — a
+    # kink or genre, not a fandom. Earlier code skipped the adult
+    # routing whenever any ``category`` was set, which leaked
+    # stories into per-kink folders like ``bdsm/`` instead of
+    # ``Adult/``. The bucket is determined by the source site
+    # adapter; that's exactly what :data:`ADULT_FICTION_ADAPTERS`
+    # enumerates, and there's no legitimate reason an AFF / Lush /
+    # Chyoa story should land under a kink-named folder.
     adapter = adapter_for_url(story.url or "")
     story_category = story.metadata.get("category")
     if adapter in ORIGINAL_FICTION_ADAPTERS and not story_category:
@@ -592,7 +603,7 @@ def _library_subdir_for(
             getattr(args, "_library_original", None)
             or "Original Works"
         ]
-    elif adapter in ADULT_FICTION_ADAPTERS and not story_category:
+    elif adapter in ADULT_FICTION_ADAPTERS:
         fandoms = [
             getattr(args, "_library_adult", None)
             or "Adult"

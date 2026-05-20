@@ -12,6 +12,15 @@ and for downloader formats that don't embed an explicit Fandom field
 (FicLab is the common case — its metadata goes into a single `tags`
 row mixing genres/characters/status/fandom), the folder name is the
 best signal available.
+
+Adult-site and original-fiction adapters are *source-classified*:
+their bucket is determined by the source URL, not by any embedded
+fandom metadata or parent-folder name. A Literotica story sitting
+in ``Harry Potter/`` because the user pasted it there once is still
+adult fiction — the adapter override forces ``fandoms=["Adult"]``
+on identification so the next reorganise migrates it correctly.
+Without this override, ``_fandom_from_parent_folder`` would cement
+the historical misplacement forever.
 """
 
 from __future__ import annotations
@@ -21,6 +30,7 @@ from typing import Optional
 
 from ..updater import FileMetadata
 from .candidate import Confidence, StoryCandidate
+from .template import ADULT_FICTION_ADAPTERS, ORIGINAL_FICTION_ADAPTERS
 
 
 # Site identifiers returned by identify(). These mirror the class names
@@ -54,10 +64,15 @@ _URL_MARKERS = [
 # Folder names that look like categorisation aids rather than fandoms.
 # Used by _fandom_from_parent_folder so a ``Misc`` / ``Unsorted`` /
 # ``Downloads`` catch-all dir never ends up recorded as a fandom.
+# Includes the dedicated adult / original-works buckets so a file
+# sitting in those folders without a recognised source URL doesn't
+# get its bucket name backfilled as a fandom (which would then
+# survive a reorganise that swaps the bucket name).
 _NON_FANDOM_FOLDER_NAMES = frozenset({
     "misc", "miscellaneous", "unsorted", "sorted", "downloads",
     "fanfics", "fanfiction", "fics", "stories", "works",
     "archive", "todo", "tbr", "read", "unread",
+    "adult", "original works", "original",
 })
 
 
@@ -104,7 +119,12 @@ def _fandom_from_parent_folder(path: Path, root: Path | None) -> Optional[str]:
 
 
 def identify(
-    path: Path, metadata: FileMetadata, *, root: Path | None = None,
+    path: Path,
+    metadata: FileMetadata,
+    *,
+    root: Path | None = None,
+    adult_folder: str | None = None,
+    original_folder: str | None = None,
 ) -> StoryCandidate:
     """Assemble a :class:`StoryCandidate` from a path + its read metadata.
 
@@ -112,12 +132,33 @@ def identify(
     parent folder is used as a fandom fallback for metadata that came
     back with no embedded fandom (common on FicLab-style downloads
     whose HTML lacks a dedicated fandom field).
+
+    ``adult_folder`` / ``original_folder`` are the user's configured
+    bucket names for adult-only and original-fiction adapters. When the
+    source URL belongs to one of those adapter groups, the function
+    forces ``metadata.fandoms`` to ``[adult_folder]`` (or
+    ``[original_folder]``) and *skips* the parent-folder backfill —
+    that bucket is determined by the source site, not by wherever the
+    file happens to sit today. Pass ``None`` (the default) to disable
+    the override; callers that don't care about adult routing keep the
+    historical behaviour.
     """
-    # Back-fill fandoms from the parent folder before we return —
-    # applies regardless of whether the URL branch or the fallback
-    # branch runs, so FicLab files (which do have a URL and therefore
-    # land in the HIGH-confidence path) still get a fandom.
-    if not metadata.fandoms:
+    # Classify by source URL first — adult/original adapters have a
+    # dedicated bucket and shouldn't inherit a parent-folder fandom or
+    # honour an embedded fandom from a prior misplacement.
+    adapter = (
+        adapter_for_url(metadata.source_url) if metadata.source_url else None
+    )
+
+    if adapter in ADULT_FICTION_ADAPTERS and adult_folder:
+        metadata.fandoms = [adult_folder]
+    elif adapter in ORIGINAL_FICTION_ADAPTERS and original_folder:
+        metadata.fandoms = [original_folder]
+    elif not metadata.fandoms:
+        # Back-fill from the parent folder for everything else — applies
+        # regardless of whether the URL branch or the fallback branch
+        # runs below, so FicLab files (which do have a URL and therefore
+        # land in the HIGH-confidence path) still get a fandom.
         folder_fandom = _fandom_from_parent_folder(path, root)
         if folder_fandom:
             metadata.fandoms = [folder_fandom]
@@ -125,7 +166,6 @@ def identify(
     candidate = StoryCandidate(path=path, metadata=metadata)
 
     if metadata.source_url:
-        adapter = adapter_for_url(metadata.source_url)
         if adapter:
             candidate.adapter_name = adapter
             candidate.confidence = Confidence.HIGH

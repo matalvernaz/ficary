@@ -332,14 +332,18 @@ def search_mcstories(query: str, *, page: int = 1,
                      tags: Optional[list] = None, **_: object) -> list[dict]:
     """MCStories indexes every story by Dublin Core tag codes at
     ``/Tags/<code>.html``. We map the first query-supplied tag to its
-    two-letter code (see :data:`_MCS_TAG_CODES`) and read that page
-    directly; unmapped tags fall back to the full Titles index, which
-    is then filtered client-side by the query."""
+    two-letter code (see :data:`_MCS_TAG_CODES`); tag-only searches
+    for tags that don't map return ``[]`` rather than the full Titles
+    index — the dispatcher's tag-capability filter already drops MCS
+    from a fan-out for unsupported tags, but defending the adapter
+    keeps direct callers honest too."""
     del page  # MCStories pages fit in one listing
     first_tag = next((t for t in (tags or []) if t), "") or ""
     code = _MCS_TAG_CODES.get(first_tag.lower())
     if code:
         url = f"https://mcstories.com/Tags/{code}.html"
+    elif first_tag and not query:
+        return []
     else:
         url = "https://mcstories.com/Titles/index.html"
     html = _fetch(url)
@@ -508,17 +512,27 @@ def search_sexstories(query: str, *, page: int = 1,
     return out
 
 
+_NIFTY_TAG_CATEGORIES = {
+    "gay": "gay", "lesbian": "lesbian", "bisexual": "bisexual",
+    "transgender": "transgender",
+}
+
+
 def search_nifty(query: str, *, page: int = 1,
                  tags: Optional[list] = None,
                  category: str = "", **_: object) -> list[dict]:
     """Nifty doesn't have full-text search. The category directory
     at ``/nifty/<category>/`` is a plain-HTML link list of story
-    subdirectories; we parse that and filter by the query."""
+    subdirectories. Only a few sexuality categories map cleanly to
+    our unified tag vocabulary (see :data:`_NIFTY_TAG_CATEGORIES`);
+    other tags return ``[]`` so a tag-only ``bdsm`` search doesn't
+    silently default to the ``/gay/`` directory."""
     del page
     cat = (category or "").strip().strip("/").lower()
     if not cat and tags:
-        cat = {"gay": "gay", "lesbian": "lesbian", "bisexual": "bisexual",
-               "transgender": "transgender"}.get(tags[0].lower(), "")
+        cat = _NIFTY_TAG_CATEGORIES.get(tags[0].lower(), "")
+        if not cat and not query:
+            return []
     if not cat:
         cat = "gay"
     url = f"https://www.nifty.org/nifty/{cat}/"
@@ -784,6 +798,7 @@ def search_darkwanderer(query: str, *, page: int = 1,
 
 
 def search_greatfeet(query: str, *, page: int = 1,
+                     tags: Optional[list] = None,
                      **_: object) -> list[dict]:
     """GreatFeet: ``/tickles.htm`` lists recent stories by ``ts<N>.htm``
     href; older issues at ``/archiveN.htm`` (weekly issues 1..484+).
@@ -791,14 +806,22 @@ def search_greatfeet(query: str, *, page: int = 1,
     styling) so we lean on BeautifulSoup to let it tolerate the
     malformed markup, then read the link text as the story title.
 
+    Tag-only searches for anything other than ``feet`` return ``[]``
+    — GreatFeet's whole catalogue is the feet tag, so a tag-only
+    ``bdsm`` lookup would otherwise leak the entire homepage as
+    noise.
+
     We decompose inline ``<img>`` tags inside the link before reading
     the text — the "new!" / "hot!" marker images carry alt attributes
     like ``"Foot Fetish Offering"`` that would otherwise pollute the
-    title. Decomposing the img is less brittle than maintaining a
-    regex of alt strings that changes whenever GreatFeet ships a new
-    marker graphic."""
+    title."""
     del page  # tickles.htm is a single page — archive pages handle
     # older stories via a separate ``/archive<N>.htm`` route.
+    if (
+        tags and not query
+        and not any(t.strip().lower() == "feet" for t in tags)
+    ):
+        return []
     url = "https://www.greatfeet.com/tickles.htm"
     html = _fetch(url)
     if not html:
@@ -986,6 +1009,30 @@ def tag_sites_for(tag: str) -> list[str]:
     return list(TAG_SITE_COVERAGE.get(tag.lower(), []))
 
 
+def _site_supports_all_tags(site: str, tags: list[str]) -> bool:
+    """True when ``site`` is listed in :data:`TAG_SITE_COVERAGE` for
+    every tag in ``tags``.
+
+    Used by :func:`search_erotica` to skip sites that would otherwise
+    silently fall back to a default browse (recent / popular /
+    homepage) when handed a tag they don't actually filter on — the
+    "tag-only search returns noise" complaint. Empty ``tags`` is a
+    free pass: a non-tag search has no per-site capability to check.
+
+    Tags that aren't in :data:`TAG_SITE_COVERAGE` at all (niche
+    free-text entries the user typed) treat *every* registered site
+    as a non-match — the safer default than letting an arbitrary tag
+    bypass the filter.
+    """
+    if not tags:
+        return True
+    for t in tags:
+        covers = TAG_SITE_COVERAGE.get(t.strip().lower(), [])
+        if site not in covers:
+            return False
+    return True
+
+
 def _normalise_sites(sites, sites_choice) -> Optional[list]:
     """GUI passes ``sites_choice`` (a single string from the dropdown);
     CLI / tests pass ``sites`` (a list). Fold both into the list form
@@ -1089,6 +1136,25 @@ def search_erotica(
     else:
         active = [
             s for s in resolved_sites if s in _SITE_FNS and s not in skip_set
+        ]
+
+    # Tag-capability filter: drop sites that don't meaningfully cover
+    # the requested tag(s) from this fan-out. Without this, sites
+    # whose adapter ignores the ``tags`` kwarg (AFF / Fictionmania /
+    # TGStorytime / Chyoa / DarkWanderer / GreatFeet — they accept
+    # ``**_: object``) silently fall back to a default browse and
+    # flood the result set with unrelated rows. Honour
+    # :data:`TAG_SITE_COVERAGE` as the single source of truth so the
+    # GUI tag picker's ``[N sites]`` annotation and the dispatcher's
+    # filter never disagree.
+    #
+    # Only applied when the caller didn't restrict ``sites`` to a
+    # specific slug — a user who explicitly picks one site has
+    # already opted into whatever that site returns.
+    if tag_list and resolved_sites is None:
+        active = [
+            s for s in active
+            if _site_supports_all_tags(s, tag_list)
         ]
     if not active:
         return ErotiCAResults()

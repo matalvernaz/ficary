@@ -380,6 +380,138 @@ def test_search_erotica_empty_sites_returns_empty():
     assert search_erotica("", sites=["nonexistent"]) == []
 
 
+# ── Tag-capability filter ────────────────────────────────────────
+
+
+def test_site_supports_all_tags_matches_coverage_table():
+    """The per-site tag-capability check must agree with
+    :data:`TAG_SITE_COVERAGE` — the dispatcher and the GUI tag-picker
+    annotation both consult this dict, so a disagreement would leak
+    noise back into the fan-out."""
+    from ffn_dl.erotica.search import _site_supports_all_tags
+
+    # Literotica is one of the well-covered sites; bdsm is in the
+    # vocabulary and Literotica covers it.
+    assert _site_supports_all_tags("literotica", ["bdsm"]) is True
+
+    # AFF doesn't filter by tag — its search adapter ignores the
+    # ``tags`` kwarg. The coverage table reflects that for ``bdsm``.
+    assert _site_supports_all_tags("aff", ["bdsm"]) is False
+
+    # Empty tag list is always supported (non-tag search).
+    assert _site_supports_all_tags("aff", []) is True
+
+    # Niche tags (not in the vocabulary) match no site — safer
+    # default than letting an arbitrary free-text tag bypass the
+    # filter and return raw recent/popular rows.
+    assert _site_supports_all_tags("literotica", ["nonexistent-tag"]) is False
+
+
+def test_search_erotica_tag_only_drops_tag_ignoring_sites(monkeypatch):
+    """Tag-only fan-out must drop sites that ignore the tag —
+    otherwise they fall back to recent/popular browses and flood the
+    merged result set with unrelated rows. The 'all sites + bdsm
+    returns junk' bug."""
+    from ffn_dl.erotica import search as erotica_search
+
+    called: set = set()
+
+    def stub_for(site_slug: str):
+        def fn(query, **kwargs):
+            called.add(site_slug)
+            return []
+        return fn
+
+    monkeypatch.setattr(
+        erotica_search, "_SITE_FNS",
+        {site: stub_for(site) for site in erotica_search._SITE_FNS},
+    )
+
+    # Tag-only "bdsm" search across "all" sites. Only sites that
+    # cover bdsm in TAG_SITE_COVERAGE should be invoked.
+    search_erotica("", tags=["bdsm"])
+
+    expected_callers = set(TAG_SITE_COVERAGE["bdsm"])
+    # AFF / Fictionmania / TGStorytime / Chyoa / DarkWanderer /
+    # GreatFeet aren't in the bdsm coverage list and must NOT be
+    # called for a tag-only bdsm search.
+    forbidden = {
+        "aff", "fictionmania", "tgstorytime", "chyoa",
+        "darkwanderer", "greatfeet",
+    }
+    assert called == expected_callers
+    assert called.isdisjoint(forbidden)
+
+
+def test_search_erotica_skips_filter_when_site_explicitly_picked(monkeypatch):
+    """A user who explicitly picked a single site has opted into
+    whatever that site returns — don't second-guess them."""
+    from ffn_dl.erotica import search as erotica_search
+
+    called: set = set()
+
+    def aff_stub(query, **kwargs):
+        called.add("aff")
+        return []
+
+    monkeypatch.setattr(
+        erotica_search, "_SITE_FNS",
+        {**erotica_search._SITE_FNS, "aff": aff_stub},
+    )
+
+    # Even though AFF doesn't cover bdsm, picking it explicitly
+    # should still fire its search.
+    search_erotica("", sites=["aff"], tags=["bdsm"])
+    assert "aff" in called
+
+
+def test_search_nifty_returns_empty_for_unsupported_tag_only():
+    """Direct callers (or fan-outs that bypass the dispatcher
+    filter) get an explicit ``[]`` for an unsupported tag-only
+    query — no fallback to ``/gay/`` directory noise."""
+    from ffn_dl.erotica.search import search_nifty
+
+    # Patch the fetch helper inline so this test stays offline.
+    import ffn_dl.erotica.search as erotica_search
+    original_fetch = erotica_search._fetch
+    try:
+        erotica_search._fetch = lambda url: ""  # would-be category page
+        assert search_nifty("", tags=["bdsm"]) == []
+    finally:
+        erotica_search._fetch = original_fetch
+
+
+def test_search_mcstories_returns_empty_for_unmapped_tag_only():
+    """Same defensive contract for MCStories — an unmapped tag with
+    no free-text query returns ``[]`` instead of dumping the entire
+    Titles index."""
+    from ffn_dl.erotica.search import search_mcstories
+
+    import ffn_dl.erotica.search as erotica_search
+    original_fetch = erotica_search._fetch
+    try:
+        erotica_search._fetch = lambda url: ""
+        # "polyamory" isn't in _MCS_TAG_CODES.
+        assert search_mcstories("", tags=["polyamory"]) == []
+    finally:
+        erotica_search._fetch = original_fetch
+
+
+def test_search_greatfeet_returns_empty_for_non_feet_tag_only():
+    """GreatFeet's whole catalogue is the feet tag — a tag-only
+    ``bdsm`` lookup must return ``[]`` rather than the homepage
+    contents."""
+    from ffn_dl.erotica.search import search_greatfeet
+
+    import ffn_dl.erotica.search as erotica_search
+    original_fetch = erotica_search._fetch
+    try:
+        erotica_search._fetch = lambda url: ""
+        assert search_greatfeet("", tags=["bdsm"]) == []
+    finally:
+        erotica_search._fetch = original_fetch
+
+
 # ── New scraper URL parsing ───────────────────────────────────────
 
 class TestTGStorytimeParsing:

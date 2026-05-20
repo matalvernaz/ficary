@@ -2177,7 +2177,21 @@ class MainFrame(wx.Frame):
             same_root = base.resolve() == library_root.resolve()
         except OSError:
             same_root = str(base) == str(library_root)
-        if not same_root:
+        # Save-to is inside the library tree (root or a subfolder) when
+        # we should let auto-sort steer adult/original adapter
+        # downloads into their dedicated bucket. A save-to *outside*
+        # the library root is the user pointing at a staging dir
+        # explicitly and gets respected verbatim.
+        try:
+            base_resolved = base.resolve()
+            library_resolved = library_root.resolve()
+            inside_library = (
+                base_resolved == library_resolved
+                or library_resolved in base_resolved.parents
+            )
+        except OSError:
+            inside_library = same_root
+        if not inside_library:
             return str(base)
 
         from types import SimpleNamespace
@@ -2191,9 +2205,54 @@ class MainFrame(wx.Frame):
             _library_misc=(
                 self.prefs.get(_p.KEY_LIBRARY_MISC_FOLDER) or "Misc"
             ),
+            # Mirror the CLI's autosort namespace so adult and
+            # original-fiction adapter downloads route to the user's
+            # configured bucket names rather than the hardcoded
+            # defaults baked into cli._library_subdir_for.
+            _library_adult=(
+                self.prefs.get(_p.KEY_LIBRARY_ADULT_FOLDER) or "Adult"
+            ),
+            _library_original=(
+                self.prefs.get(_p.KEY_LIBRARY_ORIGINAL_FOLDER)
+                or "Original Works"
+            ),
             format=params.fmt,
         )
         subdir = cli._library_subdir_for(story, args_like)
+
+        # Adult/original adapters with an inside-library save-to get
+        # routed into their dedicated bucket regardless of whether the
+        # user picked the library root or a subfolder. The save-target
+        # gate used to require an exact root match, which meant any
+        # remembered subfolder (e.g. last-used "Harry Potter/") silently
+        # bypassed adult routing and put erotica downloads into the
+        # fandom folder — the documented misfiling complaint. Adult
+        # intent is unambiguous when the URL is an adult-site URL, so
+        # we just do the right thing without prompting.
+        if not same_root and subdir is not None:
+            from .library.identifier import adapter_for_url
+            from .library.template import (
+                ADULT_FICTION_ADAPTERS, ORIGINAL_FICTION_ADAPTERS,
+            )
+            adapter = adapter_for_url(story.url or "")
+            if adapter in ADULT_FICTION_ADAPTERS:
+                bucket = (
+                    self.prefs.get(_p.KEY_LIBRARY_ADULT_FOLDER) or "Adult"
+                )
+                target = library_root / bucket
+                target.mkdir(parents=True, exist_ok=True)
+                return str(target)
+            if adapter in ORIGINAL_FICTION_ADAPTERS:
+                bucket = (
+                    self.prefs.get(_p.KEY_LIBRARY_ORIGINAL_FOLDER)
+                    or "Original Works"
+                )
+                target = library_root / bucket
+                target.mkdir(parents=True, exist_ok=True)
+                return str(target)
+            # Non-adult adapter inside a library subfolder: respect
+            # whatever the user picked, don't second-guess.
+            return str(base)
         if subdir is None or str(subdir) in ("", "."):
             return str(library_root)
 

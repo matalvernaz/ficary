@@ -424,17 +424,20 @@ def test_library_subdir_adult_folder_honours_override():
     assert _library_subdir_for(chyoa_story, args) == Path("NSFW")
 
 
-def test_library_subdir_adult_site_respects_explicit_category():
-    """If the story metadata carries an explicit category (e.g. the
-    user tagged a chyoa download with a fandom manually), honour
-    it instead of forcing the Adult bucket — same one-off override
-    path the Royal Road routing keeps open."""
+def test_library_subdir_adult_site_ignores_category_metadata():
+    """The category escape hatch is deliberately closed for adult
+    adapters. Lushstories' scraper writes URL-slug kinks like
+    ``"bdsm"`` / ``"celebrity"`` into ``metadata['category']``, and
+    earlier code treated that as a manual fandom override — leaking
+    adult stories into per-kink folders instead of the Adult bucket.
+    Adult routing is now source-classified by adapter; a category
+    value on the story can never bypass it."""
     chyoa_story = _story(
-        fandom="Some Franchise",
+        fandom="bdsm",
         url="https://chyoa.com/story/X.1",
     )
     subdir = _library_subdir_for(chyoa_story, _autosort_args())
-    assert subdir == Path("Some Franchise")
+    assert subdir == Path("Adult")
 
 
 def test_apply_library_autosort_noop_when_output_explicit():

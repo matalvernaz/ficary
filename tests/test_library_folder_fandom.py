@@ -112,3 +112,133 @@ def test_fandom_backfill_uses_first_segment_for_nested_folders(tmp_path):
     candidate = identify(path, md, root=root)
 
     assert candidate.metadata.fandoms == ["Naruto"]
+
+
+# ── Adapter override: adult / original-fiction routing ───────────
+
+
+def test_identify_routes_adult_adapter_to_adult_folder(tmp_path):
+    """A Literotica story sitting in ``Harry Potter/`` (because the
+    user pasted it there once, or because pre-Adult-routing autosort
+    landed it there) gets re-tagged with the Adult bucket on the
+    next scan. Without this override, ``_fandom_from_parent_folder``
+    would cement the historical misplacement forever — the original
+    bug behind erotica leaking into fandom folders."""
+    root = tmp_path / "library"
+    hp = root / "Harry Potter"
+    hp.mkdir(parents=True)
+    path = hp / "story.epub"
+    path.write_text("dummy", encoding="utf-8")
+
+    md = _mk_metadata(
+        source_url="https://www.literotica.com/s/some-slug",
+        fandoms=[],
+    )
+    candidate = identify(path, md, root=root, adult_folder="Adult")
+
+    assert candidate.metadata.fandoms == ["Adult"]
+    assert candidate.adapter_name == "literotica"
+
+
+def test_identify_routes_original_adapter_to_original_folder(tmp_path):
+    """Royal Road stories — even with an inherited parent folder —
+    land under Original Works on the next scan."""
+    root = tmp_path / "library"
+    misplaced = root / "Some Fandom"
+    misplaced.mkdir(parents=True)
+    path = misplaced / "story.epub"
+    path.write_text("dummy", encoding="utf-8")
+
+    md = _mk_metadata(
+        source_url="https://www.royalroad.com/fiction/12345/title",
+        fandoms=[],
+    )
+    candidate = identify(
+        path, md, root=root, original_folder="Original Works",
+    )
+
+    assert candidate.metadata.fandoms == ["Original Works"]
+    assert candidate.adapter_name == "royalroad"
+
+
+def test_identify_adult_override_supersedes_existing_fandom(tmp_path):
+    """An AFF EPUB that already carried ``fandoms=['Harry Potter']``
+    from an earlier scan (because the parent folder was HP/) gets
+    re-tagged to the Adult bucket. Otherwise a single bad placement
+    would self-perpetuate across every scan/reorganise cycle."""
+    root = tmp_path / "library"
+    hp = root / "Harry Potter"
+    hp.mkdir(parents=True)
+    path = hp / "story.epub"
+    path.write_text("dummy", encoding="utf-8")
+
+    md = _mk_metadata(
+        source_url="https://hp.adult-fanfiction.org/story.php?no=12345",
+        fandoms=["Harry Potter"],
+    )
+    candidate = identify(path, md, root=root, adult_folder="Adult")
+
+    assert candidate.metadata.fandoms == ["Adult"]
+    assert candidate.adapter_name == "aff"
+
+
+def test_identify_adult_override_disabled_when_folder_arg_omitted(tmp_path):
+    """Backwards-compat path: callers that don't pass adult_folder
+    keep the historical behaviour. Used by the older test suite and
+    by any caller that doesn't care about adult routing."""
+    root = tmp_path / "library"
+    misplaced = root / "Some Fandom"
+    misplaced.mkdir(parents=True)
+    path = misplaced / "story.epub"
+    path.write_text("dummy", encoding="utf-8")
+
+    md = _mk_metadata(
+        source_url="https://www.literotica.com/s/some-slug",
+        fandoms=["Some Fandom"],
+    )
+    candidate = identify(path, md, root=root)
+
+    assert candidate.metadata.fandoms == ["Some Fandom"]
+
+
+def test_identify_non_adult_adapter_unchanged_by_override_arg(tmp_path):
+    """The adult/original folder kwargs only fire for the matching
+    adapter group — an FFN story still gets its parent-folder
+    fallback even when the kwargs are present."""
+    root = tmp_path / "library"
+    fandom_dir = root / "Naruto"
+    fandom_dir.mkdir(parents=True)
+    path = fandom_dir / "story.epub"
+    path.write_text("dummy", encoding="utf-8")
+
+    md = _mk_metadata(
+        source_url="https://www.fanfiction.net/s/12345/",
+        fandoms=[],
+    )
+    candidate = identify(
+        path, md, root=root,
+        adult_folder="Adult",
+        original_folder="Original Works",
+    )
+
+    assert candidate.metadata.fandoms == ["Naruto"]
+    assert candidate.adapter_name == "ffn"
+
+
+def test_non_fandom_folder_set_includes_adult_and_original_buckets(tmp_path):
+    """A file in ``Adult/`` or ``Original Works/`` without a source
+    URL doesn't get its bucket name backfilled as a fandom — without
+    this exclusion, a no-URL EPUB in Adult/ would survive a future
+    reorganise under a renamed bucket as ``fandom='Adult'``."""
+    root = tmp_path / "library"
+    for bucket in ("Adult", "Original Works"):
+        bucket_dir = root / bucket
+        bucket_dir.mkdir(parents=True, exist_ok=True)
+        path = bucket_dir / "story.html"
+        path.write_text("<html></html>", encoding="utf-8")
+
+        md = _mk_metadata(source_url="", fandoms=[])
+        candidate = identify(path, md, root=root)
+        assert candidate.metadata.fandoms == [], (
+            f"folder {bucket!r} should not be treated as a fandom"
+        )

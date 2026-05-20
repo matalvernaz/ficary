@@ -23,7 +23,7 @@ from pathlib import Path
 
 import pytest
 
-from ffn_dl.exporters import export_epub, export_html, export_txt
+from ffn_dl.exporters import _is_adult_story, export_epub, export_html, export_txt
 from ffn_dl.models import Chapter, Story
 
 
@@ -297,3 +297,97 @@ class TestEpubAtomicWrite:
             export_epub(_sample_story(), output_dir=str(tmp_path))
 
         assert target.read_bytes() == b"EXISTING CONTENT, KEEP ME"
+
+
+# ── Adult-adapter category suppression ───────────────────────────
+
+
+def _adult_lush_story() -> Story:
+    """A Lush story whose scraper stored its URL-slug category in
+    metadata['category'] (as Lush actually does)."""
+    s = Story(
+        id=12345,
+        title="A Lush Story",
+        author="An Author",
+        summary="A short story.",
+        url="https://www.lushstories.com/stories/bdsm/some-slug",
+    )
+    s.metadata.update({
+        "category": "bdsm",
+        "rating": "X",
+        "status": "Complete",
+    })
+    s.chapters.append(Chapter(
+        number=1, title="Chapter 1", html="<p>Body.</p>",
+    ))
+    return s
+
+
+def _gen_html_story() -> Story:
+    """A FicWad story with a category (truly a fandom-shaped value)."""
+    s = Story(
+        id=999,
+        title="A Regular Story",
+        author="An Author",
+        summary="A short story.",
+        url="https://www.ficwad.com/story/12345",
+    )
+    s.metadata.update({"category": "Harry Potter"})
+    s.chapters.append(Chapter(
+        number=1, title="Chapter 1", html="<p>Body.</p>",
+    ))
+    return s
+
+
+def test_is_adult_story_classifies_by_url():
+    assert _is_adult_story(_adult_lush_story()) is True
+    assert _is_adult_story(_gen_html_story()) is False
+    # Plain FFN URL — not adult.
+    ffn = Story(
+        id=1, title="x", author="y", summary="",
+        url="https://www.fanfiction.net/s/1/",
+    )
+    assert _is_adult_story(ffn) is False
+
+
+def test_adult_lush_story_has_no_category_row_in_html_export(tmp_path):
+    """Lushstories writes a kink slug into metadata['category']. If
+    that survives into the EPUB / HTML title page, the reader-side
+    parser (updater._fill_from_epub) treats it as the canonical
+    fandom on the next library scan — re-leaking the story out of
+    the dedicated Adult bucket. Verify the row is suppressed."""
+    path = export_html(_adult_lush_story(), output_dir=str(tmp_path))
+    body = path.read_text(encoding="utf-8")
+    # No "Category" row — but the rest of the metadata is still there.
+    assert "Category" not in body, (
+        f"Category row leaked into adult export:\n{body}"
+    )
+    assert "A Lush Story" in body
+    assert "An Author" in body
+
+
+def test_non_adult_story_still_has_category_row(tmp_path):
+    """FicWad / FFN-style stories where ``category`` is actually a
+    fandom keep the title-page row — the escape hatch survives for
+    non-adult adapters."""
+    path = export_html(_gen_html_story(), output_dir=str(tmp_path))
+    body = path.read_text(encoding="utf-8")
+    assert "Category" in body
+    assert "Harry Potter" in body
+
+
+def test_adult_epub_export_has_no_category_in_title_page(tmp_path):
+    """Same suppression for the EPUB title page: open the EPUB,
+    inspect the title XHTML, confirm the Category row is absent."""
+    epub_path = export_epub(_adult_lush_story(), output_dir=str(tmp_path))
+    with zipfile.ZipFile(epub_path) as zf:
+        title_names = [
+            n for n in zf.namelist()
+            if "title" in n.lower() and n.endswith((".xhtml", ".html"))
+        ]
+        assert title_names, "EPUB has no title page chunk to inspect"
+        for n in title_names:
+            body = zf.read(n).decode("utf-8", errors="replace")
+            assert "Category" not in body, (
+                f"Category row leaked into adult EPUB {n}:\n{body}"
+            )

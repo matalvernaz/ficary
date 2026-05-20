@@ -102,6 +102,25 @@ def format_filename(story: Story, template: str = DEFAULT_TEMPLATE) -> str:
 # ── Metadata helpers ──────────────────────────────────────────────
 
 
+def _is_adult_story(story: Story) -> bool:
+    """True when ``story``'s source URL belongs to an adult-only adapter.
+
+    Used to suppress writing the site's URL-slug ``category`` value
+    (a kink / genre, not a fandom) to the EPUB title page — that
+    value would otherwise be parsed back as a fandom by
+    ``updater._fill_from_epub`` and re-leak the story out of the
+    dedicated Adult bucket on the next library scan. Import inside
+    the function so the library module doesn't get pulled in for
+    callers that just want plain export.
+    """
+    try:
+        from .library.identifier import adapter_for_url
+        from .library.template import ADULT_FICTION_ADAPTERS
+    except Exception:
+        return False
+    return adapter_for_url(story.url or "") in ADULT_FICTION_ADAPTERS
+
+
 def _format_epoch(ts):
     """Format an epoch timestamp as YYYY-MM-DD."""
     return datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m-%d")
@@ -130,7 +149,16 @@ def _meta_fields(story: Story) -> list[tuple[str, str]]:
     fields = []
     fields.append(("Title", story.title))
     fields.append(("Author", story.author))
-    if m.get("category"):
+    # Adult-site scrapers store kink/genre URL-slugs in
+    # ``metadata['category']`` ("bdsm", "celebrity", "interracial").
+    # That field is structurally a fandom in the title-page reader
+    # (``updater._fill_from_epub`` treats it as the canonical fandom
+    # tag), so writing it for adult adapters would cement the
+    # category as a fandom on the next library scan and re-leak the
+    # story out of the dedicated Adult bucket. Skip the row entirely
+    # for those adapters — the kink is preserved in dc:subject via
+    # genre/characters/tags lower down.
+    if m.get("category") and not _is_adult_story(story):
         fields.append(("Category", str(m["category"])))
     if m.get("genre"):
         fields.append(("Genre", str(m["genre"]).replace(",", ", ")))

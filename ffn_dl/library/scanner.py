@@ -74,6 +74,30 @@ def _resolve_abandoned_threshold(override: int | None) -> int:
         return 0
 
 
+def _resolve_bucket_folders() -> tuple[str, str]:
+    """Return ``(adult_folder, original_folder)`` from user prefs, or
+    the built-in defaults when prefs can't be read (test/headless).
+
+    Threaded into :func:`~ffn_dl.library.identifier.identify` so the
+    scanner can override embedded fandoms / parent-folder backfills
+    for adult and original-fiction adapters — those buckets are
+    determined by source site, not by wherever the file sits today.
+    """
+    from .template import DEFAULT_ADULT_FOLDER, DEFAULT_ORIGINAL_FOLDER
+    try:
+        from ..prefs import (
+            KEY_LIBRARY_ADULT_FOLDER, KEY_LIBRARY_ORIGINAL_FOLDER, Prefs,
+        )
+        prefs = Prefs()
+        adult = prefs.get(KEY_LIBRARY_ADULT_FOLDER) or DEFAULT_ADULT_FOLDER
+        original = (
+            prefs.get(KEY_LIBRARY_ORIGINAL_FOLDER) or DEFAULT_ORIGINAL_FOLDER
+        )
+        return adult, original
+    except Exception:
+        return DEFAULT_ADULT_FOLDER, DEFAULT_ORIGINAL_FOLDER
+
+
 def scan(
     root: Path,
     *,
@@ -108,6 +132,8 @@ def scan(
 
     result = ScanResult(root=root)
 
+    adult_folder, original_folder = _resolve_bucket_folders()
+
     for path in _walk_files(root, recursive):
         if path.suffix.lower() not in _EXTS:
             continue
@@ -118,7 +144,17 @@ def scan(
             # the parent folder when the file's HTML metadata didn't
             # include one (most common on FicLab dumps whose tags row
             # mixes genres/characters/status/fandom into one blob).
-            candidate = identify(path, md, root=root)
+            #
+            # Pass the configured adult/original folder names so adult
+            # and original-fiction adapters route to their dedicated
+            # buckets regardless of where the file currently sits —
+            # this is what migrates legacy erotica out of fandom folders
+            # on the next scan + reorganise cycle.
+            candidate = identify(
+                path, md, root=root,
+                adult_folder=adult_folder,
+                original_folder=original_folder,
+            )
             # record() returns False when this candidate was a
             # duplicate of a story already indexed under the same
             # canonical URL — the second (third, …) copy is recorded

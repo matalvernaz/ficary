@@ -1,5 +1,154 @@
 # Changelog
 
+## 2.4.29 — 2026-05-20
+
+Erotica search + library auto-sort audit (Claude + Gemini Pro +
+GPT-5). Two user-reported complaints — "tag-only searches return
+junk" and "erotica downloads land in Harry Potter or Misc instead
+of an Adult folder" — traced to five compounding bugs across the
+search dispatcher, the autosort routing, and the library scanner.
+All five patched in one pass.
+
+### Tag-only fan-out returned mostly noise
+
+Seven of the thirteen erotica adapters silently dropped the
+``tags`` kwarg via ``**_: object`` and fell back to a default
+"recent / popular / homepage" browse. The dispatcher's empty-query
+client-side filter (``_matches_query``) accepted every row, so a
+tag-only ``bdsm`` search across "all sites" returned ~40 BDSM
+rows mixed with ~50 random rows from sites that don't even index
+that tag. Worst offenders: AFF (returned the HP subdomain's
+``index.php`` page 1 by default), Fictionmania (``/recent.html``),
+TGStorytime (homepage), Chyoa (``/browse/popular``), DarkWanderer
+(``/forums/``), GreatFeet (single foot-fetish page).
+
+``search_erotica`` now consults the existing ``TAG_SITE_COVERAGE``
+dict — already maintained for the GUI tag-picker's ``[N sites]``
+annotation — to drop sites that don't cover the requested tag(s)
+from a tag-only / tag-plus-query fan-out. Sites explicitly picked
+by the user via the site dropdown still fire regardless (an
+explicit single-site search opts into whatever that site returns).
+``search_nifty``, ``search_mcstories``, and ``search_greatfeet``
+also got defensive ``return []`` for unsupported tag-only queries
+— direct callers and the GUI bypass-path both honour the
+contract now.
+
+Tests in
+``tests/test_erotica_scrapers.py::test_site_supports_all_tags_matches_coverage_table``,
+``tests/test_erotica_scrapers.py::test_search_erotica_tag_only_drops_tag_ignoring_sites``,
+``tests/test_erotica_scrapers.py::test_search_erotica_skips_filter_when_site_explicitly_picked``,
+plus per-adapter ``test_search_{nifty,mcstories,greatfeet}_returns_empty_for_*``.
+
+### Lushstories downloads leaked into per-kink folders
+
+``cli._library_subdir_for`` only routed adult adapters to the
+Adult bucket when ``story.metadata.get('category')`` was falsy.
+Lushstories' scraper populates ``metadata['category']`` from its
+URL slug (``"bdsm"`` / ``"celebrity"`` / ``"interracial"`` — a
+kink, not a fandom), so the routing fell through to
+``parse_category("bdsm")`` and rendered ``bdsm/Title.epub``
+instead of ``Adult/Title.epub``.
+
+Adult routing is now source-classified by adapter: any URL whose
+``adapter_for_url`` lands in ``ADULT_FICTION_ADAPTERS`` goes to
+the configured Adult bucket regardless of what the scraper wrote
+into ``metadata['category']``. The original-fiction adapter's
+manual-category escape hatch (a user attaching a fandom to a
+Royal Road download) is preserved — there's a legitimate reason
+to put The Wandering Inn under "Wandering Inn", but no
+legitimate reason to file a Lush story under "bdsm".
+
+Test in
+``tests/test_library_refresh_autosort.py::test_library_subdir_adult_site_ignores_category_metadata``;
+the previous ``test_library_subdir_adult_site_respects_explicit_category``
+was renamed and inverted to match the new contract.
+
+### GUI args_like dropped the configured adult/original bucket names
+
+``gui._resolve_output_dir`` built a ``SimpleNamespace`` for
+``cli._library_subdir_for`` that omitted ``_library_adult`` and
+``_library_original``. The ``getattr(..., None) or "Adult"``
+fallback in the CLI function meant GUI downloads always used the
+hardcoded ``"Adult"`` / ``"Original Works"`` strings, even when
+the user had renamed those buckets in preferences. Now plumbed
+through from ``KEY_LIBRARY_ADULT_FOLDER`` / ``KEY_LIBRARY_ORIGINAL_FOLDER``.
+
+### GUI save-target gate ignored library subfolders
+
+The autosort gate fired only when "Save to" equalled the library
+root verbatim. Any remembered subfolder (e.g. last-used
+``Harry Potter/`` from a previous FFN download) silently bypassed
+the adult routing and put adult-site downloads into whatever
+folder happened to be selected. ``_resolve_output_dir`` now
+treats any save target *inside* the library root as
+autosort-applicable: adult-site URLs land in the configured Adult
+bucket regardless of which subfolder was selected. No prompt — an
+adult-site URL is unambiguous intent, and second-guessing it with
+a dialog adds friction to a flow that should just do the right
+thing. Save targets outside the library root remain untouched.
+
+### Scanner cemented historical misplacements via parent-folder backfill
+
+The real driver behind "erotica in ``Harry Potter/``". The
+library scanner identifies each file via
+``library/identifier.py``; ``_fandom_from_parent_folder`` was
+backfilling the parent folder name (``"Harry Potter"``) onto
+files whose metadata had no embedded fandom, including adult
+downloads that had landed there pre-Adult-routing or via the
+broken save-target gate above. Once a Literotica / AFF / Chyoa
+file was tagged with ``fandoms=["Harry Potter"]``, every
+subsequent ``--scan-library`` + ``--reorganise-library`` cycle
+cemented that placement — the misfile was self-perpetuating.
+
+``identify()`` now accepts optional ``adult_folder`` and
+``original_folder`` kwargs. When the file's source URL maps to an
+adult or original-fiction adapter, ``metadata.fandoms`` is forced
+to ``[adult_folder]`` (or ``[original_folder]``) **before** the
+parent-folder backfill runs and **regardless** of what
+``metadata.fandoms`` already carried. The scanner reads bucket
+names from prefs via ``_resolve_bucket_folders()`` and threads
+them through. The catch-all
+``_NON_FANDOM_FOLDER_NAMES`` set picked up ``"adult"``,
+``"original"``, and ``"original works"`` so a no-source-URL
+EPUB in those folders doesn't get its bucket name treated as a
+fandom.
+
+Net effect for users with a pre-existing library where adult
+files leaked into fandom folders: the next scan + reorganise
+cycle migrates everything to the dedicated bucket
+automatically. One-shot heal of legacy placements.
+
+Tests in
+``tests/test_library_folder_fandom.py::test_identify_routes_adult_adapter_to_adult_folder``,
+``tests/test_library_folder_fandom.py::test_identify_routes_original_adapter_to_original_folder``,
+``tests/test_library_folder_fandom.py::test_identify_adult_override_supersedes_existing_fandom``,
+``tests/test_library_folder_fandom.py::test_identify_adult_override_disabled_when_folder_arg_omitted``,
+``tests/test_library_folder_fandom.py::test_identify_non_adult_adapter_unchanged_by_override_arg``,
+``tests/test_library_folder_fandom.py::test_non_fandom_folder_set_includes_adult_and_original_buckets``.
+
+### EPUB title-page leaked adult-site category as a fandom
+
+The EPUB exporter wrote a ``Category: bdsm`` row to the title
+page whenever ``metadata['category']`` was set; ``updater._fill_from_epub``
+on the read side overwrites ``md.fandoms`` with the title-page
+category value, treating it as the canonical fandom. End result:
+even after Fix 2 above routed a Lush download to ``Adult/``
+correctly, the next library scan read ``Category: bdsm`` from
+the EPUB and re-tagged the story with ``fandoms=["bdsm"]``,
+re-leaking it on the next reorganise.
+
+The category row is now suppressed for adult adapters
+(classified via ``library.identifier.adapter_for_url``). Other
+adapters where ``category`` actually carries a fandom (FicWad,
+FFN) keep the row. The kink value remains preserved in the
+``dc:subject`` block via the existing genre/characters tags.
+
+Tests in
+``tests/test_exporter_output.py::test_is_adult_story_classifies_by_url``,
+``tests/test_exporter_output.py::test_adult_lush_story_has_no_category_row_in_html_export``,
+``tests/test_exporter_output.py::test_non_adult_story_still_has_category_row``,
+``tests/test_exporter_output.py::test_adult_epub_export_has_no_category_in_title_page``.
+
 ## 2.4.28 — 2026-05-19
 
 Round-6 multi-AI deep-audit pass (Claude + Gemini Pro + GPT-5.5).
