@@ -64,10 +64,29 @@ _SEARCH_COLUMNS = [
 
 
 def _ffn_search_spec():
+    """FFN search supports two modes:
+
+    * **Keyword search** — type a query, optionally narrow with the
+      choice filters (Rating / Language / Status / Genre / Words /
+      Crossover / Match in / Sort by).
+    * **Fandom browse** — pick a fandom from the curated multi-picker
+      or type one freely into the Fandom text field; results come
+      from the category page directly. Parallel to the erotica tag
+      surface. The Category dropdown pins which FFN section the slug
+      resolves against (book / anime / movie / tv / etc.); leaving it
+      on ``any`` triggers auto-detect across the popular categories
+      in order.
+    """
     from .search import (
-        FFN_CROSSOVER, FFN_GENRE, FFN_LANGUAGE, FFN_MATCH,
-        FFN_RATING, FFN_SORT, FFN_STATUS, FFN_WORDS, search_ffn,
+        FFN_CATEGORIES, FFN_CROSSOVER, FFN_GENRE, FFN_LANGUAGE,
+        FFN_MATCH, FFN_RATING, FFN_SORT, FFN_STATUS, FFN_TOP_FANDOMS,
+        FFN_WORDS, search_ffn,
     )
+    # Annotate each curated fandom with its category so users scanning
+    # the picker can tell ``Naruto [anime]`` from any same-name book.
+    annotated_fandoms = [
+        f"{label} [{cat}]" for label, cat, _ in FFN_TOP_FANDOMS
+    ]
     return {
         "label": "Search FFN",
         "search_fn": search_ffn,
@@ -81,6 +100,16 @@ def _ffn_search_spec():
             ("&Crossover:", "crossover", list(FFN_CROSSOVER)),
             ("&Match in:", "match", list(FFN_MATCH)),
             ("Sor&t by:", "sort", list(FFN_SORT)),
+            ("Cate&gory:", "category", list(FFN_CATEGORIES)),
+        ],
+        # Fandom-browse multi-picker. Mirrors the erotica tag picker
+        # pattern: the same text control accepts free-typed input OR a
+        # picker selection. Multi-select is exposed so the picker can
+        # show every curated fandom, but ``search_ffn`` only uses the
+        # FIRST entry — FFN fandom-browse is single-fandom by URL
+        # shape.
+        "multi_pickers": [
+            ("&Fandom:", "fandom", "Pick FFN fandom", annotated_fandoms),
         ],
     }
 
@@ -664,9 +693,16 @@ class SearchFrame(wx.Frame):
                 )
             )
         )
+        # FFN fandom-browse: ``/<category>/<slug>/`` listings are
+        # valid without a free-text query — the fandom IS the search
+        # target. Mirrors the erotica tag-only flow.
+        ffn_filter_only = (
+            self.site_key == "ffn"
+            and bool(filters.get("fandom"))
+        )
         if not query and not (
             list_browse or rr_filter_only or erotica_filter_only
-            or ao3_filter_only
+            or ao3_filter_only or ffn_filter_only
         ):
             self._log("Error: Please enter a search query.")
             return

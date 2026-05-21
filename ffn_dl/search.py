@@ -152,6 +152,190 @@ FFN_SORT = {
 }
 
 
+# ── Fandom-browse (parallel to erotica tag-browse) ───────────────
+#
+# FFN's category pages (``/book/Harry-Potter/`` etc.) serve story
+# listings using the same z-list HTML as the keyword search endpoint,
+# so the existing :func:`_parse_results` can be re-used. The URL
+# parameter names differ — the fandom-page form uses short keys
+# (``r``, ``srt``, ``g1``, ``w``, ``s``, ``lan``, ``p``) where the
+# search endpoint uses ``censorid``, ``sortid``, ``genreid``, etc.
+
+FFN_CATEGORIES = {
+    "any": None,
+    "book": "book",
+    "anime": "anime",
+    "movie": "movie",
+    "tv": "tv",
+    "game": "game",
+    "cartoon": "cartoon",
+    "comic": "comic",
+    "play": "play",
+    "misc": "misc",
+}
+"""URL prefix per FFN category. ``any`` triggers auto-detect (the
+slug is tried against each category until a 200-with-results comes
+back). The curated :data:`FFN_TOP_FANDOMS` entries below pin a
+category for the popular cases so auto-detect doesn't have to
+brute-force on every Harry Potter / Naruto / etc. search."""
+
+
+FFN_TOP_FANDOMS: list[tuple[str, str, str]] = [
+    # (display_label, category, url_slug). Curated from FFN's "Just
+    # In" + top-fandom pages — ASCII-only slugs to avoid URL-encoding
+    # surprises. Power users can type any fandom name into the
+    # Fandom text field; the curated list just gives the multi-picker
+    # something to populate without making users guess the slug.
+    # ── Books ──
+    ("Harry Potter", "book", "Harry-Potter"),
+    ("Lord of the Rings", "book", "Lord-of-the-Rings"),
+    ("Percy Jackson and the Olympians", "book", "Percy-Jackson-and-the-Olympians"),
+    ("Heroes of Olympus", "book", "Heroes-of-Olympus"),
+    ("Twilight", "book", "Twilight"),
+    ("Hunger Games", "book", "Hunger-Games"),
+    ("Warriors", "book", "Warriors"),
+    ("Maximum Ride", "book", "Maximum-Ride"),
+    ("Mortal Instruments", "book", "Mortal-Instruments"),
+    ("Hobbit", "book", "Hobbit"),
+    ("Outsiders", "book", "Outsiders"),
+    ("Lightning Thief", "book", "Lightning-Thief"),
+    # ── Anime / Manga ──
+    ("Naruto", "anime", "Naruto"),
+    ("Bleach", "anime", "Bleach"),
+    ("Inuyasha", "anime", "Inuyasha"),
+    ("Fullmetal Alchemist", "anime", "Fullmetal-Alchemist"),
+    ("Hetalia - Axis Powers", "anime", "Hetalia-Axis-Powers"),
+    ("Death Note", "anime", "Death-Note"),
+    ("Fairy Tail", "anime", "Fairy-Tail"),
+    ("One Piece", "anime", "One-Piece"),
+    ("Dragon Ball Z", "anime", "Dragon-Ball-Z"),
+    ("Sword Art Online", "anime", "Sword-Art-Online"),
+    ("My Hero Academia", "anime", "My-Hero-Academia"),
+    ("Attack on Titan", "anime", "Attack-on-Titan"),
+    ("RWBY", "anime", "RWBY"),
+    ("Code Geass", "anime", "Code-Geass"),
+    ("Yu-Gi-Oh", "anime", "Yu-Gi-Oh"),
+    # ── Movies ──
+    ("Star Wars", "movie", "Star-Wars"),
+    ("Marvel", "movie", "Marvel"),
+    ("Pirates of the Caribbean", "movie", "Pirates-of-the-Caribbean"),
+    ("Disney", "movie", "Disney"),
+    ("Lion King", "movie", "Lion-King"),
+    ("Frozen", "movie", "Frozen"),
+    # ── TV ──
+    ("Supernatural", "tv", "Supernatural"),
+    ("Glee", "tv", "Glee"),
+    ("Buffy The Vampire Slayer", "tv", "Buffy-The-Vampire-Slayer"),
+    ("Sherlock", "tv", "Sherlock"),
+    ("Doctor Who", "tv", "Doctor-Who"),
+    ("NCIS", "tv", "NCIS"),
+    ("Once Upon a Time", "tv", "Once-Upon-a-Time"),
+    ("Walking Dead", "tv", "Walking-Dead"),
+    ("Vampire Diaries", "tv", "Vampire-Diaries"),
+    ("Stranger Things", "tv", "Stranger-Things"),
+    # ── Games ──
+    ("Mass Effect", "game", "Mass-Effect"),
+    ("Halo", "game", "Halo"),
+    ("Elder Scroll series", "game", "Elder-Scroll-series"),
+    ("Legend of Zelda", "game", "Legend-of-Zelda"),
+    ("Kingdom Hearts", "game", "Kingdom-Hearts"),
+    ("Final Fantasy VII", "game", "Final-Fantasy-VII"),
+    ("Five Nights at Freddy's", "game", "Five-Nights-at-Freddy-s"),
+    ("Undertale", "game", "Undertale"),
+    # ── Cartoons ──
+    ("Avatar: Last Airbender", "cartoon", "Avatar-Last-Airbender"),
+    ("Teen Titans", "cartoon", "Teen-Titans"),
+    ("Danny Phantom", "cartoon", "Danny-Phantom"),
+    ("Transformers", "cartoon", "Transformers"),
+    ("Miraculous: Tales of Ladybug & Cat Noir", "cartoon",
+     "Miraculous-Tales-of-Ladybug-Cat-Noir"),
+    ("Steven Universe", "cartoon", "Steven-Universe"),
+    # ── Comics ──
+    ("Batman", "comic", "Batman"),
+    ("X-Men", "comic", "X-Men"),
+    ("Justice League", "comic", "Justice-League"),
+    ("Spider-Man", "comic", "Spider-Man"),
+    ("Young Justice", "comic", "Young-Justice"),
+    # ── Plays / Musicals ──
+    ("Hamilton", "play", "Hamilton"),
+    ("RENT", "play", "RENT"),
+    ("Wicked", "play", "Wicked"),
+    ("Les Miserables", "play", "Les-Miserables"),
+    # ── Misc ──
+    ("Bible", "misc", "Bible"),
+    ("Greek Mythology", "misc", "Greek-Mythology"),
+    ("Wrestling", "misc", "Wrestling"),
+]
+"""Curated popular FFN fandoms — populates the GUI's Fandom multi-
+picker. Power users typing in the Fandom text field bypass this
+entirely. Display labels are user-facing; slugs are FFN's canonical
+URL slugs."""
+
+
+_FFN_TOP_FANDOM_INDEX: dict[str, tuple[str, str]] = {
+    label.lower(): (cat, slug) for label, cat, slug in FFN_TOP_FANDOMS
+}
+
+
+# FFN fandom-page URL params use shorter names than the keyword
+# search endpoint. Sort table also drops the "best match" entry —
+# fandom browses default to "updated" so a missing sort means the
+# server's default, not a relevance score.
+FFN_FANDOM_SORT = {
+    "updated": 1, "published": 2, "reviews": 3,
+    "favorites": 4, "follows": 5,
+}
+
+
+def _ffn_fandom_slug(name: str) -> str:
+    """Convert a user-typed fandom name into FFN's URL slug shape.
+
+    FFN's slugs are mostly title-cased words joined by hyphens
+    (``Harry Potter`` → ``Harry-Potter``), with a handful of
+    quirks:
+
+    * Punctuation other than apostrophes / colons / commas is
+      stripped; replaced by hyphens between word boundaries.
+    * The connectors ``a``, ``an``, ``and``, ``of``, ``the``, ``to``
+      stay lowercase unless they're the first word
+      (``Percy-Jackson-and-the-Olympians``).
+    * Apostrophes drop ("Freddy's" → ``Freddy-s``).
+
+    Returns ``""`` for inputs that slug to nothing — the caller
+    treats that as "no fandom set".
+    """
+    if not name:
+        return ""
+    s = name.strip()
+    if not s:
+        return ""
+    # Hyphenate around non-alphanumeric runs.
+    s = re.sub(r"[^A-Za-z0-9]+", "-", s)
+    s = s.strip("-")
+    if not s:
+        return ""
+    # Title-case but leave the small connectors lowercase unless at
+    # the start. Single-letter tail tokens (the ``s`` from ``Freddy's``
+    # → ``Freddy-s``) also stay lowercase — FFN's canonical slug for
+    # those is ``/Five-Nights-at-Freddy-s/`` with the trailing lowercase
+    # letter intact.
+    SMALL = {
+        "a", "an", "and", "at", "by", "for", "in", "of", "on", "or",
+        "the", "to", "vs", "with",
+    }
+    parts = s.split("-")
+    out = []
+    for i, p in enumerate(parts):
+        if not p:
+            continue
+        lower = p.lower()
+        if i > 0 and (lower in SMALL or len(p) == 1):
+            out.append(lower)
+        else:
+            out.append(p[:1].upper() + p[1:].lower())
+    return "-".join(out)
+
+
 def _resolve_filter(value, choices, name):
     """Map a user value (label or raw ID) to a FFN param value.
 
@@ -303,8 +487,189 @@ def _parse_results(html):
     return results
 
 
+def _resolve_fandom(
+    fandom_raw: str | None, category_raw: str | None,
+) -> tuple[str, str] | None:
+    """Map a user-typed Fandom + Category onto an ``(category, slug)``
+    pair. Returns ``None`` when the input doesn't look like a fandom
+    request — the caller then falls through to the keyword-search
+    endpoint.
+
+    Resolution order:
+
+    1. Empty fandom → ``None`` (no fandom browse).
+    2. Curated label match (case-insensitive) → use the pinned
+       ``(category, slug)`` from :data:`_FFN_TOP_FANDOM_INDEX`, even
+       if the user picked a category that disagrees. The curated
+       entry wins because we know it's correct.
+    3. User-supplied category + free-typed name → slugify the name
+       and pair with the category.
+    4. Free-typed name without a category → caller tries each
+       category in turn (auto-detect). Returned ``category`` is
+       empty in this case.
+    """
+    raw = (fandom_raw or "").strip()
+    if not raw:
+        return None
+    # Multi-picker writes comma-joined picks; FFN fandom-browse is
+    # single-fandom by URL shape, so take the first entry. Tail
+    # entries effectively become discoverability hints, not filters.
+    name = raw.split(",", 1)[0].strip()
+    if not name:
+        return None
+    # Extract the picker's annotation suffix BEFORE stripping it — the
+    # bracketed category ("Naruto [anime]") is a real hint about which
+    # FFN section the user meant. ``(book)`` parentheticals also count
+    # for hand-composed inputs.
+    picker_cat_hint = ""
+    m = re.search(r"\s*[\(\[]([A-Za-z]+)[\)\]]\s*$", name)
+    if m:
+        hint = m.group(1).strip().lower()
+        if hint in FFN_CATEGORIES and FFN_CATEGORIES[hint]:
+            picker_cat_hint = hint
+        name = name[:m.start()].strip()
+    if not name:
+        return None
+    cat_str = (category_raw or "").strip().lower().lstrip("/")
+    if cat_str == "any":
+        cat_str = ""
+    # Precedence for category resolution:
+    #   1. User's explicit Category dropdown selection (not "any").
+    #   2. The picker's bracketed hint (e.g. "Naruto [anime]").
+    #   3. The curated label index pinned category.
+    #   4. Auto-detect across categories in popularity order.
+    effective_cat = cat_str or picker_cat_hint
+    if not effective_cat:
+        pinned = _FFN_TOP_FANDOM_INDEX.get(name.lower())
+        if pinned:
+            return pinned
+    slug = _ffn_fandom_slug(name)
+    if not slug:
+        return None
+    if (
+        effective_cat
+        and effective_cat in FFN_CATEGORIES
+        and FFN_CATEGORIES[effective_cat]
+    ):
+        # When the user pinned a category but typed a curated name,
+        # honour the curated slug shape (it's the canonical FFN slug)
+        # under the pinned category.
+        pinned = _FFN_TOP_FANDOM_INDEX.get(name.lower())
+        if pinned:
+            return effective_cat, pinned[1]
+        return effective_cat, slug
+    return "", slug
+
+
+_FFN_AUTO_DETECT_ORDER = (
+    "book", "anime", "movie", "tv", "game", "cartoon", "comic",
+    "play", "misc",
+)
+"""Order :func:`search_ffn` tries when the user didn't pin a category.
+Roughly by popularity so the common case (book + anime) gets answered
+without burning HTTPS round-trips against the long tail."""
+
+
+def _build_ffn_fandom_url(category: str, slug: str, filters: dict, page: int) -> str:
+    """Build the fandom-page URL with the shorter param names FFN uses
+    on category listings."""
+    params: dict = {}
+    # Sort: fandom URLs use ``srt`` (no "best match" — default is
+    # "updated" server-side, so omit when the user didn't override).
+    sort_raw = filters.get("sort")
+    if sort_raw:
+        s = str(sort_raw).strip().lower()
+        if s in FFN_FANDOM_SORT:
+            params["srt"] = FFN_FANDOM_SORT[s]
+        elif s.isdigit():
+            params["srt"] = int(s)
+        elif s == "best match":
+            pass  # default
+    rating = _resolve_filter(filters.get("rating"), FFN_RATING, "rating")
+    if rating is not None:
+        params["r"] = rating
+    g1 = _resolve_filter(filters.get("genre"), FFN_GENRE, "genre")
+    if g1 is not None:
+        params["g1"] = g1
+    g2 = _resolve_filter(filters.get("genre2"), FFN_GENRE, "genre2")
+    if g2 is not None:
+        params["g2"] = g2
+    words = _resolve_filter(filters.get("min_words"), FFN_WORDS, "min_words")
+    if words is not None:
+        params["w"] = words
+    status_raw = filters.get("status")
+    if status_raw:
+        sr = str(status_raw).strip().lower()
+        if sr == "in-progress":
+            params["s"] = 1
+        elif sr == "complete":
+            params["s"] = 2
+        elif sr.isdigit():
+            params["s"] = int(sr)
+    lang = _resolve_filter(filters.get("language"), FFN_LANGUAGE, "language")
+    if lang is not None:
+        params["lan"] = lang
+    if page and page > 1:
+        params["p"] = int(page)
+    base = f"{FFN_BASE}/{category}/{slug}/"
+    if params:
+        return base + "?" + urlencode(params)
+    return base
+
+
+def _search_ffn_fandom(
+    query: str, category: str, slug: str, filters: dict, page: int,
+) -> list[dict]:
+    """Fetch a fandom-page listing and return parsed result dicts. If
+    ``query`` is non-empty, results are post-filtered on title /
+    summary substring match — fandom pages have no native keyword
+    filter, so this is the best we can do.
+
+    Backfills the per-row ``fandom`` field from the URL because
+    fandom-page HTML omits the redundant fandom name from each card's
+    metadata div (the whole page IS the fandom, so it'd be noise
+    inline). The GUI's Fandom column then shows the human-readable
+    label instead of staying empty.
+    """
+    url = _build_ffn_fandom_url(category, slug, filters, page)
+    html = _fetch_search_page(url)
+    results = _parse_results(html)
+    if query:
+        q_lower = query.lower()
+        kept = []
+        for r in results:
+            blob = (
+                (r.get("title", "") or "") + " "
+                + (r.get("summary", "") or "")
+            ).lower()
+            if q_lower in blob:
+                kept.append(r)
+        results = kept
+    # Backfill fandom name from the slug (FFN's slug→display is
+    # ``Harry-Potter`` → ``Harry Potter``; we don't have an authoritative
+    # reverse for compound names but un-hyphening is the canonical
+    # round-trip for the curated entries).
+    display = slug.replace("-", " ")
+    for r in results:
+        if not r.get("fandom"):
+            r["fandom"] = display
+    return results
+
+
 def search_ffn(query, *, page=1, **filters):
     """Search fanfiction.net and return a list of result dicts.
+
+    Two modes:
+
+    * **Keyword search** (no ``fandom``) — hits ``/search/`` with the
+      ``keywords`` field. The original behaviour; all the existing
+      filter knobs apply (rating, language, status, genre, etc.).
+    * **Fandom browse** (``fandom`` set) — fetches the FFN category
+      page (``/<category>/<slug>/``) directly. Parallel to the
+      erotica tag-browse pattern: the URL IS the search target.
+      When ``query`` is also supplied, results are post-filtered on
+      title/summary substring match (FFN's fandom pages have no
+      native keyword filter).
 
     Keyword filters (all optional — pass a label from the corresponding
     FFN_* table, or the raw numeric ID):
@@ -314,8 +679,11 @@ def search_ffn(query, *, page=1, **filters):
         genre: romance / humor / adventure / angst / ... (see FFN_GENRE)
         genre2: same values as `genre`; adds a second AND-filtered genre.
         min_words: <1k / <5k / 5k+ / 30k+ / 50k+ / 150k+ / 300k+
-        crossover: any / only / exclude
-        match: any / title / summary  (where the keywords must appear)
+        crossover: any / only / exclude  (keyword-search mode only)
+        match: any / title / summary  (keyword-search mode only)
+        fandom: free-typed or curated label — switches to fandom-browse.
+        category: book / anime / movie / tv / game / cartoon / comic
+                  / play / misc — pins the fandom URL category.
 
     Each result dict has keys: title, author, url, summary, words,
     chapters, rating, fandom, status.
@@ -323,6 +691,29 @@ def search_ffn(query, *, page=1, **filters):
     `page` (keyword-only) selects a specific results page for "load more"
     workflows — defaults to 1.
     """
+    resolved = _resolve_fandom(filters.get("fandom"), filters.get("category"))
+    if resolved is not None:
+        category, slug = resolved
+        if category:
+            return _search_ffn_fandom(query, category, slug, filters, page)
+        # Auto-detect: try each category in turn until one returns rows
+        # or returns a 200 with an empty parse (i.e. the URL existed).
+        # 404s mean wrong category and we keep walking.
+        first_empty: list[dict] | None = None
+        for guess in _FFN_AUTO_DETECT_ORDER:
+            try:
+                results = _search_ffn_fandom(query, guess, slug, filters, page)
+            except RuntimeError as exc:
+                # ``_fetch_search_page`` raises on non-200; 404 means
+                # "wrong category", try the next.
+                if "404" in str(exc):
+                    continue
+                raise
+            if results:
+                return results
+            if first_empty is None:
+                first_empty = results
+        return first_empty or []
     url = _build_search_url(query, filters, page=page)
     html = _fetch_search_page(url)
     return _parse_results(html)

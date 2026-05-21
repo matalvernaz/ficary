@@ -211,3 +211,137 @@ class TestSearchParsing:
         # Every result should link to an FFN story URL
         for r in results:
             assert r["url"].startswith("https://www.fanfiction.net/s/")
+
+
+class TestFFNFandomBrowse:
+    """Fandom-browse — the FFN parallel to erotica's tag-browse (round-7
+    audit feature). Slug derivation, category resolution, URL build,
+    and the search_ffn dispatch path."""
+
+    def test_slug_derivation_canonical_cases(self):
+        from ffn_dl.search import _ffn_fandom_slug
+        assert _ffn_fandom_slug("Harry Potter") == "Harry-Potter"
+        assert _ffn_fandom_slug("Lord of the Rings") == "Lord-of-the-Rings"
+        assert (
+            _ffn_fandom_slug("Percy Jackson and the Olympians")
+            == "Percy-Jackson-and-the-Olympians"
+        )
+        # Trailing single letter from apostrophe stays lowercase
+        # ("Freddy's" → "Freddy-s") — matches FFN's canonical slug.
+        assert (
+            _ffn_fandom_slug("Five Nights at Freddy's")
+            == "Five-Nights-at-Freddy-s"
+        )
+        # "at" / "by" etc. stay lowercase as connectors
+        assert _ffn_fandom_slug("Day at the Beach") == "Day-at-the-Beach"
+        assert _ffn_fandom_slug("") == ""
+
+    def test_resolve_uses_curated_index_when_no_category(self):
+        from ffn_dl.search import _resolve_fandom
+        # "Harry Potter" is in the curated index → pinned book category
+        assert _resolve_fandom("Harry Potter", None) == ("book", "Harry-Potter")
+        assert _resolve_fandom("Harry Potter", "") == ("book", "Harry-Potter")
+        assert _resolve_fandom("Harry Potter", "any") == ("book", "Harry-Potter")
+
+    def test_resolve_picker_bracket_hint(self):
+        from ffn_dl.search import _resolve_fandom
+        # Picker annotates as "Naruto [anime]" — bracket hint maps to category
+        assert _resolve_fandom("Naruto [anime]", None) == ("anime", "Naruto")
+
+    def test_resolve_user_category_overrides_curated(self):
+        from ffn_dl.search import _resolve_fandom
+        # User explicitly pinned category → overrides the curated entry.
+        # Harry Potter as a game (hypothetical) — honour the override.
+        assert _resolve_fandom("Harry Potter", "game") == ("game", "Harry-Potter")
+
+    def test_resolve_uncurated_name_auto_detect(self):
+        from ffn_dl.search import _resolve_fandom
+        # Empty category for an uncurated name → caller must auto-detect
+        cat, slug = _resolve_fandom("My Custom Fandom", None)
+        assert cat == ""
+        assert slug == "My-Custom-Fandom"
+
+    def test_resolve_strips_multi_picker_extras(self):
+        from ffn_dl.search import _resolve_fandom
+        # Picker joins multi-select with comma — take first.
+        # Annotation stripping works for both [] and ().
+        assert _resolve_fandom(
+            "Harry Potter [book], Naruto [anime]", None,
+        ) == ("book", "Harry-Potter")
+        assert _resolve_fandom("Bleach (anime)", None) == ("anime", "Bleach")
+
+    def test_resolve_empty_returns_none(self):
+        from ffn_dl.search import _resolve_fandom
+        assert _resolve_fandom("", "book") is None
+        assert _resolve_fandom(None, None) is None
+        assert _resolve_fandom("   ", "any") is None
+
+    def test_build_fandom_url_full_filters(self):
+        from ffn_dl.search import _build_ffn_fandom_url
+        # FFN fandom URLs use short param names: r/srt/g1/g2/w/s/lan/p
+        url = _build_ffn_fandom_url(
+            "book", "Harry-Potter",
+            {
+                "sort": "reviews", "rating": "M", "genre": "romance",
+                "genre2": "angst", "min_words": "50k+",
+                "status": "complete", "language": "english",
+            },
+            page=2,
+        )
+        assert url.startswith("https://www.fanfiction.net/book/Harry-Potter/?")
+        # Order isn't guaranteed; check each param appears.
+        for fragment in ("srt=3", "r=4", "g1=2", "g2=10", "w=6", "s=2", "lan=1", "p=2"):
+            assert fragment in url, f"missing {fragment} in {url}"
+
+    def test_build_fandom_url_no_filters(self):
+        from ffn_dl.search import _build_ffn_fandom_url
+        # Bare URL when no filters supplied
+        url = _build_ffn_fandom_url("anime", "Naruto", {}, page=1)
+        assert url == "https://www.fanfiction.net/anime/Naruto/"
+
+    def test_search_ffn_dispatches_to_fandom_when_set(self, monkeypatch):
+        """search_ffn should hit the fandom URL path when fandom is set
+        and skip the keyword /search/ endpoint."""
+        from ffn_dl import search as search_mod
+
+        fetched_urls = []
+
+        def fake_fetch(url):
+            fetched_urls.append(url)
+            return "<html><body></body></html>"
+
+        monkeypatch.setattr(search_mod, "_fetch_search_page", fake_fetch)
+        # Curated fandom → book category
+        search_mod.search_ffn("", fandom="Harry Potter")
+        assert fetched_urls
+        assert "/book/Harry-Potter/" in fetched_urls[-1]
+        # Picker output with bracket hint
+        fetched_urls.clear()
+        search_mod.search_ffn("", fandom="Naruto [anime]")
+        assert "/anime/Naruto/" in fetched_urls[-1]
+
+    def test_search_ffn_backfills_fandom_column(self, monkeypatch):
+        """Fandom-browse parses the same z-list as keyword search but
+        the per-card metadata div omits the fandom name (the whole page
+        IS the fandom). Verify _search_ffn_fandom backfills it."""
+        from ffn_dl import search as search_mod
+
+        # Minimal valid z-list HTML so _parse_results returns one row
+        html = """
+        <html><body>
+          <div class="z-list">
+            <a class="stitle" href="/s/123/1/Title">Title</a>
+            <a href="/u/1/Author">Author</a>
+            <div class="z-indent">A summary
+              <div class="z-padtop2">- Rated: T - English - Romance - Words: 10,000 - Complete</div>
+            </div>
+          </div>
+        </body></html>
+        """
+        monkeypatch.setattr(
+            search_mod, "_fetch_search_page", lambda url: html,
+        )
+        results = search_mod.search_ffn("", fandom="Harry Potter")
+        assert results
+        # Slug "Harry-Potter" → display "Harry Potter"
+        assert results[0]["fandom"] == "Harry Potter"
