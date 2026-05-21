@@ -1100,6 +1100,33 @@ def _site_handles_any_tag(site: str, tags: list[str]) -> bool:
 _site_supports_all_tags = _site_handles_any_tag
 
 
+_SITE_LABEL_SLUG_RE = re.compile(r"\(([a-z][a-z0-9_-]*)\)\s*$")
+
+
+def _extract_slug(label_or_slug: str) -> str:
+    """Pull the slug from a ``"Label (slug)"`` formatted dropdown
+    choice or pass a bare slug through unchanged. The GUI's Site
+    dropdown shows friendly labels with a trailing ``(slug)`` marker
+    so the user sees ``Adult-FanFiction.org (aff)`` instead of just
+    ``aff``; this helper recovers the slug for the fan-out without
+    requiring a separate label-to-slug map at the call site.
+
+    Bare slugs (CLI, tests, scripted callers) round-trip unchanged.
+    A full label without a slug marker also round-trips through the
+    reverse-lookup of :data:`EROTICA_SITE_LABELS` for safety.
+    """
+    s = str(label_or_slug).strip()
+    if not s:
+        return s
+    m = _SITE_LABEL_SLUG_RE.search(s)
+    if m:
+        return m.group(1)
+    for slug, label in EROTICA_SITE_LABELS.items():
+        if s == label:
+            return slug
+    return s
+
+
 def _normalise_sites(sites, sites_choice) -> Optional[list]:
     """GUI passes ``sites_choice`` (a single string from the dropdown);
     CLI / tests pass ``sites`` (a list). Fold both into the list form
@@ -1107,9 +1134,12 @@ def _normalise_sites(sites, sites_choice) -> Optional[list]:
     if sites:
         if isinstance(sites, str):
             sites = [sites]
-        return [s for s in sites if s and s != "all"] or None
-    if sites_choice and sites_choice not in ("", "all"):
-        return [sites_choice]
+        slugs = [_extract_slug(s) for s in sites if s]
+        return [s for s in slugs if s and s != "all"] or None
+    if sites_choice:
+        slug = _extract_slug(sites_choice)
+        if slug and slug not in ("", "all"):
+            return [slug]
     return None
 
 

@@ -480,6 +480,29 @@ def test_search_erotica_skips_filter_when_site_explicitly_picked(monkeypatch):
     assert "aff" in called
 
 
+def test_normalise_sites_extracts_slug_from_label():
+    """The Site dropdown shows ``Adult-FanFiction.org (aff)`` etc. for
+    readability; ``_normalise_sites`` must strip the label and return
+    the bare slug so the fan-out can look it up in ``_SITE_FNS``."""
+    from ffn_dl.erotica.search import _normalise_sites, _extract_slug
+
+    # Direct slug extraction
+    assert _extract_slug("Adult-FanFiction.org (aff)") == "aff"
+    assert _extract_slug("Literotica (literotica)") == "literotica"
+    assert _extract_slug("literotica") == "literotica"
+    assert _extract_slug("All erotica sites") == "all"
+    assert _extract_slug("") == ""
+
+    # Through the GUI's sites_choice path
+    assert _normalise_sites(None, "Literotica (literotica)") == ["literotica"]
+    assert _normalise_sites(None, "All erotica sites") is None  # "all" collapse
+    assert _normalise_sites(None, "literotica") == ["literotica"]  # bare slug
+    # Through the CLI / scripted ``sites`` list path
+    assert _normalise_sites(["aff", "Literotica (literotica)"], "") == [
+        "aff", "literotica",
+    ]
+
+
 def test_search_erotica_promotes_known_tag_query(monkeypatch):
     """Round-7 audit (v2.4.33): when the user types a bare word that is
     a known erotica tag (e.g. ``feet``) and didn't pick anything in the

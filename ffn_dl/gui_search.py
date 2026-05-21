@@ -168,8 +168,15 @@ def _erotica_search_spec():
     Tag options are annotated with their per-tag site-coverage count
     (e.g. "femdom [5 sites]") so users can tell well-covered kinks
     from niche ones before running a search that returns empty.
+
+    The Site dropdown shows friendly labels (e.g.
+    ``Adult-FanFiction.org (aff)``) instead of bare slugs — the slug
+    is appended in parentheses so the existing ``_normalise_sites``
+    contract still receives a slug-prefixed string it can parse
+    without a separate label-to-slug map.
     """
     from .erotica.search import (
+        EROTICA_SITE_LABELS,
         EROTICA_SITE_SLUGS,
         EROTICA_TAG_VOCABULARY,
         search_erotica,
@@ -181,6 +188,14 @@ def _erotica_search_spec():
         for tag in EROTICA_TAG_VOCABULARY
     ]
 
+    def _site_choice(slug: str) -> str:
+        if slug == "all":
+            return "All erotica sites"
+        label = EROTICA_SITE_LABELS.get(slug, slug)
+        return f"{label} ({slug})"
+
+    site_choices = [_site_choice(s) for s in EROTICA_SITE_SLUGS]
+
     # ``min_words`` intentionally omitted from the GUI: most erotica
     # sites don't expose word counts on their listing pages, so the
     # filter was close to a no-op in practice — dropping it keeps the
@@ -190,7 +205,7 @@ def _erotica_search_spec():
         "label": "Erotic Story Search",
         "search_fn": search_erotica,
         "filters": [
-            ("&Site:", "sites_choice", list(EROTICA_SITE_SLUGS)),
+            ("&Site:", "sites_choice", site_choices),
         ],
         # Tags are the primary input — first multi-picker so the
         # tab order lands users on tags directly after the query box.
