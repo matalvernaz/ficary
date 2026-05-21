@@ -2020,16 +2020,34 @@ def _load_pronunciation_map(path):
     """Load a pronunciation override map from JSON. Keys starting with
     '_' are treated as comments and filtered out. Returns empty dict on
     any parse error so a broken map doesn't break audiobook generation.
+
+    Empty / whitespace-only values are rejected with a warning instead
+    of silently erasing every occurrence of the key from the
+    audiobook. Content-removal heuristics in this codebase need ≥2
+    corroborating signals; an empty pronunciation map value has none
+    and a user typo (``"Hermione": ""``) would otherwise wipe the
+    character out of the narration without any log entry.
     """
     try:
         if path and Path(path).exists():
             data = json.loads(Path(path).read_text(encoding="utf-8"))
             if isinstance(data, dict):
-                return {
-                    str(k): str(v)
-                    for k, v in data.items()
-                    if k and not str(k).startswith("_")
-                }
+                out: dict[str, str] = {}
+                for k, v in data.items():
+                    if not k or str(k).startswith("_"):
+                        continue
+                    str_k = str(k)
+                    str_v = str(v)
+                    if not str_v.strip():
+                        logger.warning(
+                            "Pronunciation map: ignoring empty replacement "
+                            "for %r (would have erased every occurrence "
+                            "from the audiobook).",
+                            str_k,
+                        )
+                        continue
+                    out[str_k] = str_v
+                return out
     except (json.JSONDecodeError, OSError) as exc:
         logger.warning("Pronunciation map at %s unreadable: %s", path, exc)
     return {}
@@ -2262,7 +2280,16 @@ async def _generate_chapter_audio_inner(
         )))
         plan.append(("speech", seg.speaker, task_idx))
 
-    results = await asyncio.gather(*(t[3] for t in tasks))
+    # ``return_exceptions=True`` so a non-Exception raise from one
+    # segment (CancelledError on shutdown, an unexpected BaseException
+    # leaking out of ``_generate_with_semaphore``) doesn't cancel the
+    # whole gather and orphan the in-flight ``asyncio.to_thread``
+    # subprocesses (each one is a separate Piper / edge-tts call). We
+    # filter exception results out below the same way we'd treat a
+    # ``None`` failed segment.
+    results = await asyncio.gather(
+        *(t[3] for t in tasks), return_exceptions=True,
+    )
 
     # Build the ordered playback sequence, dropping failed TTS segments
     # but keeping scene-break pauses.
@@ -2273,6 +2300,12 @@ async def _generate_chapter_audio_inner(
                 ordered.append(("scene_break", None, scene_break_clip))
             continue
         r = results[task_idx]
+        if isinstance(r, BaseException):
+            logger.warning(
+                "TTS segment %d raised %s: %s",
+                task_idx, type(r).__name__, r,
+            )
+            continue
         if r is not None:
             ordered.append(("speech", speaker, r))
 
@@ -2896,6 +2929,23 @@ def _save_attr_entry(backend, model_size, text_hash, segment_dicts):
 _CHAPTER_CACHE_VERSION = 1
 
 
+def _safe_progress(cb, i, total, title):
+    """Call a user-supplied progress callback, swallowing exceptions
+    so a GUI implementor's stale-frame ``wx.CallAfter`` (or any other
+    raise) can't kill an audiobook render mid-flight. The render is
+    the long-running work; the callback is just a status update.
+    Exceptions are logged for diagnosis."""
+    if cb is None:
+        return
+    try:
+        cb(i, total, title)
+    except Exception:
+        logger.exception(
+            "progress_callback raised at chapter %d/%d (%r); continuing render",
+            i, total, title,
+        )
+
+
 def _chapter_cache_root(story_id):
     """Per-story cache dir for chapter body MP3s."""
     from . import portable
@@ -3364,13 +3414,24 @@ def _generate_audiobook_inner(
             # format; a trailing ".tmp" confuses the muxer with "Invalid
             # argument". os.replace still handles the atomic swap.
             tmp_body = body_path.with_name(body_path.stem + ".tmp" + body_path.suffix)
-            success = asyncio.run(
-                generate_chapter_audio(
-                    segs, mapper, tmp_body,
-                    chapter_num=i, narrator_voice=narrator,
-                    speech_rate=speech_rate,
+            # try/finally — the persistent cache lives under
+            # portable.cache_dir() and isn't swept by build_tmp's
+            # cleanup. If ``asyncio.run`` raises (CancelledError,
+            # OOM, ffmpeg-not-found mid-render, Piper crash, etc.) the
+            # tmp body must still be unlinked or future runs accumulate
+            # zero-byte / partial files in the cache root.
+            try:
+                success = asyncio.run(
+                    generate_chapter_audio(
+                        segs, mapper, tmp_body,
+                        chapter_num=i, narrator_voice=narrator,
+                        speech_rate=speech_rate,
+                    )
                 )
-            )
+            except BaseException:
+                if tmp_body.exists():
+                    tmp_body.unlink(missing_ok=True)
+                raise
             if success and tmp_body.exists() and tmp_body.stat().st_size > 0:
                 os.replace(tmp_body, body_path)
                 cache_misses += 1
@@ -3378,8 +3439,7 @@ def _generate_audiobook_inner(
                 logger.warning("No audio generated for chapter %d", i)
                 if tmp_body.exists():
                     tmp_body.unlink(missing_ok=True)
-                if progress_callback:
-                    progress_callback(i, total, ch.title)
+                _safe_progress(progress_callback, i, total, ch.title)
                 continue
 
         # Heading synth per run — if it fails we fall back to the body
@@ -3412,8 +3472,7 @@ def _generate_audiobook_inner(
         # title in the M4B metadata.
         chapter_files.append((assembled, ch.title))
 
-        if progress_callback:
-            progress_callback(i, total, ch.title)
+        _safe_progress(progress_callback, i, total, ch.title)
 
     if not chapter_files:
         raise RuntimeError("No chapter audio was generated.")
