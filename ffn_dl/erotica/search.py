@@ -226,7 +226,7 @@ def _matches_query(query: str, *fields: str) -> bool:
 
 # ── Per-site searches ────────────────────────────────────────────
 
-def search_aff(query: str, *, page: int = 1, fandom: str = "hp",
+def search_aff(query: str, *, page: int = 1, fandom: str = "",
                **_: object) -> list[dict]:
     """AFF has no site-wide search; each fandom subdomain offers a
     paginated ``index.php`` story listing. We grab the listing for
@@ -234,8 +234,20 @@ def search_aff(query: str, *, page: int = 1, fandom: str = "hp",
 
     AFF retired ``story-list.php`` (404s as of 2025) — pagination
     moved to ``index.php?page=N``.
+
+    AFF's catalog is partitioned by fandom subdomain
+    (hp.adult-fanfiction.org, sw.adult-fanfiction.org, etc.) — there
+    is no aggregated "all fandoms" view. Without an explicit
+    ``fandom``, we'd have to guess which subdomain to query and any
+    guess silently biases results to whichever fandom we picked. We
+    used to default to ``"hp"`` which leaked Harry Potter results
+    into every all-sites erotica search; return ``[]`` instead so the
+    site stats panel makes it obvious AFF was skipped and the user
+    can fill in the Fandom (AFF) field to opt in.
     """
-    fandom = (fandom or "hp").strip().lower().strip(".")
+    fandom = (fandom or "").strip().lower().strip(".")
+    if not fandom:
+        return []
     url = f"https://{fandom}.adult-fanfiction.org/index.php?page={page}"
     html = _fetch(url)
     if not html:
@@ -869,7 +881,16 @@ def search_literotica_wrapped(query: str, *, page: int = 1,
                               **_: object) -> list[dict]:
     """Thin wrapper around :func:`ffn_dl.search.search_literotica` that
     maps our unified ``tags`` input onto Literotica's ``category``
-    argument and tags every row with ``site='literotica'``."""
+    argument and tags every row with ``site='literotica'``.
+
+    Query + tag together: Literotica's tag-browse endpoint
+    (``tags.literotica.com/<tag>``) ignores any free-text query — the
+    URL IS the tag listing. ``search_literotica`` therefore drops the
+    query whenever ``category`` is set, which silently returned
+    unfiltered tag results for a "Harry Potter + bdsm" search.
+    Post-filter the tag page on title/author/summary/fandom locally
+    so query+tag behaves like "tag-browse narrowed by query".
+    """
     category = ""
     if tags:
         # Literotica categories are plural, lowercase slugs on tags.literotica.com.
@@ -882,6 +903,15 @@ def search_literotica_wrapped(query: str, *, page: int = 1,
     except Exception as exc:
         logger.debug("literotica search failed: %s", exc)
         return []
+    if query and category:
+        results = [
+            r for r in results
+            if _matches_query(
+                query,
+                r.get("title", ""), r.get("author", ""),
+                r.get("summary", ""), r.get("fandom", ""),
+            )
+        ]
     for r in results[:PER_SITE_LIMIT]:
         r["site"] = "literotica"
     return results[:PER_SITE_LIMIT]

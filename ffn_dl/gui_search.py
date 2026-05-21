@@ -140,6 +140,7 @@ def _royalroad_search_spec():
             ("Min &words:", "min_words"),
             ("Ma&x words:", "max_words"),
             ("Min &pages:", "min_pages"),
+            ("Max p&ages:", "max_pages"),
             ("Min &rating:", "min_rating"),
         ],
     }
@@ -621,8 +622,27 @@ class SearchFrame(wx.Frame):
                 )
             )
         )
+        # AO3 supports filter-only browsing: a Fandom name + Complete +
+        # English + Explicit is a perfectly valid empty-query search on
+        # AO3's /works/search endpoint. The choice filters
+        # (rating/category/complete/crossover/language/sort) and the
+        # free-text filters (fandom/character/relationship/freeform/
+        # word_count) all narrow the result set on their own.
+        ao3_filter_only = (
+            self.site_key == "ao3"
+            and any(
+                filters.get(k)
+                for k in (
+                    "rating", "category", "complete", "crossover",
+                    "language", "sort", "single_chapter",
+                    "fandom", "character", "relationship", "freeform",
+                    "word_count", "title", "creator",
+                )
+            )
+        )
         if not query and not (
             list_browse or rr_filter_only or erotica_filter_only
+            or ao3_filter_only
         ):
             self._log("Error: Please enter a search query.")
             return
@@ -642,6 +662,24 @@ class SearchFrame(wx.Frame):
         )
         site_label = self._SITE_LABELS.get(self.site_key, self.site_key)
         self._log(f"Searching {site_label} for: {query}{filter_str}")
+        # Royal Road browse-list mode (Rising Stars / Best Rated / etc.)
+        # uses a different URL shape and the URL builder silently drops
+        # most other RR filters. Surface the dropped names so users
+        # aren't left guessing why min_words wasn't honoured.
+        if list_browse:
+            list_ignored = [
+                k for k in (
+                    "status", "type", "order_by",
+                    "min_words", "max_words", "min_pages", "max_pages",
+                    "min_rating",
+                )
+                if filters.get(k)
+            ]
+            if list_ignored:
+                self._log(
+                    "  Note: Royal Road browse-list mode ignores "
+                    + ", ".join(list_ignored)
+                )
         self._spawn_search_worker(query, filters, page=1, append=False)
 
     def _on_load_more(self):
@@ -775,13 +813,29 @@ class SearchFrame(wx.Frame):
         if new_exhausted:
             self._exhausted_sites = set(self._exhausted_sites) | set(new_exhausted)
 
+        # Snapshot ticked URLs before DeleteAllItems blows them away —
+        # Load More then rebuilds the list and we re-tick any row whose
+        # URL is still present. Without this, the user's selections are
+        # silently discarded on every Load More, which is surprising for
+        # keyboard workflows that walked the list, ticked rows, and
+        # then loaded another page.
+        previous_checked_urls: set[str] = set()
+        if append:
+            for i in self._checked_rows():
+                if 0 <= i < len(self.results):
+                    u = (self.results[i].get("url") or "").strip()
+                    if u:
+                        previous_checked_urls.add(u)
+
         # Keep the raw (uncollapsed) results across load-more so we can
         # re-run collapse on the full set — otherwise parts of the same
         # series that span page boundaries never find each other.
         if append:
             raw = list(self._raw_results or []) + list(new_results)
+            raw_added = len(new_results)
         else:
             raw = list(new_results)
+            raw_added = len(raw)
         self._raw_results = raw
 
         if self.site_key == "ao3":
@@ -816,6 +870,10 @@ class SearchFrame(wx.Frame):
                 ctrl.SetItem(row, 5, str(r.get("chapters", "")))
                 ctrl.SetItem(row, 6, r.get("rating", "") or "")
                 ctrl.SetItem(row, 7, r.get("status", "") or "")
+            if previous_checked_urls:
+                for i, r in enumerate(self.results):
+                    if (r.get("url") or "").strip() in previous_checked_urls:
+                        ctrl.CheckItem(i, True)
         finally:
             ctrl.Thaw()
 
@@ -851,11 +909,22 @@ class SearchFrame(wx.Frame):
         if append:
             added = len(self.results) - previous_count
             focus_row = previous_count if added > 0 else 0
-            self._log(
-                f"Loaded more. Total {len(self.results)} rows "
-                f"(+{max(added, 0)})."
-                if added > 0 else "No more results."
-            )
+            if added > 0:
+                self._log(
+                    f"Loaded more. Total {len(self.results)} rows "
+                    f"(+{added})."
+                )
+            elif raw_added > 0:
+                # Series collapse absorbed every new raw row into an
+                # existing series row — visible count didn't change but
+                # the series rows now have more parts. Log honestly so
+                # the user knows the click did something.
+                self._log(
+                    f"Loaded more. +{raw_added} raw row(s) merged into "
+                    "existing series; visible row count unchanged."
+                )
+            else:
+                self._log("No more results.")
         else:
             focus_row = 0
             self._log(f"Found {len(self.results)} results.")
@@ -952,26 +1021,36 @@ class SearchFrame(wx.Frame):
             self.apply_busy(self.main_frame._downloading)
         event.Skip()
 
-    def _on_search_download(self):
-        ticked = self._checked_rows()
-        if len(ticked) > 1:
-            # Multi-pick batches stay on the legacy global-busy path
-            # because they may span multiple sites (erotica fan-out)
-            # and the per-site queue can't steer one job across
-            # several workers yet.
-            if self.main_frame._global_busy:
+    def _on_search_download(self, *, override_idx=None):
+        # ``override_idx`` is supplied by double-click / Enter activation
+        # so an explicit row activation wins over implicit batch state.
+        # Without it a user who'd ticked rows 1+2 and then double-clicked
+        # row 5 would download 1+2 (ticks beat the explicit activation),
+        # which surprised everyone the first time it happened.
+        if override_idx is not None:
+            idx = override_idx
+            if idx < 0 or idx >= len(self.results):
                 return
-            self._download_batch([self.results[i] for i in ticked])
-            return
-        # Zero or one ticks: act on the tick if present, otherwise on
-        # the focused row. Preserves the "arrow down, press Download"
-        # flow for users who don't care about multi-select.
-        if ticked:
-            idx = ticked[0]
         else:
-            idx = self.results_ctrl.GetFirstSelected()
-        if idx < 0 or idx >= len(self.results):
-            return
+            ticked = self._checked_rows()
+            if len(ticked) > 1:
+                # Multi-pick batches stay on the legacy global-busy path
+                # because they may span multiple sites (erotica fan-out)
+                # and the per-site queue can't steer one job across
+                # several workers yet.
+                if self.main_frame._global_busy:
+                    return
+                self._download_batch([self.results[i] for i in ticked])
+                return
+            # Zero or one ticks: act on the tick if present, otherwise on
+            # the focused row. Preserves the "arrow down, press Download"
+            # flow for users who don't care about multi-select.
+            if ticked:
+                idx = ticked[0]
+            else:
+                idx = self.results_ctrl.GetFirstSelected()
+            if idx < 0 or idx >= len(self.results):
+                return
         picked = self.results[idx]
         url = picked.get("url")
         if not url:
@@ -1065,6 +1144,10 @@ class SearchFrame(wx.Frame):
             if self.results[idx].get("is_series"):
                 self._on_show_parts()
                 return
+            # Pass the activated row through as an explicit override so
+            # ticks on other rows don't hijack the download into a batch.
+            self._on_search_download(override_idx=idx)
+            return
         self._on_search_download()
 
     def _on_pick_multiple(self):
