@@ -122,6 +122,16 @@ def can_self_replace() -> bool:
     return (Path(sys.executable).parent / ZIP_EXTRACTOR_EXE).is_file()
 
 
+def _sha256_file(path: Path) -> str:
+    """SHA-256 hex digest of ``path``. Streams in 1 MiB chunks so a
+    large portable build doesn't load the whole file into memory."""
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
 def _verify_digest(path: Path, digest: str) -> None:
     # No digest on the release asset → log loudly so the absence is
     # auditable, but don't block: GitHub doesn't always populate the
@@ -143,11 +153,7 @@ def _verify_digest(path: Path, digest: str) -> None:
             algo,
         )
         return
-    h = hashlib.sha256()
-    with open(path, "rb") as f:
-        for chunk in iter(lambda: f.read(1 << 20), b""):
-            h.update(chunk)
-    if h.hexdigest().lower() != expected.lower():
+    if _sha256_file(path).lower() != expected.lower():
         raise RuntimeError(
             "Downloaded update failed SHA-256 verification. The file was "
             "not installed; the running version is unchanged."
@@ -384,10 +390,36 @@ def download_and_replace(update_info, progress_cb=None) -> Path:
         _verify_digest(zip_path, update_info.get("digest"))
 
         # Unwrap the top-level folder so ZipExtractor can extract
-        # straight into install_dir.
+        # straight into install_dir. Validate every member's resolved
+        # path against the extraction root before writing — the stdlib
+        # ``zipfile.extractall`` does not block path traversal
+        # (``../../etc/passwd``) or absolute Windows paths
+        # (``C:\Windows\System32\...``). The SHA-256 digest check on
+        # the asset already authenticates the zip's bytes against the
+        # release API, but defense-in-depth: if a compromised release
+        # or weakened TLS pipeline ever delivered a Zip Slip payload,
+        # we'd refuse it instead of writing files outside ``extracted``.
         extracted.mkdir()
+        extracted_resolved = extracted.resolve()
         with zipfile.ZipFile(zip_path) as zf:
-            zf.extractall(extracted)
+            for info in zf.infolist():
+                # Reject absolute paths and ``..`` segments outright;
+                # they can't appear in a well-formed release zip.
+                name = info.filename
+                if name.startswith(("/", "\\")) or ".." in name.replace("\\", "/").split("/"):
+                    raise RuntimeError(
+                        "Refusing to extract update — zip contains a "
+                        f"suspicious path: {name!r}"
+                    )
+                target = (extracted / name).resolve()
+                try:
+                    target.relative_to(extracted_resolved)
+                except ValueError as exc:
+                    raise RuntimeError(
+                        "Refusing to extract update — zip member would "
+                        f"land outside the extract directory: {name!r}"
+                    ) from exc
+                zf.extract(info, extracted)
         zip_path.unlink(missing_ok=True)
 
         # Determine the directory whose *contents* should land in the
@@ -420,6 +452,23 @@ def download_and_replace(update_info, progress_cb=None) -> Path:
         # when it tries to overwrite its own binary inside install_dir.
         extractor_tmp = workdir / ZIP_EXTRACTOR_EXE
         shutil.copy2(extractor_src, extractor_tmp)
+
+        # Defence-in-depth against UAC-bypass-via-temp: low-priv
+        # malware on the same account could watch the workdir and
+        # swap the copied ZipExtractor.exe between ``shutil.copy2``
+        # and the elevated ``ShellExecuteW("runas", ...)``, then ride
+        # the user's "Yes" prompt to admin. Hash the source AND the
+        # copy immediately before spawn and refuse to launch on
+        # mismatch. The TOCTOU window is now small enough that a
+        # file-watcher malware would have to win a near-zero
+        # nanosecond race, and we surface tampering instead of
+        # silently elevating untrusted code.
+        if _sha256_file(extractor_src) != _sha256_file(extractor_tmp):
+            raise RuntimeError(
+                "Update aborted — ZipExtractor.exe staging copy did not "
+                "match the source binary's SHA-256. Refusing to launch "
+                "a possibly tampered helper. The install is unchanged."
+            )
 
         _spawn_extractor(extractor_tmp, flat_zip, install_dir, current_exe)
     except Exception:
