@@ -274,6 +274,18 @@ class MainFrame(wx.Frame):
         # manual AO3 download can run while an FFN sweep is in flight.
         self._global_busy = False
         self._busy_kind = None
+        # Picker-flow ownership transfer flag. ``_run_picker_download``
+        # runs on a raw worker thread (not the per-site queue) and
+        # spawns a follow-up ``_run_picked_batch`` thread when the user
+        # confirms selections. The follow-up takes over busy ownership,
+        # but the outer ``_run_download`` finally would otherwise
+        # clear ``_global_busy`` before the batch ran. The picker
+        # handler sets this flag before ``picker_done.set()`` so the
+        # outer finally can see "ownership transferred — leave busy
+        # alone" and skip its clear. ``threading.Event``'s set/wait
+        # establishes the happens-before relationship needed for the
+        # worker thread to observe the write.
+        self._picker_transferred_busy = False
         # site_name → (active, pending) for sites with jobs running
         # or queued. Updated from ``_on_site_queue_change`` on the
         # main thread; drives the close-confirmation dialog's summary.
@@ -784,11 +796,16 @@ class MainFrame(wx.Frame):
         prompt's message so users see *what* they're cancelling, not a
         generic "work in progress" banner.
         """
-        def _update():
-            self._global_busy = bool(busy)
-            self._busy_kind = kind if busy else None
-            self._refresh_busy_ui()
-        wx.CallAfter(_update)
+        # Flip the busy state SYNCHRONOUSLY so callers that immediately
+        # read ``self._global_busy`` see the updated value. Earlier the
+        # whole body ran via ``wx.CallAfter``, which meant two rapid
+        # Download clicks could both observe ``_global_busy == False``
+        # and both spawn workers. Bool assignment is atomic in CPython
+        # so cross-thread sets are safe; only the UI refresh has to
+        # marshal back to the main thread.
+        self._global_busy = bool(busy)
+        self._busy_kind = kind if busy else None
+        wx.CallAfter(self._refresh_busy_ui)
 
     def _refresh_busy_ui(self):
         """Re-apply button enable state from the current busy flags.
@@ -1136,7 +1153,21 @@ class MainFrame(wx.Frame):
             def cb(line):
                 # Marshal log lines back to the main thread.
                 wx.CallAfter(self._log, line)
-            ok = self._attribution_module.install(backend, log_callback=cb)
+            try:
+                ok = self._attribution_module.install(backend, log_callback=cb)
+            except Exception as exc:
+                # Without this guard, an unexpected raise from the pip
+                # subprocess (OSError, network exception, permission
+                # error) skipped the ``wx.CallAfter(self._after_install…)``
+                # line below. ``_installing_attribution`` then kept the
+                # backend forever and the install button stayed disabled
+                # with "(installing...)" as the status — only fixable
+                # by a restart.
+                wx.CallAfter(
+                    self._log,
+                    f"Install of {backend} crashed: {exc}",
+                )
+                ok = False
             wx.CallAfter(self._after_install, backend, ok, frozen)
 
         threading.Thread(target=run, daemon=True).start()
@@ -2571,8 +2602,20 @@ class MainFrame(wx.Frame):
             # ``dlq-*`` threads and manage busy state via the queue
             # listener, so clearing ``_global_busy`` here would
             # clobber an unrelated in-flight search or batch.
-            if not threading.current_thread().name.startswith(
-                WORKER_THREAD_PREFIX
+            #
+            # ``_picker_transferred_busy`` consumes-and-clears here:
+            # the picker handler spawned a ``_run_picked_batch`` thread
+            # that now owns the busy state, and that thread's own
+            # ``finally`` clears it on completion. Clearing busy here
+            # would race the user clicking Download again before the
+            # batch starts.
+            transferred = self._picker_transferred_busy
+            self._picker_transferred_busy = False
+            if (
+                not transferred
+                and not threading.current_thread().name.startswith(
+                    WORKER_THREAD_PREFIX
+                )
             ):
                 self._set_busy(False)
 
@@ -2649,6 +2692,7 @@ class MainFrame(wx.Frame):
             self._pending_worker_dialogs.add(picker_done)
 
         def _handle_selection(selected_urls):
+            spawned = False
             try:
                 if not selected_urls:
                     self._log("(No selections — nothing downloaded.)")
@@ -2668,7 +2712,15 @@ class MainFrame(wx.Frame):
                     kwargs={"params": batch_params},
                     daemon=True,
                 ).start()
+                spawned = True
             finally:
+                # Signal the outer ``_run_download`` finally to leave
+                # ``_global_busy`` alone when a batch follow-up is now
+                # carrying it. Has to land BEFORE ``picker_done.set()``
+                # so the worker thread observes the write under the
+                # Event's happens-before relationship.
+                if spawned:
+                    self._picker_transferred_busy = True
                 picker_done.set()
 
         wx.CallAfter(self._open_picker, title, works, _handle_selection)
@@ -2681,11 +2733,27 @@ class MainFrame(wx.Frame):
             self._pending_worker_dialogs.discard(picker_done)
 
     def _open_picker(self, title, works, on_ok):
-        dlg = StoryPickerDialog(self, title, works, prefs=self.prefs)
-        result = dlg.ShowModal()
-        picked_urls = dlg.picked_urls() if result == wx.ID_OK else []
-        dlg.Destroy()
-        on_ok(picked_urls)
+        # ``on_ok`` is called UNCONDITIONALLY exactly once. The worker
+        # thread that triggered this dialog is blocked on
+        # ``picker_done.wait()`` inside ``_run_picker_download`` and
+        # ``on_ok`` is what sets that event — if dialog construction or
+        # ``ShowModal`` raises and we skip ``on_ok``, the worker leaks
+        # forever (no timeout on the wait). Even on a hard error the
+        # worker has to be released with an empty selection so its
+        # outer finally runs.
+        picked_urls: list[str] = []
+        try:
+            dlg = StoryPickerDialog(self, title, works, prefs=self.prefs)
+            try:
+                if dlg.ShowModal() == wx.ID_OK:
+                    picked_urls = dlg.picked_urls()
+            finally:
+                dlg.Destroy()
+        except Exception as exc:
+            logger.exception("Story picker dialog failed: %s", exc)
+            self._log(f"Could not show picker: {exc}")
+        finally:
+            on_ok(picked_urls)
 
     def _run_picked_batch(self, urls, kind, *, params: Optional[_DownloadParams] = None):
         if params is None:
