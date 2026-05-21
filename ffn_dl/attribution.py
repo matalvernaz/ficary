@@ -1578,8 +1578,14 @@ def _llm_request_timeout_s(override: int | None = None) -> int:
     Non-positive or non-numeric values at any layer fall through to
     the next."""
     if override is not None:
+        # Accept ``"30.5"`` and ``30.5`` as well as plain ints — the
+        # env-var branch already supports float-shaped strings via
+        # ``int(float(raw))``, so the caller-supplied override should
+        # match that contract. Previously ``int("30.5")`` raised and we
+        # silently fell through to the env var instead of honouring the
+        # override the caller went out of their way to set.
         try:
-            value = int(override)
+            value = int(float(override))
         except (TypeError, ValueError):
             value = 0
         if value > 0:
@@ -1882,7 +1888,6 @@ def _llm_http_with_retry(
     import urllib.error
     import urllib.request
 
-    last_exc = None
     for attempt in range(_LLM_HTTP_RETRY_MAX):
         try:
             with urllib.request.urlopen(req, timeout=request_timeout) as resp:
@@ -1920,10 +1925,13 @@ def _llm_http_with_retry(
                 )
                 import time as _time
                 _time.sleep(delay)
-                last_exc = exc
                 continue
-            # Non-retryable status (or final attempt exhausted) —
-            # surface server-provided error text.
+            # Non-retryable status, or final attempt exhausted —
+            # surface server-provided error text. The final-attempt
+            # path lands here too (the ``attempt < MAX - 1`` guard
+            # fails on the last loop iteration), so there's no
+            # separate "after N attempts" raise below; one less code
+            # path to keep accurate as the retry knobs change.
             detail = ""
             try:
                 detail = exc.read().decode("utf-8", errors="replace")[:500]
@@ -1961,11 +1969,13 @@ def _llm_http_with_retry(
             raise LLMUnavailable(
                 f"LLM endpoint {url} unreachable: {exc}"
             ) from exc
-    # Exhausted retries on a transient status.
+    # Unreachable: every loop iteration above either returns, continues
+    # to the next attempt, or raises. _LLM_HTTP_RETRY_MAX > 0 is a
+    # module constant. Kept as a defensive sentinel against a future
+    # refactor that lets control fall off the bottom of the loop.
     raise RuntimeError(
-        f"LLM HTTP {last_exc.code} from {provider} after "
-        f"{_LLM_HTTP_RETRY_MAX} attempts: {last_exc.reason}"
-    ) from last_exc
+        f"LLM HTTP retry loop exited without resolution against {provider}"
+    )
 
 
 def _extract_llm_text(body: str, provider: str) -> str:
