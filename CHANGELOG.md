@@ -1,5 +1,29 @@
 # Changelog
 
+## 2.4.41 — 2026-05-22
+
+FFN search used to die on the first transient Cloudflare 403. The
+chapter scraper has the full retry/rotation/cf-solve machinery —
+client-hint headers, browser-impersonation rotation, on-disk CF
+cookie seeding, retry-with-backoff — but ``_fetch_search_page`` in
+``ffn_dl/search.py`` bypassed all of it: a one-shot
+``Session(impersonate="chrome")`` with no client hints and no
+retries. Matt's "list every Harry Potter book sorted by updated"
+fandom-browse hit that path and raised "FFN may be blocking
+requests" on the first 403.
+
+Hardened the search fetch to mirror the chapter scraper's 403
+mitigation. New ``_new_search_session`` reuses
+``scraper._CHROMIUM_CLIENT_HINTS`` and ``BROWSERS`` (kept in one
+place so both paths pin the same Chromium version when curl_cffi
+bumps its target). ``_fetch_search_page`` now retries up to
+``_SEARCH_FETCH_MAX_RETRIES = 4`` times on 403/429/503 with browser
+rotation between attempts and linear backoff, plus seeds on-disk
+CF cookies (free re-use of any solve a prior chapter download
+already produced). HTTP 404 still raises immediately so
+``search_ffn``'s fandom auto-detect can fall through to the next
+category slug.
+
 ## 2.4.31 — 2026-05-20
 
 Erotica fan-out used to fetch a single page per click, capping a

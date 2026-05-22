@@ -1,8 +1,10 @@
 """Search fanfiction.net, Archive of Our Own, and Royal Road."""
 
 import logging
+import random
 import re
-from urllib.parse import urlencode
+import time
+from urllib.parse import urlencode, urlparse
 
 from bs4 import BeautifulSoup, NavigableString
 from curl_cffi import requests as curl_requests
@@ -384,20 +386,163 @@ def _build_search_url(query, filters, page=1):
     return FFN_BASE + SEARCH_PATH + "?" + urlencode(params)
 
 
+_SEARCH_FETCH_MAX_RETRIES = 4
+"""How many attempts ``_fetch_search_page`` makes before giving up.
+The chapter scraper uses ``max_retries=5`` by default; search is a
+single fetch per user click rather than a long library walk, so we
+want comparable first-contact 403 resilience without spending the
+full chapter-fetch budget on one dropdown change."""
+
+_SEARCH_FETCH_BACKOFF_S = 2.0
+"""Base sleep between search retries (linear: ``base * attempt``).
+FFN's Cloudflare 403s on this path resolve on the next CDN edge
+cache hit rather than needing exponential decay, and search is
+interactive — a long wait would feel broken to the user."""
+
+_SEARCH_CF_CHALLENGE_BODY_PREFIX = 2000
+"""Bytes of the response body inspected for the ``Just a moment...``
+Cloudflare challenge signature. The marker lands well inside the
+first 2KB on every challenge variant we've seen; reading more wastes
+work on the happy path."""
+
+
+def _new_search_session(browser=None):
+    """Construct a curl_cffi Session pre-loaded with the chapter
+    scraper's client-hint headers.
+
+    FFN's Cloudflare deployment 403s first-contact requests that
+    don't carry the high-entropy client hints listed in its
+    ``Critical-CH`` response. Reusing the scraper's constants pins
+    the Chromium version in one place — when curl_cffi bumps its
+    Chrome target, both code paths update together.
+    """
+    from .scraper import BROWSERS, _CHROMIUM_CLIENT_HINTS
+    if browser is None:
+        browser = BROWSERS[0]
+    sess = curl_requests.Session(impersonate=browser)
+    if browser in ("chrome", "edge"):
+        sess.headers.update(_CHROMIUM_CLIENT_HINTS)
+    return sess
+
+
+def _search_host_for_url(url):
+    """Lower-case the URL's host with the ``www.`` prefix stripped.
+    Matches the chapter scraper's CF-cookie cache key shape so search
+    and chapter fetches share a single on-disk entry per host."""
+    host = (urlparse(url).hostname or "").lower()
+    if host.startswith("www."):
+        host = host[4:]
+    return host
+
+
+def _seed_search_cf_cookies(sess, url):
+    """Apply on-disk Cloudflare cookies for the URL's host onto
+    ``sess`` if a cached solve exists. Returns ``True`` when cookies
+    were injected.
+
+    Search never invokes the Playwright solver itself (the 300MB
+    browser dep is opt-in and search is interactive), but if a prior
+    chapter download solved the challenge already, riding those
+    persisted cookies is free.
+    """
+    try:
+        from . import cf_solve
+    except ImportError:
+        return False
+    host = _search_host_for_url(url)
+    if not host:
+        return False
+    cached = cf_solve.load_cached(host)
+    if cached is None:
+        return False
+    cf_solve.inject_into_session(sess, cached)
+    return True
+
+
 def _fetch_search_page(url):
-    session = curl_requests.Session(impersonate="chrome")
-    resp = session.get(url, timeout=30)
-    if resp.status_code != 200:
+    """Fetch a search-results page, retrying through impersonation
+    rotation on Cloudflare 403s.
+
+    The chapter scraper has the full retry/rotation/cf-solve
+    machinery for 403s. Search used to bypass all of it — one
+    ``Session(impersonate="chrome")`` with no retries — and abort on
+    the first refusal. This mirrors the same minimum hardening:
+    client-hint headers, browser-impersonation rotation between
+    attempts, on-disk CF cookie seeding (free re-use of any solve a
+    chapter fetch already produced), and short linear backoff.
+
+    HTTP 404 still raises immediately — the fandom-browse
+    auto-detect loop in :func:`search_ffn` relies on the ``"404"``
+    substring to mean "wrong category, try the next slug".
+    """
+    from .scraper import BROWSERS
+    browser = BROWSERS[0]
+    sess = _new_search_session(browser)
+    _seed_search_cf_cookies(sess, url)
+
+    last_status = None
+    last_exc = None
+    for attempt in range(_SEARCH_FETCH_MAX_RETRIES):
+        try:
+            resp = sess.get(url, timeout=30)
+        except Exception as exc:
+            last_exc = exc
+            if attempt >= _SEARCH_FETCH_MAX_RETRIES - 1:
+                break
+            time.sleep(_SEARCH_FETCH_BACKOFF_S * (attempt + 1))
+            continue
+
+        last_status = resp.status_code
+        if resp.status_code == 200:
+            lower = resp.text[:_SEARCH_CF_CHALLENGE_BODY_PREFIX].lower()
+            if "just a moment" in lower and "cloudflare" in lower:
+                if attempt >= _SEARCH_FETCH_MAX_RETRIES - 1:
+                    raise RuntimeError(
+                        "Cloudflare challenge detected. "
+                        "Try again in a few minutes."
+                    )
+                browser = random.choice(BROWSERS)
+                sess = _new_search_session(browser)
+                _seed_search_cf_cookies(sess, url)
+                time.sleep(_SEARCH_FETCH_BACKOFF_S * (attempt + 1))
+                continue
+            return resp.text
+
+        if resp.status_code == 404:
+            # search_ffn's fandom auto-detect inspects the message
+            # for "404"; keep it terminal here so the next category
+            # slug gets tried instead of burning retries on a wrong URL.
+            raise RuntimeError("Search request failed (HTTP 404).")
+
+        if resp.status_code in (403, 429, 503):
+            if attempt >= _SEARCH_FETCH_MAX_RETRIES - 1:
+                break
+            logger.debug(
+                "Search HTTP %d on %s; rotating impersonation and "
+                "retrying (attempt %d/%d)",
+                resp.status_code, url, attempt + 1,
+                _SEARCH_FETCH_MAX_RETRIES,
+            )
+            browser = random.choice(BROWSERS)
+            sess = _new_search_session(browser)
+            _seed_search_cf_cookies(sess, url)
+            time.sleep(_SEARCH_FETCH_BACKOFF_S * (attempt + 1))
+            continue
+
         raise RuntimeError(
             f"Search request failed (HTTP {resp.status_code}). "
             "FFN may be blocking requests — try again later."
         )
-    lower = resp.text[:2000].lower()
-    if "just a moment" in lower and "cloudflare" in lower:
+
+    if last_exc is not None and last_status is None:
         raise RuntimeError(
-            "Cloudflare challenge detected. Try again in a few minutes."
-        )
-    return resp.text
+            f"Search request failed: {last_exc}. "
+            "FFN may be blocking requests — try again later."
+        ) from last_exc
+    raise RuntimeError(
+        f"Search request failed (HTTP {last_status}). "
+        "FFN may be blocking requests — try again later."
+    )
 
 
 def _extract_title(stitle_tag):

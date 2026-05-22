@@ -345,3 +345,95 @@ class TestFFNFandomBrowse:
         assert results
         # Slug "Harry-Potter" → display "Harry Potter"
         assert results[0]["fandom"] == "Harry Potter"
+
+
+class TestSearchFetchRetries:
+    """`_fetch_search_page` used to be a one-shot ``Session.get``; a
+    transient Cloudflare 403 aborted the whole search. The hardened
+    version mirrors the chapter scraper's retry/rotation loop —
+    verify a 403→200 sequence resolves instead of raising."""
+
+    def _make_resp(self, status, text="<html></html>"):
+        return mock.Mock(status_code=status, text=text)
+
+    def test_recovers_from_transient_403(self, monkeypatch):
+        from ffn_dl import search as search_mod
+        responses = [
+            self._make_resp(403, "forbidden"),
+            self._make_resp(200, "<html><body>ok</body></html>"),
+        ]
+        get_calls = []
+
+        def fake_get(url, timeout=30):
+            get_calls.append(url)
+            return responses.pop(0)
+
+        def fake_new_session(browser=None):
+            sess = mock.Mock()
+            sess.get = fake_get
+            return sess
+
+        monkeypatch.setattr(search_mod, "_new_search_session", fake_new_session)
+        monkeypatch.setattr(
+            search_mod, "_seed_search_cf_cookies", lambda sess, url: False,
+        )
+        monkeypatch.setattr(search_mod.time, "sleep", lambda s: None)
+
+        html = search_mod._fetch_search_page(
+            "https://www.fanfiction.net/book/Harry-Potter/?srt=1",
+        )
+        assert "ok" in html
+        assert len(get_calls) == 2
+
+    def test_404_raises_immediately(self, monkeypatch):
+        """Fandom auto-detect depends on 404 being terminal so the
+        loop can try the next category slug instead of burning the
+        retry budget on a wrong URL."""
+        from ffn_dl import search as search_mod
+        attempts = []
+
+        def fake_get(url, timeout=30):
+            attempts.append(url)
+            return self._make_resp(404, "not found")
+
+        def fake_new_session(browser=None):
+            sess = mock.Mock()
+            sess.get = fake_get
+            return sess
+
+        monkeypatch.setattr(search_mod, "_new_search_session", fake_new_session)
+        monkeypatch.setattr(
+            search_mod, "_seed_search_cf_cookies", lambda sess, url: False,
+        )
+        monkeypatch.setattr(search_mod.time, "sleep", lambda s: None)
+
+        with pytest.raises(RuntimeError, match="404"):
+            search_mod._fetch_search_page(
+                "https://www.fanfiction.net/book/Nonexistent-Fandom/",
+            )
+        assert len(attempts) == 1
+
+    def test_exhausted_retries_raises_with_last_status(self, monkeypatch):
+        from ffn_dl import search as search_mod
+        attempts = []
+
+        def fake_get(url, timeout=30):
+            attempts.append(url)
+            return self._make_resp(403, "still forbidden")
+
+        def fake_new_session(browser=None):
+            sess = mock.Mock()
+            sess.get = fake_get
+            return sess
+
+        monkeypatch.setattr(search_mod, "_new_search_session", fake_new_session)
+        monkeypatch.setattr(
+            search_mod, "_seed_search_cf_cookies", lambda sess, url: False,
+        )
+        monkeypatch.setattr(search_mod.time, "sleep", lambda s: None)
+
+        with pytest.raises(RuntimeError, match="HTTP 403"):
+            search_mod._fetch_search_page(
+                "https://www.fanfiction.net/book/Harry-Potter/?srt=1",
+            )
+        assert len(attempts) == search_mod._SEARCH_FETCH_MAX_RETRIES
