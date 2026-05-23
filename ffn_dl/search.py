@@ -1595,56 +1595,121 @@ def _literotica_tag_slug(query: str) -> str:
     return re.sub(r"\s+", "-", s)
 
 
+_LIT_STORY_HREF_RE = re.compile(
+    r"^https?://(?:www\.)?literotica\.com/s/[a-z0-9][a-z0-9-]*$"
+)
+"""Whitelist for story-card title anchors. Pinning the host + the
+``/s/`` path keeps tag-page nav links (``/femdom?dialog=log_in``,
+``/c/<category>``) and series links (``/series/se/<id>``) from being
+mistaken for cards. The trailing ``$`` rejects query-string variants
+(bookmark dialog, login redirect) that share the ``/s/`` prefix but
+aren't story permalinks."""
+
+_LIT_AUTHOR_HREF_RE = re.compile(
+    r"/authors/[^/]+/works", re.I
+)
+
+_LIT_CATEGORY_HREF_RE = re.compile(
+    r"literotica\.com/c/[a-z0-9-]+", re.I
+)
+
+
 def _parse_literotica_results(html):
+    """Parse story cards from a Literotica tag-browse page.
+
+    Literotica migrated to a Next.js front-end whose class names rotate
+    per build (``_works_item_kpkm_4`` → ``_works_item_<rand>_4`` etc.),
+    so the previous schema.org selectors
+    (``property="itemListElement"``, ``property="ratingValue"``) match
+    zero cards on the live site. Switch to attribute-based selectors
+    that don't depend on rotating class names:
+
+    * Title links carry ``rel="external"`` and a stable
+      ``literotica.com/s/<slug>`` href. That's the durable anchor we
+      use to enumerate cards.
+    * Author links land on ``/authors/<name>/works``.
+    * Category links land on ``literotica.com/c/<slug>``.
+    * Ratings are wrapped in a ``<span data-value="X.YZ" title="Rating">``.
+
+    Each title anchor's enclosing ``<div role="article">`` carries the
+    full card metadata; we walk up at most eight levels to find it
+    before falling back to the bare title/url pair.
+    """
     soup = BeautifulSoup(html, "lxml")
     results = []
-    for card in soup.find_all(
-        "div", attrs={"property": "itemListElement"}
-    ):
-        url = card.get("resource") or ""
-        title = ""
-        h_tag = card.find(["h4", "h3"])
-        if h_tag:
-            title = h_tag.get_text(strip=True)
+    seen_urls = set()
+    for a in soup.find_all("a", attrs={"rel": "external"}):
+        href = a.get("href", "")
+        if not _LIT_STORY_HREF_RE.match(href):
+            continue
+        if href in seen_urls:
+            continue
+        seen_urls.add(href)
+        title = a.get_text(" ", strip=True)
         if not title:
-            # Fallback to <meta property=name>
-            mn = card.find("meta", attrs={"property": "name"})
-            if mn:
-                title = mn.get("content", "")
+            continue
+
+        # Walk up to the enclosing card so we can sibling-search for
+        # description / author / category / rating without re-matching
+        # at the document root.
+        card = a
+        for _ in range(8):
+            card = getattr(card, "parent", None)
+            if card is None:
+                break
+            if (
+                getattr(card, "name", None) == "div"
+                and card.get("role") == "article"
+            ):
+                break
+        else:
+            card = None
+        if card is None or card.name != "div":
+            results.append({
+                "title": title, "author": "", "url": href, "summary": "",
+                "words": "?", "chapters": "?", "rating": "?", "fandom": "",
+                "status": "",
+            })
+            continue
 
         author = ""
-        author_link = card.find(
-            "a", attrs={"property": re.compile(r"author")}
-        )
-        if author_link:
-            mn = author_link.find("meta", attrs={"property": "name"})
-            if mn:
-                author = mn.get("content", "")
-            else:
-                author = author_link.get_text(" ", strip=True).replace("by ", "").strip()
+        author_a = card.find("a", href=_LIT_AUTHOR_HREF_RE)
+        if author_a:
+            author = author_a.get_text(" ", strip=True)
 
+        # Description is the only <p> in the card that isn't the title
+        # paragraph. The title paragraph carries ``role="heading"``;
+        # everything else (including the bookmark / login aria-label
+        # span) lives inside that heading paragraph too, so the only
+        # way to reach the real description is to skip heading <p>s
+        # outright. Among the remaining paragraphs, ignore the
+        # "by <author>" attribution line.
         summary = ""
-        headline = card.find("p", attrs={"property": "headline"})
-        if headline:
-            summary = headline.get_text(" ", strip=True)
+        for p in card.find_all("p"):
+            if p.get("role") == "heading":
+                continue
+            ptext = p.get_text(" ", strip=True)
+            if not ptext or ptext == title or ptext.lower().startswith("by "):
+                continue
+            summary = ptext
+            break
 
-        # Category (Novels / Loving Wives / etc.) stands in for "fandom"
         fandom = ""
-        cat_link = card.find("a", href=re.compile(r"literotica\.com/c/"))
-        if cat_link:
-            fandom = cat_link.get_text(" ", strip=True)
-            # Strip trailing date
-            fandom = re.sub(r"\d{2}/\d{2}/\d{4}\s*$", "", fandom).strip()
+        cat_a = card.find("a", href=_LIT_CATEGORY_HREF_RE)
+        if cat_a:
+            fandom = cat_a.get_text(" ", strip=True)
 
         rating = "?"
-        rating_span = card.find("span", attrs={"property": "ratingValue"})
+        rating_span = card.find(
+            "span", attrs={"data-value": True, "title": "Rating"}
+        )
         if rating_span:
-            rating = rating_span.get_text(strip=True)
+            rating = rating_span.get("data-value", "?")
 
         results.append({
             "title": title,
             "author": author,
-            "url": url,
+            "url": href,
             "summary": summary,
             "words": "?",
             "chapters": "?",

@@ -54,6 +54,7 @@ REQUEST_TIMEOUT_S = 25
 EROTICA_SITE_SLUGS: list[str] = [
     "all",
     "literotica",
+    "ao3",
     "aff",
     "storiesonline",
     "nifty",
@@ -65,6 +66,7 @@ EROTICA_SITE_SLUGS: list[str] = [
     "chyoa",
     "darkwanderer",
     "greatfeet",
+    "bdsmlibrary",
 ]
 """Site-picker options for the unified search window. The first entry
 (``all``) triggers fan-out; everything else scopes to a single site."""
@@ -72,6 +74,7 @@ EROTICA_SITE_SLUGS: list[str] = [
 EROTICA_SITE_LABELS: dict[str, str] = {
     "all": "All erotica sites",
     "literotica": "Literotica",
+    "ao3": "AO3 (Explicit)",
     "aff": "Adult-FanFiction.org",
     "storiesonline": "StoriesOnline",
     "nifty": "Nifty",
@@ -83,6 +86,7 @@ EROTICA_SITE_LABELS: dict[str, str] = {
     "chyoa": "Chyoa (interactive)",
     "darkwanderer": "Dark Wanderer",
     "greatfeet": "GreatFeet",
+    "bdsmlibrary": "BDSM Library",
 }
 
 EROTICA_TAG_VOCABULARY: list[str] = [
@@ -98,8 +102,10 @@ EROTICA_TAG_VOCABULARY: list[str] = [
     "cheating",
     "chastity",
     "cuckold",
+    "cunnilingus",
     "dominance-submission",
     "exhibitionism",
+    "face-sitting",
     "femdom",
     "feet",
     "fisting",
@@ -224,6 +230,243 @@ def _matches_query(query: str, *fields: str) -> bool:
     return False
 
 
+# ── Per-site tag-vocabulary translation ─────────────────────────────
+#
+# The unified ``EROTICA_TAG_VOCABULARY`` is the user-facing tag list;
+# every site uses its own slugs / codes / titles. Each adapter looks
+# its tag up here instead of passing the vocab tag through verbatim
+# (which would mean every site that doesn't happen to use the same
+# slug — most of them — gets a 0-result fallback page silently).
+#
+# Returning ``None`` from :func:`_translate_tag` is a signal that the
+# site has no representation for that tag at all; callers treat that
+# as "skip this site for this tag" rather than degrading to a default
+# browse that would flood the result set with off-topic rows.
+#
+# Layout: ``_TAG_SLUGS[site][vocab_tag] = site_specific_slug``.
+# Missing entries fall through to :func:`_translate_tag`'s default
+# behaviour: vocab tag → passthrough for sites where the slug shape
+# usually matches our vocab (literotica), or ``None`` for sites where
+# an unmapped tag would never resolve (everything else).
+
+_LITEROTICA_TAG_SLUGS: dict[str, str] = {
+    # tags.literotica.com is permissive — most vocab tags are valid
+    # slugs verbatim. Only override when Literotica uses a different
+    # shape, or when we want to swap to the higher-volume sibling tag.
+    # Verified: ``feet`` returns ~100 cards vs ``foot-fetish`` ~34, so
+    # we keep the broader slug.
+}
+
+_LUSH_TAG_SLUGS: dict[str, str] = {
+    # Lushstories categories — verified live against
+    # /stories/<slug>. Anything not here returns a stub page with
+    # zero story anchors, so an explicit allowlist is mandatory.
+    "anal": "anal",
+    "bdsm": "bdsm",
+    "bondage": "bdsm",          # no standalone bondage category
+    "cheating": "cheating",
+    "cuckold": "cuckold",
+    "cunnilingus": "oral-sex",
+    "dominance-submission": "bdsm",
+    "exhibitionism": "exhibitionism",
+    "face-sitting": "facesitting",  # Lush uses no hyphen
+    "femdom": "femdom",
+    "feet": "fetish",           # no feet-specific category
+    "gangbang": "group-sex",
+    "gay": "gay-male",
+    "group-sex": "group-sex",
+    "harem": "threesomes",
+    "humiliation": "bdsm",
+    "incest": "taboo",          # Lush's incest stand-in
+    "interracial": "interracial",
+    "lesbian": "lesbian",
+    "masturbation": "masturbation",
+    "mature": "mature",
+    "mind-control": "mind-control",
+    "non-consent": "reluctance",
+    "oral": "oral-sex",
+    "polyamory": "wife-lovers",
+    "public-sex": "exhibitionism",
+    "roleplay": "fantasy-sci-fi",
+    "rough": "hardcore",
+    "spanking": "spanking",
+    "swinging": "swingers",
+    "teen": "teen",
+    "threesome": "threesomes",
+    "transgender": "trans",
+    "voyeur": "voyeur",
+    "watersports": "watersports",
+}
+
+_SOL_TAG_SLUGS: dict[str, str] = {
+    # storiesonline.net /stories/bytag/<slug>. SOL uses joined-word
+    # slugs (``femaledom``) where most sites use a hyphen, and serves
+    # the all-tags index for any unrecognised slug — so passing
+    # ``feet`` verbatim returned a 50 KB tag-index page that parsed as
+    # zero stories.
+    "anal": "anal",
+    "bdsm": "bdsm",
+    "bondage": "bondage",
+    "bukkake": "facial",
+    "celebrity": "celebrity",
+    "cheating": "cheating",
+    "chastity": "chastity-belt",
+    "cuckold": "cuckold",
+    "cunnilingus": "oral-sex",
+    "dominance-submission": "domsub",
+    "exhibitionism": "exhibitionism",
+    "feet": "foot-fetish",
+    "femdom": "femaledom",
+    "fisting": "fisting",
+    "gangbang": "gangbang",
+    "gay": "gay",
+    "group-sex": "group-sex",
+    "harem": "harem",
+    "humiliation": "humiliation",
+    "hypnosis": "hypnosis",
+    "incest": "incest",
+    "interracial": "interracial",
+    "lactation": "lactation",
+    "lesbian": "lesbian",
+    "masturbation": "masturbation",
+    "mature": "mature",
+    "mind-control": "mind-control",
+    "non-consent": "rape",
+    "oral": "oral-sex",
+    "orgy": "orgy",
+    "polyamory": "polygamy",
+    "pregnancy": "pregnancy",
+    "public-sex": "exhibitionism",
+    "roleplay": "fan-fiction",
+    "rough": "rough",
+    "spanking": "spanking",
+    "swinging": "swinging",
+    "teen": "school",
+    "threesome": "ménage",
+    "transgender": "transgender",
+    "voyeur": "voyeur",
+    "watersports": "water-sports",
+}
+
+_AO3_TAG_SLUGS: dict[str, str] = {
+    # AO3 freeform tags are Title-Case with spaces. These are the
+    # canonical AO3 tag names — passing them via the ``freeform``
+    # filter on :func:`search_ao3` lands on the canonical tag page.
+    "anal": "Anal Sex",
+    "bdsm": "BDSM",
+    "bondage": "Bondage",
+    "bukkake": "Bukkake",
+    "celebrity": "Celebrity Crush",
+    "cheating": "Infidelity",
+    "chastity": "Chastity Device",
+    "cuckold": "Cuckolding",
+    "cunnilingus": "Cunnilingus",
+    "dominance-submission": "Dom/sub",
+    "exhibitionism": "Exhibitionism",
+    "face-sitting": "Face-Sitting",
+    "femdom": "Femdom",
+    "feet": "Foot Fetish",
+    "fisting": "Fisting",
+    "futanari": "Futanari",
+    "gangbang": "Gangbang",
+    "gay": "M/M",
+    "group-sex": "Group Sex",
+    "harem": "Harem",
+    "humiliation": "Humiliation",
+    "hypnosis": "Hypnotism",
+    "incest": "Incest",
+    "interracial": "Interracial Relationship(s)",
+    "lactation": "Lactation",
+    "lesbian": "F/F",
+    "masturbation": "Masturbation",
+    "mature": "Mature",
+    "mind-control": "Mind Control",
+    "non-consent": "Non-Consensual",
+    "oral": "Oral Sex",
+    "orgy": "Orgy",
+    "polyamory": "Polyamory",
+    "pregnancy": "Pregnancy",
+    "public-sex": "Public Sex",
+    "roleplay": "Roleplay",
+    "rough": "Rough Sex",
+    "spanking": "Spanking",
+    "swinging": "Swinging",
+    "teen": "Underage",
+    "threesome": "Threesome",
+    "transgender": "Trans Character",
+    "voyeur": "Voyeurism",
+    "watersports": "Watersports",
+}
+
+_BDSMLIB_TAG_CODES: dict[str, str] = {
+    # BDSM Library encodes categories as numeric ``codeforstory[N]``
+    # radio buttons on the advanced ``/stories/search.php`` form
+    # (Yes/No/Maybe — submit ``yes`` for the targeted tag). The
+    # numeric IDs are stable code-IDs in the site's DB. Verified May
+    # 2026 by scraping the rendered form. Vocab tag → BDSM Library
+    # numeric code ID.
+    "bdsm": "71",                       # BDSM
+    "bondage": "70",                    # bondage
+    "chastity": "79",                   # chastity belt
+    "dominance-submission": "38",       # D/s
+    "exhibitionism": "21",              # exhibition
+    "femdom": "13",                     # F/m — one female dominating one male
+    "feet": "41",                       # feet
+    "fisting": "23",                    # fisting
+    "incest": "22",                     # incest
+    "interracial": "24",                # interracial
+    "lactation": "25",                  # lactation
+    "non-consent": "86",                # Rape
+    "spanking": "30",                   # spanking
+    "teen": "31",                       # teen
+    "transgender": "33",                # transgender
+    "voyeur": "35",                     # voyeurism
+    "watersports": "36",                # WaterSport
+}
+
+_SITE_TAG_SLUGS: dict[str, dict[str, str]] = {
+    "literotica": _LITEROTICA_TAG_SLUGS,
+    "lushstories": _LUSH_TAG_SLUGS,
+    "storiesonline": _SOL_TAG_SLUGS,
+    "ao3": _AO3_TAG_SLUGS,
+    "bdsmlibrary": _BDSMLIB_TAG_CODES,
+    # ``mcstories`` is wired in below where ``_MCS_TAG_CODES`` is
+    # defined (it predates the translation layer).
+}
+
+
+# Sites whose slug shape is permissive enough that any vocab tag the
+# user picks tends to resolve. Literotica's ``tags.literotica.com``
+# subdomain happily returns ~100 cards for arbitrary slugs (verified:
+# ``cheating``, ``cuckold``, ``transgender``, ``futanari``,
+# ``chastity``, all → ~100 cards) so we don't need an exhaustive
+# override table — anything not in :data:`_LITEROTICA_TAG_SLUGS`
+# falls through to the vocab tag verbatim.
+_LITEROTICA_PASSTHROUGH = True
+
+
+def _translate_tag(site: str, vocab_tag: str) -> Optional[str]:
+    """Return the site-specific slug for ``vocab_tag``, or ``None``
+    when the site has no representation for the tag.
+
+    Callers use ``None`` as a skip signal — don't fall back to a
+    default browse (would flood results with off-topic rows) and
+    don't fall back to the raw vocab tag (would build a URL the site
+    silently 404s into a stub/index page).
+    """
+    if not vocab_tag:
+        return None
+    key = vocab_tag.strip().lower()
+    if not key:
+        return None
+    site_map = _SITE_TAG_SLUGS.get(site)
+    if site_map and key in site_map:
+        return site_map[key]
+    if site == "literotica" and _LITEROTICA_PASSTHROUGH:
+        return key
+    return None
+
+
 # ── Per-site searches ────────────────────────────────────────────
 
 def search_aff(query: str, *, page: int = 1, fandom: str = "",
@@ -279,13 +522,25 @@ def search_sol(query: str, *, page: int = 1, tags: Optional[list] = None,
                **_: object) -> list[dict]:
     """StoriesOnline: free-text search is paywalled, but ``/stories/bytag/<tag1:tag2>``
     browses are free and have rich metadata in the result rows. If
-    the caller passed one or more tags we join them with ``:`` (SOL's
-    AND operator); otherwise we default to ``/library/new_stories.php``
-    as a recent-works browse and apply the query as a client-side
-    title filter."""
-    tags = [t.strip().lower() for t in (tags or []) if t and t.strip()]
-    if tags:
-        joined = ":".join(t.replace(" ", "-") for t in tags)
+    the caller passed one or more tags we translate them through
+    :data:`_SOL_TAG_SLUGS` (SOL uses joined-word slugs like
+    ``femaledom`` where most sites use a hyphen) and join with ``:``
+    — SOL's AND operator. Tags that don't translate are dropped; if
+    the resulting list is empty we return ``[]`` rather than falling
+    back to the recent-works browse (which would flood results with
+    off-topic rows).
+
+    Without any tags, default to ``/library/new_stories.php`` as a
+    recent-works browse and apply the query as a client-side title
+    filter.
+    """
+    vocab_tags = [t.strip().lower() for t in (tags or []) if t and t.strip()]
+    if vocab_tags:
+        translated = [_translate_tag("storiesonline", t) for t in vocab_tags]
+        translated = [t for t in translated if t]
+        if not translated:
+            return []
+        joined = ":".join(translated)
         url = f"https://storiesonline.net/stories/bytag/{joined}"
         if page > 1:
             url += f"/{page}"
@@ -343,12 +598,15 @@ def search_sol(query: str, *, page: int = 1, tags: Optional[list] = None,
 def search_mcstories(query: str, *, page: int = 1,
                      tags: Optional[list] = None, **_: object) -> list[dict]:
     """MCStories indexes every story by Dublin Core tag codes at
-    ``/Tags/<code>.html``. We map the first query-supplied tag to its
-    two-letter code (see :data:`_MCS_TAG_CODES`); tag-only searches
-    for tags that don't map return ``[]`` rather than the full Titles
-    index — the dispatcher's tag-capability filter already drops MCS
-    from a fan-out for unsupported tags, but defending the adapter
-    keeps direct callers honest too."""
+    ``/Tags/<code>.html``. The first query-supplied tag is translated
+    through :data:`_MCS_TAG_CODES` (which mirrors MCStories' 26 real
+    codes — earlier revisions silently mapped to wrong codes like
+    ``cb`` = comic-book instead of cheating). Tag-only searches for
+    tags MCStories doesn't carry return ``[]`` rather than the full
+    Titles index — the dispatcher's tag-capability filter already
+    drops MCS from a fan-out for unsupported tags, but defending the
+    adapter keeps direct callers honest too.
+    """
     del page  # MCStories pages fit in one listing
     first_tag = next((t for t in (tags or []) if t), "") or ""
     code = _MCS_TAG_CODES.get(first_tag.lower())
@@ -397,39 +655,68 @@ def search_mcstories(query: str, *, page: int = 1,
 
 _MCS_TAG_CODES = {
     # ffn-dl's unified tag vocabulary ↔ MCStories' two-letter codes.
-    # Compiled from mcstories.com/Tags/index.html. Only entries present
-    # on MCStories map here; queries for tags that don't translate
-    # (e.g. "chastity") fall through to the Titles index.
-    "bondage": "bd", "bdsm": "bd",
-    "cheating": "cb",
-    "humiliation": "hu", "exhibitionism": "ex",
-    "femdom": "fd", "dominance-submission": "ds",
-    "feet": "ft",
-    "group-sex": "gr", "orgy": "gr",
-    "hypnosis": "hm",
-    "incest": "in",
-    "gay": "mm", "lesbian": "ff",
-    "interracial": "la",
-    "mind-control": "mc",
-    "non-consent": "nc",
-    "transgender": "ma",
-    "futanari": "ma",
+    # Re-verified May 2026 against mcstories.com/Tags/index.html.
+    # MCStories has only 26 codes; tags not represented here have no
+    # MCStories tag at all and are dropped from the fan-out via
+    # :func:`_site_handles_any_tag`.
+    #
+    # Earlier revisions silently mapped to the wrong code (``cb`` =
+    # comic-book NOT cheating, ``ft`` = clothing-fetish NOT feet,
+    # ``hu`` = humor NOT humiliation, ``gr`` = growth NOT group-sex,
+    # ``hm`` = humiliation NOT hypnosis, ``la`` = lactation NOT
+    # interracial, ``ma`` = masturbation NOT TG/futanari). Those
+    # mappings sent users to wholly unrelated tag pages.
+    "bondage": "bd", "bdsm": "bd",     # bd = bondage and/or discipline
+    "dominance-submission": "ds",       # ds = dominance and/or submission
+    "exhibitionism": "ex",              # ex = exhibitionism
+    "femdom": "fd",                     # fd = female dominant
+    "gay": "mm",                        # mm = male/male sex
+    "lesbian": "ff",                    # ff = female/female sex
+    "humiliation": "hm",                # hm = humiliation
+    "hypnosis": "mc",                   # closest MCS tag (no hypnosis-specific code)
+    "incest": "in",                     # in = incest
+    "lactation": "la",                  # la = lactation
+    "masturbation": "ma",               # ma = masturbation
+    "mind-control": "mc",               # mc = mind control
+    "non-consent": "nc",                # nc = non-consensual
+    "watersports": "ws",                # ws = watersports
 }
+
+# Late-bind MCStories into the unified translation layer. Predates
+# the layer, so it's structured as its own table; this just gives
+# ``_translate_tag("mcstories", ...)`` access to the same lookup the
+# adapter already uses.
+_SITE_TAG_SLUGS["mcstories"] = _MCS_TAG_CODES
 
 
 def search_lushstories(query: str, *, page: int = 1,
                        tags: Optional[list] = None,
                        category: str = "", **_: object) -> list[dict]:
     """Lushstories is category-driven — every URL is ``/stories/<category>/...``.
-    Use the first tag/category as the category slug, then filter by
-    the query client-side. Defaults to the newest-stories listing
-    when no category is given."""
-    cat = (
-        (category or "").strip().lower().strip("/")
-        or (tags[0].lower() if tags else "")
-        or "new"
-    )
-    cat = cat.replace(" ", "-")
+
+    The unified tag → Lush category translation lives in
+    :data:`_LUSH_TAG_SLUGS` (verified live against /stories/<slug>):
+    Lush uses ``facesitting`` (no hyphen), ``oral-sex`` (not ``oral``),
+    ``fetish`` as the umbrella for feet/foot interest, and has no
+    standalone feet category. A vocab tag that doesn't translate
+    returns ``[]`` rather than falling through to ``/stories/<vocab>``,
+    which serves a 404-shaped 200 page (Next.js stub with no story
+    anchors).
+
+    An explicit ``category`` filter overrides tag translation — the
+    GUI's Category text box is for users who already know Lush's
+    slug. With neither tag nor category, default to the newest-
+    stories listing.
+    """
+    cat = (category or "").strip().lower().strip("/").replace(" ", "-")
+    if not cat and tags:
+        first_tag = tags[0].strip().lower()
+        translated = _translate_tag("lushstories", first_tag)
+        if translated is None:
+            return []
+        cat = translated
+    if not cat:
+        cat = "new"
     url = f"https://www.lushstories.com/stories/{cat}"
     if page > 1:
         url += f"?page={page}"
@@ -890,11 +1177,20 @@ def search_literotica_wrapped(query: str, *, page: int = 1,
     unfiltered tag results for a "Harry Potter + bdsm" search.
     Post-filter the tag page on title/author/summary/fandom locally
     so query+tag behaves like "tag-browse narrowed by query".
+
+    Tag translation goes through :func:`_translate_tag` — for
+    Literotica this is mostly passthrough (the ``tags.literotica.com``
+    subdomain is permissive about slug shape), but
+    :data:`_LITEROTICA_TAG_SLUGS` overrides specific vocab tags to
+    Literotica's preferred slug where they diverge.
     """
     category = ""
     if tags:
-        # Literotica categories are plural, lowercase slugs on tags.literotica.com.
-        category = tags[0].strip().lower().replace(" ", "-")
+        first_tag = tags[0].strip().lower()
+        translated = _translate_tag("literotica", first_tag)
+        if translated is None:
+            return []
+        category = translated
     kwargs: dict = {}
     if category:
         kwargs["category"] = category
@@ -917,10 +1213,158 @@ def search_literotica_wrapped(query: str, *, page: int = 1,
     return results[:PER_SITE_LIMIT]
 
 
+def search_ao3_erotica(query: str, *, page: int = 1,
+                       tags: Optional[list] = None,
+                       **_: object) -> list[dict]:
+    """AO3 adapter for the erotica fan-out — restricts to Explicit
+    rating and translates the first vocab tag to AO3's canonical
+    freeform tag (see :data:`_AO3_TAG_SLUGS`).
+
+    Why this lives in the erotica module instead of the existing
+    :func:`ffn_dl.search.search_ao3`: the general AO3 search returns
+    every rating, every fandom, every length. For the erotica
+    discovery surface we want the same Explicit-only narrow that
+    Literotica's tag-browse gives us by construction. The thin
+    wrapper here pins ``rating='explicit'`` and routes vocab tags
+    through the freeform field so e.g. ``feet`` → ``Foot Fetish``
+    rather than landing in a free-text query that AO3's relevance
+    sort can't make tight enough.
+
+    Tags AO3 doesn't have a canonical name for return ``[]`` so the
+    fan-out doesn't paper over noise with off-rating fandom hits.
+    """
+    from ..search import search_ao3
+
+    vocab_tags = [t.strip().lower() for t in (tags or []) if t and t.strip()]
+    if vocab_tags:
+        translated = [_translate_tag("ao3", t) for t in vocab_tags]
+        translated = [t for t in translated if t]
+        if not translated:
+            return []
+        # AO3's freeform_names is a free-text field; comma-separated
+        # values are AND-combined by the AO3 search engine.
+        freeform_arg = ", ".join(translated)
+    else:
+        freeform_arg = ""
+
+    if not query and not freeform_arg:
+        # Without either a query or a tag, the AO3 search returns
+        # every Explicit-rated work on the site — a 6M-work firehose
+        # that's never what an erotica discovery search wants.
+        return []
+
+    kwargs = {"rating": "explicit", "sort": "kudos"}
+    if freeform_arg:
+        kwargs["freeform"] = freeform_arg
+    try:
+        results = search_ao3(query or "", page=page, **kwargs)
+    except Exception as exc:
+        logger.debug("AO3 erotica search failed: %s", exc)
+        return []
+    for r in results[:PER_SITE_LIMIT]:
+        r["site"] = "ao3"
+    return results[:PER_SITE_LIMIT]
+
+
+def search_bdsmlibrary(query: str, *, page: int = 1,
+                       tags: Optional[list] = None,
+                       **_: object) -> list[dict]:
+    """BDSM Library (bdsmlibrary.com) adapter.
+
+    The site speaks plain HTTP only — HTTPS serves an expired
+    certificate. Two endpoints feed this adapter:
+
+    * Tag/code searches POST through the advanced search form at
+      ``/stories/search.php`` with ``search=advanced``,
+      ``codeforstory[<id>]=yes`` for the desired tag, and the
+      site's standard ``orderby`` / ``arrange`` pagination knobs.
+      The numeric IDs live in :data:`_BDSMLIB_TAG_CODES` —
+      femdom resolves to code 13 (F/m, "one female dominating one
+      male"), feet to code 41, etc.
+    * Plain free-text or tag-less browses GET
+      ``/stories/list.php?pos=N&sortby1=moddate&arrange1=DESC`` for
+      the recent-stories view.
+
+    Tag-only queries that don't translate return ``[]`` (the site's
+    advanced search ignores the form submission with all codes set
+    to Maybe and would return every story, swamping the result set).
+
+    Story permalinks are ``/stories/story.php?storyid=N``.
+    Position-based pagination steps by 10 rows per page; this
+    adapter caps at :data:`PER_SITE_LIMIT` of those rows.
+    """
+    base = "http://www.bdsmlibrary.com"
+    per_page = 10
+    pos = max(0, (max(1, int(page)) - 1) * per_page)
+
+    vocab_tags = [t.strip().lower() for t in (tags or []) if t and t.strip()]
+    code_id = None
+    if vocab_tags:
+        translated = [_translate_tag("bdsmlibrary", t) for t in vocab_tags]
+        translated = [t for t in translated if t]
+        if not translated:
+            return []
+        code_id = translated[0]
+
+    if code_id:
+        # Build the advanced-search GET URL. The form normally POSTs
+        # but the same parameters work via GET, which is friendlier
+        # to our retry / cache layer in BaseScraper._fetch.
+        from urllib.parse import urlencode
+        params = {
+            "title": "", "author": "", "synopsis": "",
+            "lowsize": "", "highsize": "",
+            "orderby": "moddate", "arrange": "DESC",
+            "search": "advanced",
+            "searchit": "1",
+            f"codeforstory[{code_id}]": "yes",
+            "pos": pos,
+        }
+        url = f"{base}/stories/search.php?{urlencode(params)}"
+    else:
+        url = (
+            f"{base}/stories/list.php"
+            f"?pos={pos}&sortby1=moddate&arrange1=DESC"
+        )
+
+    html = _fetch(url)
+    if not html:
+        return []
+    out: list[dict] = []
+    seen = set()
+    # Each story row carries ``story.php?storyid=N`` for the title
+    # and ``author.php?authorid=N`` immediately after it. Pair them
+    # in document order.
+    pattern = re.compile(
+        r'<a\s+href="/stories/story\.php\?storyid=(\d+)"[^>]*>([^<]+)</a>'
+        r'(?:.*?<a\s+href="/stories/author\.php\?authorid=\d+"[^>]*>([^<]+)</a>)?',
+        re.DOTALL | re.IGNORECASE,
+    )
+    for m in pattern.finditer(html):
+        story_id, title, author = m.group(1), m.group(2).strip(), (m.group(3) or "").strip()
+        if story_id in seen or not title:
+            continue
+        if not _matches_query(query, title, author):
+            continue
+        seen.add(story_id)
+        out.append({
+            "title": title,
+            "author": author,
+            "url": f"{base}/stories/story.php?storyid={story_id}",
+            "summary": "", "words": "?", "chapters": "?",
+            "rating": "M", "fandom": "", "status": "",
+            "site": "bdsmlibrary",
+        })
+        if len(out) >= PER_SITE_LIMIT:
+            break
+    return out
+
+
 # ── Fan-out ──────────────────────────────────────────────────────
 
 _SITE_FNS: dict[str, Callable[..., list[dict]]] = {
     "literotica": search_literotica_wrapped,
+    "ao3": search_ao3_erotica,
     "aff": search_aff,
     "storiesonline": search_sol,
     "nifty": search_nifty,
@@ -932,6 +1376,7 @@ _SITE_FNS: dict[str, Callable[..., list[dict]]] = {
     "chyoa": search_chyoa,
     "darkwanderer": search_darkwanderer,
     "greatfeet": search_greatfeet,
+    "bdsmlibrary": search_bdsmlibrary,
 }
 
 
@@ -940,88 +1385,129 @@ TAG_SITE_COVERAGE: dict[str, list[str]] = {
     # well-represented kink. Used by the tag picker to annotate each
     # option with its site-count (see :func:`tag_site_count`) so users
     # can see at a glance whether a tag is well-covered or niche.
-    # Entries only list sites that expose the tag as a native filter /
-    # search dimension; sites where it's just buried in free text don't
-    # count. Verified April 2026.
-    "anal": ["literotica", "storiesonline", "lushstories", "sexstories"],
-    "bdsm": ["literotica", "lushstories", "storiesonline", "mcstories"],
-    "bondage": ["literotica", "lushstories", "storiesonline", "mcstories"],
-    "bukkake": ["literotica", "sexstories"],
-    "celebrity": ["literotica", "storiesonline", "sexstories"],
+    # Entries only list sites where the tag has a native URL slug /
+    # category / code (verified May 2026 — see :data:`_LITEROTICA_TAG_SLUGS`,
+    # :data:`_LUSH_TAG_SLUGS`, :data:`_SOL_TAG_SLUGS`,
+    # :data:`_MCS_TAG_CODES`, :data:`_AO3_TAG_SLUGS`,
+    # :data:`_BDSMLIB_TAG_CODES`); sites where the tag would have to
+    # ride along inside a free-text query don't count.
+    "anal": [
+        "literotica", "storiesonline", "lushstories", "sexstories", "ao3",
+    ],
+    "bdsm": [
+        "literotica", "lushstories", "storiesonline", "mcstories", "ao3",
+        "bdsmlibrary",
+    ],
+    "bondage": [
+        "literotica", "lushstories", "storiesonline", "mcstories", "ao3",
+        "bdsmlibrary",
+    ],
+    "bukkake": ["literotica", "sexstories", "ao3"],
+    "celebrity": ["literotica", "storiesonline", "sexstories", "ao3"],
     "cheating": [
         "literotica", "lushstories", "storiesonline", "sexstories",
-        "darkwanderer",
+        "darkwanderer", "ao3",
     ],
-    "chastity": ["literotica", "storiesonline", "mcstories"],
+    "chastity": ["literotica", "storiesonline", "ao3", "bdsmlibrary"],
     "cuckold": [
         "literotica", "lushstories", "storiesonline", "sexstories",
-        "darkwanderer",
+        "darkwanderer", "ao3",
     ],
+    "cunnilingus": ["literotica", "lushstories", "storiesonline", "ao3"],
     "dominance-submission": [
-        "literotica", "lushstories", "storiesonline", "mcstories",
+        "literotica", "lushstories", "storiesonline", "mcstories", "ao3",
+        "bdsmlibrary",
     ],
     "exhibitionism": [
-        "literotica", "lushstories", "storiesonline", "mcstories",
+        "literotica", "lushstories", "storiesonline", "mcstories", "ao3",
+        "bdsmlibrary",
     ],
+    "face-sitting": ["literotica", "lushstories", "ao3"],
     "femdom": [
-        "literotica", "lushstories", "storiesonline", "mcstories",
+        "literotica", "lushstories", "storiesonline", "mcstories", "ao3",
+        "bdsmlibrary",
     ],
     "feet": [
-        "literotica", "lushstories", "storiesonline", "mcstories",
-        "greatfeet",
+        "literotica", "lushstories", "storiesonline", "greatfeet", "ao3",
+        "bdsmlibrary",
     ],
-    "fisting": ["literotica", "sexstories"],
-    "futanari": ["literotica", "storiesonline", "mcstories", "tgstorytime"],
-    "gangbang": ["literotica", "lushstories", "storiesonline", "sexstories"],
+    "fisting": [
+        "literotica", "storiesonline", "sexstories", "ao3", "bdsmlibrary",
+    ],
+    "futanari": ["literotica", "storiesonline", "tgstorytime", "ao3"],
+    "gangbang": [
+        "literotica", "lushstories", "storiesonline", "sexstories", "ao3",
+    ],
     "gay": [
         "literotica", "lushstories", "storiesonline", "nifty",
-        "sexstories", "aff",
+        "sexstories", "aff", "mcstories", "ao3",
     ],
     "group-sex": [
-        "literotica", "lushstories", "storiesonline", "sexstories",
-        "mcstories",
+        "literotica", "lushstories", "storiesonline", "sexstories", "ao3",
     ],
-    "harem": ["literotica", "storiesonline"],
+    "harem": ["literotica", "storiesonline", "lushstories", "ao3"],
     "humiliation": [
-        "literotica", "lushstories", "storiesonline", "mcstories",
+        "literotica", "lushstories", "storiesonline", "mcstories", "ao3",
     ],
-    "hypnosis": ["mcstories", "storiesonline", "literotica"],
+    "hypnosis": ["mcstories", "storiesonline", "literotica", "chyoa", "ao3"],
     "incest": [
-        "literotica", "storiesonline", "sexstories", "aff",
-        "mcstories",
+        "literotica", "storiesonline", "sexstories", "aff", "mcstories",
+        "ao3", "bdsmlibrary",
     ],
     "interracial": [
         "literotica", "lushstories", "storiesonline", "sexstories",
-        "darkwanderer",
+        "darkwanderer", "ao3", "bdsmlibrary",
     ],
-    "lactation": ["literotica", "storiesonline", "sexstories"],
+    "lactation": [
+        "literotica", "storiesonline", "sexstories", "mcstories", "ao3",
+        "bdsmlibrary",
+    ],
     "lesbian": [
         "literotica", "lushstories", "storiesonline", "nifty",
-        "sexstories", "aff",
+        "sexstories", "aff", "mcstories", "ao3",
     ],
-    "masturbation": ["literotica", "lushstories", "sexstories"],
-    "mature": ["literotica", "lushstories", "storiesonline"],
-    "mind-control": ["mcstories", "storiesonline", "literotica", "chyoa"],
+    "masturbation": [
+        "literotica", "lushstories", "sexstories", "mcstories", "ao3",
+    ],
+    "mature": ["literotica", "lushstories", "storiesonline", "ao3"],
+    "mind-control": [
+        "mcstories", "storiesonline", "literotica", "chyoa", "ao3",
+    ],
     "non-consent": [
-        "literotica", "storiesonline", "mcstories", "sexstories",
+        "literotica", "storiesonline", "mcstories", "sexstories", "ao3",
+        "bdsmlibrary",
     ],
-    "oral": ["literotica", "lushstories", "sexstories"],
-    "orgy": ["literotica", "storiesonline", "sexstories", "mcstories"],
-    "polyamory": ["literotica", "storiesonline", "lushstories"],
-    "pregnancy": ["literotica", "storiesonline", "sexstories"],
-    "public-sex": ["literotica", "lushstories", "storiesonline"],
-    "roleplay": ["literotica", "lushstories", "chyoa"],
-    "rough": ["literotica", "lushstories", "sexstories"],
-    "spanking": ["literotica", "lushstories", "storiesonline", "mcstories"],
-    "swinging": ["literotica", "lushstories", "storiesonline", "darkwanderer"],
-    "teen": ["literotica", "lushstories", "storiesonline", "sexstories"],
-    "threesome": ["literotica", "lushstories", "storiesonline", "sexstories"],
+    "oral": ["literotica", "lushstories", "sexstories", "ao3"],
+    "orgy": ["literotica", "storiesonline", "sexstories", "ao3"],
+    "polyamory": ["literotica", "storiesonline", "lushstories", "ao3"],
+    "pregnancy": ["literotica", "storiesonline", "sexstories", "ao3"],
+    "public-sex": ["literotica", "lushstories", "storiesonline", "ao3"],
+    "roleplay": ["literotica", "lushstories", "chyoa", "ao3"],
+    "rough": ["literotica", "lushstories", "sexstories", "ao3"],
+    "spanking": [
+        "literotica", "lushstories", "storiesonline", "ao3", "bdsmlibrary",
+    ],
+    "swinging": [
+        "literotica", "lushstories", "storiesonline", "darkwanderer", "ao3",
+    ],
+    "teen": [
+        "literotica", "lushstories", "storiesonline", "sexstories", "ao3",
+        "bdsmlibrary",
+    ],
+    "threesome": [
+        "literotica", "lushstories", "storiesonline", "sexstories", "ao3",
+    ],
     "transgender": [
         "literotica", "fictionmania", "tgstorytime", "storiesonline",
-        "mcstories",
+        "lushstories", "ao3",
     ],
-    "voyeur": ["literotica", "lushstories", "storiesonline"],
-    "watersports": ["literotica", "storiesonline", "sexstories"],
+    "voyeur": [
+        "literotica", "lushstories", "storiesonline", "ao3", "bdsmlibrary",
+    ],
+    "watersports": [
+        "literotica", "storiesonline", "sexstories", "mcstories", "ao3",
+        "bdsmlibrary",
+    ],
 }
 
 
@@ -1048,36 +1534,27 @@ def tag_sites_for(tag: str) -> list[str]:
 # happens to omit the tag.
 _TAG_TEXT_FOLD_SITES: set[str] = {"sexstories"}
 
-# Sites whose tag-URL shape passes the slug through verbatim — Lush
-# builds ``/stories/<slug>/`` URLs from whatever the first tag is, and
-# the resulting page usually has stories on it whether the slug is in
-# our pre-map or not. (Nifty is NOT here despite the surface
-# similarity: its ``/nifty/<cat>/`` shape only resolves for the four
-# fixed sexuality categories in :data:`_NIFTY_TAG_CATEGORIES`; other
-# slugs 404 silently and would be dead weight in the fan-out.)
-_TAG_SLUG_PASSTHROUGH_SITES: set[str] = {"lushstories"}
-
 
 def _site_handles_any_tag(site: str, tags: list[str]) -> bool:
     """True when ``site`` can do *something useful* with at least one
     tag in ``tags``.
 
-    Replaces the older ``_site_supports_all_tags`` AND-semantics gate.
-    Reasons for the relaxation (per round-7 multi-AI audit):
+    Source of truth: :data:`TAG_SITE_COVERAGE` (which sites natively
+    carry each vocab tag). The earlier slug-passthrough escape hatch
+    for Lushstories has been retired now that each adapter routes
+    tags through :func:`_translate_tag` — Lush returns ``[]`` for
+    untranslatable tags rather than 200-ing a stub category page, so
+    a passthrough flag here would only let off-topic dead-page calls
+    into the fan-out.
 
-    * Most per-site scrapers only consume ``tags[0]``, so the AND gate
-      claimed semantics the scrapers never actually delivered.
-    * Sites that fold tags into a full-text query
-      (:data:`_TAG_TEXT_FOLD_SITES`) handle arbitrary tags sensibly but
-      weren't in :data:`TAG_SITE_COVERAGE` for every tag the user might
-      pick — they were silently dropped from the fan-out.
-    * Slug-passthrough sites (:data:`_TAG_SLUG_PASSTHROUGH_SITES`)
-      construct a tag URL from any string and usually return results.
+    :data:`_TAG_TEXT_FOLD_SITES` still applies: SexStories folds tags
+    into its full-text query and so handles arbitrary tags sensibly
+    even outside :data:`TAG_SITE_COVERAGE`.
 
-    The gate still skips sites whose scrapers genuinely ignore the
-    ``tags`` kwarg (Fictionmania, TGStorytime, DarkWanderer, etc.) so
-    a tag-only ``feet`` search doesn't include those archives' default
-    browses as noise.
+    The gate continues to skip sites whose scrapers genuinely ignore
+    the ``tags`` kwarg (Fictionmania, TGStorytime, DarkWanderer, etc.)
+    so a tag-only ``feet`` search doesn't include those archives'
+    default browses as noise.
     """
     if not tags:
         return True
@@ -1088,8 +1565,6 @@ def _site_handles_any_tag(site: str, tags: list[str]) -> bool:
         if site in TAG_SITE_COVERAGE.get(tag_lower, []):
             return True
         if site in _TAG_TEXT_FOLD_SITES:
-            return True
-        if site in _TAG_SLUG_PASSTHROUGH_SITES:
             return True
     return False
 

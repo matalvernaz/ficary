@@ -11,21 +11,27 @@ the existing convention — ``ao3.py``, ``literotica.py``, ``royalroad.py``
 — and keeps per-site selectors/docs readable.
 
 Sites covered: AFF (Adult-FanFiction.org), StoriesOnline (SOL), Nifty,
-SexStories (xnxx), MCStories, Lushstories, and Fictionmania. The
-unified Erotic Story Search window (:mod:`ffn_dl.gui_search`) fans out
-across all of them.
+SexStories (xnxx), MCStories, Lushstories, Fictionmania, TGStorytime,
+Chyoa, Dark Wanderer, GreatFeet, and BDSM Library. AO3 is folded into
+the unified Erotic Story Search window's fan-out via an explicit-only
+adapter in :mod:`ffn_dl.erotica.search`; the underlying scraper is
+:class:`ffn_dl.ao3.AO3Scraper`. The unified Erotic Story Search window
+(:mod:`ffn_dl.gui_search`) fans out across all of them.
 
 Sites considered and not included in this release:
 
-* ASSTR — domain offline; no DNS resolution.
-* Kristen Archives — JS fingerprint gate that curl_cffi can't bypass
-  without a browser runtime.
-* BDSM Library — connection times out (site unreachable).
-* BigCloset TopShelf, Dark Wanderer — structurally different (Drupal
-  and XenForo forum respectively) and left for a follow-up.
+* ASSTR / Kristen Archives — DNS offline as of 2024 takedown, no
+  alternate host found.
+* BigCloset TopShelf — Drupal install with TG-only focus; would
+  duplicate Fictionmania + TGStorytime coverage.
+* Standalone foot-fetish portals (feetstories.com, crazyfoot.com,
+  thefoothunter.com) — all serve stub bodies (~114 bytes) or are DNS-
+  dead; the live archive coverage for feet is Literotica /
+  Lushstories / SOL / GreatFeet / BDSM Library.
 """
 
 from .aff import AFFScraper
+from .bdsmlibrary import BDSMLibraryScraper
 from .chyoa import ChyoaScraper
 from .darkwanderer import DarkWandererScraper
 from .fictionmania import FictionmaniaScraper
@@ -40,6 +46,7 @@ from .tgstorytime import TGStorytimeScraper
 
 __all__ = [
     "AFFScraper",
+    "BDSMLibraryScraper",
     "ChyoaScraper",
     "DarkWandererScraper",
     "FictionmaniaScraper",

@@ -12,6 +12,7 @@ from urllib.parse import urlsplit, urlunsplit
 from .ao3 import AO3Scraper
 from .erotica import (
     AFFScraper,
+    BDSMLibraryScraper,
     ChyoaScraper,
     DarkWandererScraper,
     FictionmaniaScraper,
@@ -131,6 +132,14 @@ _STORY_URL_PATTERNS: list[tuple[type[BaseScraper], re.Pattern[str]]] = [
         ),
     ),
     (
+        BDSMLibraryScraper,
+        re.compile(
+            r"https?://(?:www\.)?bdsmlibrary\.com/stories/"
+            r"(?:story|chapter)\.php\?storyid=\d+",
+            re.I,
+        ),
+    ),
+    (
         FFNScraper,
         re.compile(r"https?://(?:www\.)?fanfiction\.net/s/\d+", re.I),
     ),
@@ -159,6 +168,7 @@ _HOSTNAME_TO_SCRAPER: list[tuple[str, type[BaseScraper]]] = [
     ("chyoa.com", ChyoaScraper),
     ("darkwanderer.net", DarkWandererScraper),
     ("greatfeet.com", GreatFeetScraper),
+    ("bdsmlibrary.com", BDSMLibraryScraper),
 ]
 
 # Scrapers whose is_author_url / is_series_url static methods should be
@@ -182,6 +192,7 @@ ALL_SCRAPERS: list[type[BaseScraper]] = [
     ChyoaScraper,
     DarkWandererScraper,
     GreatFeetScraper,
+    BDSMLibraryScraper,
 ]
 
 # Erotica-specific scraper classes, exported for the unified Erotic
@@ -201,6 +212,7 @@ EROTICA_SCRAPERS: tuple[type[BaseScraper], ...] = (
     ChyoaScraper,
     DarkWandererScraper,
     GreatFeetScraper,
+    BDSMLibraryScraper,
 )
 
 
@@ -375,6 +387,7 @@ _CANONICAL_RULES: list[tuple[str, str, re.Pattern[str], str]] = [
 # during its normal "strip query and fragment" cleanup.
 _AFF_NO_RE = re.compile(r"(?:^|[?&])no=(\d+)")
 _FM_STORY_RE = re.compile(r"(?:^|[?&])storyID=(\d+)", re.I)
+_BDSMLIB_STORYID_RE = re.compile(r"(?:^|[?&])storyid=(\d+)", re.I)
 _TGS_SID_RE = re.compile(r"(?:^|[?&])sid=(\d+)", re.I)
 
 
@@ -429,6 +442,19 @@ def canonical_url(url: str) -> str:
                 "https", "www.tgstorytime.com",
                 "/viewstory.php",
                 f"sid={m.group(1)}", "",
+            ))
+
+    # BDSM Library ids live in ``?storyid=<N>`` on story.php and
+    # chapter.php; canonicalise both to the story page so the chapter
+    # variant of a URL still dedupes against its story root. The site
+    # only speaks plain HTTP (HTTPS cert is expired) — preserve that.
+    if "bdsmlibrary.com" in netloc:
+        m = _BDSMLIB_STORYID_RE.search(parts.query or "")
+        if m:
+            return urlunsplit((
+                "http", "www.bdsmlibrary.com",
+                "/stories/story.php",
+                f"storyid={m.group(1)}", "",
             ))
 
     for host_fragment, canonical_host, path_re, path_template in _CANONICAL_RULES:

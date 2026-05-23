@@ -173,3 +173,93 @@ class TestSeriesExtraction:
                 count += 1
         # Series fixture for /series/se/100 (Ruth) has 3 chapters
         assert count >= 3
+
+
+class TestParseTagBrowseResults:
+    """:func:`_parse_literotica_results` against the post-Next.js
+    markup. The live tag-browse page wraps each card in
+    ``<div role="article">`` and uses a title anchor with
+    ``rel="external"`` + a ``literotica.com/s/<slug>`` href. The
+    previous parser keyed off schema.org ``property="itemListElement"``
+    selectors that Literotica's React rewrite removed."""
+
+    @staticmethod
+    def _card_html(slug, title, author, summary, category, rating):
+        return f"""
+        <div role="article" class="_works_item_rand_4">
+          <p class="_works_item__title_rand_50" role="heading" aria-level="3">
+            <a href="https://www.literotica.com/s/{slug}" rel="external"
+               class="_item_title_rand_227">{title}</a>
+            <a href="/{slug}?dialog=log_in" class="_headline__link_rand_478"
+               title="Bookmark Story" aria-label="Bookmark Story: {title}">
+              <span class="visually-hidden">Bookmark Story</span>
+            </a>
+          </p>
+          <p class="_item_description_rand_256">{summary}</p>
+          <div class="_item_metadata_rand_492">
+            <span class="_item_by_rand_502">by</span>
+            <a href="https://www.literotica.com/authors/{author}/works/stories"
+               class="_item_authorname_link_rand_511">{author}</a>
+            <span class="_item_in_rand_556">in</span>
+            <a href="https://www.literotica.com/c/{category.lower().replace(' ', '-')}"
+               rel="external" class="_item_category_rand_92">{category}</a>
+            <time datetime="2026-05-22">05/22/2026</time>
+          </div>
+          <div class="_stats_wrapper_rand_468">
+            <span data-value="{rating}" title="Rating">
+              <span class="_stats__text_rand_209">{rating}</span>
+            </span>
+          </div>
+        </div>
+        """
+
+    def test_parses_modern_card_markup(self):
+        from ffn_dl.search import _parse_literotica_results
+        html = "<html><body>" + "".join([
+            self._card_html(
+                "first-card", "First Card", "AuthorOne",
+                "A summary line.", "BDSM", "4.75",
+            ),
+            self._card_html(
+                "second-card", "Second Card", "AuthorTwo",
+                "Another summary.", "Novels and Novellas", "4.20",
+            ),
+        ]) + "</body></html>"
+        results = _parse_literotica_results(html)
+        assert len(results) == 2
+        first = results[0]
+        assert first["title"] == "First Card"
+        assert first["url"] == "https://www.literotica.com/s/first-card"
+        assert first["author"] == "AuthorOne"
+        assert first["summary"] == "A summary line."
+        assert first["fandom"] == "BDSM"
+        assert first["rating"] == "4.75"
+
+    def test_ignores_nav_and_bookmark_links_sharing_href_shapes(self):
+        """Pinning the title selector to ``rel="external"`` plus an
+        anchored ``literotica.com/s/<slug>`` URL keeps tag-page chrome
+        (bookmark / login dialog / category nav) from being mistaken
+        for cards."""
+        from ffn_dl.search import _parse_literotica_results
+        # No rel="external" → not a card. Path-only links and series
+        # links → not a card either.
+        html = """
+        <html><body>
+          <a href="https://www.literotica.com/s/should-not-show">No rel attr</a>
+          <a href="/femdom?dialog=log_in" rel="external">Login</a>
+          <a href="https://www.literotica.com/series/se/12345" rel="external">Series</a>
+          <a href="https://www.literotica.com/c/bdsm" rel="external">Category</a>
+        </body></html>
+        """
+        assert _parse_literotica_results(html) == []
+
+    def test_dedupes_repeat_card_anchors(self):
+        from ffn_dl.search import _parse_literotica_results
+        html = (
+            "<html><body>"
+            + self._card_html("same", "Same Card", "A", "summary", "BDSM", "5")
+            + self._card_html("same", "Same Card", "A", "summary", "BDSM", "5")
+            + "</body></html>"
+        )
+        results = _parse_literotica_results(html)
+        assert len(results) == 1

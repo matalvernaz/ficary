@@ -10,6 +10,7 @@ import pytest
 
 from ffn_dl.erotica import (
     AFFScraper,
+    BDSMLibraryScraper,
     ChyoaScraper,
     DarkWandererScraper,
     FictionmaniaScraper,
@@ -44,7 +45,7 @@ def test_all_erotica_scrapers_registered():
         LiteroticaScraper, AFFScraper, StoriesOnlineScraper, NiftyScraper,
         SexStoriesScraper, MCStoriesScraper, LushStoriesScraper,
         FictionmaniaScraper, TGStorytimeScraper, ChyoaScraper,
-        DarkWandererScraper, GreatFeetScraper,
+        DarkWandererScraper, GreatFeetScraper, BDSMLibraryScraper,
     }
     assert set(EROTICA_SCRAPERS) == expected
 
@@ -67,6 +68,10 @@ def test_all_erotica_scrapers_registered():
     ("https://darkwanderer.net/threads/foo.12345/page-3",
      DarkWandererScraper),
     ("https://www.greatfeet.com/stories/ts1735.htm", GreatFeetScraper),
+    ("http://www.bdsmlibrary.com/stories/story.php?storyid=10994",
+     BDSMLibraryScraper),
+    ("http://www.bdsmlibrary.com/stories/chapter.php?storyid=10994&chapterid=31865",
+     BDSMLibraryScraper),
 ])
 def test_detect_scraper_routes_correctly(url, expected_cls):
     assert detect_scraper(url) is expected_cls
@@ -134,6 +139,17 @@ def test_detect_scraper_routes_correctly(url, expected_cls):
     (
         "https://www.greatfeet.com/stories/ts1735.htm",
         "https://www.greatfeet.com/stories/ts1735.htm",
+    ),
+    # BDSM Library: story id lives in ``?storyid=N``; chapter URLs
+    # collapse to the story page so chapter and story variants dedupe.
+    # HTTPS cert is expired so the canonical form stays http://.
+    (
+        "http://www.bdsmlibrary.com/stories/story.php?storyid=10994",
+        "http://www.bdsmlibrary.com/stories/story.php?storyid=10994",
+    ),
+    (
+        "http://www.bdsmlibrary.com/stories/chapter.php?storyid=10994&chapterid=31865",
+        "http://www.bdsmlibrary.com/stories/story.php?storyid=10994",
     ),
 ])
 def test_canonical_url(raw, expected):
@@ -414,17 +430,19 @@ def test_search_erotica_tag_only_drops_tag_ignoring_sites(monkeypatch):
     returns junk' bug.
 
     Sites that fold ``tags`` into a full-text search payload
-    (:data:`_TAG_TEXT_FOLD_SITES`) or pass the tag slug through
-    verbatim into their URL (:data:`_TAG_SLUG_PASSTHROUGH_SITES`)
-    ARE invoked even when the tag isn't pre-mapped — they handle
-    arbitrary tags sensibly, so dropping them would discard real
-    discovery surface. The forbidden set still catches sites whose
-    scrapers genuinely ignore the ``tags`` kwarg entirely.
+    (:data:`_TAG_TEXT_FOLD_SITES`) ARE invoked even when the tag
+    isn't pre-mapped — they handle arbitrary tags sensibly, so
+    dropping them would discard real discovery surface. The forbidden
+    set still catches sites whose scrapers genuinely ignore the
+    ``tags`` kwarg entirely.
+
+    The earlier slug-passthrough escape hatch (Lush) was retired
+    when each adapter started routing tags through
+    :func:`_translate_tag` — Lush now returns ``[]`` for tags it
+    doesn't carry, so the gate no longer needs to wave it through.
     """
     from ffn_dl.erotica import search as erotica_search
-    from ffn_dl.erotica.search import (
-        _TAG_TEXT_FOLD_SITES, _TAG_SLUG_PASSTHROUGH_SITES,
-    )
+    from ffn_dl.erotica.search import _TAG_TEXT_FOLD_SITES
 
     called: set = set()
 
@@ -444,12 +462,10 @@ def test_search_erotica_tag_only_drops_tag_ignoring_sites(monkeypatch):
     expected_callers = (
         set(TAG_SITE_COVERAGE["bdsm"])
         | _TAG_TEXT_FOLD_SITES
-        | _TAG_SLUG_PASSTHROUGH_SITES
     )
-    # AFF / Fictionmania / TGStorytime / Chyoa / DarkWanderer /
-    # GreatFeet ignore the ``tags`` kwarg entirely and must NOT be
-    # called for a tag-only bdsm search — their scrapers would
-    # silently fall back to a default browse.
+    # Sites whose adapters ignore the ``tags`` kwarg entirely must
+    # NOT be called for a tag-only bdsm search — their scrapers
+    # would silently fall back to a default browse.
     forbidden = {
         "aff", "fictionmania", "tgstorytime", "chyoa",
         "darkwanderer", "greatfeet",
@@ -852,6 +868,59 @@ class TestGreatFeetParsing:
         assert GreatFeetScraper.parse_story_id("1735") == 1735
 
 
+class TestBDSMLibraryParsing:
+    """BDSM Library URL → story id parsing.
+
+    The site speaks plain HTTP only (HTTPS cert is expired) so the
+    parser accepts both schemes and stores nothing scheme-specific.
+    Story ids come from ``?storyid=<N>`` on both ``story.php`` and
+    ``chapter.php``.
+    """
+
+    def test_story_url(self):
+        assert (
+            BDSMLibraryScraper.parse_story_id(
+                "http://www.bdsmlibrary.com/stories/story.php?storyid=10994"
+            ) == 10994
+        )
+
+    def test_chapter_url(self):
+        assert (
+            BDSMLibraryScraper.parse_story_id(
+                "http://www.bdsmlibrary.com/stories/chapter.php"
+                "?storyid=10994&chapterid=31865"
+            ) == 10994
+        )
+
+    def test_bare_id(self):
+        assert BDSMLibraryScraper.parse_story_id("10994") == 10994
+
+    def test_rejects_bad_url(self):
+        with pytest.raises(ValueError):
+            BDSMLibraryScraper.parse_story_id("https://example.com/foo")
+
+    def test_chapter_links_parsed_in_order(self):
+        from bs4 import BeautifulSoup
+        # Minimal story.php listing — three chapter anchors. The
+        # parser keys off the ``chapter.php?storyid=N&chapterid=M``
+        # href shape and returns (1-based-index, chapterid, title)
+        # tuples in document order.
+        html = """
+        <html><body>
+          <a href="/stories/chapter.php?storyid=42&chapterid=100">Part 1</a>
+          <a href="/stories/chapter.php?storyid=42&chapterid=101">Part 2</a>
+          <a href="/stories/chapter.php?storyid=42&chapterid=102">Part 3</a>
+        </body></html>
+        """
+        soup = BeautifulSoup(html, "lxml")
+        chap_list = BDSMLibraryScraper._chapter_links(soup, 42)
+        assert chap_list == [
+            (1, 100, "Part 1"),
+            (2, 101, "Part 2"),
+            (3, 102, "Part 3"),
+        ]
+
+
 # ── UX plumbing ───────────────────────────────────────────────────
 
 def test_erotica_results_carries_stats():
@@ -899,3 +968,90 @@ def test_tag_coverage_only_references_registered_sites():
             assert site in known_sites, (
                 f"tag {tag!r} references unknown site {site!r}"
             )
+
+
+# ── Per-site tag translation layer ────────────────────────────────
+
+
+def test_translate_tag_resolves_matts_interests():
+    """The three interests that drove the 2.4.42 search rework
+    (foot fetish, femdom, cunnilingus) must translate to a real
+    site-specific slug for every site that's claimed to cover them
+    in :data:`TAG_SITE_COVERAGE`.
+
+    Earlier revisions passed the unified vocab slug through
+    verbatim, which silently 404-ed into stub / all-tags-index pages
+    for every site whose actual slug shape differed (SOL needs
+    ``foot-fetish``, Lush needs ``fetish``, AO3 needs Title-Case
+    ``Foot Fetish``, etc.). Pin a representative translation so any
+    future regression hits a test instead of a quiet zero-result
+    fan-out.
+    """
+    from ffn_dl.erotica.search import _translate_tag
+
+    # Feet: literotica permissive, SOL has its own slug, Lush has
+    # only the umbrella ``fetish`` category, AO3 uses title-case.
+    assert _translate_tag("literotica", "feet") == "feet"
+    assert _translate_tag("storiesonline", "feet") == "foot-fetish"
+    assert _translate_tag("lushstories", "feet") == "fetish"
+    assert _translate_tag("ao3", "feet") == "Foot Fetish"
+    assert _translate_tag("bdsmlibrary", "feet") == "41"
+
+    # Femdom: SOL uses ``femaledom``, BDSM Library uses the F/m
+    # code id (13). Literotica/Lush/AO3 use the canonical name.
+    assert _translate_tag("storiesonline", "femdom") == "femaledom"
+    assert _translate_tag("lushstories", "femdom") == "femdom"
+    assert _translate_tag("ao3", "femdom") == "Femdom"
+    assert _translate_tag("bdsmlibrary", "femdom") == "13"
+    assert _translate_tag("mcstories", "femdom") == "fd"
+
+    # Cunnilingus: Literotica + AO3 have a specific tag; SOL +
+    # Lush fold it under oral-sex.
+    assert _translate_tag("literotica", "cunnilingus") == "cunnilingus"
+    assert _translate_tag("ao3", "cunnilingus") == "Cunnilingus"
+    assert _translate_tag("storiesonline", "cunnilingus") == "oral-sex"
+    assert _translate_tag("lushstories", "cunnilingus") == "oral-sex"
+
+
+def test_translate_tag_returns_none_for_untranslatable():
+    """Sites with no representation for a tag must return ``None`` —
+    not a vocab passthrough that would 404 into a stub page."""
+    from ffn_dl.erotica.search import _translate_tag
+
+    # MCStories has only 26 codes; cunnilingus / face-sitting / etc.
+    # aren't among them.
+    assert _translate_tag("mcstories", "cunnilingus") is None
+    assert _translate_tag("mcstories", "face-sitting") is None
+    # BDSM Library has no humiliation code.
+    assert _translate_tag("bdsmlibrary", "humiliation") is None
+    # Lush has no harem category.
+    # (Confirmed: not in the Lush /stories/<slug> live category list.)
+    assert _translate_tag("lushstories", "futanari") is None
+
+
+def test_mcstories_tag_codes_no_longer_misroute():
+    """The 2.4.42 fix corrected seven wrong MCStories code mappings.
+    Pin the post-fix correctness so a future edit can't silently
+    reintroduce the ``cb=cheating`` / ``ft=feet`` / ``gr=group-sex``
+    / ``hm=hypnosis`` / ``hu=humiliation`` / ``la=interracial`` /
+    ``ma=transgender`` confusion that sent users to unrelated tag
+    pages."""
+    from ffn_dl.erotica.search import _MCS_TAG_CODES
+
+    # Tags that USED to map but had no real MCStories representation
+    # must now be absent. Adding them back without verifying the code
+    # would mean silently sending users to e.g. comic-book stories
+    # when they ask for cheating.
+    forbidden_keys = {
+        "cheating", "feet", "group-sex", "orgy",
+        "interracial", "transgender", "futanari",
+    }
+    for key in forbidden_keys:
+        assert key not in _MCS_TAG_CODES, (
+            f"{key!r} has no real MCStories tag — last time we mapped "
+            "it we landed users on a wholly unrelated tag page."
+        )
+    # Tags that DO have a real MCStories code must still resolve.
+    assert _MCS_TAG_CODES["femdom"] == "fd"
+    assert _MCS_TAG_CODES["humiliation"] == "hm"
+    assert _MCS_TAG_CODES["mind-control"] == "mc"

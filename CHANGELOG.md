@@ -1,5 +1,80 @@
 # Changelog
 
+## 2.4.42 — 2026-05-22
+
+Erotica search overhaul — five compounding bugs and a missing
+discovery axis, all surfaced by live-probing every adapter against
+real tag URLs.
+
+**Literotica parser dead.** ``_parse_literotica_results`` selected
+on ``<div property="itemListElement">`` — schema.org markup that
+Literotica's Next.js migration removed. Every tag-browse search
+returned zero rows even though the page rendered ~100 story cards.
+Rewrote against stable attribute selectors: anchor tags with
+``rel="external"`` and a ``literotica.com/s/<slug>`` href, walking
+up to the enclosing ``<div role="article">`` for description /
+author / category / rating. Class-name churn no longer breaks
+parsing.
+
+**MCStories tag codes mostly wrong.** Seven of eighteen mappings
+in ``_MCS_TAG_CODES`` were semantically incorrect: ``cb`` is
+comic-book NOT cheating, ``ft`` is clothing-fetish NOT feet, ``hu``
+is humor NOT humiliation, ``gr`` is growth NOT group-sex, ``hm``
+is humiliation NOT hypnosis, ``la`` is lactation NOT interracial,
+``ma`` is masturbation NOT transgender/futanari. Re-verified the
+table against ``mcstories.com/Tags/index.html`` (only 26 codes
+exist) and dropped the misses; tags MCStories doesn't carry are
+now simply absent from the table and the dispatcher skips MCS for
+them.
+
+**Per-site tag-vocabulary translation layer.** Each adapter used
+to pass the unified vocab tag through as its URL slug, but most
+sites use site-specific shapes — SOL needs ``foot-fetish`` /
+``femaledom`` / ``oral-sex``, Lush needs ``fetish`` /
+``oral-sex`` / ``facesitting``, AO3 needs Title-Case
+freeform tags. The pass-through silently produced 200-OK stub /
+all-tags-index pages that parsed as zero rows. New
+``_translate_tag(site, vocab_tag)`` central lookup
+(``_LITEROTICA_TAG_SLUGS`` / ``_LUSH_TAG_SLUGS`` /
+``_SOL_TAG_SLUGS`` / ``_AO3_TAG_SLUGS`` / ``_MCS_TAG_CODES`` /
+``_BDSMLIB_TAG_CODES``) returns the site-specific slug or
+``None`` to skip the site for tags it doesn't carry. Each adapter
+routes its first tag through this.
+
+**``cunnilingus`` and ``face-sitting`` added to the vocabulary.**
+Previously only the broader ``oral`` tag existed, conflating
+cunnilingus with blowjobs and burying it on every site that
+carries it as its own tag (Literotica, AO3, Lush). Face-sitting
+straddles the femdom + cunnilingus interest space.
+
+**AO3 folded into the erotica fan-out.** ``search_ao3_erotica``
+pins ``rating='explicit'`` and routes vocab tags through AO3's
+``freeform`` filter so e.g. ``cunnilingus`` lands on the canonical
+``/tags/Cunnilingus`` AO3 tag page. AO3 has first-class tag pages
+for every entry in the unified vocabulary — particularly valuable
+for cunnilingus (sparse on the per-site tag URLs of other
+archives) and face-sitting.
+
+**BDSM Library added as a new site.** The earlier
+``erotica/__init__.py`` docstring claimed it was unreachable; in
+practice the site is alive on plain HTTP (HTTPS serves an expired
+cert). New ``BDSMLibraryScraper`` handles multi-chapter stories
+via ``story.php`` → chapter-list → ``chapter.php?storyid=N&chapterid=M``;
+new ``search_bdsmlibrary`` submits the advanced search form's
+``codeforstory[<id>]=yes`` filter with the site's stable numeric
+code IDs (femdom = 13 / ``F/m``, feet = 41, BDSM = 71, etc.).
+Registered in ``sites.py`` for download routing and in the
+erotica fan-out for search.
+
+Net effect on Matt's three core interests:
+
+* ``feet``: was 24 results across 3 sites (literotica / sol / lush
+  all silently broken) → 54 results across 7 sites including AO3
+  + BDSM Library.
+* ``femdom``: was 16 across 3 → 51 across 7.
+* ``cunnilingus``: was 0 (not in vocab) → 37 across 5 sites.
+* ``face-sitting``: was 0 (not in vocab) → 32 across 4 sites.
+
 ## 2.4.41 — 2026-05-22
 
 FFN search used to die on the first transient Cloudflare 403. The
