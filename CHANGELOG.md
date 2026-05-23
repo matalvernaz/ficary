@@ -1,5 +1,24 @@
 # Changelog
 
+## 2.4.44 — 2026-05-22
+
+Two more cunnilingus-family refining tags added to the erotica
+search vocabulary:
+
+* ``pussy-eating`` — synonym for cunnilingus but a distinct
+  first-class tag on Literotica (76 cards) and AO3 (20 works).
+  Lush / SOL / Wattpad / BDSM Library don't carry it as a native
+  slug; SexStories picks it up via the text-fold path. Not mapped
+  to ``oral-sex`` on Lush/SOL because the refining tag's whole
+  point is to be narrower than the umbrella ``cunnilingus``.
+
+* ``squirting`` — Literotica (99 cards), AO3 (20 works), SOL
+  (10 rows). Standalone tag everywhere it's carried.
+
+Live counts: ``pussy-eating`` 24 results across 3 sites,
+``squirting`` 26 across 4. SexStories contributes via tag-fold on
+both.
+
 ## 2.4.43 — 2026-05-22
 
 Erotica search depth pass — push the three user-named core
