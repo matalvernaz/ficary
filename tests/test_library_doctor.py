@@ -218,7 +218,10 @@ class TestStaleUntrackable:
              "title": "T", "author": "A", "reason": "no URL"},
         ])
         report = check_integrity(tmp_path, index)
-        assert report.stale_untrackable == [1]
+        # stale_untrackable is now content-keyed (relpath strings) so
+        # the report stays stable against intervening mutation of the
+        # untrackable list.
+        assert report.stale_untrackable == ["F/gone.html"]
 
     def test_heal_prunes_stale_untrackable(self, tmp_path):
         _make_file(tmp_path, "F/alive.html")

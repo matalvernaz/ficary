@@ -79,12 +79,52 @@ def _normalize_root(root: Path) -> str:
     return str(Path(root).expanduser().resolve())
 
 
+class IndexConflictError(RuntimeError):
+    """Raised by :meth:`LibraryIndex.save` when the on-disk file has
+    changed since this in-memory copy was loaded — another process or
+    thread wrote between our load and save, and continuing would
+    silently obliterate their changes. Callers should reload and merge.
+
+    Optimistic concurrency check (mtime-based) rather than a file lock:
+    no cross-platform stdlib lock primitive works on every filesystem
+    Matt's libraries live on (NTFS, ext4, NFS shares); a mismatch is
+    rare enough that the simple check covers the realistic threat —
+    a CLI ``--update-library`` running alongside the GUI's Check for
+    Updates."""
+
+
+_EMPTY_LIBRARY = {"last_scan": None, "stories": {}, "untrackable": []}
+
+
+def _stat_mtime(path: Path) -> float | None:
+    """Return the file's modification time, or ``None`` on any stat
+    failure (file missing, permissions, network blip). Used by the
+    save() conflict check; missing mtime is treated as "first write"
+    which is safe."""
+    try:
+        return path.stat().st_mtime
+    except OSError:
+        return None
+
+
 class LibraryIndex:
     """In-memory view of the on-disk library index, with save()."""
 
     def __init__(self, path: Path, data: dict):
         self._path = Path(path)
         self._data = data
+        # ``_save_blocker`` carries a reason string when ``load()`` could
+        # not snapshot an unreadable original index. ``save()`` refuses
+        # to overwrite the disk file in that state — the in-memory copy
+        # is empty, so a save would atomically destroy the original.
+        # Cleared by :meth:`discard_save_blocker` (wired to the CLI's
+        # ``--discard-bad-index`` and a future GUI recovery dialog).
+        self._save_blocker: str | None = None
+        # mtime captured at load time. ``save()`` re-stats before writing;
+        # a mismatch means another writer touched the file and a blind
+        # overwrite would lose those changes. None means "never loaded
+        # from disk" (first write, no prior state to conflict with).
+        self._loaded_mtime: float | None = None
 
     # ── Construction ────────────────────────────────────────────
 
@@ -100,47 +140,128 @@ class LibraryIndex:
         the original file via :func:`library.backup.backup`. Without that
         snapshot, the next :meth:`save` would atomically replace the
         original with ``{}`` and silently wipe the user's library, with
-        no signal that anything went wrong. The backup lets a downgrade
-        round-trip back to the newer build without data loss."""
+        no signal that anything went wrong.
+
+        When the snapshot itself fails (disk full, permissions), the
+        returned index carries a ``_save_blocker`` reason — subsequent
+        :meth:`save` calls raise ``RuntimeError`` until the user
+        acknowledges the data-loss risk via
+        :meth:`discard_save_blocker`. The app still loads (so the user
+        can navigate / diagnose), it just can't overwrite the original
+        index until the situation is resolved."""
         p = Path(path) if path else default_index_path()
         if not p.exists():
             return cls(p, _empty())
         try:
             raw = json.loads(p.read_text(encoding="utf-8"))
         except (json.JSONDecodeError, OSError):
-            return cls(p, _empty())
+            inst = cls(p, _empty())
+            # File exists but is unparseable. Set a blocker to prevent
+            # blind overwrite — a JSON-corrupt index might still be
+            # recoverable by hand. Mtime stays captured so a concurrent
+            # writer that fixed the file in the meantime still triggers
+            # the conflict path on save.
+            inst._loaded_mtime = _stat_mtime(p)
+            inst._save_blocker = (
+                f"unreadable JSON at {p} (parse error or I/O); "
+                "saves blocked until acknowledged via discard_save_blocker()"
+            )
+            return inst
         if not isinstance(raw, dict) or raw.get("version") != SCHEMA_VERSION:
-            _snapshot_unreadable_index(p, raw)
-            return cls(p, _empty())
+            snapshot_path, blocker = _snapshot_unreadable_index(p, raw)
+            inst = cls(p, _empty())
+            inst._loaded_mtime = _stat_mtime(p)
+            if blocker is not None:
+                inst._save_blocker = blocker
+            return inst
         raw.setdefault("libraries", {})
         _migrate_non_canonical_keys(raw)
-        return cls(p, raw)
+        inst = cls(p, raw)
+        inst._loaded_mtime = _stat_mtime(p)
+        return inst
 
     def save(self) -> None:
-        """Atomic write with fsync: the index is the source of truth for
-        every library tool downstream, so we use the shared atomic
-        helper to get fsync-of-the-temp + parent-dir-fsync semantics
-        rather than rolling our own rename-only path."""
+        """Atomic write with fsync, gated by two safety checks:
+
+        1. ``_save_blocker`` — refuse to save when ``load()`` detected an
+           unreadable original it couldn't snapshot. Writing would
+           atomically destroy the original.
+        2. Mtime check — refuse to save when another process has
+           written the file since we loaded it. Caller must reload and
+           merge before retrying.
+        """
+        if self._save_blocker is not None:
+            raise RuntimeError(
+                f"library index in unsafe state, refusing to save: "
+                f"{self._save_blocker}"
+            )
+        if self._loaded_mtime is not None:
+            current = _stat_mtime(self._path)
+            if current is not None and current != self._loaded_mtime:
+                raise IndexConflictError(
+                    f"library index at {self._path} was modified by "
+                    "another process since load(); reload before saving "
+                    "to avoid silently overwriting concurrent changes"
+                )
         atomic_write_text(
             self._path,
             json.dumps(self._data, indent=2, sort_keys=True),
             fsync_dir=True,
         )
+        # Re-stat after our own write so subsequent saves don't
+        # spuriously detect our last write as another writer's.
+        self._loaded_mtime = _stat_mtime(self._path)
+
+    @property
+    def save_blocker(self) -> str | None:
+        """Reason save is blocked, or ``None`` when save is safe.
+
+        Callers should display this to the user before offering to
+        proceed (the GUI Library panel renders it as a status banner;
+        the CLI prints it before ``--discard-bad-index`` is honoured)."""
+        return self._save_blocker
+
+    def discard_save_blocker(self) -> None:
+        """Clear the save-blocker flag.
+
+        Call this only when the user has explicitly accepted that any
+        unparseable original index file may be overwritten — wired to
+        ``ffn-dl --discard-bad-index`` and to a future GUI recovery
+        dialog. Existing rolling backups (see ``library/backup.py``)
+        remain in place if the snapshot itself succeeded; only the
+        unsnapshotted case loses ground truth on next save, which is
+        what the gate exists to make the user aware of."""
+        self._save_blocker = None
 
     # ── Library-scoped accessors ────────────────────────────────
 
-    def _library(self, root: Path) -> dict:
+    def _library(self, root: Path, *, create: bool = True) -> dict:
+        """Return the in-memory dict for ``root``.
+
+        ``create=True`` (the default for mutating callers like
+        ``record`` and ``library_state``) inserts an empty library
+        entry if missing — keeps the historic mutate-on-touch behaviour
+        for callers that genuinely want to start tracking a new root.
+
+        ``create=False`` is for read-only paths (``stories_in``,
+        ``untrackable_in``, ``lookup_by_url``). Without this split,
+        every read of an unindexed root silently persisted a phantom
+        library entry on the next save — observed as drift between
+        what ``library_roots()`` returned and what the user had
+        actually scanned."""
         key = _normalize_root(root)
-        return self._data["libraries"].setdefault(
-            key, {"last_scan": None, "stories": {}, "untrackable": []}
-        )
+        if create:
+            return self._data["libraries"].setdefault(
+                key, {"last_scan": None, "stories": {}, "untrackable": []}
+            )
+        return self._data["libraries"].get(key) or dict(_EMPTY_LIBRARY)
 
     def library_state(self, root: Path) -> dict:
         """Mutable in-place dict for a library root: ``stories``,
         ``untrackable``, and ``last_scan``. Callers that need to
         promote/demote entries reach in through this; single-read
         consumers stick to the stories_in / untrackable_in helpers."""
-        return self._library(root)
+        return self._library(root, create=True)
 
     def record(self, root: Path, candidate: StoryCandidate) -> bool:
         """Add or update an entry for this candidate under ``root``.
@@ -352,14 +473,14 @@ class LibraryIndex:
         # form (chapter id in the path, query strings, etc.). Match the
         # storage convention before lookup.
         key = canonical_url(url) or url
-        return self._library(root)["stories"].get(key)
+        return self._library(root, create=False)["stories"].get(key)
 
     def stories_in(self, root: Path) -> Iterator[tuple[str, dict]]:
-        for url, entry in self._library(root)["stories"].items():
+        for url, entry in self._library(root, create=False)["stories"].items():
             yield url, entry
 
     def untrackable_in(self, root: Path) -> list[dict]:
-        return list(self._library(root)["untrackable"])
+        return list(self._library(root, create=False)["untrackable"])
 
     def library_roots(self) -> list[str]:
         return list(self._data["libraries"].keys())
@@ -373,31 +494,48 @@ def _empty() -> dict:
     return {"version": SCHEMA_VERSION, "libraries": {}}
 
 
-def _snapshot_unreadable_index(path: Path, raw: object) -> None:
+def _snapshot_unreadable_index(
+    path: Path, raw: object,
+) -> tuple[Path | None, str | None]:
     """Back up an index whose schema we can't read before the next save
     overwrites it.
 
-    The structurally-valid-but-version-mismatched case is the only one
-    where the existing file contains usable (just-unreadable-by-this-
-    build) data. Logging at WARNING ensures the user sees the snapshot
-    path; the backup module's pruning keeps the directory tidy. We
-    swallow every failure here because index.load() must never raise on
-    a bad file — a bricked backup pathway is worse than no backup."""
+    Returns ``(snapshot_path, save_blocker_reason)``:
+
+    * ``(<Path>, None)`` — snapshot succeeded; save is safe.
+    * ``(None, None)`` — original file didn't exist (nothing to snapshot,
+      nothing to lose).
+    * ``(None, "<reason>")`` — snapshot failed; the caller should attach
+      the reason to the LibraryIndex's ``_save_blocker`` so subsequent
+      saves refuse to atomically destroy the original.
+
+    ``load()`` still returns an empty index in every case — the loaded
+    instance must be functional enough for the UI to render. But when
+    the snapshot fails, the in-memory empty index carries a blocker so
+    ``save()`` raises rather than silently overwriting the corrupt-but-
+    recoverable original. This was a verified data-loss path before:
+    swallowing every exception here meant a disk-full or permissions
+    failure on backup proceeded to ``return empty``, and the next save
+    atomically obliterated the original."""
     try:
         from .backup import backup
         snapshot = backup(path)
-    except Exception:
+    except Exception as exc:
         logger.warning(
             "library index at %s has an unrecognised schema "
-            "(got version=%r, expected %d) and snapshot failed; "
-            "the next save will replace it",
+            "(got version=%r, expected %d) and snapshot failed: %s; "
+            "saves blocked until --discard-bad-index acknowledges the risk",
             path,
             raw.get("version") if isinstance(raw, dict) else None,
             SCHEMA_VERSION,
+            exc,
         )
-        return
+        return None, (
+            f"unreadable index schema at {path}; snapshot failed ({exc!r}); "
+            "saving would overwrite the original irrecoverably"
+        )
     if snapshot is None:
-        return
+        return None, None
     logger.warning(
         "library index at %s has an unrecognised schema "
         "(got version=%r, expected %d); snapshotted to %s before "
@@ -407,6 +545,7 @@ def _snapshot_unreadable_index(path: Path, raw: object) -> None:
         SCHEMA_VERSION,
         snapshot,
     )
+    return snapshot, None
 
 
 def _migrate_non_canonical_keys(raw: dict) -> None:
@@ -418,10 +557,13 @@ def _migrate_non_canonical_keys(raw: dict) -> None:
     the same story happened to carry different URL shapes, both landed
     as separate entries — silently doubling up. ``canonical_url`` now
     collapses them, so on load we re-key the stored entries in place
-    and merge any collisions into a primary + ``duplicate_relpaths``
-    pair. The net effect is that upgrading to this build recovers the
-    missing duplicates from an existing index without forcing a
-    full re-scan, while a future scan produces the same layout.
+    and merge any collisions via :func:`_merge_secondary_into_primary`.
+
+    Collision merge preserves tracking state (``last_probed``,
+    ``remote_chapter_count``, ``chapter_hashes``, ``duplicate_relpaths``)
+    that an earlier version of this migration silently dropped from the
+    loser — see :func:`_merge_secondary_into_primary` for the field-by-
+    field policy.
     """
     # Imported locally because sites.py imports scraper modules that
     # pull in heavy dependencies; keeping the import out of module
@@ -439,16 +581,76 @@ def _migrate_non_canonical_keys(raw: dict) -> None:
             if existing is None:
                 rekeyed[new_key] = entry
                 continue
-            # Collision — merge ``entry`` into ``existing`` as a
-            # duplicate. Keep the entry with more populated metadata
-            # as the primary so the richer record wins.
             primary, secondary = _pick_primary_entry(existing, entry)
-            dupes = primary.setdefault("duplicate_relpaths", [])
-            candidate_rel = secondary.get("relpath")
-            if candidate_rel and candidate_rel not in dupes and candidate_rel != primary.get("relpath"):
-                dupes.append(candidate_rel)
+            _merge_secondary_into_primary(primary, secondary)
             rekeyed[new_key] = primary
         lib["stories"] = rekeyed
+
+
+def _merge_secondary_into_primary(primary: dict, secondary: dict) -> None:
+    """Merge tracking fields from ``secondary`` into ``primary`` after a
+    migration-time collision.
+
+    The primary was chosen by :func:`_pick_primary_entry` as the
+    higher-completeness entry; its identity fields (``relpath``,
+    ``title``, ``author``, ``fandoms``, ``adapter``, ``format``,
+    ``chapter_count``) are retained. Tracking fields are merged
+    conservatively so we don't lose ground truth from either side:
+
+    * ``duplicate_relpaths`` — union of primary's, secondary's, and
+      secondary.relpath itself, minus the primary's own relpath.
+    * ``last_probed`` / ``remote_chapter_count`` — taken from whichever
+      entry has the newer ``last_probed`` (treating absent as oldest).
+      They travel together because they're written in lockstep by
+      :meth:`mark_probed`.
+    * ``chapter_hashes`` — if primary has none and secondary does, adopt
+      secondary's. If both have non-empty differing lists, keep the
+      primary's and log WARNING so the migration is observable. Never
+      silently drop the loser's hashes without surfacing the conflict.
+    """
+    primary_rel = primary.get("relpath")
+
+    dupes = primary.setdefault("duplicate_relpaths", [])
+    candidate_rel = secondary.get("relpath")
+    if (
+        candidate_rel
+        and candidate_rel not in dupes
+        and candidate_rel != primary_rel
+    ):
+        dupes.append(candidate_rel)
+    for rel in secondary.get("duplicate_relpaths") or []:
+        if rel and rel not in dupes and rel != primary_rel:
+            dupes.append(rel)
+    if not dupes:
+        primary.pop("duplicate_relpaths", None)
+
+    primary_lp = primary.get("last_probed") or ""
+    secondary_lp = secondary.get("last_probed") or ""
+    if secondary_lp and secondary_lp > primary_lp:
+        primary["last_probed"] = secondary_lp
+        if "remote_chapter_count" in secondary:
+            primary["remote_chapter_count"] = secondary["remote_chapter_count"]
+        else:
+            primary.pop("remote_chapter_count", None)
+
+    primary_hashes = primary.get("chapter_hashes")
+    secondary_hashes = secondary.get("chapter_hashes")
+    if not primary_hashes and secondary_hashes:
+        primary["chapter_hashes"] = list(secondary_hashes)
+    elif (
+        primary_hashes
+        and secondary_hashes
+        and list(primary_hashes) != list(secondary_hashes)
+    ):
+        logger.warning(
+            "migration: conflicting chapter_hashes for collapsed entry "
+            "%r; keeping primary's (%d chapters), discarding secondary's "
+            "(%d chapters); silent-edit detection may need re-bootstrap "
+            "for this story",
+            primary_rel or "?",
+            len(primary_hashes),
+            len(secondary_hashes),
+        )
 
 
 def _entry_completeness_score(entry: dict) -> int:

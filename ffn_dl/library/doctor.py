@@ -69,10 +69,16 @@ class IntegrityReport:
     fields to skip re-parsing unchanged EPUBs; drift defeats the
     optimisation. Healing re-stats and updates the entry."""
 
-    stale_untrackable: list[int] = field(default_factory=list)
-    """Indices into the library's ``untrackable`` list whose files
-    are gone. Cleanup candidates — untrackable entries don't
-    self-prune and accumulate forever otherwise."""
+    stale_untrackable: list[str] = field(default_factory=list)
+    """Relpaths of untrackable entries whose files are gone. Cleanup
+    candidates — untrackable entries don't self-prune and accumulate
+    forever otherwise.
+
+    Previously stored positional indices into ``lib_state["untrackable"]``,
+    which drifted under your feet if anything mutated the list between
+    ``check_integrity()`` and ``heal()`` (e.g., GUI Review Ambiguous
+    promoting an entry mid-doctor-run). Content-keyed lookup is
+    stable against intervening mutation."""
 
     stale_duplicate_relpaths: dict[str, list[str]] = field(default_factory=dict)
     """``url -> [duplicate relpaths that no longer exist]``. The
@@ -227,13 +233,16 @@ def check_integrity(root: Path, index: LibraryIndex) -> IntegrityReport:
         for rel in dupes:
             tracked_relpaths.add(rel)
 
-    # Pass 2 — untrackable list.
-    for idx, record in enumerate(lib_state.get("untrackable", [])):
+    # Pass 2 — untrackable list. Track stale entries by their relpath
+    # rather than by list position so a concurrent mutator (e.g. the
+    # GUI Review Ambiguous flow) between this report and heal() can't
+    # shift the indices we'd later try to delete.
+    for record in lib_state.get("untrackable", []):
         rel = record.get("relpath")
         if rel:
             tracked_relpaths.add(rel)
             if not (root / rel).exists():
-                report.stale_untrackable.append(idx)
+                report.stale_untrackable.append(rel)
 
     # Pass 3 — files on disk. Anything with a known extension that
     # isn't in tracked_relpaths is an orphan. We normalise each file's
@@ -297,12 +306,21 @@ def heal(
             result.removed_stale_duplicates += len(stale_list)
 
     if prune_untrackable and report.stale_untrackable:
+        # Relpath-keyed prune is stable against intervening mutation:
+        # if the user promoted an untrackable entry between
+        # check_integrity() and heal(), we just won't find that relpath
+        # in the untrackable list and quietly skip it (correct
+        # behaviour — there's nothing to prune for a promoted entry).
+        stale_set = set(report.stale_untrackable)
         untrackable = lib_state.get("untrackable", [])
-        # Delete from the tail so earlier indices stay valid.
-        for idx in sorted(report.stale_untrackable, reverse=True):
-            if 0 <= idx < len(untrackable):
-                del untrackable[idx]
+        keep: list[dict] = []
+        for record in untrackable:
+            rel = record.get("relpath") or ""
+            if rel in stale_set:
                 result.removed_stale_untrackable += 1
+            else:
+                keep.append(record)
+        lib_state["untrackable"] = keep
 
     if refresh_drift and report.drifted_entries:
         for url, entry in report.drifted_entries:

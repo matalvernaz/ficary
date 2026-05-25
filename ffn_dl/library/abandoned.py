@@ -208,14 +208,19 @@ def revive_abandoned(
     urls: Iterable[str] | None = None,
     *,
     roots: Iterable[Path] | None = None,
+    revive_all: bool = False,
 ) -> ReviveReport:
     """Clear ``abandoned_at`` on the matching stor(y/ies).
 
-    Called with ``urls=None`` and ``roots=[root]`` (or ``None``),
-    revives every abandoned story across those roots — the "I
-    changed my mind, unmark everything" path. Called with specific
-    URLs, revives only those — useful when the user learned one
-    story updated again.
+    Pass specific ``urls`` to revive a known set — the common case
+    when the user learned one story updated again.
+
+    To revive *every* abandoned story in scope (the "I changed my mind,
+    unmark everything" path), pass ``urls=None`` AND ``revive_all=True``.
+    The explicit kwarg prevents a CLI/GUI plumbing slip-up — formerly a
+    caller that forgot to populate ``urls`` would silently bulk-clear
+    the entire scope. ``urls=None`` without ``revive_all`` now raises
+    ``ValueError``.
 
     URLs that don't correspond to an abandoned entry in any of the
     searched roots land in :attr:`ReviveReport.missing` so the CLI
@@ -231,6 +236,12 @@ def revive_abandoned(
         root_list = [Path(r).expanduser().resolve() for r in roots]
 
     if urls is None:
+        if not revive_all:
+            raise ValueError(
+                "revive_abandoned: urls=None requires revive_all=True. "
+                "Pass an explicit URL list or set revive_all=True to "
+                "bulk-clear the entire scope."
+            )
         for root in root_list:
             for url, entry in index.stories_in(root):
                 if entry.pop("abandoned_at", None):

@@ -204,7 +204,7 @@ def test_revive_abandoned_all_in_root(tmp_path: Path):
     idx.save()
 
     idx2 = LibraryIndex.load(_idx_path(tmp_path))
-    report = revive_abandoned(idx2, urls=None, roots=[lib])
+    report = revive_abandoned(idx2, urls=None, roots=[lib], revive_all=True)
     assert len(report.revived) == 3
     idx2.save()
     reloaded = LibraryIndex.load(_idx_path(tmp_path))

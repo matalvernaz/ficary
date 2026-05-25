@@ -8,10 +8,11 @@ stays wx-free for CLI use. Two dialogs:
 * ``ReorganizePreviewDialog`` — CheckListBox-based dry-run review,
   each row toggleable before applying.
 
-NVDA state reporting on ``wx.CheckListBox`` is unreliable, so every
-row gets a ``[x] `` / ``[ ] `` prefix — same pattern as the
-StoryPickerDialog. Long operations (scan, apply) run on a worker
-thread and report back through ``wx.CallAfter``.
+NVDA reads CheckListBox check state natively on current wxPython, so
+no row-prefix workaround is needed — the historical ``[x] / [ ]``
+pattern was dropped to match the convention in ``gui_dialogs.py``.
+Long operations (scan, apply) run on a worker thread and report back
+through ``wx.CallAfter``.
 """
 
 from __future__ import annotations
@@ -676,6 +677,23 @@ class LibraryFrame(wx.Frame):
         self._append_status(
             f"Applying {len(selected_indices)} of {len(moves)} move(s)..."
         )
+        # V2 — snapshot before the destructive op so a misdiagnosed
+        # reorganize can be rolled back via --restore-index. Done on the
+        # main thread before the worker fires so the snapshot is in
+        # place even if the worker dies before the first move.
+        try:
+            from .backup import snapshot_before
+            from .index import default_index_path
+            snap = snapshot_before(
+                f"GUI reorganize-apply on {root}", default_index_path(),
+            )
+            if snap is not None:
+                self._append_status(f"Pre-apply index backup: {snap.name}")
+        except Exception as exc:
+            # Failing the backup shouldn't block the apply — but we log
+            # it so a user diagnosing later knows there's no rollback
+            # checkpoint for this run.
+            self._append_status(f"Warning: pre-apply backup failed: {exc}")
         self._set_busy(True)
 
         def worker():
@@ -795,7 +813,6 @@ class ReorganizePreviewDialog(wx.Dialog):
 
         self.list_ctrl = wx.CheckListBox(panel, choices=[])
         self.list_ctrl.SetName("Planned moves")
-        # Prefix pattern matches StoryPickerDialog for NVDA state reporting.
         self.list_ctrl.Bind(wx.EVT_CHECKLISTBOX, self._on_item_toggled)
         sizer.Add(self.list_ctrl, 1, wx.EXPAND | wx.LEFT | wx.RIGHT, 8)
 
@@ -1138,7 +1155,13 @@ class AbandonedStoriesDialog(wx.Dialog):
 
         idx = LibraryIndex.load()
         roots_arg = [self._root] if self._root is not None else None
-        report = revive_abandoned(idx, urls=urls, roots=roots_arg)
+        # ``urls=None`` is only reachable via the "Revive all" button,
+        # which prompts a YES/NO confirm before getting here — pass the
+        # explicit opt-in so the safety gate fires only on programming
+        # mistakes, not on the legitimate UI path.
+        report = revive_abandoned(
+            idx, urls=urls, roots=roots_arg, revive_all=(urls is None),
+        )
         if report.revived:
             idx.save()
         self._refresh_rows()

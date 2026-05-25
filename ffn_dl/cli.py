@@ -1877,7 +1877,7 @@ def _handle_library_doctor(args: argparse.Namespace) -> None:
     """Diagnose (and optionally heal) drift between the library index
     and the files on disk. Read-only unless ``--heal`` is passed."""
     from .library import check_integrity, heal
-    from .library.backup import backup as backup_index
+    from .library.backup import snapshot_before
     from .library.index import LibraryIndex
 
     root = Path(args.library_doctor)
@@ -1903,12 +1903,10 @@ def _handle_library_doctor(args: argparse.Namespace) -> None:
         sys.exit(2)
 
     # Take a snapshot before mutating the index so a misdiagnosed heal
-    # can be rolled back with --restore-index. The backup is free
-    # (tiny file) and silent on success so the normal happy-path
-    # output stays clean.
-    backup_path = backup_index(idx.path)
-    if backup_path is not None:
-        logger.debug("Indexed backed up to %s before heal", backup_path)
+    # can be rolled back with --restore-index. snapshot_before logs at
+    # INFO with the operation label so the operator can later map the
+    # backup file back to the user action that triggered it.
+    backup_path = snapshot_before(f"--heal on {root_resolved}", idx.path)
 
     result = heal(
         root_resolved,
@@ -2174,12 +2172,16 @@ def _handle_revive_abandoned(args: argparse.Namespace) -> None:
 
     value = args.revive_abandoned
     urls: list[str] | None
+    revive_all = False
     if value == _REVIVE_ABANDONED_ALL_SENTINEL:
         urls = None
+        # Explicit opt-in required by the library helper to bulk-clear
+        # — the sentinel here IS that opt-in from the CLI's POV.
+        revive_all = True
     else:
         urls = [value]
 
-    report = revive_abandoned(idx, urls=urls, roots=roots)
+    report = revive_abandoned(idx, urls=urls, roots=roots, revive_all=revive_all)
     if report.revived:
         idx.save()
     print(report.summary())
@@ -2348,6 +2350,40 @@ def _handle_list_backups() -> None:
     for p in backups:
         size = p.stat().st_size
         print(f"  {p.name}  ({size} bytes)")
+    sys.exit(0)
+
+
+def _handle_discard_bad_index() -> None:
+    """Clear the save-blocker flag set by load() when the original
+    library index was unreadable and couldn't be snapshotted.
+
+    The blocker is a safety gate — it stops the next save() from
+    atomically overwriting a corrupt-but-recoverable original. Once
+    the user has either manually rescued the original (by hand-editing
+    or restoring from filesystem backup) or accepted that it's
+    unrecoverable, this flag clears the gate so subsequent saves
+    proceed normally.
+    """
+    from .library.index import LibraryIndex, default_index_path
+
+    idx = LibraryIndex.load()
+    if idx.save_blocker is None:
+        print(
+            f"No save blocker on {default_index_path()}; nothing to discard."
+        )
+        sys.exit(0)
+    print(f"Discarding save-blocker: {idx.save_blocker}")
+    idx.discard_save_blocker()
+    # Empty in-memory state + cleared blocker → safe to save the
+    # new state. We don't auto-save here; the user runs --scan-library
+    # next, or another flow that mutates+saves.
+    print(
+        "Save-blocker cleared. The next ffn-dl operation that saves "
+        "the library index will write the (currently empty) in-memory "
+        "state. If you intended to recover from the unreadable file, "
+        "run --list-backups and --restore-index <BACKUP> before "
+        "anything else."
+    )
     sys.exit(0)
 
 
@@ -2598,8 +2634,10 @@ def _handle_update_library(args: argparse.Namespace) -> None:
 
 def _handle_reorganize(args: argparse.Namespace) -> None:
     """Plan (and optionally apply) file moves to match the library template."""
+    from .library.backup import snapshot_before
+    from .library.index import default_index_path
     from .library.reorganizer import apply as apply_moves
-    from .library.reorganizer import plan
+    from .library.reorganizer import plan_with_conflicts
     from .library.template import DEFAULT_MISC_FOLDER, DEFAULT_TEMPLATE
     from .prefs import (
         KEY_LIBRARY_MISC_FOLDER,
@@ -2616,9 +2654,13 @@ def _handle_reorganize(args: argparse.Namespace) -> None:
     template = prefs.get(KEY_LIBRARY_PATH_TEMPLATE) or DEFAULT_TEMPLATE
     misc_folder = prefs.get(KEY_LIBRARY_MISC_FOLDER) or DEFAULT_MISC_FOLDER
 
-    moves = plan(root, template=template, misc_folder=misc_folder)
+    plan_result = plan_with_conflicts(
+        root, template=template, misc_folder=misc_folder,
+    )
+    moves = plan_result.moves
+    conflicts = plan_result.conflicts
 
-    if not moves:
+    if not moves and not conflicts:
         print(f"Library at {root} is already organized — no moves needed.")
         sys.exit(0)
 
@@ -2632,11 +2674,47 @@ def _handle_reorganize(args: argparse.Namespace) -> None:
         arrow = "renamed to" if op.is_rename else "->"
         print(f"  {src_rel}  {arrow}  {tgt_rel}")
 
+    if conflicts:
+        # Surface collisions at plan time so the user knows why N moves
+        # were planned but only K will land. Each cluster is two or more
+        # distinct stories rendering to the same target path; the user
+        # has to decide which one wins (rename a fandom, edit metadata,
+        # ...) before --apply will move both.
+        print(
+            f"\n{len(conflicts)} planned move(s) collide on the same "
+            "target path and were not queued for apply. Resolve before "
+            "re-running --apply:\n"
+        )
+        for target, ops in conflicts:
+            tgt_rel = (
+                target.relative_to(root_resolved)
+                if target.is_relative_to(root_resolved) else target
+            )
+            print(f"  conflict at {tgt_rel}:")
+            for op in ops:
+                src_rel = (
+                    op.source.relative_to(root_resolved)
+                    if op.source.is_relative_to(root_resolved) else op.source
+                )
+                print(f"    {src_rel}  ({op.source_url})")
+
     if not args.apply:
         print(
             "\nDry run. Re-run with --apply to execute these moves."
         )
         sys.exit(0)
+
+    if not moves:
+        print(
+            "\nNothing to apply — every planned move collided with another."
+        )
+        sys.exit(1)
+
+    # V2 — snapshot before the destructive op so a misdiagnosed
+    # reorganize can be rolled back with ``--restore-index``. Closes
+    # the documentation-claim/code-reality gap where the help text
+    # promised an auto-backup that never actually happened.
+    snapshot_before(f"--reorganize --apply on {root_resolved}", default_index_path())
 
     print("\nApplying...")
     result = apply_moves(root, moves)
@@ -3050,9 +3128,21 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help=(
             "Copy the current library index to a timestamped sibling "
-            "file for safe-keeping before risky operations. Destructive "
-            "commands (--heal, --reorganize --apply) auto-backup already; "
-            "this flag is for manual checkpoints."
+            "file for safe-keeping before risky operations. The "
+            "destructive flows (--heal, --reorganize --apply) also "
+            "auto-snapshot before mutating; this flag is for manual "
+            "checkpoints outside those flows."
+        ),
+    )
+    parser.add_argument(
+        "--discard-bad-index",
+        action="store_true",
+        help=(
+            "Clear the save-blocker flag set when ffn-dl loaded an "
+            "unreadable library index it couldn't snapshot. Use only "
+            "after manually rescuing the original index, or when you "
+            "accept that the original is unrecoverable and the empty "
+            "in-memory copy may be saved over it."
         ),
     )
     parser.add_argument(
@@ -4374,6 +4464,9 @@ def main(argv: list[str] | None = None) -> None:
         return
     if args.restore_index:
         _handle_restore_index(args)
+        return
+    if args.discard_bad_index:
+        _handle_discard_bad_index()
         return
     if args.update_all:
         _handle_update_all(args)

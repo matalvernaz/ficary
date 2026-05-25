@@ -6,7 +6,6 @@ downloaders (FanFicFare, FicHub, bare HTML scrapes) when enough
 metadata survived.
 """
 
-from . import backup
 from .abandoned import (
     AbandonedListing,
     MarkReport,
@@ -68,7 +67,11 @@ __all__ = [
     "mark_abandoned",
     "revive_abandoned",
     "list_abandoned",
-    "backup",
+    # ``backup`` is intentionally NOT re-exported. Callers should
+    # ``from ffn_dl.library import backup`` (submodule import) — the
+    # earlier ``from . import backup`` re-export inside ``__all__``
+    # leaked the whole module as a public API surface and blurred the
+    # boundary between top-level helpers and internal mutators.
     "ChapterHashUnavailable",
     "compute_local_hashes",
     "store_hashes",

@@ -20,16 +20,17 @@ def relative_to_root(p: Path, root: Path) -> str:
         return str(p)
 
 
-def format_move_label(op: MoveOp, root: Path, checked: bool) -> str:
+def format_move_label(op: MoveOp, root: Path, checked: bool = False) -> str:
     """The string shown in a ReorganizePreviewDialog row.
 
-    ``[x] `` / ``[ ] `` prefix matches the pattern used elsewhere in
-    the GUI (StoryPickerDialog) for NVDA state reporting on
-    ``wx.CheckListBox``, which doesn't report check state reliably
-    through MSAA on Windows.
+    No ``[x]/[ ]`` prefix: NVDA reads CheckListBox checkbox state
+    natively on current wxPython, so the prefix double-announced check
+    state (matching the pattern dropped from ``gui_dialogs.py``'s
+    StoryPickerDialog). ``checked`` is retained as a no-op kwarg so
+    callers that still pass it don't break.
     """
-    prefix = "[x] " if checked else "[ ] "
+    del checked  # accepted for back-compat with callers that still pass it
     source = relative_to_root(op.source, root)
     target = relative_to_root(op.target, root)
     arrow = "renamed to" if op.is_rename else "→"
-    return f"{prefix}{source}  {arrow}  {target}"
+    return f"{source}  {arrow}  {target}"

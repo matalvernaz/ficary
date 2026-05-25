@@ -49,6 +49,36 @@ class ApplyResult:
     messages: list[str] = field(default_factory=list)
 
 
+@dataclass
+class PlanResult:
+    """Output of :func:`plan` — moves the user can apply, plus
+    collisions the user needs to resolve first.
+
+    Returning collisions explicitly (rather than discovering them only
+    when ``apply()`` skips with "target exists") closes a UX gap: the
+    dry-run preview claimed N moves, then apply silently dropped K of
+    them with a per-line skip message that scrolled past in the status
+    pane. With this report shape the GUI / CLI can surface the
+    conflicts before the user clicks Apply, and the user can choose
+    which of each cluster to keep.
+    """
+
+    moves: list[MoveOp] = field(default_factory=list)
+    """Non-conflicting moves — safe to apply in any subset."""
+
+    conflicts: list[tuple[Path, list["MoveOp"]]] = field(default_factory=list)
+    """Each tuple is ``(target_path, [MoveOps that all resolve to it])``.
+    The first MoveOp in the list is the one ``apply()`` would let win
+    under first-come-wins semantics; the rest would be silently skipped
+    if not surfaced.
+
+    Two distinct stories rendering to the same path is the classic
+    cause: template values rarely produce a true single-path identity
+    (title+author can coincide across remasters / translated reuploads).
+    Different fix per case — rename one, merge metadata, pick a winner.
+    """
+
+
 def plan(
     root: Path,
     *,
@@ -58,11 +88,44 @@ def plan(
 ) -> list[MoveOp]:
     """Compute the moves that would bring this library into alignment
     with the template. Files already at their template-resolved target
-    are omitted, so the result is directly the work the user sees."""
+    are omitted, so the result is directly the work the user sees.
+
+    Backwards-compat shape: returns only the non-conflicting MoveOps.
+    Callers that want to surface plan-time collisions to the user
+    should call :func:`plan_with_conflicts` instead.
+    """
+    return plan_with_conflicts(
+        root,
+        index_path=index_path,
+        template=template,
+        misc_folder=misc_folder,
+    ).moves
+
+
+def plan_with_conflicts(
+    root: Path,
+    *,
+    index_path: Path | None = None,
+    template: str = DEFAULT_TEMPLATE,
+    misc_folder: str = DEFAULT_MISC_FOLDER,
+) -> PlanResult:
+    """Like :func:`plan` but separates conflicting target paths into a
+    dedicated ``conflicts`` field instead of dropping them silently to
+    ``apply()``'s first-come-wins skip path.
+
+    Conflict detection runs across all MoveOps from a single ``plan``
+    invocation, so it catches the case where two indexed stories
+    render to the same on-disk path under the same template. A
+    collision against a file that's NOT in any MoveOp's source set
+    (e.g., a manually-dropped file the user added without scanning)
+    still falls through to ``apply()``'s ``target.exists()`` skip — by
+    design, since we have no signal at plan time that the on-disk file
+    is anything we'd be willing to overwrite.
+    """
     root = Path(root).expanduser().resolve()
     idx = LibraryIndex.load(index_path)
 
-    moves: list[MoveOp] = []
+    candidates: list[MoveOp] = []
     for url, entry in idx.stories_in(root):
         md = _entry_to_metadata(url, entry)
         source = (root / entry["relpath"]).resolve(strict=False)
@@ -84,8 +147,24 @@ def plan(
             continue
         if source == target:
             continue
-        moves.append(MoveOp(source=source, target=target, source_url=url))
-    return moves
+        candidates.append(MoveOp(source=source, target=target, source_url=url))
+
+    by_target: dict[Path, list[MoveOp]] = {}
+    for op in candidates:
+        by_target.setdefault(op.target, []).append(op)
+
+    moves: list[MoveOp] = []
+    conflicts: list[tuple[Path, list[MoveOp]]] = []
+    for target, ops in by_target.items():
+        if len(ops) == 1:
+            moves.append(ops[0])
+        else:
+            # Multiple distinct stories planned to the same path.
+            # Surface them so the user can resolve before Apply rather
+            # than discover the silent skip in the post-apply log.
+            conflicts.append((target, ops))
+
+    return PlanResult(moves=moves, conflicts=conflicts)
 
 
 def _is_under(path: Path, root: Path) -> bool:

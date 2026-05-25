@@ -1,5 +1,121 @@
 # Changelog
 
+## 2.4.45 — 2026-05-25
+
+Round-8 multi-AI audit landed 17 fixes across the library subsystem,
+the round-7 deferred items in ``tts.py`` / ``gui.py``, and the CLI
+backup-before-mutate gap. Gemini Pro + GPT-5 + Claude Opus
+roundtable; verified against actual code before applying. No
+behavioural regression on the 1489 pre-existing tests; 15 new tests
+cover the data-loss and concurrency fixes.
+
+**Critical — index data loss surfaces closed**
+
+* ``LibraryIndex._save_blocker``: when ``load()`` reads an
+  unreadable schema or unparseable JSON and the snapshot-before-
+  replace attempt fails, the loaded index now carries a reason
+  string. ``save()`` raises ``RuntimeError`` until the user
+  acknowledges the risk via ``--discard-bad-index``. Previously a
+  disk-full backup failure proceeded to ``return empty``, and the
+  next save atomically destroyed the corrupt-but-recoverable
+  original. The app still loads in unsafe-state — the user can
+  navigate / diagnose — it just can't atomically overwrite the
+  original until they've acted.
+* ``_migrate_non_canonical_keys`` collision merge: the loser entry's
+  ``last_probed`` / ``remote_chapter_count`` / ``chapter_hashes`` /
+  ``duplicate_relpaths`` were silently discarded on canonical-URL
+  re-keying. New ``_merge_secondary_into_primary`` takes the newer
+  ``last_probed`` (and the count that travels with it), copies
+  ``chapter_hashes`` when primary empty (warns at WARNING when both
+  non-empty and differ — never silently drops), and unions
+  duplicate-relpaths. Silent-edit detection no longer has its
+  ground-truth hashes wiped on a one-time migration.
+* CLI ``--reorganize --apply`` and GUI ``Apply Selected`` now take a
+  snapshot before mutating files + index. The ``--backup-index`` help
+  text used to claim this was happening; it wasn't. Now it is.
+  ``snapshot_before(label, index_path)`` helper centralises the
+  pattern so future destructive flows wire it the same way.
+
+**High**
+
+* ``backup.restore`` snapshots the current index before overwriting.
+  A mis-picked restore was previously unrecoverable.
+* ``backup()`` filenames now carry an 8-char UUID suffix in addition
+  to the second-resolution timestamp; same-second collisions can no
+  longer overwrite each other (the failure mode where a load-fail
+  retry loop wiped its own emergency backup).
+* ``LibraryIndex.save()`` mtime conflict check: a second process or
+  thread that wrote the index between our ``load()`` and ``save()``
+  now triggers ``IndexConflictError`` instead of silently
+  overwriting their changes. Caller reloads + retries.
+* ``reorganizer.plan_with_conflicts(...)`` surfaces target-path
+  collisions at plan time. Two distinct indexed stories rendering to
+  the same target previously showed up only as silent skip messages
+  during apply; now the dry-run preview surfaces them so the user
+  can resolve before clicking Apply. ``plan()`` is preserved as a
+  back-compat shim returning only the non-colliding moves.
+* ``scanner.scan(clear_existing=True)`` pre-captures the prior
+  library state and re-injects entries for files whose
+  ``extract_metadata`` fails mid-rescan. A poisoned-on-rescan-day
+  HTML no longer silently drops a tracked story from the index.
+* ``tts.py`` ``_run_silent(cmd, **kw)`` helper defaults
+  ``stdin=subprocess.DEVNULL`` and wraps all 6 internal
+  ``subprocess.run`` callsites. ffmpeg/ffprobe can no longer inherit
+  a tty stdin and block the audiobook render indefinitely on
+  Windows. New callsites should route through ``_run_silent``.
+
+**Medium**
+
+* ``library/doctor.py`` ``stale_untrackable`` is now content-keyed
+  (list of relpaths) instead of positional list indices into
+  ``lib_state["untrackable"]``. Heal stays correct when the GUI's
+  Review Ambiguous flow mutates the untrackable list between
+  ``check_integrity()`` and ``heal()``.
+* ``library/mirrors.py`` ``_bucket_by_title_prefix`` strips leading
+  articles ({the, a, an, of, and}) before bucketing. Cross-site
+  mirror pairs with article drift ("The Dragon" vs "A Dragon") now
+  land in the same bucket and are actually compared. Mid-title
+  articles preserved (they're signal, not noise).
+* ``library/__init__.py`` no longer re-exports the ``backup``
+  submodule. Callers use the explicit submodule import path.
+* ``LibraryIndex._library`` split into mutating and read-only
+  paths. Read accessors (``stories_in``, ``untrackable_in``,
+  ``lookup_by_url``) no longer leave phantom library entries for
+  unindexed roots that subsequent saves persisted.
+* ``revive_abandoned(urls=None)`` now requires explicit
+  ``revive_all=True``. A CLI/GUI plumbing slip-up that left ``urls``
+  unpopulated used to bulk-clear the entire scope without warning.
+* ``library/gui_logic.py`` ``format_move_label`` drops the deprecated
+  ``[x]/[ ]`` prefix workaround; NVDA reads CheckListBox state
+  natively on current wxPython (matches ``gui_dialogs.py``
+  convention). The ``checked`` kwarg is kept as a no-op for callers
+  that still pass it.
+* ``gui.py`` ``_on_close`` stops the clipboard-watch timer alongside
+  the log timer. Previously left running past close, calling
+  ``_on_clip_timer`` could touch destroyed widgets.
+* New CI guardrail ``test_default_refresh_args_signature`` uses
+  ``inspect.signature`` + AST scan to assert every
+  ``args.<attr>`` the cli ``_download_one`` reads is present on the
+  Namespace ``library.refresh.default_refresh_args`` builds. Catches
+  the otherwise-opaque "Update failed" regression in CI rather than
+  at GUI-update time.
+
+**Deferred to v2.5.0** (acknowledged in the audit, not in this
+release):
+
+* ``DownloadJob`` dataclass refactor + ``_download_one`` API split —
+  the right architecture but a 60-90min refactor that touches cli.py
+  too. The new signature-coverage test mitigates the worst regression
+  shape in the meantime.
+* ``cli.py`` ↔ ``library/`` inversion (``library/gui.py`` imports cli
+  at worker time) — couples to the DownloadJob refactor.
+* Fan-out per-site parallelism in ``edits.scan_edits`` — real win for
+  mixed-site libraries but needs careful per-host semaphore work.
+* GUI ``_run_picked_batch`` ``params=None`` worker-thread widget read
+  — raise RuntimeError instead of silent fallback (this round's
+  audit reaffirmed it's real but kept the fix for a focused gui.py
+  pass).
+
 ## 2.4.44 — 2026-05-22
 
 Two more cunnilingus-family refining tags added to the erotica

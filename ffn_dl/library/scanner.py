@@ -127,7 +127,21 @@ def scan(
         raise NotADirectoryError(f"{root} is not a directory")
 
     index = LibraryIndex.load(index_path)
+    # ``clear_existing`` rebuilds the index from disk state, so a
+    # per-file extraction error mid-scan used to delete that file's
+    # prior entry without warning — a poisoned FicHub HTML on rescan
+    # day silently demoted a tracked story to "missing" until the user
+    # noticed it disappeared from --library-stats. Cache the pre-clear
+    # state by relpath so we can re-inject any file the per-file
+    # extractor fails on, mirroring the merge semantics of a normal
+    # (non-clear) rescan. Keyed by relpath since URL might not match
+    # if the failing file was tracked under a non-canonical URL form.
+    preserved_by_relpath: dict[str, tuple[str, dict]] = {}
     if clear_existing:
+        for url, entry in list(index.stories_in(root)):
+            rel = entry.get("relpath")
+            if rel:
+                preserved_by_relpath[rel] = (url, dict(entry))
         index.clear_library(root)
 
     result = ScanResult(root=root)
@@ -170,6 +184,20 @@ def scan(
         except Exception as exc:
             result.errors += 1
             result.error_files.append((path, str(exc)))
+            # If this file had a prior entry and we cleared the
+            # library before the loop, re-inject the cached copy so a
+            # transient parse error doesn't silently drop a tracked
+            # story from the index. The relpath relative-to-root form
+            # matches what ``index.record`` writes.
+            if preserved_by_relpath:
+                try:
+                    rel = str(path.relative_to(root))
+                except ValueError:
+                    rel = ""
+                cached = preserved_by_relpath.get(rel)
+                if cached is not None:
+                    url, prior = cached
+                    index.library_state(root)["stories"][url] = prior
 
     days = _resolve_abandoned_threshold(abandoned_after_days)
     if days > 0:

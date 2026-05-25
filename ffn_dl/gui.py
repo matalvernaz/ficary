@@ -1339,6 +1339,12 @@ class MainFrame(wx.Frame):
             logger.debug("_save_prefs on close failed", exc_info=True)
         if hasattr(self, "_log_timer"):
             self._log_timer.Stop()
+        # Same treatment for the clipboard-watch timer — left running
+        # past close, it kept calling _on_clip_timer which would touch
+        # destroyed widgets if the user closed the window during an
+        # active clipboard-watch session.
+        if hasattr(self, "_clip_timer"):
+            self._clip_timer.Stop()
         self._detach_log_handlers()
         # Unregister the DownloadQueues listener so the global queue
         # singleton stops holding a reference to this MainFrame after

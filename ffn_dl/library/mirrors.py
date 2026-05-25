@@ -312,19 +312,49 @@ def _collect_records(
     return records
 
 
+_LEADING_STOPWORDS = frozenset({"the", "a", "an", "of", "and"})
+"""Articles and short conjunctions stripped from the *front* of a title
+before bucketing.
+
+A pair of cross-site mirrors of the same story usually carries the
+same leading article ("The Dragon"), but a substantial fraction don't —
+an AO3 reupload of an FFN classic frequently drops "The" while the
+original keeps it. Without stopword stripping the two land in different
+buckets (``the dragon`` vs ``a dragon`` vs ``dragon ...``) and are
+never compared, producing a silent false negative.
+
+Stripping is leading-only by design: a mid-title ``The`` (e.g. ``Harry
+and the Half-Blood Prince``) is signal, not noise. Same word, different
+position, different role."""
+
+
 def _bucket_by_title_prefix(records: list[_StoryRecord]) -> dict[str, list[_StoryRecord]]:
-    """Group records by the first two alphabetical tokens of the
+    """Group records by the first two non-stopword tokens of the
     normalised title. Two copies of the same story always land in
     the same bucket; pairs that share a prefix by coincidence are
     cheap to compare further.
 
-    Stories with fewer than two tokens land in a ``_short_`` bucket
-    that's compared all-pairs — they're the cases where bucketing
-    would cost accuracy more than it saves time.
+    Stories with fewer than two non-stopword tokens land in a
+    ``_short_`` bucket that's compared all-pairs — they're the cases
+    where bucketing would cost accuracy more than it saves time.
+
+    See :data:`_LEADING_STOPWORDS` for why we strip leading articles
+    before bucketing.
     """
     buckets: dict[str, list[_StoryRecord]] = {}
     for r in records:
         toks = r.title_norm.split()
+        # Strip leading stopwords only — a mid-title "the" or "and" is
+        # content (``Harry and the Half-Blood Prince``) and must be
+        # preserved for the bucket to discriminate.
+        while toks and toks[0] in _LEADING_STOPWORDS:
+            toks.pop(0)
+        if not toks:
+            # Every token was a stopword. Fall back to the original
+            # tokens so we still bucket together rather than dumping
+            # everything into _notitle_ (rare corner case: a title like
+            # "The And", which would otherwise lose its identity).
+            toks = r.title_norm.split()
         if len(toks) >= 2:
             key = f"{toks[0]} {toks[1]}"
         elif toks:

@@ -24,18 +24,19 @@ def test_relative_to_root_outside_root_returns_absolute():
     assert relative_to_root(p, root) == "/elsewhere/Fic.epub"
 
 
-def test_format_move_label_checked_prefix():
+def test_format_move_label_no_checked_prefix():
+    """The deprecated ``[x] / [ ] `` prefix workaround is gone — NVDA
+    reads CheckListBox state natively on current wxPython. The
+    ``checked`` kwarg is retained as a no-op for back-compat with
+    callers that still pass it."""
     root = Path("/lib")
     op = _op("/lib/Fic.epub", "/lib/Harry Potter/Fic.epub")
-    label = format_move_label(op, root, checked=True)
-    assert label.startswith("[x] ")
-
-
-def test_format_move_label_unchecked_prefix():
-    root = Path("/lib")
-    op = _op("/lib/Fic.epub", "/lib/Harry Potter/Fic.epub")
-    label = format_move_label(op, root, checked=False)
-    assert label.startswith("[ ] ")
+    checked = format_move_label(op, root, checked=True)
+    unchecked = format_move_label(op, root, checked=False)
+    assert not checked.startswith("[x] ")
+    assert not checked.startswith("[ ] ")
+    # Same label regardless of checked state, by design.
+    assert checked == unchecked
 
 
 def test_format_move_label_uses_arrow_for_relocation():

@@ -47,6 +47,24 @@ def _find_tool(name):
             return str(bundled)
     return shutil.which(name) or name
 
+
+def _run_silent(cmd, **kwargs):
+    """``subprocess.run`` with stdin=DEVNULL forced unless overridden.
+
+    Why: ffmpeg/ffprobe inherit the parent process's stdin by default.
+    When ffn-dl runs from a console (or in some scripted contexts) the
+    child can attempt a blocking read on tty stdin during codec
+    negotiation or interactive prompts. On Windows the parent's
+    ``terminate()`` can't unstick that read, freezing the audiobook
+    render indefinitely. ``stdin=subprocess.DEVNULL`` closes the loophole.
+
+    Every subprocess.run callsite in this module should route through
+    here — a callsite that wants its own stdin can still pass
+    ``stdin=<...>`` explicitly and override the default.
+    """
+    kwargs.setdefault("stdin", subprocess.DEVNULL)
+    return subprocess.run(cmd, **kwargs)
+
 from .exporters import strip_note_paragraphs
 
 logger = logging.getLogger(__name__)
@@ -1971,7 +1989,7 @@ def _make_silence_clip(tmp_dir, duration_s):
     (24 kHz mono MP3) so it can be concat-demuxed with -c copy."""
     path = tmp_dir / f"silence_{int(duration_s * 1000)}ms.mp3"
     try:
-        result = subprocess.run(
+        result = _run_silent(
             [
                 FFMPEG, "-y",
                 "-f", "lavfi", "-i", "anullsrc=r=24000:cl=mono",
@@ -2349,7 +2367,7 @@ async def _generate_chapter_audio_inner(
             last_was_scene_break = False
 
     try:
-        result = subprocess.run(
+        result = _run_silent(
             [
                 FFMPEG, "-y", "-f", "concat", "-safe", "0",
                 "-i", str(list_file), "-c", "copy", str(output_path),
@@ -2501,7 +2519,7 @@ def _run_ffmpeg(cmd, *, step, timeout=_FFMPEG_BUILD_TIMEOUT_S):
     want that in the user's face so audiobook errors are debuggable.
     """
     try:
-        result = subprocess.run(
+        result = _run_silent(
             cmd, capture_output=True, text=True, timeout=timeout,
         )
     except subprocess.TimeoutExpired as exc:
@@ -2596,7 +2614,7 @@ def _build_m4b_inner(
         # navigation. Better to surface the bad probe than write a
         # poisoned ToC.
         try:
-            probe = subprocess.run(
+            probe = _run_silent(
                 [
                     FFPROBE, "-v", "quiet", "-show_entries",
                     "format=duration", "-of", "csv=p=0", str(path),
@@ -2788,7 +2806,7 @@ def _check_ffmpeg():
     """
     for tool, label in ((FFMPEG, "ffmpeg"), (FFPROBE, "ffprobe")):
         try:
-            subprocess.run(
+            _run_silent(
                 [tool, "-version"], capture_output=True, check=True, timeout=10,
             )
         except FileNotFoundError:
@@ -3002,7 +3020,7 @@ def _concat_mp3s(inputs, output):
             for p in inputs:
                 f.write(_concat_entry(p))
         try:
-            result = subprocess.run(
+            result = _run_silent(
                 [
                     FFMPEG, "-y", "-f", "concat", "-safe", "0",
                     "-i", str(list_file), "-c", "copy", str(output),
