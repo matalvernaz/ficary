@@ -220,7 +220,10 @@ def _meta_fields(story: Story) -> list[tuple[str, str]]:
     elif m.get("published"):
         fields.append(("Published", str(m["published"])))
     fields.append(("Downloaded", datetime.now(tz=timezone.utc).strftime("%Y-%m-%d")))
-    fields.append(("Source", story.url))
+    # Coerce: a Story reconstructed from a local file (merge/anthology
+    # paths) can carry url=None, and the downstream html.escape() raises
+    # on a non-str.
+    fields.append(("Source", str(story.url or "")))
     return fields
 
 

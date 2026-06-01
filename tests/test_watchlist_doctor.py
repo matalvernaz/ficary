@@ -101,6 +101,31 @@ class TestUnsupportedSite:
         report = check_watchlist(store)
         assert report.unsupported_site == []
 
+    def test_resolvable_story_watch_not_dropped_on_legacy_site(self, store):
+        # A real FFN URL with a legacy/display ``site`` value that isn't
+        # a current scraper key. The URL still resolves, so the watch
+        # must NOT be flagged unsupported (and heal must not delete it) —
+        # that was silent loss of a user's followed story.
+        store.add(_make_watch(
+            site="fanfiction.net",  # legacy label, not the "ffn" scraper key
+            target="https://www.fanfiction.net/s/12345",
+        ))
+        report = check_watchlist(store)
+        assert report.unsupported_site == []
+        result = heal_watchlist(store, report, drop_unsupported_site=True)
+        assert result.removed == 0
+        assert len(store.all()) == 1
+
+    def test_unresolvable_story_watch_with_bad_site_still_flagged(self, store):
+        # When the URL ALSO doesn't resolve, the unsupported-site flag
+        # still fires — only resolvable watches are protected.
+        store.add(_make_watch(
+            site="deadsite",
+            target="https://example.com/deadsite/1",
+        ))
+        report = check_watchlist(store)
+        assert len(report.unsupported_site) == 1
+
 
 class TestUnresolvableUrl:
     def test_random_url_flagged(self, store):

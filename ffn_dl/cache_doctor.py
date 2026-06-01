@@ -134,7 +134,13 @@ def check_cache(
         report.by_site[site] += 1
         report.bytes_by_site[site] += size
 
-        if tracked_keys is not None and name not in tracked_keys:
+        # ``tracked_keys`` is an empty set (not None) when the index
+        # loaded zero stories — a moved, quarantined, or fresh index.
+        # In that state EVERY cache dir looks orphaned, and heal_all
+        # would prune the whole cache (hours of re-scrape at FFN's
+        # rate-limit floor). Treat "no known stories" as "can't
+        # determine orphans" and flag nothing.
+        if tracked_keys and name not in tracked_keys:
             report.orphan_entries.append(entry)
 
     entries_with_size.sort(key=lambda t: t[1], reverse=True)

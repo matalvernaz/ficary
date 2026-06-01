@@ -121,9 +121,20 @@ class DarkWandererScraper(BaseScraper):
     def _thread_starter_username(soup) -> str:
         """Name to compare each post's author against so we can keep
         only the starter's posts (= the story chapters)."""
-        # XenForo's thread_view template exposes the starter via
-        # <a class="username" ...> in the post-starter block. Fallback
-        # to the first post's username.
+        # The thread starter is structurally the first post — the first
+        # <article class="message"> — so its data-author is the OP.
+        # Prefer that over a page-wide <a class="username"> scan: on some
+        # XenForo skins the first such anchor is a sidebar / newest-poster
+        # / breadcrumb link, not the OP, which would silently filter out
+        # every real chapter and keep the wrong author's posts.
+        first_article = soup.find(
+            "article", class_=re.compile(r"\bmessage\b")
+        )
+        if first_article is not None:
+            author_attr = (first_article.get("data-author") or "").strip()
+            if author_attr:
+                return author_attr
+        # Fallback: the post-starter username anchor.
         first_post_user = soup.find(
             "a", href=re.compile(r"^/members/"), class_=re.compile(r"username"),
         )

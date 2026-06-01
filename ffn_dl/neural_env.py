@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import logging
 import os
+import shutil
 import site
 import subprocess
 import sys
@@ -235,6 +236,15 @@ def ensure_embed_python(log_callback=None) -> bool:
         _enable_site_in_pth(PY_DIR, log_callback=log_callback)
         return True
 
+    # No success sentinel ⇒ a fresh machine or a torn install: a prior
+    # run extracted python.exe but died before bootstrap finished.
+    # zipfile.extractall is not atomic, so an existing python.exe can't
+    # be trusted to sit atop a complete tree — and the existence check
+    # below would otherwise skip re-extraction and trust the corrupt
+    # tree forever. Start clean so a half-extracted distribution can't
+    # wedge the install permanently.
+    if PY_DIR.exists():
+        shutil.rmtree(PY_DIR, ignore_errors=True)
     PY_DIR.mkdir(parents=True, exist_ok=True)
 
     if not python_exe().exists():
@@ -278,11 +288,20 @@ def ensure_embed_python(log_callback=None) -> bool:
     # Bootstrap pip via get-pip.py. The embeddable distribution
     # intentionally ships without pip so we have to install it
     # ourselves; this is the official approach per python.org docs.
-    pip_check = subprocess.run(
-        [str(python_exe()), "-m", "pip", "--version"],
-        capture_output=True, text=True, timeout=60,
-    )
-    if pip_check.returncode != 0:
+    try:
+        pip_check = subprocess.run(
+            [str(python_exe()), "-m", "pip", "--version"],
+            capture_output=True, text=True, timeout=60,
+        )
+        pip_present = pip_check.returncode == 0
+    except (OSError, subprocess.TimeoutExpired):
+        # python.exe present but unrunnable (AV quarantine, 0-byte file,
+        # wedged interpreter). Treat as "needs bootstrap" rather than
+        # letting the exception escape — every other spawn in this file
+        # degrades to a bool, and callers (optional_features.install)
+        # don't guard this one.
+        pip_present = False
+    if not pip_present:
         if log_callback:
             log_callback("Bootstrapping pip...")
         get_pip = PY_DIR / "get-pip.py"

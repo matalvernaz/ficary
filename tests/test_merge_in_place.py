@@ -22,9 +22,42 @@ from pathlib import Path
 
 import pytest
 
-from ffn_dl.cli import _download_one, _merge_with_existing
+from ffn_dl.cli import _download_one, _merge_chapter_lists, _merge_with_existing
 from ffn_dl.exporters import DEFAULT_TEMPLATE, export_epub, export_html, export_txt
 from ffn_dl.models import Chapter, Story
+
+
+def _ch(number: int, body: str) -> Chapter:
+    return Chapter(number=number, title=f"Chapter {number}", html=body)
+
+
+class TestMergeChapterLists:
+    """The shared dedupe helper both the disk-read merge
+    (``_merge_with_existing``) and the in-memory update path in
+    ``_download_one`` route through. Without it, a re-published chapter
+    N produced two chapter-N rows in the merged file."""
+
+    def test_no_overlap_concatenates_in_order(self):
+        merged, dupes = _merge_chapter_lists(
+            [_ch(1, "a"), _ch(2, "b")], [_ch(3, "c")]
+        )
+        assert [c.number for c in merged] == [1, 2, 3]
+        assert dupes == 0
+
+    def test_republished_chapter_deduped_fresh_wins(self):
+        merged, dupes = _merge_chapter_lists(
+            [_ch(1, "old1"), _ch(2, "old2")], [_ch(2, "new2"), _ch(3, "new3")]
+        )
+        assert [c.number for c in merged] == [1, 2, 3]
+        assert dupes == 1
+        # The freshly-downloaded body wins on the collision.
+        assert next(c for c in merged if c.number == 2).html == "new2"
+
+    def test_out_of_order_input_is_sorted(self):
+        merged, _ = _merge_chapter_lists(
+            [_ch(3, "c"), _ch(1, "a")], [_ch(2, "b")]
+        )
+        assert [c.number for c in merged] == [1, 2, 3]
 
 
 class _FakeScraper:

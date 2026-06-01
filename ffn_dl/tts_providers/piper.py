@@ -467,6 +467,12 @@ class PiperProvider:
                     "-codec:a", "libmp3lame", "-qscale:a", "4",
                     str(output_path),
                 ],
+                # stdin=DEVNULL: ffmpeg inherits the parent tty stdin
+                # otherwise and can wedge on a console read during codec
+                # negotiation — the freeze hazard tts._run_silent guards
+                # against in the main module. (piper synth above is safe:
+                # it pipes via input=.)
+                stdin=subprocess.DEVNULL,
                 capture_output=True, text=True, timeout=120,
             )
             if convert.returncode != 0:

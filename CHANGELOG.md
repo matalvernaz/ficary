@@ -1,5 +1,82 @@
 # Changelog
 
+## 2.4.46 — 2026-06-01
+
+Round-9 multi-AI audit (Gemini Pro + GPT-5 + Claude Opus; five
+parallel reader passes over the under-audited surface — cli.py heavy
+flows, the erotica site adapters, the tts_providers split, and the
+installer/doctor utilities — plus a fresh re-read of the core
+scrapers). Every finding verified against current source before
+applying; two AI findings were rejected as already-handled or
+unreachable. 11 new tests; 1515 passing.
+
+**High — data correctness**
+
+* Update-merge in ``_download_one`` no longer leaves duplicate
+  chapter rows. The production path concatenated existing + new
+  chapters without deduping by number, while the chapter-number
+  dedupe lived in ``_merge_with_existing`` — a helper that was only
+  ever called from the test suite. An author re-publishing or
+  renumbering chapter N produced two chapter-N rows in the output.
+  Both paths now route through a single shared ``_merge_chapter_lists``
+  (freshly-downloaded chapter wins on a collision), so the dedupe is
+  applied identically and the tests exercise the code production runs.
+* ``watchlist --doctor --heal`` no longer deletes a followed
+  story/author watch whose URL still resolves just because its
+  free-text ``site`` field is a legacy/display value. The resolvable
+  URL is ground truth; the unsupported-site drop now fires only when
+  the URL is *also* unresolvable.
+* Audiobook renders no longer go silently empty when the configured
+  narrator is an uninstalled Piper voice. A guaranteed edge-default
+  last-resort synthesis attempt is appended so a missing Piper
+  binary/model yields a wrong-voiced line rather than a dropped one.
+
+**Medium**
+
+* ``cache_doctor`` no longer flags every cache entry as an orphan
+  when the library index has zero tracked stories (a moved,
+  quarantined, or fresh index). That path let ``--doctor --heal``
+  wipe the whole scraper cache, forcing a full re-scrape at FFN's
+  2s/chapter floor. An empty index now flags nothing.
+* ``check_format_deps`` (the fail-fast export-dependency gate) now
+  runs once up front for the multi-URL batch / ``--author`` paths,
+  not just the bulk-update handlers — a missing ebooklib/edge-tts
+  fails in a second instead of after every story downloads.
+* ``build_m4b`` checks for ffmpeg up front, matching
+  ``generate_audiobook`` — direct callers got a deep RuntimeError
+  instead of the friendly install message.
+* Piper's WAV→MP3 ffmpeg call now passes ``stdin=DEVNULL``, closing
+  the console-stdin freeze hazard the main TTS module already guards.
+* ``neural_env`` repairs a torn embedded-Python install: a kill mid
+  ``extractall`` previously left ``python.exe`` present atop an
+  incomplete tree that the existence check trusted forever. A missing
+  success sentinel now forces a clean re-extract. The ``pip --version``
+  probe is also guarded so an unrunnable interpreter degrades to
+  "needs bootstrap" instead of crashing the install path.
+* Chyoa: the chapter-body fallback (used when the primary selector
+  drifts) now strips the branch-choice container and sanity-checks
+  length, so it fails loudly instead of emitting page chrome as prose;
+  the node cache tolerates every corruption shape (truncated JSON,
+  non-dict root, malformed children) without crashing the story.
+* Dark Wanderer: the thread-starter (= chapter author) is now derived
+  from the first ``<article>``'s ``data-author`` rather than the first
+  page-wide username anchor, which on some XenForo skins matched a
+  sidebar/breadcrumb link and dropped every real chapter.
+
+**Low**
+
+* ``--probe-workers 0`` now serialises to 1 (matching the help text)
+  instead of silently becoming the default of 5.
+* TTS segment splitting hard-slices a single >ceiling spaceless token
+  (a URL, a run-on) so edge-tts never receives an over-limit payload,
+  which it answers with silent empty audio.
+* ``parse_chapter_spec`` rejects a bare ``-`` (e.g. a typo'd ``1-5,-``)
+  instead of silently expanding it to "all chapters".
+* Exporter ``Source`` row coerces a possibly-``None`` ``story.url`` so
+  a Story reconstructed from a local file can't crash ``html.escape``.
+* Per-site update workers deep-copy args (defence-in-depth on the
+  parallel dispatch).
+
 ## 2.4.45 — 2026-05-25
 
 Round-8 multi-AI audit landed 17 fixes across the library subsystem,

@@ -108,6 +108,11 @@ def parse_chapter_spec(spec):
         m = re.fullmatch(r"(\d*)\s*-\s*(\d*)", t)
         if m:
             lo_s, hi_s = m.group(1), m.group(2)
+            if not lo_s and not hi_s:
+                # A bare "-" matches with both groups empty and would
+                # silently expand to "all chapters" — almost certainly a
+                # typo (e.g. "1-5,-"). Reject it instead.
+                raise ValueError(f"Bad chapter token: {t!r} (empty range)")
             lo = int(lo_s) if lo_s else 1
             hi = int(hi_s) if hi_s else None
             if lo < 1:

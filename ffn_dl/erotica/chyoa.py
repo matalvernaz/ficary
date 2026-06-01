@@ -45,6 +45,12 @@ logger = logging.getLogger(__name__)
 
 CHYOA_BASE = "https://chyoa.com"
 
+# Minimum stripped-text length for a fallback chapter body to be
+# accepted as prose. Only applied on the markup-drift fallback path
+# (when ``chapter-content`` is missing); a real chapter clears this by
+# an order of magnitude, while a nav/branch-only container won't.
+_MIN_FALLBACK_BODY_CHARS = 200
+
 CHYOA_STORY_RE = re.compile(
     r"^https?://(?:www\.)?chyoa\.com/story/([^/?#\s]+)\.(\d+)", re.I,
 )
@@ -152,17 +158,32 @@ class ChyoaScraper(BaseScraper):
     @staticmethod
     def _parse_chapter_html(soup) -> str:
         content = soup.find("div", class_="chapter-content")
+        used_fallback = False
         if content is None:
             # Fall back: pick the article body or the first long div.
+            # These wrap nav, the branch-choice list, and comments, so
+            # the result is sanity-checked for length below — an
+            # unguarded return would emit page chrome as prose if the
+            # primary selector ever drifts.
             content = soup.find("article") or soup.find("div", id="content")
+            used_fallback = True
         if content is None:
             raise ValueError("Could not find Chyoa chapter body.")
-        # Drop Chyoa's ad-zones and author-bio inserts that share the
-        # page but aren't chapter prose.
+        # Drop Chyoa's ad-zones, author-bio inserts, and (critically on
+        # the fallback path) the question-content branch list that share
+        # the page but aren't chapter prose.
         for selector in ("div.chyoa-adzone", "div.chyoa-banner",
-                         "div.chapter-nav", "div.chapter-choices"):
+                         "div.chapter-nav", "div.chapter-choices",
+                         "div.question-content"):
             for el in content.select(selector):
                 el.decompose()
+        if used_fallback and (
+            len(content.get_text(strip=True)) < _MIN_FALLBACK_BODY_CHARS
+        ):
+            raise ValueError(
+                "Could not find Chyoa chapter body (fallback container "
+                "too short to be prose — markup may have changed)."
+            )
         return content.decode_contents()
 
     @staticmethod
@@ -215,16 +236,26 @@ class ChyoaScraper(BaseScraper):
             return None
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
+            if not isinstance(data, dict):
+                raise TypeError("node cache root is not an object")
             # Children round-tripped as list-of-lists in JSON.
             data["children"] = [
                 (c[0], int(c[1]), c[2]) for c in data.get("children", [])
             ]
             return data
-        except (ValueError, UnicodeDecodeError, OSError, KeyError) as exc:
+        except (ValueError, UnicodeDecodeError, OSError, KeyError,
+                TypeError, IndexError, AttributeError) as exc:
+            # Tolerate every corruption shape (truncated JSON, non-dict
+            # root, malformed child tuples) — a crash here blocks the
+            # whole story until the user clears the cache by hand. Unlink
+            # is itself guarded: a permission error must not escape.
             logger.warning(
                 "Corrupt chyoa node cache %s (%s); will refetch", path, exc
             )
-            path.unlink(missing_ok=True)
+            try:
+                path.unlink(missing_ok=True)
+            except OSError:
+                pass
             return None
 
     def _save_node_cache(

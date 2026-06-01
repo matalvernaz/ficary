@@ -151,10 +151,19 @@ def check_watchlist(store: WatchlistStore) -> WatchlistReport:
             if not target:
                 report.empty_target.append(watch)
                 continue
-            if _scraper_for_url(target) is None:
+            resolvable = _scraper_for_url(target) is not None
+            if not resolvable:
                 report.unresolvable_url.append(watch)
+            # Only flag (and let heal drop) an unsupported site when the
+            # URL is *also* unresolvable. A watch whose URL a live
+            # scraper still accepts must never be deleted just because
+            # its free-text ``site`` field is a legacy/display value
+            # that disagrees with the scraper's ``site_name`` — that's
+            # silent loss of a followed story/author. The site string is
+            # advisory; the resolvable URL is ground truth.
             if (
-                watch.site
+                not resolvable
+                and watch.site
                 and watch.site not in supported_scraper_sites
             ):
                 report.unsupported_site.append(watch)

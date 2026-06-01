@@ -1645,6 +1645,18 @@ def _split_oversized_text(text, max_len=_MAX_SEGMENT_CHARS):
             words = sentence.split(" ")
             chunk = ""
             for w in words:
+                # A single token longer than max_len (a URL, or a
+                # run-on with no spaces) can't fit any chunk. Hard-slice
+                # it so edge-tts never receives an over-ceiling payload —
+                # which it answers with silent empty audio, losing the
+                # segment entirely.
+                if len(w) > max_len:
+                    if chunk:
+                        parts.append(chunk)
+                        chunk = ""
+                    for i in range(0, len(w), max_len):
+                        parts.append(w[i:i + max_len])
+                    continue
                 if chunk and len(chunk) + 1 + len(w) > max_len:
                     parts.append(chunk)
                     chunk = w
@@ -2197,6 +2209,16 @@ async def _generate_with_semaphore(
         ("no-emotion", voice, seg_no_emotion),
         ("narrator-fallback", fallback_voice, seg_no_emotion),
     )
+    # If the narrator itself is a non-default (possibly Piper) voice, a
+    # missing binary/model makes all three attempts above fail with the
+    # same error and the segment is dropped — silently emptying the
+    # whole book. Append a guaranteed last resort: the bare edge
+    # narrator, which is always available whenever edge-tts is
+    # installed. Better a wrong-voiced line than a silent gap.
+    if fallback_voice != NARRATOR_VOICE:
+        attempts = attempts + (
+            ("edge-default", NARRATOR_VOICE, seg_no_emotion),
+        )
     async with sem:
         for attempt, (label, try_voice, try_seg) in enumerate(attempts, 1):
             try:
@@ -2553,6 +2575,13 @@ def build_m4b(chapter_files, story, output_path, cover_path=None, intro_file=Non
     """
     if not chapter_files:
         return None
+
+    # build_m4b always muxes via ffmpeg, so verify it's present here
+    # too — not just in generate_audiobook. Callers that invoke
+    # build_m4b directly (re-mux, tests, advanced flows) otherwise hit
+    # a deep RuntimeError from the first ffmpeg call instead of the
+    # friendly install message.
+    _check_ffmpeg()
 
     # Normalise to (path, title) tuples internally.
     normalised: list[tuple[Path, str]] = []

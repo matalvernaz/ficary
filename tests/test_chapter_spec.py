@@ -47,6 +47,14 @@ class TestParseChapterSpec:
         with pytest.raises(ValueError):
             parse_chapter_spec("1-2-3")
 
+    def test_rejects_bare_dash(self):
+        # A lone "-" used to match with both bounds empty and silently
+        # expand to "all chapters" — almost always a typo.
+        with pytest.raises(ValueError):
+            parse_chapter_spec("-")
+        with pytest.raises(ValueError):
+            parse_chapter_spec("1-5,-")
+
 
 class TestChapterInSpec:
     def test_none_spec_matches_everything(self):

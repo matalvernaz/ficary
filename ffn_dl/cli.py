@@ -661,6 +661,31 @@ def _build_scraper(url: str, args: argparse.Namespace):
     return scraper_cls(**kwargs)
 
 
+def _merge_chapter_lists(existing, new):
+    """Merge two chapter lists, deduping by chapter number with the
+    freshly-downloaded chapter winning. Returns ``(merged_sorted,
+    duplicate_count)``.
+
+    Without the dedupe, an author re-publishing chapter N (a routine
+    occurrence — fixing typos, re-numbering after edits) produces a
+    merged file with two chapter-N rows. The freshly-downloaded body
+    is the one we keep. Both the disk-read merge path
+    (``_merge_with_existing``) and the in-memory update path in
+    ``_download_one`` route through here so the dedupe is applied
+    identically and tested once.
+    """
+    by_number: dict[int, "object"] = {}
+    for ch in existing:
+        by_number[ch.number] = ch
+    duplicates = 0
+    for ch in new:
+        if ch.number in by_number:
+            duplicates += 1
+        by_number[ch.number] = ch
+    merged = sorted(by_number.values(), key=lambda c: c.number)
+    return merged, duplicates
+
+
 def _merge_with_existing(
     new_story: Story,
     scraper,
@@ -712,24 +737,11 @@ def _merge_with_existing(
         f"\n  Merging {len(existing)} existing chapter(s) with "
         f"{len(new_story.chapters)} new."
     )
-    # Dedupe by chapter number, with the freshly-downloaded chapter
-    # winning. Without this, an author re-publishing chapter N (a
-    # routine occurrence — fixing typos, re-numbering after edits)
-    # produced a merged file with two chapter-N rows. The freshly-
-    # downloaded body is the one we want to keep.
-    by_number: dict[int, "object"] = {}
-    duplicates = 0
-    for ch in existing:
-        by_number[ch.number] = ch
-    for ch in new_story.chapters:
-        if ch.number in by_number:
-            duplicates += 1
-        by_number[ch.number] = ch
+    merged, duplicates = _merge_chapter_lists(existing, new_story.chapters)
     if duplicates:
         status(
             f"  ({duplicates} chapter(s) replaced by re-downloaded versions)"
         )
-    merged = sorted(by_number.values(), key=lambda c: c.number)
     new_story.chapters = merged
     return new_story
 
@@ -867,8 +879,14 @@ def _download_one(
                 f"\n  Merging {len(existing_chapters_list)} existing "
                 f"chapter(s) with {len(story.chapters)} new."
             )
-            merged = list(existing_chapters_list) + list(story.chapters)
-            merged.sort(key=lambda c: c.number)
+            merged, duplicates = _merge_chapter_lists(
+                existing_chapters_list, story.chapters
+            )
+            if duplicates:
+                status(
+                    f"  ({duplicates} chapter(s) replaced by "
+                    f"re-downloaded versions)"
+                )
             story.chapters = merged
 
         # Library auto-sort: for fresh downloads only, route into
@@ -1253,7 +1271,7 @@ def _handle_update_all(args: argparse.Namespace) -> None:
         print(f"No .epub, .html, or .txt files {where} {folder}.")
         sys.exit(0)
 
-    workers = max(1, int(args.probe_workers or 5))
+    workers = max(1, int(args.probe_workers))
     mode_bits = []
     if args.recursive:
         mode_bits.append("recursive")
@@ -1590,9 +1608,11 @@ def _run_update_queue(
         )
         path = entry["path"]
         # Clone args so concurrent sites don't race on the shared
-        # namespace's ``format``/``output`` fields. Shallow copy is
-        # enough: only these two attributes get mutated per entry.
-        per_args = copy.copy(args)
+        # namespace's ``format``/``output`` fields. Only those two
+        # scalars are mutated today, but this runs on parallel
+        # per-site worker threads, so deep-copy to stay safe if a
+        # future callee ever mutates a shared mutable args field.
+        per_args = copy.deepcopy(args)
         per_args.format = _FMT_MAP.get(path.suffix.lower(), "epub")
         per_args.output = str(path.parent)
         ok = False
@@ -2467,7 +2487,7 @@ def _handle_update_library(args: argparse.Namespace) -> None:
         print(f"Missing dependency: {exc}", file=sys.stderr)
         sys.exit(1)
 
-    workers = max(1, int(args.probe_workers or 5))
+    workers = max(1, int(args.probe_workers))
     recheck_interval = 0 if args.force_recheck else int(
         args.recheck_interval or 0
     )
@@ -4577,6 +4597,16 @@ def main(argv: list[str] | None = None) -> None:
 
     if args.format is None:
         args.format = "epub"
+
+    # Fail fast on a missing export dependency (e.g. ebooklib for epub,
+    # edge-tts for audio) before any fetching, so a multi-URL batch /
+    # --author run doesn't download every story and then fail per-story
+    # at export time. Mirrors the pre-flight in the bulk-update handlers.
+    try:
+        check_format_deps(args.format)
+    except ImportError as exc:
+        print(f"Missing dependency: {exc}", file=sys.stderr)
+        sys.exit(1)
 
     # Library auto-sort: if --output wasn't given and a library path is
     # configured, route fresh downloads into the library and let

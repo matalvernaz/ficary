@@ -133,15 +133,32 @@ class TestPrune:
         assert (tmp_path / "ffn_1").exists()
 
     def test_prune_counts_freed_bytes(self, tmp_path):
-        _seed_cache_entry(tmp_path, "ffn", "1", bytes_ish=5000)
+        _seed_cache_entry(tmp_path, "ffn", "1", bytes_ish=5000)  # orphan
         lib_root = tmp_path / "lib"
         lib_root.mkdir()
         index = _fresh_index(tmp_path)
-        # No seeded entries — every cache entry is orphan.
+        # A tracked story keeps the index non-empty so ffn_1 is a
+        # genuine orphan. An empty index deliberately flags nothing —
+        # see test_empty_index_flags_no_orphans.
+        _seed_cache_entry(tmp_path, "ffn", "2")
+        _seed_library_entry(
+            index, lib_root, "https://www.fanfiction.net/s/2", "ffn",
+        )
         report = check_cache(tmp_path, index=index)
         assert len(report.orphan_entries) == 1
         result = prune(report)
         assert result.bytes_freed >= 5000
+
+    def test_empty_index_flags_no_orphans(self, tmp_path):
+        # Regression: an index with zero tracked stories (moved,
+        # quarantined, or fresh) must NOT flag every cache entry as an
+        # orphan. That path let `--doctor --heal` wipe the entire cache,
+        # forcing a full re-scrape at FFN's 2s/chapter rate-limit floor.
+        _seed_cache_entry(tmp_path, "ffn", "1")
+        _seed_cache_entry(tmp_path, "ao3", "2")
+        index = _fresh_index(tmp_path)  # zero tracked stories
+        report = check_cache(tmp_path, index=index)
+        assert report.orphan_entries == []
 
 
 class TestSummary:
@@ -162,9 +179,13 @@ class TestSummary:
 
     def test_summary_surfaces_orphan_count(self, tmp_path):
         _seed_cache_entry(tmp_path, "ffn", "orphan")
+        _seed_cache_entry(tmp_path, "ffn", "1")  # tracked, keeps index non-empty
         lib_root = tmp_path / "lib"
         lib_root.mkdir()
         index = _fresh_index(tmp_path)
+        _seed_library_entry(
+            index, lib_root, "https://www.fanfiction.net/s/1", "ffn",
+        )
         report = check_cache(tmp_path, index=index)
         summary = report.summary()
         assert "Orphan" in summary
