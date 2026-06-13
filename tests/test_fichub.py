@@ -8,8 +8,8 @@ layer is a fake session, so nothing here touches fichub.net or FFN.
 import pytest
 
 from ffn_dl import fichub
-from ffn_dl.models import Story, parse_chapter_spec
-from ffn_dl.scraper import FFNScraper
+from ffn_dl.models import Chapter, Story, parse_chapter_spec
+from ffn_dl.scraper import CloudflareBlockError, FFNScraper
 
 
 # ── Fixtures: a FicHub-shaped EPUB and API JSON ──────────────────────
@@ -288,15 +288,18 @@ class TestFetchStory:
 # ── FFNScraper routing guard ─────────────────────────────────────────
 
 class TestScraperFastPathGuard:
-    """use_fichub only diverts a *fresh* download; updates and the
-    flag-off case must fall through to a direct scrape."""
+    """use_fichub diverts a *fresh* download to FicHub and then verifies
+    against FFN; updates and the flag-off case scrape directly."""
 
     def _patch(self, monkeypatch):
-        fichub_calls, scrape_calls = [], []
+        fichub_calls, scrape_calls, complete_calls = [], [], []
 
         def fake_fetch(url, **kw):
             fichub_calls.append(url)
-            return Story(id=1, title="T", author="A", summary="", url=url)
+            return Story(
+                id=1, title="T", author="A", summary="", url=url,
+                chapters=[Chapter(1, "C1", "x")],
+            )
 
         class _Sentinel(Exception):
             pass
@@ -305,21 +308,26 @@ class TestScraperFastPathGuard:
             scrape_calls.append(url)
             raise _Sentinel()
 
+        def fake_complete(self, story, story_url, chapters, progress_callback):
+            complete_calls.append(story_url)
+
         monkeypatch.setattr(fichub, "fetch_story", fake_fetch)
         monkeypatch.setattr(FFNScraper, "_fetch", fake_fetch_page)
-        return fichub_calls, scrape_calls, _Sentinel
+        monkeypatch.setattr(FFNScraper, "_complete_from_ffn", fake_complete)
+        return fichub_calls, scrape_calls, complete_calls, _Sentinel
 
-    def test_fresh_download_uses_fichub(self, monkeypatch):
-        fichub_calls, scrape_calls, _ = self._patch(monkeypatch)
+    def test_fresh_download_uses_fichub_then_verifies(self, monkeypatch):
+        fichub_calls, scrape_calls, complete_calls, _ = self._patch(monkeypatch)
         story = FFNScraper(use_fichub=True).download(
             "https://www.fanfiction.net/s/12345/", skip_chapters=0
         )
         assert story.title == "T"
         assert len(fichub_calls) == 1
-        assert scrape_calls == []
+        assert len(complete_calls) == 1  # verified against FFN for newer chapters
+        assert scrape_calls == []        # but no full chapter crawl
 
     def test_update_skips_fichub(self, monkeypatch):
-        fichub_calls, scrape_calls, sentinel = self._patch(monkeypatch)
+        fichub_calls, scrape_calls, _, sentinel = self._patch(monkeypatch)
         with pytest.raises(sentinel):
             FFNScraper(use_fichub=True).download(
                 "https://www.fanfiction.net/s/12345/", skip_chapters=3
@@ -328,10 +336,96 @@ class TestScraperFastPathGuard:
         assert len(scrape_calls) == 1
 
     def test_flag_off_skips_fichub(self, monkeypatch):
-        fichub_calls, scrape_calls, sentinel = self._patch(monkeypatch)
+        fichub_calls, scrape_calls, _, sentinel = self._patch(monkeypatch)
         with pytest.raises(sentinel):
             FFNScraper(use_fichub=False).download(
                 "https://www.fanfiction.net/s/12345/", skip_chapters=0
             )
         assert fichub_calls == []
         assert len(scrape_calls) == 1
+
+
+class TestCompleteFromFfn:
+    """FicHub-then-FFN top-up: fetch only the chapters FFN has published
+    since FicHub's cache, and degrade gracefully when FFN is unreachable.
+    Uses the real 66-chapter ffn_story.html fixture as the metadata page."""
+
+    def _scraper(self, monkeypatch, ch1_html, chapter_bodies):
+        scraper = FFNScraper(use_fichub=True, use_cache=False)
+        monkeypatch.setattr(scraper, "_delay", lambda *a, **k: None)
+
+        def fake_fetch(url, session=None):
+            if url.endswith("/1"):
+                return ch1_html
+            number = url.rsplit("/", 1)[-1]
+            if number in chapter_bodies:
+                return chapter_bodies[number]
+            raise CloudflareBlockError(f"no body for chapter {number}")
+
+        monkeypatch.setattr(scraper, "_fetch", fake_fetch)
+        return scraper
+
+    def _fichub_story(self, up_to):
+        return Story(
+            id=1, title="Potter Club", author="Razamataz22", summary="",
+            url="https://www.fanfiction.net/s/1",
+            chapters=[Chapter(n, f"C{n}", "x") for n in range(1, up_to + 1)],
+        )
+
+    def test_fetches_only_newer_tail(self, monkeypatch, ffn_story_html):
+        bodies = {
+            str(n): f'<div id="storytext"><p>Body {n}</p></div>'
+            for n in (65, 66)
+        }
+        scraper = self._scraper(monkeypatch, ffn_story_html, bodies)
+        story = self._fichub_story(64)  # FicHub is two chapters behind
+        scraper._complete_from_ffn(
+            story, "https://www.fanfiction.net/s/1", None, None
+        )
+        assert [c.number for c in story.chapters] == list(range(1, 67))
+        # New chapters carry FFN's parsed body (storytext inner HTML).
+        assert story.chapters[-1].html == "<p>Body 66</p>"
+        assert story.metadata["chapters"] == "66"
+
+    def test_no_fetch_when_current(self, monkeypatch, ffn_story_html):
+        calls = []
+        scraper = self._scraper(monkeypatch, ffn_story_html, {})
+        inner = scraper._fetch
+
+        def counting(url, session=None):
+            calls.append(url)
+            return inner(url)
+
+        monkeypatch.setattr(scraper, "_fetch", counting)
+        story = self._fichub_story(66)  # already complete
+        scraper._complete_from_ffn(
+            story, "https://www.fanfiction.net/s/1", None, None
+        )
+        assert [c.number for c in story.chapters] == list(range(1, 67))
+        # Only the single metadata probe — no per-chapter fetches.
+        assert calls == ["https://www.fanfiction.net/s/1/1"]
+
+    def test_respects_chapter_spec(self, monkeypatch, ffn_story_html):
+        bodies = {"65": '<div id="storytext"><p>B65</p></div>'}
+        scraper = self._scraper(monkeypatch, ffn_story_html, bodies)
+        story = self._fichub_story(64)
+        scraper._complete_from_ffn(
+            story, "https://www.fanfiction.net/s/1",
+            parse_chapter_spec("1-65"), None,  # cap below FFN's 66
+        )
+        assert [c.number for c in story.chapters] == list(range(1, 66))
+
+    def test_probe_failure_keeps_fichub(self, monkeypatch):
+        scraper = FFNScraper(use_fichub=True, use_cache=False)
+        monkeypatch.setattr(scraper, "_delay", lambda *a, **k: None)
+
+        def boom(url, session=None):
+            raise CloudflareBlockError("blocked")
+
+        monkeypatch.setattr(scraper, "_fetch", boom)
+        story = self._fichub_story(2)
+        scraper._complete_from_ffn(
+            story, "https://www.fanfiction.net/s/1", None, None
+        )
+        # FicHub's chapters survive a failed freshness probe; no crash.
+        assert [c.number for c in story.chapters] == [1, 2]

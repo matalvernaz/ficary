@@ -1874,6 +1874,80 @@ class FFNScraper(BaseScraper):
         meta = self._parse_metadata(soup)
         return meta["num_chapters"]
 
+    def _complete_from_ffn(self, story, story_url, chapters, progress_callback):
+        """Top up a FicHub-sourced story with chapters newer than its cache.
+
+        FicHub's cached copy can lag the source by a few chapters. This
+        makes one cheap FFN metadata request to learn the current
+        chapter count and titles, then fetches *only* the chapters FFN
+        has beyond what FicHub provided (honouring a ``chapters`` spec
+        when given) via the normal rate-limited path.
+
+        Best-effort and in-place: if FFN is unreachable, blocked, or
+        returns unparseable markup, the FicHub chapters are kept as-is
+        and the gap is logged — the fast path still succeeds when FFN is
+        down or actively hostile, which is the whole point of preferring
+        FicHub in the first place.
+        """
+        from .models import chapter_in_spec
+
+        have = {chapter.number for chapter in story.chapters}
+        try:
+            page = self._fetch(f"{story_url}/1")
+            meta = self._parse_metadata(BeautifulSoup(page, "lxml"))
+        except (StoryNotFoundError, RateLimitError, CloudflareBlockError,
+                ValueError) as exc:
+            logger.info(
+                "Couldn't verify FicHub freshness against FFN (%s); keeping "
+                "FicHub's %d chapter(s).", exc, len(story.chapters),
+            )
+            return
+
+        ffn_count = meta["num_chapters"]
+        chapter_titles = meta["chapter_titles"]
+        missing = [
+            number for number in range(1, ffn_count + 1)
+            if number not in have and chapter_in_spec(number, chapters)
+        ]
+        if not missing:
+            logger.info("FicHub copy is current with FFN (%d chapters).", ffn_count)
+            return
+
+        logger.info(
+            "FicHub had %d chapter(s); FFN shows %d — fetching %d newer "
+            "chapter(s) directly.", len(have), ffn_count, len(missing),
+        )
+        fetched = 0
+        for chap_num in missing:
+            self._delay()
+            try:
+                chap_page = self._fetch(f"{story_url}/{chap_num}")
+                html = self._parse_chapter_html(BeautifulSoup(chap_page, "lxml"))
+            except (StoryNotFoundError, RateLimitError, CloudflareBlockError,
+                    ValueError) as exc:
+                logger.warning(
+                    "Failed to fetch new chapter %d from FFN (%s); keeping the "
+                    "%d chapter(s) gathered so far.",
+                    chap_num, exc, len(story.chapters),
+                )
+                break
+            title = chapter_titles.get(str(chap_num), f"Chapter {chap_num}")
+            chapter = Chapter(number=chap_num, title=title, html=html)
+            story.chapters.append(chapter)
+            self._save_chapter_cache(story.id, chapter)
+            fetched += 1
+            if progress_callback:
+                progress_callback(chap_num, ffn_count, title, False)
+
+        story.chapters.sort(key=lambda chapter: chapter.number)
+        # Only claim FFN's count/status once the story is fully caught
+        # up; a tail that broke early would otherwise overstate it.
+        if fetched == len(missing):
+            story.metadata["chapters"] = str(ffn_count)
+            status = (meta.get("extra") or {}).get("status")
+            if status:
+                story.metadata["status"] = status
+
     def download(self, url_or_id, progress_callback=None, skip_chapters=0, chapters=None):
         """Download a story. If skip_chapters > 0, only fetch metadata
         and chapters beyond that count (for update mode).
@@ -1884,12 +1958,14 @@ class FFNScraper(BaseScraper):
         story_id = self.parse_story_id(url_or_id)
         story_url = f"{FFN_BASE}/s/{story_id}"
 
-        # FicHub fast-path: on a full download, try FicHub's shared
-        # cache first — one request for the whole fic instead of the
-        # per-chapter rate-limited crawl. Skipped for updates
-        # (skip_chapters > 0): FicHub's copy can lag the source, so it
-        # must never answer a "latest chapters" request. Any miss or
-        # error returns None and we fall through to a direct scrape.
+        # FicHub fast-path: on a full download, pull the bulk of the fic
+        # from FicHub's shared cache in one request instead of the
+        # per-chapter rate-limited crawl, then top up with any chapters
+        # FFN has published since FicHub last refreshed (see
+        # ``_complete_from_ffn``) so a stale cache doesn't cost the
+        # newest chapters. Skipped for updates (skip_chapters > 0) —
+        # those go straight to the source. A FicHub miss/error returns
+        # None and we fall through to a direct scrape.
         if self.use_fichub and skip_chapters == 0:
             from . import fichub
             fast = fichub.fetch_story(
@@ -1898,6 +1974,9 @@ class FFNScraper(BaseScraper):
                 progress_callback=progress_callback,
             )
             if fast is not None:
+                self._complete_from_ffn(
+                    fast, story_url, chapters, progress_callback,
+                )
                 return fast
             logger.info(
                 "FicHub had no usable copy of FFN %s; scraping directly.",

@@ -1,5 +1,26 @@
 # Changelog
 
+## 2.4.48 — 2026-06-12
+
+**FicHub fast-path now tops up the newest chapters from FFN**
+
+Closes the one gap in the v2.4.47 fast-path: FicHub's cache can lag the
+source, so it used to be "fast but maybe a few chapters behind". Now,
+after pulling the bulk from FicHub, a fresh `--fichub` download makes a
+single cheap FFN metadata request to learn the current chapter count
+and fetches *only* the chapters FFN has published since — the
+rate-limited crawl, but for the two-or-three new chapters instead of
+all of them. A near-current 100-chapter fic still comes back in
+seconds; you just also get the latest chapter.
+
+* The freshness check is best-effort: if FFN is unreachable, blocked,
+  or returns unparseable markup, the FicHub chapters are kept and the
+  gap is logged — so the fast path still works when FFN is down or
+  hostile (the pure-FicHub behaviour from 2.4.47 is the graceful
+  fallback). A chapter spec is honoured when topping up.
+* New `FFNScraper._complete_from_ffn`, run only on the FicHub fresh-
+  download path. 4 new tests (real 66-chapter fixture); 1544 passing.
+
 ## 2.4.47 — 2026-06-12
 
 **Fast fanfiction.net downloads via FicHub**
