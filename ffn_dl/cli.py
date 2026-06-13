@@ -650,6 +650,15 @@ def _build_scraper(url: str, args: argparse.Namespace):
         kwargs["use_wayback"] = True
     if getattr(args, "cf_solve", False):
         kwargs["cf_solve"] = True
+    # FicHub fast-path is FFN-only and a first-download optimisation:
+    # suppress it for --refetch-all (a deliberate fresh re-pull) so we
+    # don't serve FicHub's possibly-stale copy when the user explicitly
+    # asked to re-fetch from the source. ``use_fichub`` is an FFN-only
+    # constructor kwarg, so guard the class like the chyoa case below.
+    if getattr(args, "fichub", False) and not getattr(args, "refetch_all", False):
+        from .scraper import FFNScraper
+        if scraper_cls is FFNScraper:
+            kwargs["use_fichub"] = True
     # Chyoa-specific: tree-walk depth cap. Only forward to the
     # ChyoaScraper constructor — other scrapers don't accept it and
     # ``**kwargs`` would surface an unrelated TypeError.
@@ -3479,7 +3488,8 @@ def _build_parser() -> argparse.ArgumentParser:
         help=(
             "Override the adaptive (AIMD) inter-chapter delay with a fixed "
             "random range. By default the scraper starts fast and only "
-            "slows down if the site returns 429/503 (FFN floors at 2s)."
+            "slows down if the site returns 429/503 (FFN holds a steady "
+            "6s/chapter; see --fichub for a faster path)."
         ),
     )
     parser.add_argument(
@@ -3536,6 +3546,18 @@ def _build_parser() -> argparse.ArgumentParser:
             "reuse them without re-invoking the browser. Requires "
             "the 'cf-solve' extra: "
             "pip install 'ffn-dl[cf-solve]' && playwright install chromium."
+        ),
+    )
+    parser.add_argument(
+        "--fichub",
+        action="store_true",
+        help=(
+            "For fanfiction.net, try FicHub's shared cache first "
+            "(https://fichub.net) and re-ingest its EPUB instead of "
+            "crawling FFN chapter-by-chapter. One request for the whole "
+            "fic vs the ~6s/chapter rate limit. FicHub's copy can lag "
+            "the source, so this is for first-time downloads, not "
+            "updates; it falls back to a direct scrape on any miss."
         ),
     )
     parser.add_argument(

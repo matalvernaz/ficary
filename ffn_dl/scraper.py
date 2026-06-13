@@ -1448,12 +1448,15 @@ class FFNScraper(BaseScraper):
 
     site_name = "ffn"
 
-    def __init__(self, **kwargs):
-        # Match FanFicFare's defaults.ini for www.fanfiction.net:
-        # `slow_down_sleep_time: 6` applied to every request, jittered.
-        # A steady ~6s/chapter is what's been proven safe against
-        # Cloudflare for 10+ years; the old "fast-burst then 60s pause"
-        # pattern is closer to what bot-detection actually flags.
+    def __init__(self, use_fichub: bool = False, **kwargs):
+        # A steady ~6s/chapter is the conservative default for FFN:
+        # FanFicFare (the canonical FFN downloader) currently floors its
+        # own `slow_down_sleep_time` at 12s and warns the site "is
+        # blocking people more aggressively", so 6s is already on the
+        # fast side of proven-safe. The limit is behavioural (request
+        # speed + volume + fingerprint), not a quota — the real way to
+        # go faster is FicHub's shared cache, see ``use_fichub``.
+        self.use_fichub = bool(use_fichub)
         kwargs.setdefault("chunk_size", 0)
         kwargs.setdefault("delay_floor", 6.0)
         kwargs.setdefault("delay_start", 6.0)
@@ -1880,6 +1883,26 @@ class FFNScraper(BaseScraper):
 
         story_id = self.parse_story_id(url_or_id)
         story_url = f"{FFN_BASE}/s/{story_id}"
+
+        # FicHub fast-path: on a full download, try FicHub's shared
+        # cache first — one request for the whole fic instead of the
+        # per-chapter rate-limited crawl. Skipped for updates
+        # (skip_chapters > 0): FicHub's copy can lag the source, so it
+        # must never answer a "latest chapters" request. Any miss or
+        # error returns None and we fall through to a direct scrape.
+        if self.use_fichub and skip_chapters == 0:
+            from . import fichub
+            fast = fichub.fetch_story(
+                story_url,
+                chapters=chapters,
+                progress_callback=progress_callback,
+            )
+            if fast is not None:
+                return fast
+            logger.info(
+                "FicHub had no usable copy of FFN %s; scraping directly.",
+                story_id,
+            )
 
         ch1_url = f"{story_url}/1"
         logger.info("Fetching FFN story %s metadata...", story_id)

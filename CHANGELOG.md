@@ -1,5 +1,41 @@
 # Changelog
 
+## 2.4.47 — 2026-06-12
+
+**Fast fanfiction.net downloads via FicHub**
+
+New opt-in fast path for FFN. fanfiction.net throttles direct scraping
+to a steady ~6s/chapter to stay under Cloudflare's bot wall, so a
+100-chapter fic costs ten-plus minutes no matter how the fetch loop is
+tuned — the limit is behavioural (request rate + volume + fingerprint),
+not a quota we can out-clever. FanFicFare, the canonical FFN
+downloader, has actually raised its own per-chapter delay to 12s for
+the same reason, so ffn-dl's 6s is already on the fast side of
+proven-safe.
+
+FicHub (https://fichub.net) is the community's answer: it fetches each
+fic from the source once, globally, caches it, and serves a pre-built
+export to everyone — the politeness cost is paid once, by FicHub, on
+behalf of every reader. With the new `--fichub` flag (CLI) or the
+"Fast fanfiction.net download via FicHub" checkbox (GUI), ffn-dl
+queries FicHub's API, downloads the cached EPUB, and re-ingests it into
+the normal Story/Chapter pipeline — so every export format,
+`--strip-notes`, the metadata header, and the audiobook builder run
+exactly as they do for a direct scrape. A 122-chapter fic that takes
+~12 minutes to crawl comes back in one ~2-second request.
+
+* **Default off, and never used where freshness matters.** FicHub's
+  copy can lag the source, so the fast path is skipped for updates and
+  for `--refetch-all` (both always read from FFN directly), and it
+  falls back to a normal scrape on any cache miss, network error, or if
+  the optional `ebooklib` extra isn't installed.
+* New module `ffn_dl/fichub.py`. `FFNScraper(use_fichub=…)` consults it
+  only on a full (skip=0) download; both the CLI and GUI download paths
+  route through it. 25 new tests; 1540 passing.
+
+Also corrected the `--delay-min` help text, which still claimed FFN
+floors at 2s (it holds a steady 6s now).
+
 ## 2.4.46 — 2026-06-01
 
 Round-9 multi-AI audit (Gemini Pro + GPT-5 + Claude Opus; five

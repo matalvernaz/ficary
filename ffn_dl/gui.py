@@ -51,6 +51,7 @@ class _DownloadParams:
     audio_size: Optional[str] = None
     speech_rate: Optional[int] = None
     enabled_tts_providers: tuple = ()
+    use_fichub: bool = False
 
 
 logger = logging.getLogger(__name__)
@@ -392,6 +393,31 @@ class MainFrame(wx.Frame):
             "pick the provider/model."
         )
         opts2.Add(self.llm_strip_notes_ctrl, 0, wx.ALIGN_CENTER_VERTICAL)
+
+        # FFN-only fast path. fanfiction.net throttles direct scraping
+        # to ~6s/chapter; FicHub (https://fichub.net) serves a shared,
+        # pre-built cache so the whole fic arrives in one request. Off
+        # by default because its copy can lag the latest chapters.
+        self.fichub_ctrl = wx.CheckBox(
+            root,
+            label="&Fast fanfiction.net download via FicHub (may lag latest chapters)",
+        )
+        self.fichub_ctrl.SetName(
+            "Fast fanfiction.net download via FicHub shared cache — "
+            "much faster but may lag the most recent chapters"
+        )
+        self.fichub_ctrl.SetToolTip(
+            "fanfiction.net rate-limits direct downloads to about six "
+            "seconds per chapter. FicHub keeps a shared cache of fics "
+            "and serves the whole story in one request, so a long fic "
+            "downloads in seconds instead of minutes. FicHub's copy can "
+            "lag the source by a few chapters, so leave this off when "
+            "you specifically want the very latest chapter or are "
+            "updating an existing download — it's ignored for updates "
+            "and falls back to a normal download if FicHub doesn't have "
+            "the fic."
+        )
+        opts2.Add(self.fichub_ctrl, 0, wx.ALIGN_CENTER_VERTICAL | wx.LEFT, 16)
 
         # Always-visible shortcut to the LLM settings dialog. The
         # audio toolbar has its own copy that surfaces only when
@@ -1225,6 +1251,7 @@ class MainFrame(wx.Frame):
         self.llm_strip_notes_ctrl.SetValue(
             self.prefs.get_bool(_p.KEY_LLM_STRIP_NOTES)
         )
+        self.fichub_ctrl.SetValue(self.prefs.get_bool(_p.KEY_FICHUB))
 
         try:
             rate = int(self.prefs.get(_p.KEY_SPEECH_RATE) or 0)
@@ -1274,6 +1301,7 @@ class MainFrame(wx.Frame):
         self.prefs.set_bool(
             _p.KEY_LLM_STRIP_NOTES, self.llm_strip_notes_ctrl.GetValue(),
         )
+        self.prefs.set_bool(_p.KEY_FICHUB, self.fichub_ctrl.GetValue())
         self.prefs.set(_p.KEY_SPEECH_RATE, self.speech_rate_ctrl.GetValue())
         self.prefs.set(_p.KEY_ATTRIBUTION_BACKEND, self._selected_attribution_backend())
         self.prefs.set(_p.KEY_ATTRIBUTION_MODEL_SIZE, self._selected_size() or "")
@@ -2139,9 +2167,16 @@ class MainFrame(wx.Frame):
 
     # ── Download worker ──────────────────────────────────────
 
-    def _scraper_for(self, url):
+    def _scraper_for(self, url, *, use_fichub=False):
         from .sites import detect_scraper
-        return detect_scraper(url)()
+        cls = detect_scraper(url)
+        # use_fichub is an FFN-only constructor kwarg; only forward it to
+        # FFNScraper so other site scrapers don't choke on it.
+        if use_fichub:
+            from .scraper import FFNScraper
+            if cls is FFNScraper:
+                return cls(use_fichub=True)
+        return cls()
 
     def _snapshot_download_params(self) -> _DownloadParams:
         """MAIN THREAD ONLY. Bundle every wx-widget setting a worker
@@ -2181,6 +2216,7 @@ class MainFrame(wx.Frame):
             enabled_tts_providers=(
                 tuple(self._enabled_tts_providers()) if fmt == "audio" else ()
             ),
+            use_fichub=self.fichub_ctrl.GetValue(),
         )
 
     def _resolve_output_dir(self, story, params: _DownloadParams) -> str:
@@ -2509,7 +2545,14 @@ class MainFrame(wx.Frame):
             from .erotica import LiteroticaScraper
             from .updater import ChaptersNotReadableError, read_chapters
 
-            scraper = self._scraper_for(url)
+            # FicHub fast-path only on fresh downloads — updates and
+            # fresh-copies re-pulls must read from the source. The
+            # scraper itself also guards on skip_chapters, but gating
+            # here keeps the picker/series branches below on plain
+            # scrapers too.
+            scraper = self._scraper_for(
+                url, use_fichub=(params.use_fichub and not is_update),
+            )
 
             if not is_update and AO3Scraper.is_bookmarks_url(url):
                 self._run_picker_download(
@@ -3021,6 +3064,7 @@ class MainFrame(wx.Frame):
         self.llm_strip_notes_ctrl.SetValue(
             self.prefs.get_bool(_p.KEY_LLM_STRIP_NOTES)
         )
+        self.fichub_ctrl.SetValue(self.prefs.get_bool(_p.KEY_FICHUB))
 
         try:
             rate = int(self.prefs.get(_p.KEY_SPEECH_RATE) or "0")

@@ -59,6 +59,10 @@ KEY_STRIP_NOTES = "strip_notes"
 # Off by default; the LLM round-trip costs latency (and tokens on
 # paid providers).
 KEY_LLM_STRIP_NOTES = "llm_strip_notes"
+# FFN-only: prefer FicHub's shared cache over a direct chapter-by-chapter
+# scrape. Off by default — FicHub's copy can lag the latest chapters, so
+# it's opt-in and ignored for updates. See ffn_dl/fichub.py.
+KEY_FICHUB = "fichub"
 KEY_SPEECH_RATE = "speech_rate"
 KEY_ATTRIBUTION_BACKEND = "attribution_backend"
 KEY_ATTRIBUTION_MODEL_SIZE = "attribution_model_size"
@@ -154,6 +158,7 @@ DEFAULTS = {
     KEY_HR_AS_STARS: False,
     KEY_STRIP_NOTES: False,
     KEY_LLM_STRIP_NOTES: False,
+    KEY_FICHUB: False,
     KEY_SPEECH_RATE: "0",
     KEY_ATTRIBUTION_BACKEND: "builtin",
     KEY_ATTRIBUTION_MODEL_SIZE: "",
