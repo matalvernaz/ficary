@@ -13,7 +13,7 @@ import re
 from bs4 import BeautifulSoup
 
 from .models import Chapter, Story
-from .scraper import BaseScraper
+from .scraper import BaseScraper, CookieAuthMixin
 
 logger = logging.getLogger(__name__)
 
@@ -36,16 +36,23 @@ class AO3LockedError(Exception):
     """Raised when a work requires an AO3 login to view."""
 
 
-class AO3Scraper(BaseScraper):
-    """Scraper for archiveofourown.org."""
+class AO3Scraper(CookieAuthMixin, BaseScraper):
+    """Scraper for archiveofourown.org.
+
+    Optional ``session_cookie`` (a logged-in browser ``Cookie:`` header,
+    handled by :class:`CookieAuthMixin`) unlocks restricted / Archive-locked
+    works and your own private bookmarks / marked-for-later; anonymous
+    otherwise.
+    """
 
     site_name = "ao3"
+    _auth_cookie_domain = ".archiveofourown.org"
 
-    def __init__(self, **kwargs):
+    def __init__(self, session_cookie: str = "", **kwargs):
         # AO3 fetches the whole work in a single request, so the inter-
         # chapter delay barely matters. AIMD defaults (floor 0) let us
         # back off only if AO3 ever actually pushes back.
-        super().__init__(**kwargs)
+        super().__init__(session_cookie=session_cookie, **kwargs)
 
     @staticmethod
     def parse_story_id(url_or_id):
@@ -77,8 +84,17 @@ class AO3Scraper(BaseScraper):
         if "users must be logged in to access" in lower or (
             "sorry, you don't have permission" in lower
         ):
+            if self.has_auth:
+                raise AO3LockedError(
+                    "This work is still inaccessible with the supplied AO3 "
+                    "cookie — it may have expired, or the work is hidden from "
+                    "your account. Re-copy the Cookie header from a "
+                    "logged-in AO3 session."
+                )
             raise AO3LockedError(
-                "This work requires an AO3 login to view."
+                "This work requires an AO3 login to view. Pass a logged-in "
+                "browser Cookie header via --ao3-cookie (or the "
+                "FFN_DL_AO3_COOKIE env var, or the GUI's AO3 cookie field)."
             )
 
     @staticmethod

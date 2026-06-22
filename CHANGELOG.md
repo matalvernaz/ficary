@@ -1,5 +1,36 @@
 # Changelog
 
+## 2.4.50 — 2026-06-22
+
+**FFN character/pairing/world filters, AO3 login, deeper AO3 search**
+
+Three search/auth gaps closed (all requested on the AudioGames.net
+fanfiction-manager thread).
+
+* **FFN fandom-browse filters.** Browsing a fandom (e.g. the Harry Potter
+  archive) now supports the full filter set FFN exposes: up to four
+  characters, a pairing toggle, world/verse, a time range, and exclusions
+  (genre, characters, world). Characters and worlds are fandom-specific
+  numeric ids, so you give names — `--ffn-characters "Harry P., Hermione G."`
+  or the GUI's free-text fields — and they're resolved against the chosen
+  fandom at search time (the same shape AO3's character field already uses).
+  Fixes a latent bug while here: fandom word-length was sent as `w=` with
+  the wrong value encoding, so it silently did nothing; it now uses FFN's
+  `len` param correctly.
+* **AO3 account login.** Pass a logged-in browser `Cookie:` header via
+  `--ao3-cookie`, the `FFN_DL_AO3_COOKIE` env var, or the GUI's AO3 cookie
+  field to download restricted / Archive-locked works and your own private
+  bookmarks. Anonymous behaviour is unchanged; the login-required error now
+  tells you how to authenticate. Shares a new `CookieAuthMixin` with the
+  webnovel scraper.
+* **Deeper AO3 search.** Added the Archive Warnings filter (`--ao3-warning`)
+  and surfaced Title and Author/Creator search in the GUI and CLI
+  (`--ao3-title`, `--ao3-creator`). (AO3's search endpoint has no
+  tag-exclusion field — that's a tag-page feature — so it's not included.)
+* New `CookieAuthMixin` in `scraper.py`; `fetch_ffn_fandom_filters` and the
+  expanded fandom-URL builder in `search.py`; `FFN_TIME` / `AO3_WARNINGS`
+  tables. Full suite at 1603 passing; FFN character filtering verified live.
+
 ## 2.4.49 — 2026-06-22
 
 **New download source: webnovel.com, and scheme-optional URL detection**

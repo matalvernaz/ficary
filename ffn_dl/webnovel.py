@@ -39,7 +39,7 @@ from urllib.parse import urlencode
 from bs4 import BeautifulSoup
 
 from .models import Chapter, Story, chapter_in_spec
-from .scraper import BaseScraper, StoryNotFoundError
+from .scraper import BaseScraper, CookieAuthMixin, StoryNotFoundError
 
 logger = logging.getLogger(__name__)
 
@@ -88,10 +88,16 @@ class WebnovelLockedStoryError(Exception):
     """Raised when every requested chapter is behind the paywall."""
 
 
-class WebnovelScraper(BaseScraper):
-    """Scraper for webnovel.com books."""
+class WebnovelScraper(CookieAuthMixin, BaseScraper):
+    """Scraper for webnovel.com books.
+
+    Optional ``session_cookie`` (a logged-in browser ``Cookie:`` header,
+    handled by :class:`CookieAuthMixin`) unlocks chapters the account has
+    purchased; without it only free chapters read.
+    """
 
     site_name = "webnovel"
+    _auth_cookie_domain = ".webnovel.com"
 
     def __init__(self, session_cookie: str = "", **kwargs):
         # New site: stay polite and serial until parallel fetches are
@@ -99,48 +105,9 @@ class WebnovelScraper(BaseScraper):
         kwargs.setdefault("delay_floor", 0.5)
         kwargs.setdefault("delay_start", 0.5)
         kwargs.setdefault("concurrency", 1)
-        super().__init__(**kwargs)
-        # Optional auth cookies let a logged-in user pull chapters they've
-        # personally unlocked; without them only free chapters read.
-        self._auth_cookies = self._parse_cookie_header(session_cookie)
+        super().__init__(session_cookie=session_cookie, **kwargs)
         self._csrf_token = ""
         self._csrf_primed = False
-        if self._auth_cookies:
-            self._apply_auth_cookies(self.session)
-
-    # ── auth / session ────────────────────────────────────────────
-
-    @staticmethod
-    def _parse_cookie_header(raw: str) -> list[tuple[str, str]]:
-        """Parse a raw ``Cookie:`` header (``a=1; b=2``) into (name, value)
-        pairs. Accepts the whole header string a user copies from browser
-        devtools — forward-compatible if webnovel renames or adds auth
-        cookies, since we seed whatever is supplied verbatim.
-        """
-        pairs = []
-        for chunk in (raw or "").split(";"):
-            chunk = chunk.strip()
-            name, sep, value = chunk.partition("=")
-            if sep and name.strip():
-                pairs.append((name.strip(), value.strip()))
-        return pairs
-
-    def _apply_auth_cookies(self, sess) -> None:
-        for name, value in self._auth_cookies:
-            sess.cookies.set(
-                name=name, value=value, domain=".webnovel.com", path="/",
-            )
-
-    def _new_session(self, browser=None):
-        # Re-seed auth cookies onto every session the base class spins up
-        # (main thread plus any parallel workers) so the logged-in state
-        # isn't confined to the first session. Guard with getattr: the base
-        # __init__ builds the first session before our __init__ has set the
-        # attribute.
-        sess = super()._new_session(browser)
-        if getattr(self, "_auth_cookies", None):
-            self._apply_auth_cookies(sess)
-        return sess
 
     # ── URL parsing ───────────────────────────────────────────────
 
@@ -380,7 +347,7 @@ class WebnovelScraper(BaseScraper):
         if skip_chapters >= num_chapters:
             return story  # update mode: nothing new
 
-        has_auth = bool(self._auth_cookies)
+        has_auth = self.has_auth
         locked_count = 0
         for idx, entry in enumerate(chapter_list, 1):
             if idx <= skip_chapters or not chapter_in_spec(idx, chapters):

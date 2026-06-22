@@ -678,6 +678,16 @@ def _build_scraper(url: str, args: argparse.Namespace):
         )
         if cookie:
             kwargs["session_cookie"] = cookie
+    # AO3 optional auth: a logged-in session cookie unlocks restricted works
+    # and private bookmarks. Same guard-by-class shape as webnovel above.
+    from .ao3 import AO3Scraper
+    if scraper_cls is AO3Scraper:
+        cookie = (
+            getattr(args, "ao3_cookie", None)
+            or os.environ.get("FFN_DL_AO3_COOKIE", "")
+        )
+        if cookie:
+            kwargs["session_cookie"] = cookie
     return scraper_cls(**kwargs)
 
 
@@ -1059,6 +1069,9 @@ def _build_search_spec(args: argparse.Namespace):
             "character": args.character,
             "relationship": args.relationship,
             "freeform": getattr(args, "ao3_freeform", None),
+            "warning": getattr(args, "ao3_warning", None),
+            "title": getattr(args, "ao3_title", None),
+            "creator": getattr(args, "ao3_creator", None),
             "single_chapter": args.single_chapter,
         }
         search_fn = search_ao3
@@ -1100,10 +1113,17 @@ def _build_search_spec(args: argparse.Namespace):
             "status": args.status,
             "genre": args.genre,
             "genre2": getattr(args, "genre2", None),
+            "exclude_genre": getattr(args, "ffn_exclude_genre", None),
             "min_words": args.min_words,
             "crossover": args.crossover,
             "match": args.match,
             "sort": args.sort,
+            "time": getattr(args, "ffn_time", None),
+            "characters": getattr(args, "ffn_characters", None),
+            "world": getattr(args, "ffn_world", None),
+            "exclude_characters": getattr(args, "ffn_exclude_characters", None),
+            "exclude_world": getattr(args, "ffn_exclude_world", None),
+            "pairing": getattr(args, "ffn_pairing", None),
         }
         search_fn = search_ffn
     filters = {k: v for k, v in filters.items() if v}
@@ -3605,6 +3625,18 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--ao3-cookie",
+        type=str,
+        default=None,
+        metavar="COOKIE",
+        help=(
+            "For AO3, a logged-in browser 'Cookie:' header string. Lets you "
+            "download restricted / Archive-locked works and your own private "
+            "bookmarks and marked-for-later. Reads $FFN_DL_AO3_COOKIE if the "
+            "flag is omitted."
+        ),
+    )
+    parser.add_argument(
         "--hr-as-stars",
         action="store_true",
         help=(
@@ -3768,6 +3800,61 @@ def _build_parser() -> argparse.ArgumentParser:
         "--single-chapter",
         action="store_true",
         help="AO3-only: one-shots only",
+    )
+    parser.add_argument(
+        "--ao3-warning",
+        metavar="W",
+        help=(
+            "AO3-only Archive Warning: none apply, creator chose not to "
+            "warn, graphic violence, major character death, rape/non-con, "
+            "underage."
+        ),
+    )
+    parser.add_argument(
+        "--ao3-title", metavar="TEXT", help="AO3-only: match the work title",
+    )
+    parser.add_argument(
+        "--ao3-creator", metavar="NAME", help="AO3-only: match the author/creator",
+    )
+    parser.add_argument(
+        "--ffn-time",
+        metavar="T",
+        help=(
+            "FFN fandom-browse time range: updated 24h / 1 week / 1 month / "
+            "6 months / 1 year (or published 24h / 1 week / ...)."
+        ),
+    )
+    parser.add_argument(
+        "--ffn-characters",
+        metavar="NAMES",
+        help=(
+            "FFN fandom-browse: up to 4 character names (comma-separated), "
+            "resolved against the chosen fandom. Requires a fandom."
+        ),
+    )
+    parser.add_argument(
+        "--ffn-world", metavar="NAME",
+        help="FFN fandom-browse: world/verse name (requires a fandom).",
+    )
+    parser.add_argument(
+        "--ffn-exclude-genre", metavar="G",
+        help="FFN fandom-browse: exclude a genre. Same values as --genre.",
+    )
+    parser.add_argument(
+        "--ffn-exclude-characters", metavar="NAMES",
+        help="FFN fandom-browse: up to 2 character names to exclude (comma-sep).",
+    )
+    parser.add_argument(
+        "--ffn-exclude-world", metavar="NAME",
+        help="FFN fandom-browse: world/verse name to exclude.",
+    )
+    parser.add_argument(
+        "--ffn-pairing",
+        action="store_true",
+        help=(
+            "FFN fandom-browse: require the selected characters to be a "
+            "pairing (relationship)."
+        ),
     )
     parser.add_argument(
         "--rr-type",

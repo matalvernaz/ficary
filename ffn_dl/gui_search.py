@@ -79,8 +79,8 @@ def _ffn_search_spec():
     """
     from .search import (
         FFN_CATEGORIES, FFN_CROSSOVER, FFN_GENRE, FFN_LANGUAGE,
-        FFN_MATCH, FFN_RATING, FFN_SORT, FFN_STATUS, FFN_TOP_FANDOMS,
-        FFN_WORDS, search_ffn,
+        FFN_MATCH, FFN_RATING, FFN_SORT, FFN_STATUS, FFN_TIME,
+        FFN_TOP_FANDOMS, FFN_WORDS, search_ffn,
     )
     # Annotate each curated fandom with its category so users scanning
     # the picker can tell ``Naruto [anime]`` from any same-name book.
@@ -96,11 +96,26 @@ def _ffn_search_spec():
             ("S&tatus:", "status", list(FFN_STATUS)),
             ("&Genre:", "genre", list(FFN_GENRE)),
             ("Genre &2:", "genre2", list(FFN_GENRE)),
+            ("E&xclude genre:", "exclude_genre", list(FFN_GENRE)),
             ("&Words:", "min_words", list(FFN_WORDS)),
+            ("T&ime:", "time", list(FFN_TIME)),
             ("&Crossover:", "crossover", list(FFN_CROSSOVER)),
             ("&Match in:", "match", list(FFN_MATCH)),
             ("Sor&t by:", "sort", list(FFN_SORT)),
             ("Cate&gory:", "category", list(FFN_CATEGORIES)),
+        ],
+        # Character / world filters apply only in fandom-browse mode (the
+        # ids are fandom-specific). Free-text names — resolved against the
+        # chosen fandom at search time — mirror AO3's character field, so
+        # no dynamic per-fandom dropdown is needed.
+        "text_filters": [
+            ("C&haracters (up to 4, comma-sep):", "characters"),
+            ("&World/verse:", "world"),
+            ("Exclude c&haracters (up to 2):", "exclude_characters"),
+            ("Exclude wor&ld:", "exclude_world"),
+        ],
+        "checkboxes": [
+            ("&Pairing (selected characters paired)", "pairing"),
         ],
         # Fandom-browse multi-picker. Mirrors the erotica tag picker
         # pattern: the same text control accepts free-typed input OR a
@@ -117,13 +132,14 @@ def _ffn_search_spec():
 def _ao3_search_spec():
     from .search import (
         AO3_CATEGORY, AO3_COMPLETE, AO3_CROSSOVER, AO3_LANGUAGES,
-        AO3_RATING, AO3_SORT, search_ao3,
+        AO3_RATING, AO3_SORT, AO3_WARNINGS, search_ao3,
     )
     return {
         "label": "Search AO3",
         "search_fn": search_ao3,
         "filters": [
             ("&Rating:", "rating", list(AO3_RATING)),
+            ("Warn&ing:", "warning", list(AO3_WARNINGS)),
             ("Cate&gory:", "category", list(AO3_CATEGORY)),
             ("S&tatus:", "complete", list(AO3_COMPLETE)),
             ("&Crossover:", "crossover", list(AO3_CROSSOVER)),
@@ -135,6 +151,8 @@ def _ao3_search_spec():
             ("&Character:", "character"),
             ("&Relationship:", "relationship"),
             ("Free&form tag:", "freeform"),
+            ("Titl&e:", "title"),
+            ("&Author:", "creator"),
             ("&Word count:", "word_count"),
         ],
         "checkboxes": [

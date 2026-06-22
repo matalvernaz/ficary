@@ -122,6 +122,62 @@ def _default_cache_dir() -> Path:
     return path
 
 
+class CookieAuthMixin:
+    """Optional session-cookie auth for sites that gate content behind a
+    login (webnovel paid chapters, AO3 restricted works).
+
+    A subclass mixes this in *before* :class:`BaseScraper`, sets
+    ``_auth_cookie_domain``, and forwards a ``session_cookie`` kwarg (a raw
+    ``Cookie:`` header string copied from a logged-in browser) to
+    ``super().__init__``. The parsed pairs are seeded onto every session the
+    scraper builds — the main-thread session and every parallel worker — so
+    the logged-in state isn't confined to the first request.
+
+    Accepting the whole header verbatim (rather than named cookies) is
+    forward-compatible: if a site renames or adds auth cookies, the user's
+    pasted header still carries them.
+    """
+
+    _auth_cookie_domain = ""
+
+    def __init__(self, *args, session_cookie: str = "", **kwargs):
+        super().__init__(*args, **kwargs)
+        self._auth_cookies = self._parse_cookie_header(session_cookie)
+        if self._auth_cookies:
+            self._apply_auth_cookies(self.session)
+
+    @staticmethod
+    def _parse_cookie_header(raw: str) -> list[tuple[str, str]]:
+        """Parse ``a=1; b=2`` into ``[("a", "1"), ("b", "2")]``."""
+        pairs = []
+        for chunk in (raw or "").split(";"):
+            chunk = chunk.strip()
+            name, sep, value = chunk.partition("=")
+            if sep and name.strip():
+                pairs.append((name.strip(), value.strip()))
+        return pairs
+
+    def _apply_auth_cookies(self, sess) -> None:
+        for name, value in self._auth_cookies:
+            sess.cookies.set(
+                name=name, value=value,
+                domain=self._auth_cookie_domain, path="/",
+            )
+
+    def _new_session(self, browser: Optional[str] = None):
+        # Re-seed auth cookies onto every session the base class builds.
+        # getattr guard: BaseScraper.__init__ builds the first session
+        # before this mixin's __init__ has set the attribute.
+        sess = super()._new_session(browser)
+        if getattr(self, "_auth_cookies", None):
+            self._apply_auth_cookies(sess)
+        return sess
+
+    @property
+    def has_auth(self) -> bool:
+        return bool(getattr(self, "_auth_cookies", None))
+
+
 class BaseScraper:
     """Shared HTTP, retry, and cache logic for all site scrapers."""
 

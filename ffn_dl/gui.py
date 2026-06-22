@@ -53,6 +53,7 @@ class _DownloadParams:
     enabled_tts_providers: tuple = ()
     use_fichub: bool = False
     webnovel_cookie: str = ""
+    ao3_cookie: str = ""
 
 
 logger = logging.getLogger(__name__)
@@ -468,6 +469,32 @@ class MainFrame(wx.Frame):
         )
         wn_sizer.Add(self.webnovel_cookie_ctrl, 1, wx.ALIGN_CENTER_VERTICAL)
         root_sizer.Add(wn_sizer, 0, wx.EXPAND | wx.LEFT | wx.RIGHT, pad)
+
+        # AO3 optional auth. A logged-in browser "Cookie:" header unlocks
+        # restricted / Archive-locked works and your private bookmarks;
+        # blank means anonymous. Same plain-text-in-prefs posture as above.
+        ao3c_sizer = wx.BoxSizer(wx.HORIZONTAL)
+        ao3c_sizer.Add(
+            wx.StaticText(root, label="A&O3 cookie:"),
+            0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 4,
+        )
+        self.ao3_cookie_ctrl = wx.TextCtrl(
+            root, size=(260, -1), style=wx.TE_PASSWORD,
+        )
+        self.ao3_cookie_ctrl.SetName(
+            "AO3 session cookie — paste a logged-in browser Cookie header to "
+            "download restricted works and private bookmarks; leave blank for "
+            "anonymous access"
+        )
+        self.ao3_cookie_ctrl.SetToolTip(
+            "Optional, only used for archiveofourown.org. Paste the 'Cookie:' "
+            "header from a logged-in AO3 browser session to download "
+            "restricted / Archive-locked works and your own private bookmarks "
+            "and marked-for-later. Leave blank for anonymous access. Stored "
+            "in your local settings."
+        )
+        ao3c_sizer.Add(self.ao3_cookie_ctrl, 1, wx.ALIGN_CENTER_VERTICAL)
+        root_sizer.Add(ao3c_sizer, 0, wx.EXPAND | wx.LEFT | wx.RIGHT, pad)
 
         # ── Audiobook settings (visible only when Format = audio) ────
         from . import attribution as _attribution_module
@@ -1284,6 +1311,7 @@ class MainFrame(wx.Frame):
         self.webnovel_cookie_ctrl.SetValue(
             self.prefs.get(_p.KEY_WEBNOVEL_COOKIE) or ""
         )
+        self.ao3_cookie_ctrl.SetValue(self.prefs.get(_p.KEY_AO3_COOKIE) or "")
 
         try:
             rate = int(self.prefs.get(_p.KEY_SPEECH_RATE) or 0)
@@ -1337,6 +1365,9 @@ class MainFrame(wx.Frame):
         self.prefs.set(
             _p.KEY_WEBNOVEL_COOKIE,
             self.webnovel_cookie_ctrl.GetValue().strip(),
+        )
+        self.prefs.set(
+            _p.KEY_AO3_COOKIE, self.ao3_cookie_ctrl.GetValue().strip(),
         )
         self.prefs.set(_p.KEY_SPEECH_RATE, self.speech_rate_ctrl.GetValue())
         self.prefs.set(_p.KEY_ATTRIBUTION_BACKEND, self._selected_attribution_backend())
@@ -2203,12 +2234,12 @@ class MainFrame(wx.Frame):
 
     # ── Download worker ──────────────────────────────────────
 
-    def _scraper_for(self, url, *, use_fichub=False, webnovel_cookie=""):
+    def _scraper_for(self, url, *, use_fichub=False, webnovel_cookie="", ao3_cookie=""):
         from .sites import detect_scraper
         cls = detect_scraper(url)
-        # use_fichub / webnovel_cookie are per-site constructor kwargs; only
-        # forward each to the scraper that accepts it so other site
-        # scrapers don't choke on an unexpected kwarg.
+        # use_fichub / *_cookie are per-site constructor kwargs; only forward
+        # each to the scraper that accepts it so other site scrapers don't
+        # choke on an unexpected kwarg.
         if use_fichub:
             from .scraper import FFNScraper
             if cls is FFNScraper:
@@ -2217,6 +2248,10 @@ class MainFrame(wx.Frame):
             from .webnovel import WebnovelScraper
             if cls is WebnovelScraper:
                 return cls(session_cookie=webnovel_cookie)
+        if ao3_cookie:
+            from .ao3 import AO3Scraper
+            if cls is AO3Scraper:
+                return cls(session_cookie=ao3_cookie)
         return cls()
 
     def _snapshot_download_params(self) -> _DownloadParams:
@@ -2259,6 +2294,7 @@ class MainFrame(wx.Frame):
             ),
             use_fichub=self.fichub_ctrl.GetValue(),
             webnovel_cookie=self.webnovel_cookie_ctrl.GetValue().strip(),
+            ao3_cookie=self.ao3_cookie_ctrl.GetValue().strip(),
         )
 
     def _resolve_output_dir(self, story, params: _DownloadParams) -> str:
@@ -2595,6 +2631,7 @@ class MainFrame(wx.Frame):
             scraper = self._scraper_for(
                 url, use_fichub=(params.use_fichub and not is_update),
                 webnovel_cookie=params.webnovel_cookie,
+                ao3_cookie=params.ao3_cookie,
             )
 
             if not is_update and AO3Scraper.is_bookmarks_url(url):

@@ -153,6 +153,38 @@ FFN_SORT = {
     "follows": 5,
 }
 
+# Fandom-page time-range filter (the ``t`` URL param). Global across
+# fandoms; verified live 2026-06-22.
+FFN_TIME = {
+    "any": None,
+    "updated 24h": 1,
+    "updated 1 week": 2,
+    "updated 1 month": 3,
+    "updated 6 months": 4,
+    "updated 1 year": 5,
+    "published 24h": 11,
+    "published 1 week": 12,
+    "published 1 month": 13,
+    "published 6 months": 14,
+    "published 1 year": 15,
+}
+
+# Fandom pages use the ``len`` param with a DIFFERENT value encoding than
+# the keyword-search ``words`` param (FFN_WORDS). Translate the shared
+# human labels to the nearest fandom ``len`` bucket. (Before this, fandom
+# browse sent ``w=<FFN_WORDS value>`` — wrong param name AND wrong values,
+# so the word-length filter silently did nothing on fandom pages.)
+_FFN_WORDS_TO_LEN = {
+    "<1k": 11,
+    "<5k": 51,
+    "5k+": 5,
+    "10k+": 10,
+    "30k+": 20,
+    "50k+": 40,
+    "150k+": 100,
+    "300k+": 100,
+}
+
 
 # ── Fandom-browse (parallel to erotica tag-browse) ───────────────
 #
@@ -715,9 +747,99 @@ Roughly by popularity so the common case (book + anime) gets answered
 without burning HTTPS round-trips against the long tail."""
 
 
-def _build_ffn_fandom_url(category: str, slug: str, filters: dict, page: int) -> str:
-    """Build the fandom-page URL with the shorter param names FFN uses
-    on category listings."""
+def _split_names(value) -> list[str]:
+    """Normalise a comma-separated string or a list into a clean name list."""
+    if not value:
+        return []
+    if isinstance(value, (list, tuple)):
+        return [str(v).strip() for v in value if str(v).strip()]
+    return [p.strip() for p in str(value).split(",") if p.strip()]
+
+
+def _parse_fandom_filter_options(html: str) -> dict:
+    """Parse a fandom page's character/world ``<select>`` options into
+    ``{"characters": {name: id}, "worlds": {name: id}}``.
+
+    Character and world IDs are fandom-specific (Harry Potter has ~460
+    characters, each with its own numeric id), so they can only be
+    resolved by name against the live page — there's no global table.
+    """
+    soup = BeautifulSoup(html, "lxml")
+
+    def options(select_name):
+        sel = soup.find("select", attrs={"name": select_name})
+        out = {}
+        if sel:
+            for opt in sel.find_all("option"):
+                val = opt.get("value")
+                label = opt.get_text(strip=True)
+                if val and val != "0" and label:
+                    out[label] = val
+        return out
+
+    return {
+        "characters": options("characterid1"),
+        "worlds": options("verseid1"),
+    }
+
+
+def fetch_ffn_fandom_filters(category: str, slug: str) -> dict:
+    """Fetch a fandom page and return its per-fandom filter option maps
+    (``characters`` and ``worlds``) for name→id resolution."""
+    html = _fetch_search_page(f"{FFN_BASE}/{category}/{slug}/")
+    return _parse_fandom_filter_options(html)
+
+
+def _resolve_named(value, options: dict, kind: str):
+    """Resolve a character/world NAME (or raw numeric id) to its FFN id
+    against a fandom's option map. Case-insensitive exact match first, then
+    a unique substring match. Raises ValueError on unknown/ambiguous names
+    so the caller can surface a useful message instead of silently
+    dropping the filter."""
+    s = str(value).strip()
+    if not s:
+        return None
+    if s.isdigit():
+        return s
+    low = s.lower()
+    for label, vid in options.items():
+        if label.lower() == low:
+            return vid
+    matches = [(label, vid) for label, vid in options.items() if low in label.lower()]
+    if len(matches) == 1:
+        return matches[0][1]
+    if not matches:
+        raise ValueError(
+            f"Unknown {kind} {value!r} for this fandom. "
+            "Check spelling, or use the exact name from FFN's filter list."
+        )
+    raise ValueError(
+        f"Ambiguous {kind} {value!r} — matches: "
+        + ", ".join(label for label, _ in matches[:6])
+    )
+
+
+def _fandom_filters_requested(filters: dict) -> bool:
+    """True if any filter that needs the per-fandom character/world option
+    map (so we must fetch the fandom page first to resolve names)."""
+    return any(
+        filters.get(k)
+        for k in ("characters", "world", "exclude_characters", "exclude_world")
+    )
+
+
+def _build_ffn_fandom_url(
+    category: str, slug: str, filters: dict, page: int, options: dict = None,
+) -> str:
+    """Build the fandom-page URL with the short param names FFN uses on
+    category listings (``srt``, ``t``, ``r``, ``g1``, ``len``, ``v1``,
+    ``c1``…``c4``, ``pm`` and the ``_``-prefixed exclusion variants).
+
+    ``options`` is the ``{"characters": ..., "worlds": ...}`` map from
+    :func:`fetch_ffn_fandom_filters`, required only when a character or
+    world filter (by name) is present.
+    """
+    options = options or {"characters": {}, "worlds": {}}
     params: dict = {}
     # Sort: fandom URLs use ``srt`` (no "best match" — default is
     # "updated" server-side, so omit when the user didn't override).
@@ -730,6 +852,9 @@ def _build_ffn_fandom_url(category: str, slug: str, filters: dict, page: int) ->
             params["srt"] = int(s)
         elif s == "best match":
             pass  # default
+    time_val = _resolve_filter(filters.get("time"), FFN_TIME, "time")
+    if time_val is not None:
+        params["t"] = time_val
     rating = _resolve_filter(filters.get("rating"), FFN_RATING, "rating")
     if rating is not None:
         params["r"] = rating
@@ -739,9 +864,19 @@ def _build_ffn_fandom_url(category: str, slug: str, filters: dict, page: int) ->
     g2 = _resolve_filter(filters.get("genre2"), FFN_GENRE, "genre2")
     if g2 is not None:
         params["g2"] = g2
-    words = _resolve_filter(filters.get("min_words"), FFN_WORDS, "min_words")
-    if words is not None:
-        params["w"] = words
+    ex_genre = _resolve_filter(
+        filters.get("exclude_genre"), FFN_GENRE, "exclude_genre",
+    )
+    if ex_genre is not None:
+        params["_g1"] = ex_genre
+    # Word length: the fandom ``len`` param, NOT the keyword ``words`` param.
+    mw = filters.get("min_words")
+    if mw:
+        key = str(mw).strip().lower()
+        if key in _FFN_WORDS_TO_LEN:
+            params["len"] = _FFN_WORDS_TO_LEN[key]
+        elif key.isdigit():
+            params["len"] = int(key)
     status_raw = filters.get("status")
     if status_raw:
         sr = str(status_raw).strip().lower()
@@ -754,6 +889,31 @@ def _build_ffn_fandom_url(category: str, slug: str, filters: dict, page: int) ->
     lang = _resolve_filter(filters.get("language"), FFN_LANGUAGE, "language")
     if lang is not None:
         params["lan"] = lang
+    # World / verse (fandom-specific id, resolved by name).
+    world = filters.get("world")
+    if world:
+        vid = _resolve_named(world, options["worlds"], "world")
+        if vid:
+            params["v1"] = vid
+    ex_world = filters.get("exclude_world")
+    if ex_world:
+        vid = _resolve_named(ex_world, options["worlds"], "world")
+        if vid:
+            params["_v1"] = vid
+    # Characters A–D (c1..c4) and exclusions (_c1, _c2), resolved by name.
+    for idx, name in enumerate(_split_names(filters.get("characters"))[:4], 1):
+        cid = _resolve_named(name, options["characters"], "character")
+        if cid:
+            params[f"c{idx}"] = cid
+    for idx, name in enumerate(
+        _split_names(filters.get("exclude_characters"))[:2], 1,
+    ):
+        cid = _resolve_named(name, options["characters"], "character")
+        if cid:
+            params[f"_c{idx}"] = cid
+    # Pairing: require the selected characters to be in a relationship.
+    if filters.get("pairing"):
+        params["pm"] = 1
     if page and page > 1:
         params["p"] = int(page)
     base = f"{FFN_BASE}/{category}/{slug}/"
@@ -775,8 +935,17 @@ def _search_ffn_fandom(
     metadata div (the whole page IS the fandom, so it'd be noise
     inline). The GUI's Fandom column then shows the human-readable
     label instead of staying empty.
+
+    Character/world filters need the fandom's own option list (those ids
+    are fandom-specific), so when one is requested we fetch the fandom
+    page once for its filter options before building the filtered URL.
     """
-    url = _build_ffn_fandom_url(category, slug, filters, page)
+    options = (
+        fetch_ffn_fandom_filters(category, slug)
+        if _fandom_filters_requested(filters)
+        else None
+    )
+    url = _build_ffn_fandom_url(category, slug, filters, page, options=options)
     html = _fetch_search_page(url)
     results = _parse_results(html)
     if query:
@@ -859,6 +1028,21 @@ def search_ffn(query, *, page=1, **filters):
             if first_empty is None:
                 first_empty = results
         return first_empty or []
+    # Keyword-search mode: the character/world/time/pairing/exclusion
+    # filters live only on FFN's fandom pages, so warn rather than
+    # silently drop them when no fandom was given.
+    fandom_only = [
+        k for k in (
+            "time", "characters", "world", "exclude_genre",
+            "exclude_characters", "exclude_world", "pairing",
+        )
+        if filters.get(k)
+    ]
+    if fandom_only:
+        logger.warning(
+            "FFN keyword search ignores fandom-only filters (%s); "
+            "pick a fandom to use them.", ", ".join(fandom_only),
+        )
     url = _build_search_url(query, filters, page=page)
     html = _fetch_search_page(url)
     return _parse_results(html)
@@ -911,6 +1095,18 @@ AO3_CATEGORY = {
     "f/f": 116,
     "multi": 2246,
     "other": 24,
+}
+
+# AO3 Archive Warning tag IDs (work_search[archive_warning_ids][]). Global
+# tag IDs read from AO3's search form; verified live 2026-06-22.
+AO3_WARNINGS = {
+    "any": None,
+    "none apply": 16,
+    "creator chose not to warn": 14,
+    "graphic violence": 17,
+    "major character death": 18,
+    "rape/non-con": 19,
+    "underage": 20,
 }
 
 # AO3 accepts either the short language code (ISO-ish — "en", "zh") or
@@ -987,6 +1183,10 @@ def _build_ao3_search_url(query, filters, page=1):
         # AO3 expects category_ids as an array param — urlencode handles
         # the [] suffix when we feed it a list under the same key.
         params["work_search[category_ids][]"] = category
+
+    warning = resolve(filters.get("warning"), AO3_WARNINGS, "warning")
+    if warning is not None:
+        params["work_search[archive_warning_ids][]"] = warning
 
     sort = resolve(filters.get("sort"), AO3_SORT, "sort")
     if sort is not None:

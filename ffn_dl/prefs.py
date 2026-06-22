@@ -67,6 +67,9 @@ KEY_FICHUB = "fichub"
 # Optional — lets the user pull chapters their account has unlocked.
 # Plain-text in the config file, same as the LLM/Pushover/Discord secrets.
 KEY_WEBNOVEL_COOKIE = "webnovel_cookie"
+# AO3 logged-in session cookie (raw "Cookie:" header). Optional — unlocks
+# restricted works and private bookmarks. Plain-text, same as the others.
+KEY_AO3_COOKIE = "ao3_cookie"
 KEY_SPEECH_RATE = "speech_rate"
 KEY_ATTRIBUTION_BACKEND = "attribution_backend"
 KEY_ATTRIBUTION_MODEL_SIZE = "attribution_model_size"
@@ -164,6 +167,7 @@ DEFAULTS = {
     KEY_LLM_STRIP_NOTES: False,
     KEY_FICHUB: False,
     KEY_WEBNOVEL_COOKIE: "",
+    KEY_AO3_COOKIE: "",
     KEY_SPEECH_RATE: "0",
     KEY_ATTRIBUTION_BACKEND: "builtin",
     KEY_ATTRIBUTION_MODEL_SIZE: "",

@@ -278,7 +278,9 @@ class TestFFNFandomBrowse:
 
     def test_build_fandom_url_full_filters(self):
         from ffn_dl.search import _build_ffn_fandom_url
-        # FFN fandom URLs use short param names: r/srt/g1/g2/w/s/lan/p
+        # FFN fandom URLs use short param names: r/srt/g1/g2/len/s/lan/p.
+        # Word length uses the ``len`` param (NOT ``words``): "50k+" maps
+        # to the nearest fandom bucket, >40K = len 40.
         url = _build_ffn_fandom_url(
             "book", "Harry-Potter",
             {
@@ -290,7 +292,7 @@ class TestFFNFandomBrowse:
         )
         assert url.startswith("https://www.fanfiction.net/book/Harry-Potter/?")
         # Order isn't guaranteed; check each param appears.
-        for fragment in ("srt=3", "r=4", "g1=2", "g2=10", "w=6", "s=2", "lan=1", "p=2"):
+        for fragment in ("srt=3", "r=4", "g1=2", "g2=10", "len=40", "s=2", "lan=1", "p=2"):
             assert fragment in url, f"missing {fragment} in {url}"
 
     def test_build_fandom_url_no_filters(self):
