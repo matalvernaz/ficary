@@ -138,6 +138,16 @@ def neural_dir() -> Path:
     return portable_root() / "neural"
 
 
+def soundscapes_dir() -> Path:
+    """JSON soundscape definitions live here."""
+    return portable_root() / "soundscapes"
+
+
+def sounds_dir() -> Path:
+    """User-supplied ambient sound files referenced by soundscapes."""
+    return portable_root() / "sounds"
+
+
 def booknlp_home() -> Path:
     """Directory BookNLP will see as the user's home, so its hardcoded
     ~/booknlp_models lands inside the portable folder. BookNLP creates

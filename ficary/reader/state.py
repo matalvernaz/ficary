@@ -72,6 +72,10 @@ class ReaderStateDB:
         )
         c.execute("CREATE INDEX IF NOT EXISTS idx_bookmark_story ON bookmark(story_key)")
         c.execute(
+            "CREATE TABLE IF NOT EXISTS story_soundscape ("
+            "story_key TEXT PRIMARY KEY, slug TEXT NOT NULL)"
+        )
+        c.execute(
             "INSERT OR IGNORE INTO meta (key, value) VALUES ('schema_version', ?)",
             (SCHEMA_VERSION,),
         )
@@ -125,6 +129,22 @@ class ReaderStateDB:
     def delete_bookmark(self, bookmark_id: int) -> None:
         self._conn.execute("DELETE FROM bookmark WHERE id = ?", (bookmark_id,))
         self._conn.commit()
+
+    # ── soundscape assignment ─────────────────────────────────────
+    def set_soundscape(self, story_key: str, slug: Optional[str]) -> None:
+        if slug:
+            self._conn.execute(
+                "INSERT INTO story_soundscape (story_key, slug) VALUES (?, ?) "
+                "ON CONFLICT(story_key) DO UPDATE SET slug = excluded.slug",
+                (story_key, slug))
+        else:
+            self._conn.execute("DELETE FROM story_soundscape WHERE story_key = ?", (story_key,))
+        self._conn.commit()
+
+    def get_soundscape(self, story_key: str) -> Optional[str]:
+        row = self._conn.execute(
+            "SELECT slug FROM story_soundscape WHERE story_key = ?", (story_key,)).fetchone()
+        return row[0] if row else None
 
     def close(self) -> None:
         self._conn.close()

@@ -3100,6 +3100,10 @@ class MainFrame(wx.Frame):
             wx.ID_ANY, "&Open reader...\tCtrl+R",
         )
         self.Bind(wx.EVT_MENU, self._on_reader_menu, reader_item)
+        soundscape_item = reader_menu.Append(
+            wx.ID_ANY, "&Soundscape editor...",
+        )
+        self.Bind(wx.EVT_MENU, self._on_soundscape_editor, soundscape_item)
         bar.Append(reader_menu, "&Reader")
 
         watchlist_menu = wx.Menu()
@@ -3311,6 +3315,12 @@ class MainFrame(wx.Frame):
 
     def _notify_reader_frame_closed(self):
         self._reader_frame = None
+
+    def _on_soundscape_editor(self, event):
+        """Open the soundscape editor (manage ambient audio definitions)."""
+        from .soundscape.editor import SoundscapeEditorDialog
+        with SoundscapeEditorDialog(self) as dlg:
+            dlg.ShowModal()
 
     def _on_watchlist_menu(self, event):
         """Open the watchlist manager (non-modal). Reuses the same

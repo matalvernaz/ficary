@@ -15,6 +15,8 @@ import wx
 
 from ..audio.engine import get_engine
 from ..audio.events import Event, ReaderEvent
+from ..soundscape import library as _sc_library
+from ..soundscape.session import SoundscapeSession
 from ..prefs import (
     KEY_READER_FONT_PT,
     KEY_READER_THEME,
@@ -48,6 +50,7 @@ class ReaderFrame(wx.Frame):
         self._paused = False
         self._engine = get_engine()
         self._live = None
+        self._soundscape_session = None
 
         self._build_menu()
         self._build_ui()
@@ -55,6 +58,7 @@ class ReaderFrame(wx.Frame):
 
         self._populate_chapter_list()
         self._restore_position()
+        self._soundscape_session = self._make_soundscape_session()
         self._engine.emit(Event(ReaderEvent.READER_OPENED, story_key=self.source.story_key))
         self.Centre()
 
@@ -74,6 +78,7 @@ class ReaderFrame(wx.Frame):
         menu.AppendSeparator()
         self._mi_play = menu.Append(wx.ID_ANY, "&Play/Pause (app voice)\tCtrl+P")
         self._mi_stop = menu.Append(wx.ID_ANY, "&Stop reading\tCtrl+.")
+        self._mi_soundscape = menu.Append(wx.ID_ANY, "&Soundscape for this story...\tCtrl+Shift+A")
         menu.AppendSeparator()
         self._mi_close = menu.Append(wx.ID_CLOSE, "&Close\tCtrl+W")
         bar.Append(menu, "&Reader")
@@ -88,6 +93,7 @@ class ReaderFrame(wx.Frame):
         self.Bind(wx.EVT_MENU, self._on_cycle_theme, self._mi_theme)
         self.Bind(wx.EVT_MENU, self._on_play_pause, self._mi_play)
         self.Bind(wx.EVT_MENU, self._on_stop_tts, self._mi_stop)
+        self.Bind(wx.EVT_MENU, self._on_pick_soundscape, self._mi_soundscape)
         self.Bind(wx.EVT_MENU, lambda e: self.Close(), self._mi_close)
 
     def _build_ui(self) -> None:
@@ -326,6 +332,29 @@ class ReaderFrame(wx.Frame):
         except Exception:
             return ""
 
+    # ── soundscape ────────────────────────────────────────────────
+    def _make_soundscape_session(self):
+        slug = self._state.get_soundscape(self.source.story_key)
+        sc = _sc_library.load(slug) if slug else None
+        return SoundscapeSession(self._engine, sc)
+
+    def _on_pick_soundscape(self, event) -> None:
+        slugs = _sc_library.list_slugs()
+        choices = ["(none)"] + slugs
+        with wx.SingleChoiceDialog(self, "Ambient soundscape for this story:",
+                                   "Soundscape", choices) as dlg:
+            current = self._state.get_soundscape(self.source.story_key)
+            if current in slugs:
+                dlg.SetSelection(slugs.index(current) + 1)
+            if dlg.ShowModal() != wx.ID_OK:
+                return
+            sel = dlg.GetSelection()
+        slug = None if sel == 0 else slugs[sel - 1]
+        self._state.set_soundscape(self.source.story_key, slug)
+        sc = _sc_library.load(slug) if slug else None
+        if self._soundscape_session is not None:
+            self._soundscape_session.set_soundscape(sc)
+
     # ── lifecycle ─────────────────────────────────────────────────
     def _on_close(self, event) -> None:
         self._alive = False
@@ -335,6 +364,11 @@ class ReaderFrame(wx.Frame):
             except Exception:
                 pass
         self._engine.emit(Event(ReaderEvent.READER_CLOSED, story_key=self.source.story_key))
+        if self._soundscape_session is not None:
+            try:
+                self._soundscape_session.close()
+            except Exception:
+                pass
         self._save_position()
         try:
             self._state.close()
