@@ -15,7 +15,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from ffn_dl import cf_solve
+from ficary import cf_solve
 
 
 # ── Cookie cache round-trip ──────────────────────────────────────
@@ -24,7 +24,7 @@ from ffn_dl import cf_solve
 @pytest.fixture
 def cache_dir(tmp_path, monkeypatch):
     """Redirect the cf-cookie cache into a per-test tmp dir so the
-    tests don't scribble on the real ``~/.cache/ffn-dl/cf-cookies``."""
+    tests don't scribble on the real ``~/.cache/ficary/cf-cookies``."""
     monkeypatch.setattr(cf_solve, "_cookie_cache_dir", lambda: tmp_path)
     return tmp_path
 
@@ -321,7 +321,7 @@ class _ProbeScraper:
 @pytest.fixture
 def scraper(cache_dir, monkeypatch):
     # cache_dir monkeypatches _cookie_cache_dir — nothing more to do.
-    from ffn_dl.scraper import BaseScraper
+    from ficary.scraper import BaseScraper
 
     class _Scr(BaseScraper):
         site_name = "probe"
@@ -353,7 +353,7 @@ def test_maybe_seed_cf_cookies_applies_cache(cache_dir, scraper, monkeypatch):
 
 
 def test_maybe_seed_skips_when_solver_disabled(cache_dir, monkeypatch):
-    from ffn_dl.scraper import BaseScraper
+    from ficary.scraper import BaseScraper
 
     class _Scr(BaseScraper):
         site_name = "probe"
@@ -416,7 +416,7 @@ def test_invoke_cf_solver_deduplicates_per_host(
 
 
 def test_invoke_cf_solver_returns_false_when_disabled(cache_dir, monkeypatch):
-    from ffn_dl.scraper import BaseScraper
+    from ficary.scraper import BaseScraper
 
     class _Scr(BaseScraper):
         site_name = "probe"
@@ -524,7 +524,7 @@ def test_fetch_403_then_solver_success_produces_body(
     doesn't apply, the solver runs on the second-to-last attempt,
     cookies go into the session, and the next fetch returns 200.
     The loop returns the 200 body rather than exhausting retries."""
-    from ffn_dl.scraper import BaseScraper
+    from ficary.scraper import BaseScraper
 
     class _Scr(BaseScraper):
         site_name = "probe"
@@ -546,7 +546,7 @@ def test_fetch_403_then_solver_success_produces_body(
     fake_session.cookies.jar = []
     monkeypatch.setattr(scr, "_session", lambda: fake_session)
     # Avoid real sleeps
-    monkeypatch.setattr("ffn_dl.scraper.time.sleep", lambda *_: None)
+    monkeypatch.setattr("ficary.scraper.time.sleep", lambda *_: None)
     # Solver returns one cookie — just verify it was called.
     solved = {"n": 0}
 

@@ -6,14 +6,14 @@ from pathlib import Path
 
 import pytest
 
-from ffn_dl.library.index import LibraryIndex
-from ffn_dl.library.reorganizer import apply, plan
-from ffn_dl.library.scanner import scan
+from ficary.library.index import LibraryIndex
+from ficary.library.reorganizer import apply, plan
+from ficary.library.scanner import scan
 
 from .library_fixtures import (
     bare_txt_no_url,
     fanficfare_epub,
-    ffndl_epub,
+    ficary_epub,
 )
 
 
@@ -32,7 +32,7 @@ def test_plan_empty_when_already_organized(tmp_path: Path):
     # File dropped directly at its template-resolved location
     fandom_dir = lib / "Harry Potter"
     fandom_dir.mkdir()
-    ffndl_epub(
+    ficary_epub(
         fandom_dir,
         title="The Sample Fic",
         author="Test Author",
@@ -46,7 +46,7 @@ def test_plan_empty_when_already_organized(tmp_path: Path):
 def test_plan_proposes_move_for_misplaced_file(tmp_path: Path):
     lib, idx_file = _setup(tmp_path)
     # Dropped at the library root, not in a fandom folder
-    ffndl_epub(lib, title="Misplaced", author="Auth")
+    ficary_epub(lib, title="Misplaced", author="Auth")
     scan(lib, index_path=idx_file)
 
     moves = plan(lib, index_path=idx_file)
@@ -71,7 +71,7 @@ def test_plan_uses_misc_for_multi_fandom(tmp_path: Path):
 
 def test_plan_respects_custom_template(tmp_path: Path):
     lib, idx_file = _setup(tmp_path)
-    ffndl_epub(lib, title="T", author="A")
+    ficary_epub(lib, title="T", author="A")
     scan(lib, index_path=idx_file)
 
     moves = plan(
@@ -98,7 +98,7 @@ def test_plan_ignores_untrackable_files(tmp_path: Path):
 
 def test_apply_moves_file_and_updates_index(tmp_path: Path):
     lib, idx_file = _setup(tmp_path)
-    path = ffndl_epub(lib, title="Story", author="Auth")
+    path = ficary_epub(lib, title="Story", author="Auth")
     scan(lib, index_path=idx_file)
 
     moves = plan(lib, index_path=idx_file)
@@ -121,7 +121,7 @@ def test_apply_moves_file_and_updates_index(tmp_path: Path):
 
 def test_apply_skips_missing_source(tmp_path: Path):
     lib, idx_file = _setup(tmp_path)
-    path = ffndl_epub(lib, title="Story", author="Auth")
+    path = ficary_epub(lib, title="Story", author="Auth")
     scan(lib, index_path=idx_file)
     moves = plan(lib, index_path=idx_file)
 
@@ -135,7 +135,7 @@ def test_apply_skips_missing_source(tmp_path: Path):
 
 def test_apply_skips_when_target_exists(tmp_path: Path):
     lib, idx_file = _setup(tmp_path)
-    ffndl_epub(lib, title="Story", author="Auth")
+    ficary_epub(lib, title="Story", author="Auth")
     scan(lib, index_path=idx_file)
     moves = plan(lib, index_path=idx_file)
 
@@ -151,8 +151,8 @@ def test_apply_skips_when_target_exists(tmp_path: Path):
 
 def test_apply_selected_subset_only(tmp_path: Path):
     lib, idx_file = _setup(tmp_path)
-    ffndl_epub(lib, title="Keep", author="A", url="https://www.fanfiction.net/s/1/1/")
-    ffndl_epub(lib, title="Move", author="B", url="https://archiveofourown.org/works/2")
+    ficary_epub(lib, title="Keep", author="A", url="https://www.fanfiction.net/s/1/1/")
+    ficary_epub(lib, title="Move", author="B", url="https://archiveofourown.org/works/2")
     scan(lib, index_path=idx_file)
 
     moves = plan(lib, index_path=idx_file)
@@ -167,7 +167,7 @@ def test_apply_selected_subset_only(tmp_path: Path):
 
 def test_apply_creates_parent_directories(tmp_path: Path):
     lib, idx_file = _setup(tmp_path)
-    ffndl_epub(lib, title="Story", author="Auth")
+    ficary_epub(lib, title="Story", author="Auth")
     scan(lib, index_path=idx_file)
     moves = plan(lib, index_path=idx_file)
 
@@ -180,7 +180,7 @@ def test_apply_cleans_empty_source_dir(tmp_path: Path):
     lib, idx_file = _setup(tmp_path)
     stash = lib / "misorganized"
     stash.mkdir()
-    ffndl_epub(stash, title="Story", author="Auth")
+    ficary_epub(stash, title="Story", author="Auth")
     scan(lib, index_path=idx_file)
 
     moves = plan(lib, index_path=idx_file)
@@ -194,7 +194,7 @@ def test_apply_leaves_nonempty_source_dir(tmp_path: Path):
     lib, idx_file = _setup(tmp_path)
     stash = lib / "mixed"
     stash.mkdir()
-    ffndl_epub(stash, title="Story", author="Auth")
+    ficary_epub(stash, title="Story", author="Auth")
     (stash / "unrelated.txt").write_text("keep me")
     scan(lib, index_path=idx_file)
 

@@ -8,15 +8,15 @@ from pathlib import Path
 
 import pytest
 
-from ffn_dl.library.scanner import scan
-from ffn_dl.library.template import (
+from ficary.library.scanner import scan
+from ficary.library.template import (
     DEFAULT_TEMPLATE,
     _MAX_SEGMENT_LEN,
     render,
 )
-from ffn_dl.updater import FileMetadata, extract_metadata
+from ficary.updater import FileMetadata, extract_metadata
 
-from .library_fixtures import ffndl_epub
+from .library_fixtures import ficary_epub
 
 
 # ── Template: path traversal ─────────────────────────────────────
@@ -159,7 +159,7 @@ def test_scanner_skips_symlinked_files(tmp_path: Path):
 
     lib = tmp_path / "lib"
     lib.mkdir()
-    real = ffndl_epub(lib, title="Real")
+    real = ficary_epub(lib, title="Real")
     link = lib / "symlink_copy.epub"
     os.symlink(real, link)
 
@@ -174,7 +174,7 @@ def test_scanner_survives_symlink_loop(tmp_path: Path):
 
     lib = tmp_path / "lib"
     lib.mkdir()
-    ffndl_epub(lib, title="Real")
+    ficary_epub(lib, title="Real")
     # Self-referential symlink: lib/loop -> lib
     os.symlink(lib, lib / "loop")
 
@@ -193,7 +193,7 @@ def test_extract_metadata_logs_warning_on_malformed_epub(
     # An EPUB is a zip; this is neither. ebooklib will raise.
     bad.write_text("this is not a zip at all", encoding="utf-8")
 
-    with caplog.at_level(logging.WARNING, logger="ffn_dl.updater"):
+    with caplog.at_level(logging.WARNING, logger="ficary.updater"):
         md = extract_metadata(bad)
 
     # No exception propagates — the contract stays unchanged

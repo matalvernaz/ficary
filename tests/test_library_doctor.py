@@ -7,8 +7,8 @@ from pathlib import Path
 
 import pytest
 
-from ffn_dl.library import check_integrity, heal
-from ffn_dl.library.index import LibraryIndex
+from ficary.library import check_integrity, heal
+from ficary.library.index import LibraryIndex
 
 
 def _fresh_index(tmp_path: Path) -> LibraryIndex:

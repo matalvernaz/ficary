@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from ffn_dl.wattpad import (
+from ficary.wattpad import (
     WattpadPaidStoryError,
     WattpadScraper,
     _MAX_PART_PAGES,
@@ -315,7 +315,7 @@ class TestV2413RegressionFixes:
     """Regressions for the multi-AI audit fixes in v2.4.13."""
 
     def test_walk_paginated_stories_follows_next_url(self):
-        from ffn_dl.wattpad import WattpadScraper
+        from ficary.wattpad import WattpadScraper
 
         # Stub _api_get_json to feed two pages with a nextUrl pivot.
         scraper = WattpadScraper(use_cache=False)
@@ -334,7 +334,7 @@ class TestV2413RegressionFixes:
         assert seen == [1, 2, 3]
 
     def test_walk_paginated_stories_stops_on_self_loop(self):
-        from ffn_dl.wattpad import WattpadScraper
+        from ficary.wattpad import WattpadScraper
 
         scraper = WattpadScraper(use_cache=False)
         scraper._api_get_json = lambda url: {

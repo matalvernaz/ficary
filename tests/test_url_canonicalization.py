@@ -12,8 +12,8 @@ from pathlib import Path
 
 import pytest
 
-from ffn_dl.library.index import LibraryIndex, SCHEMA_VERSION
-from ffn_dl.sites import canonical_url
+from ficary.library.index import LibraryIndex, SCHEMA_VERSION
+from ficary.sites import canonical_url
 
 
 # ---------------------------------------------------------------------------
@@ -103,7 +103,7 @@ class _FakeMeta:
 
 class _FakeCandidate:
     def __init__(self, path, url, confidence_value="high"):
-        from ffn_dl.library.candidate import Confidence
+        from ficary.library.candidate import Confidence
 
         self.path = path
         self.metadata = _FakeMeta(url)

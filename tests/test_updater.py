@@ -4,9 +4,9 @@ from pathlib import Path
 
 import pytest
 
-from ffn_dl.exporters import export_epub, export_html, export_txt
-from ffn_dl.models import Chapter, Story
-from ffn_dl.updater import (
+from ficary.exporters import export_epub, export_html, export_txt
+from ficary.models import Chapter, Story
+from ficary.updater import (
     ChaptersNotReadableError,
     count_chapters,
     extract_source_url,
@@ -47,7 +47,7 @@ class TestRoundTripHtml:
         """The regex that replaced BS4 has to match real-world markup
         variants: attribute order (class before id vs after), whitespace
         around ``=``, and class lists containing ``chapter`` plus other
-        tokens. These forms all appear in past ffn-dl outputs and
+        tokens. These forms all appear in past ficary outputs and
         hand-edited exports users send us."""
         path = tmp_path / "variants.html"
         path.write_text(
@@ -158,11 +158,11 @@ class TestReadChapters:
         with pytest.raises(ChaptersNotReadableError, match="not found"):
             read_chapters(tmp_path / "nope.html")
 
-    def test_non_ffn_dl_html_raises(self, tmp_path):
-        """A random HTML file with no ffn-dl chapter markup can't merge."""
+    def test_non_ficary_html_raises(self, tmp_path):
+        """A random HTML file with no ficary chapter markup can't merge."""
         path = tmp_path / "foreign.html"
         path.write_text(
-            "<html><body><h1>Not an ffn-dl file</h1>"
+            "<html><body><h1>Not an ficary file</h1>"
             "<p>Just some text.</p></body></html>"
         )
         with pytest.raises(ChaptersNotReadableError, match="chapter blocks"):
@@ -209,7 +209,7 @@ class TestReadChapters:
         """Chapter bodies containing nested ``<div>`` blocks (authors
         often wrap scene breaks or notes in divs) must not confuse the
         block terminator — the regex anchors on ``</div><hr>``, which
-        only appears at the *outer* chapter boundary in ffn-dl output.
+        only appears at the *outer* chapter boundary in ficary output.
         """
         s = Story(
             id=1, title="T", author="A", summary="S",
@@ -252,9 +252,9 @@ class TestV2416FinalAuditFixes:
         The reader used to slice from after ``<h2>`` to end-of-string,
         keeping the trailing ``</body></html>`` as part of body_html
         — corrupting the round-tripped EPUB on re-export."""
-        from ffn_dl.exporters import export_epub
-        from ffn_dl.models import Chapter, Story
-        from ffn_dl.updater import read_chapters
+        from ficary.exporters import export_epub
+        from ficary.models import Chapter, Story
+        from ficary.updater import read_chapters
 
         s = Story(
             id=1, title="T", author="A", summary="S",
@@ -275,9 +275,9 @@ class TestV2416FinalAuditFixes:
         the FIRST such pair, so author prose containing ``</div><hr>``
         mid-body (rare but real on AO3 cross-posts) silently truncated.
         The lookahead forces a real chapter-boundary anchor."""
-        from ffn_dl.exporters import export_html
-        from ffn_dl.models import Chapter, Story
-        from ffn_dl.updater import read_chapters
+        from ficary.exporters import export_html
+        from ficary.models import Chapter, Story
+        from ficary.updater import read_chapters
 
         # The chapter body itself contains a stray ``</div><hr>`` — the
         # exporter writes it verbatim. The reader must NOT take that as
@@ -307,11 +307,11 @@ class TestV2416FinalAuditFixes:
         not silence the rest of the watchlist by raising out of
         ``run_once``."""
         import time
-        from ffn_dl.watchlist import (
+        from ficary.watchlist import (
             Watch, WatchlistStore, PollResult, run_once,
             WATCH_TYPE_STORY,
         )
-        from ffn_dl.notifications import Notification
+        from ficary.notifications import Notification
 
         store = WatchlistStore(tmp_path / "watchlist.json")
         w1 = Watch(

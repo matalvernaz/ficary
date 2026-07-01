@@ -9,7 +9,7 @@ from collections import Counter
 
 import pytest
 
-from ffn_dl.tts import (
+from ficary.tts import (
     _apply_pronunciation_map,
     _guess_gender_from_name,
     _load_pronunciation_map,

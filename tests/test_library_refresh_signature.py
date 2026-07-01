@@ -21,8 +21,8 @@ from __future__ import annotations
 import ast
 import inspect
 
-import ffn_dl.cli as cli_module
-from ffn_dl.library.refresh import default_refresh_args
+import ficary.cli as cli_module
+from ficary.library.refresh import default_refresh_args
 
 
 def _attrs_read_from(func_obj) -> set[str]:

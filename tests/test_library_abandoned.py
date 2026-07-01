@@ -2,11 +2,11 @@
 
 Covers the three public operations:
 
-* :func:`ffn_dl.library.mark_abandoned` — auto-sweep criteria
+* :func:`ficary.library.mark_abandoned` — auto-sweep criteria
   (WIP + stale mtime) and the sticky-marking invariant.
-* :func:`ffn_dl.library.revive_abandoned` — single-URL and whole-
+* :func:`ficary.library.revive_abandoned` — single-URL and whole-
   root clears.
-* :func:`ffn_dl.library.list_abandoned` — the read-back surface
+* :func:`ficary.library.list_abandoned` — the read-back surface
   the CLI and GUI both render.
 
 Plus the integration with ``build_refresh_queue`` (abandoned
@@ -21,16 +21,16 @@ from pathlib import Path
 
 import pytest
 
-from ffn_dl.library import (
+from ficary.library import (
     list_abandoned,
     mark_abandoned,
     revive_abandoned,
 )
-from ffn_dl.library.index import LibraryIndex
-from ffn_dl.library.refresh import build_refresh_queue
-from ffn_dl.library.scanner import scan
+from ficary.library.index import LibraryIndex
+from ficary.library.refresh import build_refresh_queue
+from ficary.library.scanner import scan
 
-from .library_fixtures import ffndl_epub
+from .library_fixtures import ficary_epub
 
 
 def _idx_path(tmp_path: Path) -> Path:
@@ -52,7 +52,7 @@ def _age_file(path: Path, days: float) -> None:
 def test_mark_abandoned_marks_stale_wip(tmp_path: Path):
     lib = tmp_path / "lib"
     lib.mkdir()
-    path = ffndl_epub(
+    path = ficary_epub(
         lib, title="Stale WIP",
         url="https://www.fanfiction.net/s/1/1/",
         status="In-Progress",
@@ -79,7 +79,7 @@ def test_mark_abandoned_leaves_complete_alone(tmp_path: Path):
     mark finished fics as abandoned."""
     lib = tmp_path / "lib"
     lib.mkdir()
-    path = ffndl_epub(
+    path = ficary_epub(
         lib, title="Old Complete",
         url="https://www.fanfiction.net/s/2/1/",
         status="Complete",
@@ -99,7 +99,7 @@ def test_mark_abandoned_leaves_fresh_wip_alone(tmp_path: Path):
     downloads."""
     lib = tmp_path / "lib"
     lib.mkdir()
-    ffndl_epub(
+    ficary_epub(
         lib, title="Fresh WIP",
         url="https://www.fanfiction.net/s/3/1/",
         status="In-Progress",
@@ -120,7 +120,7 @@ def test_mark_abandoned_sticky_does_not_rewrite(tmp_path: Path):
     user has for "when did I declare this dead"."""
     lib = tmp_path / "lib"
     lib.mkdir()
-    path = ffndl_epub(
+    path = ficary_epub(
         lib, title="Sticky",
         url="https://www.fanfiction.net/s/4/1/",
         status="In-Progress",
@@ -162,7 +162,7 @@ def test_mark_abandoned_rejects_non_positive_days(tmp_path: Path):
 def test_revive_abandoned_single_url(tmp_path: Path):
     lib = tmp_path / "lib"
     lib.mkdir()
-    path = ffndl_epub(
+    path = ficary_epub(
         lib, title="Back from dead",
         url="https://www.fanfiction.net/s/10/1/",
         status="In-Progress",
@@ -190,7 +190,7 @@ def test_revive_abandoned_all_in_root(tmp_path: Path):
     lib = tmp_path / "lib"
     lib.mkdir()
     for n in (20, 21, 22):
-        p = ffndl_epub(
+        p = ficary_epub(
             lib, title=f"WIP {n}",
             url=f"https://www.fanfiction.net/s/{n}/1/",
             status="In-Progress",
@@ -218,7 +218,7 @@ def test_revive_abandoned_missing_url_is_reported(tmp_path: Path):
     effect, rather than silently succeeding."""
     lib = tmp_path / "lib"
     lib.mkdir()
-    ffndl_epub(
+    ficary_epub(
         lib, title="Only story",
         url="https://www.fanfiction.net/s/30/1/",
     )
@@ -238,7 +238,7 @@ def test_list_abandoned_sorted_newest_first(tmp_path: Path):
     lib = tmp_path / "lib"
     lib.mkdir()
     for n in (40, 41):
-        p = ffndl_epub(
+        p = ficary_epub(
             lib, title=f"Dead WIP {n}",
             url=f"https://www.fanfiction.net/s/{n}/1/",
             status="In-Progress",
@@ -280,7 +280,7 @@ def test_list_abandoned_empty_library(tmp_path: Path):
 def test_refresh_queue_skips_abandoned_entries(tmp_path: Path):
     lib = tmp_path / "lib"
     lib.mkdir()
-    path = ffndl_epub(
+    path = ficary_epub(
         lib, title="Dead",
         url="https://www.fanfiction.net/s/50/1/",
         status="In-Progress",
@@ -308,7 +308,7 @@ def test_refresh_queue_honours_skip_abandoned_false(tmp_path: Path):
     still land in the probe queue."""
     lib = tmp_path / "lib"
     lib.mkdir()
-    path = ffndl_epub(
+    path = ficary_epub(
         lib, title="Forced recheck",
         url="https://www.fanfiction.net/s/51/1/",
         status="In-Progress",
@@ -333,7 +333,7 @@ def test_refresh_queue_honours_skip_abandoned_false(tmp_path: Path):
 def test_scan_auto_marks_when_threshold_given(tmp_path: Path):
     lib = tmp_path / "lib"
     lib.mkdir()
-    path = ffndl_epub(
+    path = ficary_epub(
         lib, title="Aged WIP",
         url="https://www.fanfiction.net/s/60/1/",
         status="In-Progress",
@@ -357,7 +357,7 @@ def test_scan_does_not_mark_when_threshold_zero(tmp_path: Path):
     to override a user's prefs for one specific scan."""
     lib = tmp_path / "lib"
     lib.mkdir()
-    path = ffndl_epub(
+    path = ficary_epub(
         lib, title="Not swept",
         url="https://www.fanfiction.net/s/61/1/",
         status="In-Progress",
@@ -376,21 +376,21 @@ def test_scan_reads_pref_when_no_override(tmp_path: Path, monkeypatch):
     """With ``abandoned_after_days=None`` (default), the sweep
     threshold comes from user prefs. Scanner must call Prefs()
     lazily so headless tests can inject a fake."""
-    from ffn_dl.library import scanner as _scanner
+    from ficary.library import scanner as _scanner
 
     class _FakePrefs:
         def get(self, key, default=None):
             return "365"
 
     monkeypatch.setattr(
-        "ffn_dl.prefs.Prefs", _FakePrefs, raising=False,
+        "ficary.prefs.Prefs", _FakePrefs, raising=False,
     )
     # The resolver imports Prefs lazily; monkeypatch the attribute
     # on the prefs module so the scanner's own import sees the fake.
 
     lib = tmp_path / "lib"
     lib.mkdir()
-    path = ffndl_epub(
+    path = ficary_epub(
         lib, title="Pref-driven",
         url="https://www.fanfiction.net/s/62/1/",
         status="In-Progress",

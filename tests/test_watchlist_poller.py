@@ -11,13 +11,13 @@ from __future__ import annotations
 
 import pytest
 
-from ffn_dl import prefs as _p
-from ffn_dl.watchlist import MIN_POLL_INTERVAL_S
-from ffn_dl.watchlist_poller import WatchlistPoller
+from ficary import prefs as _p
+from ficary.watchlist import MIN_POLL_INTERVAL_S
+from ficary.watchlist_poller import WatchlistPoller
 
 
 class _FakePrefs:
-    """In-memory stand-in for :class:`ffn_dl.prefs.Prefs`."""
+    """In-memory stand-in for :class:`ficary.prefs.Prefs`."""
 
     def __init__(self, values=None):
         self._values = dict(values or {})

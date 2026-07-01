@@ -6,7 +6,7 @@ from unittest import mock
 
 import pytest
 
-from ffn_dl import portable
+from ficary import portable
 
 
 @pytest.fixture(autouse=True)
@@ -24,12 +24,12 @@ def test_not_frozen_uses_home_dotdir(monkeypatch, tmp_path):
     monkeypatch.setattr(portable, "is_frozen", lambda: False)
     monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
     root = portable.portable_root()
-    assert root == tmp_path / ".ffn-dl"
+    assert root == tmp_path / ".ficary"
     assert root.exists()
 
 
 def test_frozen_writable_exe_dir_wins(monkeypatch, tmp_path):
-    exe_dir = tmp_path / "ffn-dl"
+    exe_dir = tmp_path / "ficary"
     exe_dir.mkdir()
     monkeypatch.setattr(portable, "is_frozen", lambda: True)
     monkeypatch.setattr(portable, "_exe_dir", lambda: exe_dir)
@@ -41,8 +41,8 @@ def test_frozen_system_protected_exe_falls_back(monkeypatch, tmp_path):
     """If the exe dir is inside a Windows system-protected root (e.g.
     Program Files), fall back to %LOCALAPPDATA% so the app can still
     save settings."""
-    fake_exe_dir = tmp_path / "program-files" / "ffn-dl"
-    fallback = tmp_path / "local-appdata" / "ffn-dl"
+    fake_exe_dir = tmp_path / "program-files" / "ficary"
+    fallback = tmp_path / "local-appdata" / "ficary"
 
     monkeypatch.setattr(portable, "is_frozen", lambda: True)
     monkeypatch.setattr(portable, "_exe_dir", lambda: fake_exe_dir)
@@ -61,11 +61,11 @@ def test_frozen_ordinary_location_never_falls_back(monkeypatch, tmp_path):
     """Regression: a portable install in Downloads/Desktop/Tools must
     always use the exe dir, even if a write probe would transiently
     fail (AV scan, OneDrive sync, post-update handle residue). Silent
-    fallback created a ghost %LOCALAPPDATA%\\ffn-dl\\ folder next to
+    fallback created a ghost %LOCALAPPDATA%\\ficary\\ folder next to
     the real install — we no longer probe, we check the path."""
-    exe_dir = tmp_path / "Downloads" / "ffn-dl"
+    exe_dir = tmp_path / "Downloads" / "ficary"
     exe_dir.mkdir(parents=True)
-    fallback = tmp_path / "local-appdata" / "ffn-dl"
+    fallback = tmp_path / "local-appdata" / "ficary"
 
     monkeypatch.setattr(portable, "is_frozen", lambda: True)
     monkeypatch.setattr(portable, "_exe_dir", lambda: exe_dir)

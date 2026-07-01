@@ -2,7 +2,7 @@
 
 import pytest
 
-from ffn_dl.models import chapter_in_spec, parse_chapter_spec
+from ficary.models import chapter_in_spec, parse_chapter_spec
 
 
 class TestParseChapterSpec:

@@ -5,8 +5,8 @@ from unittest import mock
 
 import pytest
 
-from ffn_dl import attribution
-from ffn_dl.tts import (
+from ficary import attribution
+from ficary.tts import (
     Segment,
     _combine_rate,
     _rate_str,
@@ -421,7 +421,7 @@ def test_install_command_none_when_frozen(monkeypatch):
 
 def test_install_unsupported_reason_none_on_windows_frozen(monkeypatch):
     """On Windows-frozen, install is supported via neural_env — no reason to refuse."""
-    from ffn_dl import neural_env
+    from ficary import neural_env
 
     monkeypatch.setattr(attribution, "_is_frozen", lambda: True)
     monkeypatch.setattr(neural_env, "is_supported", lambda: True)
@@ -433,7 +433,7 @@ def test_install_unsupported_reason_non_windows_frozen(monkeypatch):
     """If we ever ship a frozen build on a platform neural_env doesn't
     handle, install() must refuse with an explanation instead of
     silently no-opping."""
-    from ffn_dl import neural_env
+    from ficary import neural_env
 
     monkeypatch.setattr(attribution, "_is_frozen", lambda: True)
     monkeypatch.setattr(neural_env, "is_supported", lambda: False)
@@ -445,7 +445,7 @@ def test_install_routes_through_neural_env_when_frozen(monkeypatch):
     """Frozen install() must NOT Popen sys.executable — it must call
     neural_env.pip_install with the backend's pip_name and the
     CPU-torch extra-index-url so it doesn't pull 2.5 GB of CUDA."""
-    from ffn_dl import neural_env
+    from ficary import neural_env
 
     monkeypatch.setattr(attribution, "_is_frozen", lambda: True)
     monkeypatch.setattr(neural_env, "is_supported", lambda: True)
@@ -778,7 +778,7 @@ def test_install_reactivates_deps_dir_after_pip_install(monkeypatch):
     post-install _ensure_spacy_model can't see the model it just
     downloaded. install() must re-run activate() after pip_install
     succeeds."""
-    from ffn_dl import neural_env
+    from ficary import neural_env
 
     monkeypatch.setattr(attribution, "_is_frozen", lambda: True)
     monkeypatch.setattr(neural_env, "is_supported", lambda: True)

@@ -1,6 +1,6 @@
 """Tests for the LLM author's-note backstop on the export pipeline.
 
-These exercise :func:`ffn_dl.exporters.strip_an_via_llm` end-to-end
+These exercise :func:`ficary.exporters.strip_an_via_llm` end-to-end
 with the underlying ``attribution._llm_call`` stubbed out, so we
 never make a real network round-trip during testing. The stub lets
 us:
@@ -22,7 +22,7 @@ from pathlib import Path
 
 import pytest
 
-from ffn_dl import attribution, exporters
+from ficary import attribution, exporters
 
 
 # ── Test helpers ──────────────────────────────────────────────────
@@ -31,7 +31,7 @@ from ffn_dl import attribution, exporters
 def _isolate_cache_dir(monkeypatch, tmp_path):
     """Point the LLM cache helper at ``tmp_path`` so each test gets a
     fresh slate. The production helper falls through ``portable``
-    detection then uses ``~/.cache/ffn-dl/llm_an``; substituting the
+    detection then uses ``~/.cache/ficary/llm_an``; substituting the
     base directory keeps tests hermetic without monkeypatching the
     portable module."""
     cache_root = tmp_path / "llm_an"
@@ -103,7 +103,7 @@ def _cloud_llm_config():
 class TestParseAnResponseSchemas:
     """Real LLMs return creative JSON shapes ignoring the documented
     ``{"1": true}`` schema. Each test below pins one of the shapes
-    seen in real ffn-dl logs (qwen2.5:7b, gpt-4o-mini, llama3.1)
+    seen in real ficary logs (qwen2.5:7b, gpt-4o-mini, llama3.1)
     against the same set of three input paragraphs where indices
     0 and 2 are the A/Ns. The parser must extract those two indices
     no matter which shape the model picks."""
@@ -212,7 +212,7 @@ class TestParseAnResponseSchemas:
 
     def test_qwen_scene_summary_schema_returns_empty(self):
         # Real qwen2.5:14b reply on the FFN founders'-vault fic
-        # (2026-04-26 ffn-dl.log:1342). The model ignored the prompt
+        # (2026-04-26 ficary.log:1342). The model ignored the prompt
         # entirely and produced a scene-summary keyed by quoted
         # dialogue snippets with ``{speaker, response, description}``
         # sub-objects. None of the keys parse as paragraph numbers,
@@ -575,7 +575,7 @@ class TestStripAnViaLlmSinglePass:
     ):
         """Every line the user sees in the GUI status pane is also
         written to the file logger — without this, a postmortem of
-        ffn-dl.log can't tell what the LLM A/N pass actually did."""
+        ficary.log can't tell what the LLM A/N pass actually did."""
         import logging as _logging
         _isolate_cache_dir(monkeypatch, tmp_path)
         html = (
@@ -585,7 +585,7 @@ class TestStripAnViaLlmSinglePass:
         _stub_llm(monkeypatch, [
             json.dumps({"1": False, "2": False, "3": False, "4": True}),
         ])
-        with caplog.at_level(_logging.INFO, logger="ffn_dl.exporters"):
+        with caplog.at_level(_logging.INFO, logger="ficary.exporters"):
             exporters.strip_an_via_llm(
                 html, llm_config=_llm_config(),
                 site_name="ffn", story_id=5, chapter_number=4,
@@ -1259,7 +1259,7 @@ class TestClassifyAuthorsNotesBatching:
         # chapter-loop circuit breaker can disable the LLM for the
         # rest of the run; we don't want each subsequent batch
         # spamming the same connection-refused warning.
-        from ffn_dl.attribution import LLMUnavailable
+        from ficary.attribution import LLMUnavailable
         b = attribution._AN_BATCH_SIZE
         n = b + 5
 
@@ -1292,7 +1292,7 @@ class TestExportLoopCircuitBreaker:
     remaining chapters in that download."""
 
     def _multi_chapter_story(self, n: int):
-        from ffn_dl.models import Chapter, Story
+        from ficary.models import Chapter, Story
         s = Story(
             id=1,
             title="T",
@@ -1446,7 +1446,7 @@ class TestExportLoopTimeoutThreshold:
     consecutive timeouts."""
 
     def _multi_chapter_story(self, n: int):
-        from ffn_dl.models import Chapter, Story
+        from ficary.models import Chapter, Story
         s = Story(
             id=1,
             title="T",
@@ -1616,7 +1616,7 @@ class TestExportLoopTimeoutThreshold:
 
 
 class TestLlmRequestTimeoutEnvOverride:
-    """``FFN_DL_LLM_TIMEOUT_S`` lets users on slow hardware extend the
+    """``FICARY_LLM_TIMEOUT_S`` lets users on slow hardware extend the
     per-request deadline without editing source. The default 300s is
     sized for a 14B model on CPU, but a *long* chapter on the same
     hardware can still time out — bumping to 600 or 900 fixes those
@@ -1625,31 +1625,31 @@ class TestLlmRequestTimeoutEnvOverride:
     non-blocking, which would break every call)."""
 
     def test_unset_returns_default(self, monkeypatch):
-        monkeypatch.delenv("FFN_DL_LLM_TIMEOUT_S", raising=False)
+        monkeypatch.delenv("FICARY_LLM_TIMEOUT_S", raising=False)
         assert (
             attribution._llm_request_timeout_s()
             == attribution._LLM_REQUEST_TIMEOUT_DEFAULT_S
         )
 
     def test_blank_returns_default(self, monkeypatch):
-        monkeypatch.setenv("FFN_DL_LLM_TIMEOUT_S", "   ")
+        monkeypatch.setenv("FICARY_LLM_TIMEOUT_S", "   ")
         assert (
             attribution._llm_request_timeout_s()
             == attribution._LLM_REQUEST_TIMEOUT_DEFAULT_S
         )
 
     def test_positive_int_overrides(self, monkeypatch):
-        monkeypatch.setenv("FFN_DL_LLM_TIMEOUT_S", "900")
+        monkeypatch.setenv("FICARY_LLM_TIMEOUT_S", "900")
         assert attribution._llm_request_timeout_s() == 900
 
     def test_positive_float_truncates_to_int(self, monkeypatch):
         # urllib.request.urlopen accepts floats, but staying int keeps
         # log lines tidy and matches every other timeout in the file.
-        monkeypatch.setenv("FFN_DL_LLM_TIMEOUT_S", "450.7")
+        monkeypatch.setenv("FICARY_LLM_TIMEOUT_S", "450.7")
         assert attribution._llm_request_timeout_s() == 450
 
     def test_non_numeric_falls_back(self, monkeypatch):
-        monkeypatch.setenv("FFN_DL_LLM_TIMEOUT_S", "forever")
+        monkeypatch.setenv("FICARY_LLM_TIMEOUT_S", "forever")
         assert (
             attribution._llm_request_timeout_s()
             == attribution._LLM_REQUEST_TIMEOUT_DEFAULT_S
@@ -1659,14 +1659,14 @@ class TestLlmRequestTimeoutEnvOverride:
         # Zero or negative would either disable timeouts (urllib's
         # non-blocking mode) or raise — neither matches "longer
         # deadline", so we ignore the value.
-        monkeypatch.setenv("FFN_DL_LLM_TIMEOUT_S", "0")
+        monkeypatch.setenv("FICARY_LLM_TIMEOUT_S", "0")
         assert (
             attribution._llm_request_timeout_s()
             == attribution._LLM_REQUEST_TIMEOUT_DEFAULT_S
         )
 
     def test_negative_falls_back(self, monkeypatch):
-        monkeypatch.setenv("FFN_DL_LLM_TIMEOUT_S", "-30")
+        monkeypatch.setenv("FICARY_LLM_TIMEOUT_S", "-30")
         assert (
             attribution._llm_request_timeout_s()
             == attribution._LLM_REQUEST_TIMEOUT_DEFAULT_S
@@ -1691,7 +1691,7 @@ class TestLlmRequestTimeoutEnvOverride:
             seen["timeout"] = timeout
             return _Resp()
 
-        monkeypatch.setenv("FFN_DL_LLM_TIMEOUT_S", "777")
+        monkeypatch.setenv("FICARY_LLM_TIMEOUT_S", "777")
         monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
         attribution._llm_call(
             provider="ollama", model="m", api_key="",
@@ -1709,25 +1709,25 @@ class TestLlmRequestTimeoutOverride:
     frozen .exe."""
 
     def test_override_beats_env(self, monkeypatch):
-        monkeypatch.setenv("FFN_DL_LLM_TIMEOUT_S", "450")
+        monkeypatch.setenv("FICARY_LLM_TIMEOUT_S", "450")
         assert attribution._llm_request_timeout_s(900) == 900
 
     def test_override_zero_falls_through_to_env(self, monkeypatch):
         # 0 is the dialog's "no override" sentinel — must NOT be
         # treated as "0-second timeout" (which urllib reads as
         # non-blocking and would break every call).
-        monkeypatch.setenv("FFN_DL_LLM_TIMEOUT_S", "450")
+        monkeypatch.setenv("FICARY_LLM_TIMEOUT_S", "450")
         assert attribution._llm_request_timeout_s(0) == 450
 
     def test_override_negative_falls_through_to_default(self, monkeypatch):
-        monkeypatch.delenv("FFN_DL_LLM_TIMEOUT_S", raising=False)
+        monkeypatch.delenv("FICARY_LLM_TIMEOUT_S", raising=False)
         assert (
             attribution._llm_request_timeout_s(-30)
             == attribution._LLM_REQUEST_TIMEOUT_DEFAULT_S
         )
 
     def test_override_non_numeric_falls_through(self, monkeypatch):
-        monkeypatch.delenv("FFN_DL_LLM_TIMEOUT_S", raising=False)
+        monkeypatch.delenv("FICARY_LLM_TIMEOUT_S", raising=False)
         assert (
             attribution._llm_request_timeout_s("forever")
             == attribution._LLM_REQUEST_TIMEOUT_DEFAULT_S
@@ -1753,7 +1753,7 @@ class TestLlmRequestTimeoutOverride:
             seen["timeout"] = timeout
             return _Resp()
 
-        monkeypatch.delenv("FFN_DL_LLM_TIMEOUT_S", raising=False)
+        monkeypatch.delenv("FICARY_LLM_TIMEOUT_S", raising=False)
         monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
         attribution.classify_authors_notes_via_llm(
             ["only paragraph"],

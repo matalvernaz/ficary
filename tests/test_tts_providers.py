@@ -1,6 +1,6 @@
 """Offline tests for the multi-provider TTS layer.
 
-The provider abstraction (``ffn_dl/tts_providers/``) ships two
+The provider abstraction (``ficary/tts_providers/``) ships two
 backends: edge-tts (cloud, the legacy default) and Piper (local ONNX,
 lazy model download). These tests run without either being installed
 on the host — every external dependency is monkeypatched to a stub.
@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from ffn_dl import accent_map, character_profile, tts_providers
+from ficary import accent_map, character_profile, tts_providers
 
 
 # ── Voice id namespacing / parsing ────────────────────────────────
@@ -208,7 +208,7 @@ def _seed_pool_test_catalog(monkeypatch):
 
 
 def test_build_voice_pool_filters_by_accent_and_gender(monkeypatch):
-    from ffn_dl.tts import _build_voice_pool
+    from ficary.tts import _build_voice_pool
 
     _seed_pool_test_catalog(monkeypatch)
     pool = _build_voice_pool(
@@ -224,7 +224,7 @@ def test_build_voice_pool_filters_by_accent_and_gender(monkeypatch):
 
 
 def test_build_voice_pool_falls_back_when_accent_has_no_matches(monkeypatch):
-    from ffn_dl.tts import _build_voice_pool
+    from ficary.tts import _build_voice_pool
 
     _seed_pool_test_catalog(monkeypatch)
     pool = _build_voice_pool(
@@ -242,7 +242,7 @@ def test_build_voice_pool_falls_back_when_accent_has_no_matches(monkeypatch):
 
 
 def test_build_voice_pool_uses_profile_accent_when_no_explicit_accent(monkeypatch):
-    from ffn_dl.tts import _build_voice_pool
+    from ficary.tts import _build_voice_pool
 
     _seed_pool_test_catalog(monkeypatch)
     pool = _build_voice_pool(
@@ -259,7 +259,7 @@ def test_build_voice_pool_uses_profile_accent_when_no_explicit_accent(monkeypatc
 
 
 def test_build_voice_pool_excludes_narrator_voice(monkeypatch):
-    from ffn_dl.tts import _build_voice_pool
+    from ficary.tts import _build_voice_pool
 
     _seed_pool_test_catalog(monkeypatch)
     pool = _build_voice_pool(
@@ -284,7 +284,7 @@ def test_build_voice_pool_excludes_narrator_voice(monkeypatch):
 
 
 def test_build_voice_pool_respects_enabled_providers(monkeypatch):
-    from ffn_dl.tts import _build_voice_pool
+    from ficary.tts import _build_voice_pool
 
     _seed_pool_test_catalog(monkeypatch)
     pool = _build_voice_pool(
@@ -302,7 +302,7 @@ def test_voice_mapper_legacy_bare_names_get_namespaced(tmp_path):
     """A pre-2.2.0 voice map JSON has bare ``"en-US-AvaNeural"`` keys.
     Loading must auto-namespace them to ``edge:en-US-AvaNeural`` so
     the provider dispatcher can resolve them."""
-    from ffn_dl.tts import VoiceMapper
+    from ficary.tts import VoiceMapper
 
     map_path = tmp_path / "voices.json"
     map_path.write_text('{"Harry": "en-US-Christopher"}', encoding="utf-8")
@@ -311,7 +311,7 @@ def test_voice_mapper_legacy_bare_names_get_namespaced(tmp_path):
 
 
 def test_voice_mapper_set_voice_pool_rotates(tmp_path):
-    from ffn_dl.tts import VoiceMapper
+    from ficary.tts import VoiceMapper
 
     mapper = VoiceMapper(tmp_path / "voices.json")
     mapper.set_voice_pool({
@@ -322,7 +322,7 @@ def test_voice_mapper_set_voice_pool_rotates(tmp_path):
 
 
 def test_voice_mapper_get_returns_namespaced_narrator(tmp_path):
-    from ffn_dl.tts import VoiceMapper, NARRATOR_VOICE
+    from ficary.tts import VoiceMapper, NARRATOR_VOICE
 
     mapper = VoiceMapper(tmp_path / "voices.json")
     # Unmapped name falls through to narrator, namespaced.
@@ -381,7 +381,7 @@ def test_derive_accents_skips_any():
 
 
 def test_classify_authors_notes_via_llm_returns_empty_with_no_config():
-    from ffn_dl import attribution
+    from ficary import attribution
 
     out = attribution.classify_authors_notes_via_llm(
         ["A paragraph."], llm_config=None,
@@ -390,7 +390,7 @@ def test_classify_authors_notes_via_llm_returns_empty_with_no_config():
 
 
 def test_classify_authors_notes_via_llm_parses_flags(monkeypatch):
-    from ffn_dl import attribution
+    from ficary import attribution
 
     monkeypatch.setattr(
         attribution, "_llm_call",
@@ -405,7 +405,7 @@ def test_classify_authors_notes_via_llm_parses_flags(monkeypatch):
 
 
 def test_classify_authors_notes_via_llm_ignores_out_of_range(monkeypatch):
-    from ffn_dl import attribution
+    from ficary import attribution
 
     monkeypatch.setattr(
         attribution, "_llm_call",
@@ -425,7 +425,7 @@ def test_piper_provider_lists_full_manifest(monkeypatch):
     """Piper.list_voices reflects the curated manifest regardless of
     whether any voice file is on disk — the catalog drives the GUI's
     "click Install to download" surface."""
-    from ffn_dl.tts_providers import piper as _piper
+    from ficary.tts_providers import piper as _piper
 
     provider = _piper.PiperProvider()
     voices = provider.list_voices()
@@ -437,7 +437,7 @@ def test_piper_provider_lists_full_manifest(monkeypatch):
 
 
 def test_piper_voice_files_paths_match_short_name(tmp_path, monkeypatch):
-    from ffn_dl.tts_providers import piper as _piper
+    from ficary.tts_providers import piper as _piper
 
     monkeypatch.setattr(_piper, "piper_models_dir", lambda: tmp_path)
     onnx, cfg = _piper._voice_files("en_GB-alan-medium")
@@ -446,7 +446,7 @@ def test_piper_voice_files_paths_match_short_name(tmp_path, monkeypatch):
 
 
 def test_piper_voice_is_downloaded_requires_both_files(tmp_path, monkeypatch):
-    from ffn_dl.tts_providers import piper as _piper
+    from ficary.tts_providers import piper as _piper
 
     monkeypatch.setattr(_piper, "piper_models_dir", lambda: tmp_path)
     short = "en_GB-alan-medium"
@@ -503,7 +503,7 @@ def test_analyze_story_via_llm_parses_combined_reply(monkeypatch):
     """One round-trip should yield profiles + pronunciations +
     narrator from a single JSON object, each section running through
     the same normalisers as the legacy split helpers."""
-    from ffn_dl import attribution
+    from ficary import attribution
 
     captured: dict = {}
 
@@ -538,7 +538,7 @@ def test_analyze_story_via_llm_parses_combined_reply(monkeypatch):
 
 
 def test_analyze_story_via_llm_returns_empty_shape_on_garbage(monkeypatch):
-    from ffn_dl import attribution
+    from ficary import attribution
 
     monkeypatch.setattr(
         attribution, "_llm_call", lambda **_kw: "not json",
@@ -553,7 +553,7 @@ def test_analyze_story_via_llm_returns_empty_shape_on_garbage(monkeypatch):
 
 
 def test_analyze_story_via_llm_returns_empty_shape_on_transport_error(monkeypatch):
-    from ffn_dl import attribution
+    from ficary import attribution
 
     def boom(**_kw):
         raise RuntimeError("network down")
@@ -574,7 +574,7 @@ def test_analyze_story_via_llm_returns_empty_shape_on_transport_error(monkeypatc
 def test_model_limits_known_anthropic_models():
     """The lookup table drives Anthropic ``max_tokens`` budget.
     Sonnet 4.6 must report >4096 so big A/N batches don't truncate."""
-    from ffn_dl import attribution
+    from ficary import attribution
 
     _ctx, sonnet_out = attribution._model_limits("claude-sonnet-4-6")
     assert sonnet_out > 4096
@@ -583,7 +583,7 @@ def test_model_limits_known_anthropic_models():
 
 
 def test_model_limits_unknown_model_falls_back():
-    from ffn_dl import attribution
+    from ficary import attribution
 
     ctx, out = attribution._model_limits("some-random-future-model")
     assert ctx == attribution._DEFAULT_CONTEXT_TOKENS
@@ -591,7 +591,7 @@ def test_model_limits_unknown_model_falls_back():
 
 
 def test_max_output_tokens_for_model_floors_at_4096():
-    from ffn_dl import attribution
+    from ficary import attribution
 
     # Even an empty-string model must return a usable budget.
     assert attribution._max_output_tokens_for_model("") >= 4096
@@ -605,7 +605,7 @@ def test_max_output_tokens_for_model_floors_at_4096():
 
 
 def test_chunk_chars_for_provider_cloud_vs_local():
-    from ffn_dl import attribution
+    from ficary import attribution
 
     cloud = attribution._chunk_chars_for_provider("anthropic")
     local = attribution._chunk_chars_for_provider("ollama")
@@ -613,7 +613,7 @@ def test_chunk_chars_for_provider_cloud_vs_local():
 
 
 def test_an_batch_size_for_provider_cloud_vs_local():
-    from ffn_dl import attribution
+    from ficary import attribution
 
     cloud = attribution._an_batch_size_for_provider("openai")
     local = attribution._an_batch_size_for_provider("ollama")
@@ -624,7 +624,7 @@ def test_an_batch_size_for_provider_cloud_vs_local():
 
 
 def test_should_constrain_an_to_boundaries_only_for_ollama():
-    from ffn_dl import attribution
+    from ficary import attribution
 
     assert attribution.should_constrain_an_to_boundaries("ollama") is True
     assert attribution.should_constrain_an_to_boundaries("anthropic") is False
@@ -638,7 +638,7 @@ def test_constrain_an_to_boundaries_drops_mid_chapter_flags():
     """A 20-paragraph chapter has head=indices 0-2 and tail=indices
     14-19 under the 15%/30% windows. Mid-chapter flags (3..13) must
     be dropped; boundary flags must survive."""
-    from ffn_dl import attribution
+    from ficary import attribution
 
     flagged = {0, 1, 5, 7, 10, 14, 18}
     out = attribution.constrain_an_to_boundaries(flagged, 20)
@@ -647,7 +647,7 @@ def test_constrain_an_to_boundaries_drops_mid_chapter_flags():
 
 
 def test_constrain_an_to_boundaries_no_op_on_empty_or_short():
-    from ffn_dl import attribution
+    from ficary import attribution
 
     assert attribution.constrain_an_to_boundaries(set(), 50) == set()
     # n_paragraphs <= 0 — guard against pathological input.
@@ -656,7 +656,7 @@ def test_constrain_an_to_boundaries_no_op_on_empty_or_short():
 
 def test_constrain_an_to_boundaries_returns_new_set():
     """Mutation discipline — input set must not change."""
-    from ffn_dl import attribution
+    from ficary import attribution
 
     original = {0, 5, 18}
     out = attribution.constrain_an_to_boundaries(original, 20)
@@ -665,7 +665,7 @@ def test_constrain_an_to_boundaries_returns_new_set():
 
 
 def test_piper_length_scale_from_rate():
-    from ffn_dl.tts_providers import piper as _piper
+    from ficary.tts_providers import piper as _piper
 
     assert _piper._length_scale_from_rate(None) == 1.0
     # +20% rate → 0.8 length_scale (faster speech)

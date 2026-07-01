@@ -18,7 +18,7 @@ import json
 
 import pytest
 
-from ffn_dl import attribution, ollama_install
+from ficary import attribution, ollama_install
 
 
 # ── probe_llm_endpoint ────────────────────────────────────────────
@@ -803,7 +803,7 @@ class TestLlmProviderPrefKeys:
     provider's saved credentials."""
 
     def test_keys_for_each_supported_provider(self):
-        from ffn_dl.prefs import llm_provider_pref_keys
+        from ficary.prefs import llm_provider_pref_keys
         for provider in ("ollama", "openai", "anthropic"):
             model_k, api_k, ep_k = llm_provider_pref_keys(provider)
             assert model_k == f"llm_{provider}_model"
@@ -814,7 +814,7 @@ class TestLlmProviderPrefKeys:
         # ``openai-compatible`` must produce wx.Config-safe key
         # names — hyphens have no semantic meaning in pref keys, so
         # collapse to underscores.
-        from ffn_dl.prefs import llm_provider_pref_keys
+        from ficary.prefs import llm_provider_pref_keys
         keys = llm_provider_pref_keys("openai-compatible")
         assert keys == (
             "llm_openai_compatible_model",
@@ -823,14 +823,14 @@ class TestLlmProviderPrefKeys:
         )
 
     def test_uppercase_provider_lowercased(self):
-        from ffn_dl.prefs import llm_provider_pref_keys
+        from ficary.prefs import llm_provider_pref_keys
         keys = llm_provider_pref_keys("OpenAI")
         assert keys[0] == "llm_openai_model"
 
     def test_empty_provider_falls_back_to_default_slug(self):
         # Defensive: never produce the bare keys ``llm__model`` etc.
         # — those would collide across "no provider" instances.
-        from ffn_dl.prefs import llm_provider_pref_keys
+        from ficary.prefs import llm_provider_pref_keys
         keys = llm_provider_pref_keys("")
         assert keys == (
             "llm_default_model",
@@ -839,7 +839,7 @@ class TestLlmProviderPrefKeys:
         )
 
     def test_keys_are_distinct_across_providers(self):
-        from ffn_dl.prefs import llm_provider_pref_keys
+        from ficary.prefs import llm_provider_pref_keys
         all_keys = set()
         for provider in (
             "ollama", "openai", "anthropic", "openai-compatible",

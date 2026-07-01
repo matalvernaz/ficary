@@ -7,7 +7,7 @@ and fanfic authors invent a new divider glyph every Tuesday ("oOo",
 pipeline strips notes, drops an <hr/> into a pause, and normalises
 every text-based divider we've seen in the wild to the same pause.
 """
-from ffn_dl.tts import (
+from ficary.tts import (
     _html_to_audiobook_text,
     _is_scene_break_line,
     _segment_chapter_text,

@@ -19,7 +19,7 @@ from pathlib import Path
 
 import pytest
 
-from ffn_dl.erotica import (
+from ficary.erotica import (
     AFFScraper,
     ChyoaScraper,
     DarkWandererScraper,

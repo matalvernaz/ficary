@@ -7,13 +7,13 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from ffn_dl.library.mirrors import _bucket_by_title_prefix, normalise_title
+from ficary.library.mirrors import _bucket_by_title_prefix, normalise_title
 
 
 def _record(title: str, author: str = "Author", url: str = "https://a/1"):
     # Construct a minimal _StoryRecord-like duck. The bucket function
     # only reads ``title_norm``; the rest is unused for this test.
-    from ffn_dl.library.mirrors import StoryKey, _StoryRecord
+    from ficary.library.mirrors import StoryKey, _StoryRecord
 
     return _StoryRecord(
         key=StoryKey(root="/root", url=url),

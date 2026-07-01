@@ -54,12 +54,12 @@ def wx_app():
 def test_main_frame_constructs(wx_app):
     """MainFrame's __init__ wires every menu, toolbar, and bind in
     one shot — a regression that breaks any of those raises here."""
-    from ffn_dl import gui
+    from ficary import gui
 
     frame = gui.MainFrame()
     try:
         title = frame.GetTitle()
-        assert "ffn-dl" in title.lower()
+        assert "ficary" in title.lower()
 
         menubar = frame.GetMenuBar()
         assert menubar is not None
@@ -88,7 +88,7 @@ def test_merge_series_snapshot_roundtrips(wx_app):
     via the params snapshot — that snapshot is the only thing the series
     dispatch reads. Off by default so pasting a series URL keeps the
     existing one-file-per-part behavior until the user opts in."""
-    from ffn_dl.gui import MainFrame
+    from ficary.gui import MainFrame
 
     frame = MainFrame()
     try:
@@ -104,7 +104,7 @@ def test_show_update_dialog_helper_callable(wx_app):
     """``_show_update_dialog`` is the four-button update prompt
     introduced in 2.3.2. Confirms the helper survives import
     without actually showing the modal."""
-    from ffn_dl import gui
+    from ficary import gui
 
     assert callable(gui._show_update_dialog)
 
@@ -112,8 +112,8 @@ def test_show_update_dialog_helper_callable(wx_app):
 def test_search_frame_roundtrip(wx_app):
     """SearchFrame's constructor signature drifted away from its
     caller in past refactors — round-trip catches the next time."""
-    from ffn_dl.gui import MainFrame
-    from ffn_dl.gui_search import SearchFrame, _ffn_search_spec
+    from ficary.gui import MainFrame
+    from ficary.gui_search import SearchFrame, _ffn_search_spec
 
     frame = MainFrame()
     try:
@@ -125,8 +125,8 @@ def test_search_frame_roundtrip(wx_app):
 
 def test_watchlist_frame_roundtrip(wx_app):
     """WatchlistFrame opens and closes without firing the poller."""
-    from ffn_dl.gui import MainFrame
-    from ffn_dl.gui_watchlist import WatchlistFrame
+    from ficary.gui import MainFrame
+    from ficary.gui_watchlist import WatchlistFrame
 
     frame = MainFrame()
     try:
@@ -139,8 +139,8 @@ def test_watchlist_frame_roundtrip(wx_app):
 def test_library_frame_roundtrip(wx_app):
     """LibraryFrame's prefs argument is required — a refactor that
     flips to lazy ``self.prefs`` in MainFrame would break this."""
-    from ffn_dl.gui import MainFrame
-    from ffn_dl.library.gui import LibraryFrame
+    from ficary.gui import MainFrame
+    from ficary.library.gui import LibraryFrame
 
     frame = MainFrame()
     try:
@@ -160,7 +160,7 @@ def test_announce_label_updates_label_and_accessible_name(wx_app):
     We verify the public observable (``GetName()`` matches the new
     label after the call) rather than the MSAA event itself, which
     is platform-internal."""
-    from ffn_dl.gui import _announce_label
+    from ficary.gui import _announce_label
 
     frame = wx.Frame(None)
     try:
@@ -181,7 +181,7 @@ def test_idle_event_pumps_clean(wx_app):
     the recent-files list, log pane, etc. Pumping idle once flushes
     those handlers in a controlled context so we catch any crash
     here instead of in production."""
-    from ffn_dl.gui import MainFrame
+    from ficary.gui import MainFrame
 
     frame = MainFrame()
     try:
@@ -198,8 +198,8 @@ def test_add_from_url_list_dialog_constructs(wx_app):
     catches the class of regression where a Bind() targets a
     renamed handler — which on the GUI side never crashes the
     test suite, only production."""
-    from ffn_dl.gui import MainFrame
-    from ffn_dl.gui_dialogs import AddFromUrlListDialog
+    from ficary.gui import MainFrame
+    from ficary.gui_dialogs import AddFromUrlListDialog
 
     frame = MainFrame()
     try:

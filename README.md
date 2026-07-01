@@ -1,4 +1,4 @@
-# ffn-dl
+# Ficary
 
 Cross-platform fanfiction and original-fiction downloader. Exports as
 EPUB, HTML, plain text, or a chaptered M4B audiobook.
@@ -27,30 +27,30 @@ interactive TUI gotchas, usable from any screen-readable terminal.
 
 ### Windows (recommended)
 
-Download the latest `ffn-dl-portable.zip` from the
-[Releases page](https://github.com/matalvernaz/ffn-dl/releases). It's a
+Download the latest `ficary-portable.zip` from the
+[Releases page](https://github.com/matalvernaz/ficary/releases). It's a
 self-contained folder with its own Python, ffmpeg, and ffprobe bundled —
 no dependencies to install. The app auto-updates from GitHub when a new
 release is published.
 
 ### macOS (Apple Silicon)
 
-Download `ffn-dl-macos-arm64.tar.gz` from the Releases page, extract, and
-run `./ffn-dl/ffn-dl`. The binary is unsigned, so the first launch needs
+Download `ficary-macos-arm64.tar.gz` from the Releases page, extract, and
+run `./ficary/ficary`. The binary is unsigned, so the first launch needs
 right-click → Open (or **System Settings → Privacy & Security → Open
 Anyway**) to clear Gatekeeper.
 
 ### Linux (x86_64)
 
-Download `ffn-dl-linux-x86_64.tar.gz` from the Releases page, extract,
-and run `./ffn-dl/ffn-dl`. Built against GTK3 — any modern desktop Linux
+Download `ficary-linux-x86_64.tar.gz` from the Releases page, extract,
+and run `./ficary/ficary`. Built against GTK3 — any modern desktop Linux
 (Ubuntu 22.04+, Fedora 38+, Debian 12+) has the runtime libraries
 already installed.
 
 ### pip (any platform, dev)
 
 ```bash
-pip install "ffn-dl[all] @ git+https://github.com/matalvernaz/ffn-dl"
+pip install "ficary[all] @ git+https://github.com/matalvernaz/ficary"
 ```
 
 Extras are split so you only pull what you need:
@@ -72,12 +72,12 @@ Optional Features...** if you need it.
 
 ### GUI
 
-`ffn-dl` with no arguments launches the GUI — that's what
+`ficary` with no arguments launches the GUI — that's what
 double-clicking the desktop binary does. From a pip install:
 
 ```bash
-ffn-dl                    # no args → GUI
-python -m ffn_dl.gui      # explicit GUI launch
+ficary                    # no args → GUI
+python -m ficary.gui      # explicit GUI launch
 ```
 
 The main window is a download form. Search windows open from the
@@ -110,74 +110,74 @@ into the row label so every screen reader speaks it reliably.
 ```bash
 # Single story (URL or ID). URLs for any of the supported sites
 # work — the scraper is auto-selected from the URL.
-ffn-dl https://www.fanfiction.net/s/12345
-ffn-dl 12345
-ffn-dl https://www.literotica.com/s/example-story
-ffn-dl https://storiesonline.net/s/12345
+ficary https://www.fanfiction.net/s/12345
+ficary 12345
+ficary https://www.literotica.com/s/example-story
+ficary https://storiesonline.net/s/12345
 
 # Batch from a text file (one URL per line, mixed sites allowed)
-ffn-dl -b urls.txt
+ficary -b urls.txt
 
 # Pick format
-ffn-dl -f html  https://archiveofourown.org/works/1234
-ffn-dl -f audio https://www.royalroad.com/fiction/26727   # needs ffmpeg
+ficary -f html  https://archiveofourown.org/works/1234
+ficary -f audio https://www.royalroad.com/fiction/26727   # needs ffmpeg
 
 # All of an author's stories
-ffn-dl -a https://www.fanfiction.net/u/1234/Name
-ffn-dl -a https://archiveofourown.org/users/Name/works
+ficary -a https://www.fanfiction.net/u/1234/Name
+ficary -a https://archiveofourown.org/users/Name/works
 
 # AO3 series merged into a single file
-ffn-dl --merge-series https://archiveofourown.org/series/1234
+ficary --merge-series https://archiveofourown.org/series/1234
 
 # Search
-ffn-dl -s "time travel" --site ffn  --sort favorites
-ffn-dl -s "dungeon"      --site royalroad --rr-tags progression,magic
-ffn-dl --rr-list "rising stars"   # list browse — no query needed
-ffn-dl -s "werewolf"     --site literotica
+ficary -s "time travel" --site ffn  --sort favorites
+ficary -s "dungeon"      --site royalroad --rr-tags progression,magic
+ficary --rr-list "rising stars"   # list browse — no query needed
+ficary -s "werewolf"     --site literotica
 # (fan-out search across every erotica site is GUI-only — open the
 # Erotic Story Search window from the GUI search menu)
 
 # Update an existing export with new chapters
-ffn-dl -u "Path/To/Story.epub"
+ficary -u "Path/To/Story.epub"
 
 # Update a whole library folder (unchanged fics cost one HTTP probe)
-ffn-dl -U ~/Fanfic --recursive --skip-complete
+ficary -U ~/Fanfic --recursive --skip-complete
 
 # Partial downloads
-ffn-dl --chapters 1-5,10,50- https://...      # flexible ranges
+ficary --chapters 1-5,10,50- https://...      # flexible ranges
 
 # Send an EPUB to Kindle after download
-ffn-dl --send-to-kindle you@kindle.com https://...
+ficary --send-to-kindle you@kindle.com https://...
 ```
 
-`ffn-dl --help` has the full list.
+`ficary --help` has the full list.
 
 ## Library management
 
-Once you've scanned a directory of downloaded stories, ffn-dl tracks
+Once you've scanned a directory of downloaded stories, ficary tracks
 them in a library index and layers several tools on top.
 
 ```bash
 # One-time scan of a directory — identifies every story, records
 # metadata, bootstraps the library index.
-ffn-dl --scan-library ~/Fanfic
+ficary --scan-library ~/Fanfic
 
 # During scan: auto-mark WIPs (status != Complete) whose file
 # hasn't been touched in DAYS days as abandoned, so subsequent
 # --update-library runs skip them. Reads the
 # library_abandoned_after_days user pref by default; pass
 # --abandoned-after-days N to override, or 0 to disable.
-ffn-dl --scan-library ~/Fanfic --abandoned-after-days 730
+ficary --scan-library ~/Fanfic --abandoned-after-days 730
 
 # Review the abandoned list (scope with --library-dir)
-ffn-dl --list-abandoned
+ficary --list-abandoned
 
 # Revive one URL (the author posted again!) or all at once
-ffn-dl --revive-abandoned https://www.fanfiction.net/s/12345
-ffn-dl --revive-abandoned          # no URL = revive every marked story
+ficary --revive-abandoned https://www.fanfiction.net/s/12345
+ficary --revive-abandoned          # no URL = revive every marked story
 
 # Search by metadata (title / author / fandom / URL substring)
-ffn-dl --library-find "time travel"
+ficary --library-find "time travel"
 
 # Full-text search across every indexed chapter body. Uses SQLite
 # FTS5 syntax: prefix wildcards (dragon*), NEAR(a b), and boolean
@@ -185,28 +185,28 @@ ffn-dl --library-find "time travel"
 # --populate-search DIR; subsequent --update-library runs keep the
 # index warm. Stories downloaded via direct URL (not the library
 # update path) land in the text index on the next --populate-search.
-ffn-dl --populate-search ~/Fanfic
-ffn-dl --library-search "orphanage scene"
+ficary --populate-search ~/Fanfic
+ficary --library-search "orphanage scene"
 
 # Detect suspected cross-site mirror pairs (same story on FFN and
 # AO3, Literotica and StoriesOnline, etc.). Needs >=2 corroborating
 # signals (normalised title match, author match, first-chapter word
 # overlap) to flag a pair, so common titles don't produce false
 # positives. Read-only; never deletes.
-ffn-dl --find-mirrors ~/Fanfic
+ficary --find-mirrors ~/Fanfic
 
 # Hygiene: library doctor, watchlist doctor, cache doctor, or all
 # three at once. --heal applies safe fixes; the index is auto-
 # backed-up before destructive operations so --restore-index FILE
 # can roll back a bad heal.
-ffn-dl --doctor
-ffn-dl --doctor --heal
+ficary --doctor
+ficary --doctor --heal
 
 # Per-chapter silent-edit detection. Hash-based, so an author's
 # in-place typo fix shows up even though the chapter count didn't
 # change.
-ffn-dl --populate-hashes ~/Fanfic    # one-time bootstrap
-ffn-dl --scan-edits ~/Fanfic         # drift report
+ficary --populate-hashes ~/Fanfic    # one-time bootstrap
+ficary --scan-edits ~/Fanfic         # drift report
 ```
 
 ### Auto-sort and the Original Works folder
@@ -224,7 +224,7 @@ alongside the fandom folders.
 
 Upgrading from a 1.x install with an existing library?
 2.0.0 changes the auto-sort layout for FFN and Royal Road downloads —
-run `ffn-dl --reorganize ~/Fanfic --apply` to migrate your existing
+run `ficary --reorganize ~/Fanfic --apply` to migrate your existing
 files to match the new layout. The dry-run (without `--apply`) prints
 the proposed moves first.
 
@@ -242,9 +242,9 @@ the proposed moves first.
   Stubborn 403s can opt into `--cf-solve`, which launches a headless
   Chromium via Playwright, lets the challenge resolve, and injects
   the solved cookies into the scraper session. Solved cookies are
-  cached under `~/.cache/ffn-dl/cf-cookies/` (chmod 0600) for 24
+  cached under `~/.cache/ficary/cf-cookies/` (chmod 0600) for 24
   hours so later runs reuse them without re-launching the browser.
-- **Per-chapter caching** in `~/.cache/ffn-dl`, so interrupted downloads
+- **Per-chapter caching** in `~/.cache/ficary`, so interrupted downloads
   resume cheaply and update-mode only fetches what actually changed.
 - **Cover image cache** at 7-day TTL so re-exporting a long series
   doesn't re-download the same cover per part.
@@ -320,7 +320,7 @@ button in the GUI's audio toolbar.
 
 Voice ids are namespaced as `provider:short_name`
 (`edge:en-US-AvaNeural`, `piper:en_GB-alan-medium`). Per-story
-voice maps live at `<output_dir>/.ffn-voices-<id>.json` and are
+voice maps live at `<output_dir>/.ficary-voices-<id>.json` and are
 user-editable.
 
 ### Speaker attribution
@@ -355,14 +355,14 @@ audiobook than the heuristic pipeline alone:
    per-chapter call as attribution): `whisper`, `shout`, `excited`,
    `cheerful`, `sad`, `angry`. Maps to edge-tts prosody adjustments.
 2. **Character profiles** (`gender` / `age` / `accent` / `tone`)
-   saved to `.ffn-profile-<id>.json`. Feeds VoiceMapper as a richer
+   saved to `.ficary-profile-<id>.json`. Feeds VoiceMapper as a richer
    prior than gender alone.
-3. **Per-character accent map** seeded into `.ffn-accents-<id>.json`
+3. **Per-character accent map** seeded into `.ficary-accents-<id>.json`
    from the profiles. The VoiceMapper builds each character's voice
    pool with a three-tier preference (exact locale > language >
    any), so Hagrid lands on a UK voice instead of round-robining to
    en-US.
-4. **Pronunciation map** (`.ffn-pronunciations-<id>.json`):
+4. **Pronunciation map** (`.ficary-pronunciations-<id>.json`):
    pre-filled with phonetic respellings of made-up names, fandom
    terms, foreign loanwords, hard-to-pronounce place names.
 5. **Narrator voice suggestion**: the LLM reads the story's tone and
@@ -384,7 +384,7 @@ adding one new chapter doesn't repeat the LLM cost on the rest.
 
 ## Accessibility
 
-ffn-dl is built and tested with screen-reader users as a first-class
+ficary is built and tested with screen-reader users as a first-class
 audience. Concretely:
 
 - **Windows**: GUI tested with NVDA. Multi-select pickers, search
@@ -405,8 +405,8 @@ audience. Concretely:
 ## Development
 
 ```bash
-git clone https://github.com/matalvernaz/ffn-dl
-cd ffn-dl
+git clone https://github.com/matalvernaz/ficary
+cd ficary
 python -m venv .venv && source .venv/bin/activate
 pip install -e ".[all,dev]"
 pytest

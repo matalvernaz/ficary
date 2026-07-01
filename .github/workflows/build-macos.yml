@@ -5,7 +5,7 @@ name: Build macOS Binary
 # Accessibility: wxPython on macOS wraps native Cocoa widgets, which
 # VoiceOver reads the same way it reads any macOS app; CLI users can
 # still invoke the binary inside the bundle directly
-# (``ffn-dl.app/Contents/MacOS/ffn-dl --url ...``).
+# (``ficary.app/Contents/MacOS/ficary --url ...``).
 #
 # The build is unsigned — users hit Gatekeeper on first launch.
 # Code-signing + notarization would need a paid Apple Developer
@@ -75,26 +75,26 @@ jobs:
         # binaries that CLI users can run but GUI users can't open
         # the normal way.
         #
-        # ``--collect-submodules ffn_dl`` scoops up every submodule
+        # ``--collect-submodules ficary`` scoops up every submodule
         # under the package so new files land in the bundle without
         # maintaining a hidden-import list.
         run: |
-          pyinstaller --onedir --name ffn-dl --windowed \
+          pyinstaller --onedir --name ficary --windowed \
             --add-binary "ffmpeg_bin/ffmpeg:." \
             --add-binary "ffmpeg_bin/ffprobe:." \
-            --collect-submodules ffn_dl \
+            --collect-submodules ficary \
             --hidden-import edge_tts \
             --hidden-import ebooklib \
             --hidden-import curl_cffi \
             --hidden-import wx \
             --collect-all curl_cffi \
             --collect-all wx \
-            ffn_dl/__main__.py
+            ficary/__main__.py
 
       - name: Smoke-test bundle
         # --windowed builds put the binary inside Contents/MacOS;
         # CLI users will invoke it the same way.
-        run: dist/ffn-dl.app/Contents/MacOS/ffn-dl --help
+        run: dist/ficary.app/Contents/MacOS/ficary --help
 
       - name: Package
         # ``ditto`` preserves macOS metadata (extended attributes,
@@ -104,17 +104,17 @@ jobs:
         # Gatekeeper even gets a chance to weigh in.
         run: |
           cd dist
-          ditto -c -k --keepParent --sequesterRsrc ffn-dl.app ffn-dl-macos-arm64.zip
-          ls -la ffn-dl-macos-arm64.zip
+          ditto -c -k --keepParent --sequesterRsrc ficary.app ficary-macos-arm64.zip
+          ls -la ficary-macos-arm64.zip
 
       - name: Upload artifact
         uses: actions/upload-artifact@v7
         with:
-          name: ffn-dl-macos-arm64
-          path: dist/ffn-dl-macos-arm64.zip
+          name: ficary-macos-arm64
+          path: dist/ficary-macos-arm64.zip
 
       - name: Upload to release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v3
         with:
-          files: dist/ffn-dl-macos-arm64.zip
+          files: dist/ficary-macos-arm64.zip

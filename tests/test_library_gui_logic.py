@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from ffn_dl.library.gui_logic import format_move_label, relative_to_root
-from ffn_dl.library.reorganizer import MoveOp
+from ficary.library.gui_logic import format_move_label, relative_to_root
+from ficary.library.reorganizer import MoveOp
 
 
 def _op(source: str, target: str, url: str = "https://x/y/1/") -> MoveOp:

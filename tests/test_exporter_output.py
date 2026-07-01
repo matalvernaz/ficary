@@ -23,8 +23,8 @@ from pathlib import Path
 
 import pytest
 
-from ffn_dl.exporters import _is_adult_story, export_epub, export_html, export_txt
-from ffn_dl.models import Chapter, Story
+from ficary.exporters import _is_adult_story, export_epub, export_html, export_txt
+from ficary.models import Chapter, Story
 
 
 def _sample_story(

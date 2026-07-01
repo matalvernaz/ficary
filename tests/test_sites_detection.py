@@ -7,10 +7,10 @@ while still refusing a host fragment buried in a larger token.
 
 import pytest
 
-from ffn_dl.scraper import FFNScraper
-from ffn_dl.sites import detect_scraper, extract_story_url
-from ffn_dl.royalroad import RoyalRoadScraper
-from ffn_dl.webnovel import WebnovelScraper
+from ficary.scraper import FFNScraper
+from ficary.sites import detect_scraper, extract_story_url
+from ficary.royalroad import RoyalRoadScraper
+from ficary.webnovel import WebnovelScraper
 
 
 @pytest.mark.parametrize(

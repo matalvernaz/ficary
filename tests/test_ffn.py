@@ -6,8 +6,8 @@ from bs4 import BeautifulSoup
 
 import pytest
 
-from ffn_dl.scraper import FFNScraper, StoryNotFoundError
-from ffn_dl.search import _parse_results
+from ficary.scraper import FFNScraper, StoryNotFoundError
+from ficary.search import _parse_results
 
 
 class TestURLParsing:
@@ -219,7 +219,7 @@ class TestFFNFandomBrowse:
     and the search_ffn dispatch path."""
 
     def test_slug_derivation_canonical_cases(self):
-        from ffn_dl.search import _ffn_fandom_slug
+        from ficary.search import _ffn_fandom_slug
         assert _ffn_fandom_slug("Harry Potter") == "Harry-Potter"
         assert _ffn_fandom_slug("Lord of the Rings") == "Lord-of-the-Rings"
         assert (
@@ -237,32 +237,32 @@ class TestFFNFandomBrowse:
         assert _ffn_fandom_slug("") == ""
 
     def test_resolve_uses_curated_index_when_no_category(self):
-        from ffn_dl.search import _resolve_fandom
+        from ficary.search import _resolve_fandom
         # "Harry Potter" is in the curated index → pinned book category
         assert _resolve_fandom("Harry Potter", None) == ("book", "Harry-Potter")
         assert _resolve_fandom("Harry Potter", "") == ("book", "Harry-Potter")
         assert _resolve_fandom("Harry Potter", "any") == ("book", "Harry-Potter")
 
     def test_resolve_picker_bracket_hint(self):
-        from ffn_dl.search import _resolve_fandom
+        from ficary.search import _resolve_fandom
         # Picker annotates as "Naruto [anime]" — bracket hint maps to category
         assert _resolve_fandom("Naruto [anime]", None) == ("anime", "Naruto")
 
     def test_resolve_user_category_overrides_curated(self):
-        from ffn_dl.search import _resolve_fandom
+        from ficary.search import _resolve_fandom
         # User explicitly pinned category → overrides the curated entry.
         # Harry Potter as a game (hypothetical) — honour the override.
         assert _resolve_fandom("Harry Potter", "game") == ("game", "Harry-Potter")
 
     def test_resolve_uncurated_name_auto_detect(self):
-        from ffn_dl.search import _resolve_fandom
+        from ficary.search import _resolve_fandom
         # Empty category for an uncurated name → caller must auto-detect
         cat, slug = _resolve_fandom("My Custom Fandom", None)
         assert cat == ""
         assert slug == "My-Custom-Fandom"
 
     def test_resolve_strips_multi_picker_extras(self):
-        from ffn_dl.search import _resolve_fandom
+        from ficary.search import _resolve_fandom
         # Picker joins multi-select with comma — take first.
         # Annotation stripping works for both [] and ().
         assert _resolve_fandom(
@@ -271,13 +271,13 @@ class TestFFNFandomBrowse:
         assert _resolve_fandom("Bleach (anime)", None) == ("anime", "Bleach")
 
     def test_resolve_empty_returns_none(self):
-        from ffn_dl.search import _resolve_fandom
+        from ficary.search import _resolve_fandom
         assert _resolve_fandom("", "book") is None
         assert _resolve_fandom(None, None) is None
         assert _resolve_fandom("   ", "any") is None
 
     def test_build_fandom_url_full_filters(self):
-        from ffn_dl.search import _build_ffn_fandom_url
+        from ficary.search import _build_ffn_fandom_url
         # FFN fandom URLs use short param names: r/srt/g1/g2/len/s/lan/p.
         # Word length uses the ``len`` param (NOT ``words``): "50k+" maps
         # to the nearest fandom bucket, >40K = len 40.
@@ -296,7 +296,7 @@ class TestFFNFandomBrowse:
             assert fragment in url, f"missing {fragment} in {url}"
 
     def test_build_fandom_url_no_filters(self):
-        from ffn_dl.search import _build_ffn_fandom_url
+        from ficary.search import _build_ffn_fandom_url
         # Bare URL when no filters supplied
         url = _build_ffn_fandom_url("anime", "Naruto", {}, page=1)
         assert url == "https://www.fanfiction.net/anime/Naruto/"
@@ -304,7 +304,7 @@ class TestFFNFandomBrowse:
     def test_search_ffn_dispatches_to_fandom_when_set(self, monkeypatch):
         """search_ffn should hit the fandom URL path when fandom is set
         and skip the keyword /search/ endpoint."""
-        from ffn_dl import search as search_mod
+        from ficary import search as search_mod
 
         fetched_urls = []
 
@@ -326,7 +326,7 @@ class TestFFNFandomBrowse:
         """Fandom-browse parses the same z-list as keyword search but
         the per-card metadata div omits the fandom name (the whole page
         IS the fandom). Verify _search_ffn_fandom backfills it."""
-        from ffn_dl import search as search_mod
+        from ficary import search as search_mod
 
         # Minimal valid z-list HTML so _parse_results returns one row
         html = """
@@ -359,7 +359,7 @@ class TestSearchFetchRetries:
         return mock.Mock(status_code=status, text=text)
 
     def test_recovers_from_transient_403(self, monkeypatch):
-        from ffn_dl import search as search_mod
+        from ficary import search as search_mod
         responses = [
             self._make_resp(403, "forbidden"),
             self._make_resp(200, "<html><body>ok</body></html>"),
@@ -391,7 +391,7 @@ class TestSearchFetchRetries:
         """Fandom auto-detect depends on 404 being terminal so the
         loop can try the next category slug instead of burning the
         retry budget on a wrong URL."""
-        from ffn_dl import search as search_mod
+        from ficary import search as search_mod
         attempts = []
 
         def fake_get(url, timeout=30):
@@ -416,7 +416,7 @@ class TestSearchFetchRetries:
         assert len(attempts) == 1
 
     def test_exhausted_retries_raises_with_last_status(self, monkeypatch):
-        from ffn_dl import search as search_mod
+        from ficary import search as search_mod
         attempts = []
 
         def fake_get(url, timeout=30):

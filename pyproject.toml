@@ -6,15 +6,15 @@ build-backend = "setuptools.build_meta"
 # ffmpeg_bin/ and other transient folders alongside the source
 # tree before the pip install step, and setuptools' flat-layout
 # auto-discovery refuses to build when it sees more than one
-# top-level directory. Pinning the pattern to "ffn_dl*" makes
+# top-level directory. Pinning the pattern to "ficary*" makes
 # discovery deterministic regardless of what's in the workspace.
 [tool.setuptools.packages.find]
-include = ["ffn_dl*"]
+include = ["ficary*"]
 namespaces = false
 
 [project]
-name = "ffn-dl"
-version = "2.4.51"
+name = "ficary"
+version = "2.5.0"
 description = "Cross-platform fanfiction + erotica downloader (FFN, AO3, FicWad, Royal Road, MediaMiner, Wattpad, Webnovel, Literotica, AFF, StoriesOnline, Nifty, SexStories, MCStories, Lushstories, Fictionmania, TGStorytime, Chyoa, Dark Wanderer, GreatFeet, BDSM Library)"
 requires-python = ">=3.9"
 dependencies = [
@@ -34,4 +34,4 @@ dev = ["pytest>=7.0"]
 all = ["ebooklib>=0.18", "edge-tts>=7.0", "wxPython>=4.2", "pyperclip>=1.8"]
 
 [project.scripts]
-ffn-dl = "ffn_dl.cli:main"
+ficary = "ficary.cli:main"

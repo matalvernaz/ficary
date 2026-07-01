@@ -8,7 +8,7 @@ import time
 
 import pytest
 
-from ffn_dl.logging_utils import (
+from ficary.logging_utils import (
     correlation_context,
     current_correlation_id,
     install_correlation_filter,
@@ -24,10 +24,10 @@ def ensure_filter_installed():
 
 
 @pytest.fixture
-def capture_ffn_dl_logs(caplog):
-    """Capture ffn_dl.* log records so tests can inspect the ``msg``
+def capture_ficary_logs(caplog):
+    """Capture ficary.* log records so tests can inspect the ``msg``
     attribute after the LogRecordFactory has munged it."""
-    caplog.set_level(logging.DEBUG, logger="ffn_dl")
+    caplog.set_level(logging.DEBUG, logger="ficary")
     return caplog
 
 
@@ -48,48 +48,48 @@ class TestIDGeneration:
 
 
 class TestTagging:
-    def test_log_inside_context_gets_prefix(self, capture_ffn_dl_logs):
-        logger = logging.getLogger("ffn_dl.test.tagging")
+    def test_log_inside_context_gets_prefix(self, capture_ficary_logs):
+        logger = logging.getLogger("ficary.test.tagging")
         with correlation_context("abcd1234"):
             logger.info("hello world")
-        record = capture_ffn_dl_logs.records[-1]
+        record = capture_ficary_logs.records[-1]
         assert record.msg.startswith("[dl-abcd1234]")
         assert "hello world" in record.msg
 
-    def test_log_outside_context_has_no_prefix(self, capture_ffn_dl_logs):
-        logger = logging.getLogger("ffn_dl.test.outside")
+    def test_log_outside_context_has_no_prefix(self, capture_ficary_logs):
+        logger = logging.getLogger("ficary.test.outside")
         logger.info("no context here")
-        record = capture_ffn_dl_logs.records[-1]
+        record = capture_ficary_logs.records[-1]
         assert not record.msg.startswith("[dl-")
         assert record.msg == "no context here"
 
-    def test_auto_generated_id_when_omitted(self, capture_ffn_dl_logs):
-        logger = logging.getLogger("ffn_dl.test.auto")
+    def test_auto_generated_id_when_omitted(self, capture_ficary_logs):
+        logger = logging.getLogger("ficary.test.auto")
         with correlation_context() as cid:
             assert len(cid) == 8
             logger.info("auto-tagged")
-        record = capture_ffn_dl_logs.records[-1]
+        record = capture_ficary_logs.records[-1]
         assert record.msg.startswith(f"[dl-{cid}]")
 
-    def test_child_logger_inherits_prefix(self, capture_ffn_dl_logs):
-        """The factory keys on record.name.startswith("ffn_dl") so any
+    def test_child_logger_inherits_prefix(self, capture_ficary_logs):
+        """The factory keys on record.name.startswith("ficary") so any
         child logger under the package picks up the tag."""
         with correlation_context("11111111"):
-            logging.getLogger("ffn_dl.scraper").info("from scraper")
-            logging.getLogger("ffn_dl.erotica.literotica").info("from erotica")
-        records = [r for r in capture_ffn_dl_logs.records
-                   if r.name.startswith("ffn_dl")]
+            logging.getLogger("ficary.scraper").info("from scraper")
+            logging.getLogger("ficary.erotica.literotica").info("from erotica")
+        records = [r for r in capture_ficary_logs.records
+                   if r.name.startswith("ficary")]
         for record in records:
             if "from" in record.msg:
                 assert "[dl-11111111]" in record.msg
 
-    def test_third_party_logs_not_tagged(self, capture_ffn_dl_logs):
+    def test_third_party_logs_not_tagged(self, capture_ficary_logs):
         """A ``[dl-…]`` tag leaking into urllib3 / requests logs would
         be noise. The factory guards on the logger name."""
-        capture_ffn_dl_logs.set_level(logging.DEBUG)  # capture all
+        capture_ficary_logs.set_level(logging.DEBUG)  # capture all
         with correlation_context("dead1234"):
             logging.getLogger("urllib3.test").info("third-party line")
-        records = [r for r in capture_ffn_dl_logs.records
+        records = [r for r in capture_ficary_logs.records
                    if r.name == "urllib3.test"]
         assert records
         assert not any("[dl-" in r.msg for r in records)
@@ -136,25 +136,25 @@ class TestThreadIsolation:
 
 
 class TestIdempotent:
-    def test_install_is_idempotent(self, capture_ffn_dl_logs):
+    def test_install_is_idempotent(self, capture_ficary_logs):
         install_correlation_filter()
         install_correlation_filter()
         install_correlation_filter()
         # Still works, no double-prefix.
         with correlation_context("cafebabe"):
-            logging.getLogger("ffn_dl.idem").info("x")
-        record = capture_ffn_dl_logs.records[-1]
+            logging.getLogger("ficary.idem").info("x")
+        record = capture_ficary_logs.records[-1]
         assert record.msg == "[dl-cafebabe] x"
         assert record.msg.count("[dl-") == 1
 
 
 class TestScraperDownloadWrapping:
-    def test_download_wrapped_with_context(self, capture_ffn_dl_logs):
+    def test_download_wrapped_with_context(self, capture_ficary_logs):
         """A scraper's ``download`` method runs inside a fresh
         correlation context without the caller having to set one up.
         This is the ``__init_subclass__`` hook on BaseScraper paying
         off — every existing callsite stays unchanged."""
-        from ffn_dl.scraper import BaseScraper
+        from ficary.scraper import BaseScraper
 
         captured_cid: list[str | None] = []
 
@@ -163,7 +163,7 @@ class TestScraperDownloadWrapping:
 
             def download(self, url_or_id, **kw):
                 captured_cid.append(current_correlation_id())
-                logging.getLogger("ffn_dl.toy").info("inside download")
+                logging.getLogger("ficary.toy").info("inside download")
                 return None
 
         scraper = _Toy(use_cache=False)
@@ -173,14 +173,14 @@ class TestScraperDownloadWrapping:
 
         # Log line carries the tag.
         matches = [
-            r for r in capture_ffn_dl_logs.records
+            r for r in capture_ficary_logs.records
             if "inside download" in str(r.msg)
         ]
         assert matches
         assert matches[0].msg.startswith("[dl-")
 
     def test_two_downloads_get_distinct_ids(self):
-        from ffn_dl.scraper import BaseScraper
+        from ficary.scraper import BaseScraper
 
         seen = []
 
@@ -200,7 +200,7 @@ class TestScraperDownloadWrapping:
         a CLI ``--update-all`` pass wrapping batch downloads), the
         wrapper's fresh id takes precedence inside ``download`` —
         consistent with "each individual download is its own unit"."""
-        from ffn_dl.scraper import BaseScraper
+        from ficary.scraper import BaseScraper
 
         outer = []
         inner = []
@@ -235,13 +235,13 @@ class TestTransient403Tracking:
         record_transient_403()
         record_transient_403()
 
-    def test_summary_logged_at_context_exit(self, capture_ffn_dl_logs):
+    def test_summary_logged_at_context_exit(self, capture_ficary_logs):
         with correlation_context("aaaa1111"):
             record_transient_403()
             record_transient_403()
             record_transient_403()
         summaries = [
-            r for r in capture_ffn_dl_logs.records
+            r for r in capture_ficary_logs.records
             if "transient 403" in r.getMessage()
         ]
         assert len(summaries) == 1
@@ -250,26 +250,26 @@ class TestTransient403Tracking:
         assert "3" in rendered
         assert "retries" in rendered
 
-    def test_singular_grammar_for_one(self, capture_ffn_dl_logs):
+    def test_singular_grammar_for_one(self, capture_ficary_logs):
         with correlation_context("bbbb2222"):
             record_transient_403()
         summaries = [
-            r for r in capture_ffn_dl_logs.records
+            r for r in capture_ficary_logs.records
             if "transient 403" in r.getMessage()
         ]
         assert len(summaries) == 1
         assert "1 transient 403 retry" in summaries[0].getMessage()
 
-    def test_no_summary_when_count_is_zero(self, capture_ffn_dl_logs):
+    def test_no_summary_when_count_is_zero(self, capture_ficary_logs):
         with correlation_context("cccc3333"):
             pass
         summaries = [
-            r for r in capture_ffn_dl_logs.records
+            r for r in capture_ficary_logs.records
             if "transient 403" in r.getMessage()
         ]
         assert summaries == []
 
-    def test_nested_contexts_each_have_own_count(self, capture_ffn_dl_logs):
+    def test_nested_contexts_each_have_own_count(self, capture_ficary_logs):
         with correlation_context("outer_id"):
             record_transient_403()
             with correlation_context("inner_id"):
@@ -279,7 +279,7 @@ class TestTransient403Tracking:
             # summary; outer's count should still be 1.
             record_transient_403()
         summaries = [
-            r for r in capture_ffn_dl_logs.records
+            r for r in capture_ficary_logs.records
             if "transient 403" in r.getMessage()
         ]
         # One per context, in exit order: inner first, then outer.
@@ -313,21 +313,21 @@ class TestTransient403Tracking:
             t.join()
         assert results == {"a": 5, "b": 3}
 
-    def test_scraper_first_403_logged_at_debug(self, capture_ffn_dl_logs):
+    def test_scraper_first_403_logged_at_debug(self, capture_ficary_logs):
         """The retry path's first 403 should not surface as WARNING.
         We poke at the same logger the scraper uses and confirm the
         WARNING level is silent for an attempt-0 retry. (A direct
         unit test of the scraper retry would require mocking
         curl_cffi; this test pins the logging contract instead.)"""
-        # The scraper logs to ffn_dl.scraper. Verify a DEBUG-level
+        # The scraper logs to ficary.scraper. Verify a DEBUG-level
         # call there shows up in caplog (which is set to DEBUG in
         # the fixture) but a separate test would catch a regression
         # of someone bumping the level back to WARNING.
-        scraper_logger = logging.getLogger("ffn_dl.scraper")
+        scraper_logger = logging.getLogger("ficary.scraper")
         scraper_logger.debug("Forbidden (HTTP 403), retrying in 2s (attempt 1/5)")
         debugs = [
-            r for r in capture_ffn_dl_logs.records
-            if r.name == "ffn_dl.scraper"
+            r for r in capture_ficary_logs.records
+            if r.name == "ficary.scraper"
             and r.levelname == "DEBUG"
             and "Forbidden" in str(r.msg)
         ]
@@ -355,7 +355,7 @@ class TestForbiddenRetryLogLevels:
         fake.headers = {}
         fake.cookies.jar = []
         monkeypatch.setattr(scraper, "_session", lambda: fake)
-        monkeypatch.setattr("ffn_dl.scraper.time.sleep", lambda *_: None)
+        monkeypatch.setattr("ficary.scraper.time.sleep", lambda *_: None)
         # Skip the on-disk cookie cache path so the retry loop hits
         # the wait/log branch we're pinning.
         monkeypatch.setattr(
@@ -367,7 +367,7 @@ class TestForbiddenRetryLogLevels:
 
     def test_attempt_zero_403_logs_at_debug(self, monkeypatch, caplog):
         from unittest.mock import MagicMock
-        from ffn_dl.scraper import BaseScraper
+        from ficary.scraper import BaseScraper
 
         class _S(BaseScraper):
             site_name = "probe"
@@ -378,13 +378,13 @@ class TestForbiddenRetryLogLevels:
             MagicMock(status_code=200, text="<html>ok</html>", headers={}),
         ])
 
-        caplog.set_level(logging.DEBUG, logger="ffn_dl.scraper")
+        caplog.set_level(logging.DEBUG, logger="ficary.scraper")
         body = scraper._fetch("https://example.invalid/x")
         assert body == "<html>ok</html>"
 
         forbidden_records = [
             r for r in caplog.records
-            if r.name == "ffn_dl.scraper"
+            if r.name == "ficary.scraper"
             and "Forbidden (HTTP 403)" in r.getMessage()
         ]
         assert len(forbidden_records) == 1, \
@@ -396,7 +396,7 @@ class TestForbiddenRetryLogLevels:
 
     def test_attempt_one_403_escalates_to_warning(self, monkeypatch, caplog):
         from unittest.mock import MagicMock
-        from ffn_dl.scraper import BaseScraper
+        from ficary.scraper import BaseScraper
 
         class _S(BaseScraper):
             site_name = "probe"
@@ -408,13 +408,13 @@ class TestForbiddenRetryLogLevels:
             MagicMock(status_code=200, text="<html>ok</html>", headers={}),
         ])
 
-        caplog.set_level(logging.DEBUG, logger="ffn_dl.scraper")
+        caplog.set_level(logging.DEBUG, logger="ficary.scraper")
         body = scraper._fetch("https://example.invalid/x")
         assert body == "<html>ok</html>"
 
         forbidden_records = [
             r for r in caplog.records
-            if r.name == "ffn_dl.scraper"
+            if r.name == "ficary.scraper"
             and "Forbidden (HTTP 403)" in r.getMessage()
         ]
         levels = [r.levelname for r in forbidden_records]
@@ -428,8 +428,8 @@ class TestForbiddenRetryLogLevels:
         """A 403-then-200 recovery should bump the per-context counter
         so the correlation_context exit summary surfaces the aggregate."""
         from unittest.mock import MagicMock
-        from ffn_dl.scraper import BaseScraper
-        from ffn_dl.logging_utils import correlation_context
+        from ficary.scraper import BaseScraper
+        from ficary.logging_utils import correlation_context
 
         class _S(BaseScraper):
             site_name = "probe"
@@ -440,13 +440,13 @@ class TestForbiddenRetryLogLevels:
             MagicMock(status_code=200, text="<html>ok</html>", headers={}),
         ])
 
-        caplog.set_level(logging.DEBUG, logger="ffn_dl")
+        caplog.set_level(logging.DEBUG, logger="ficary")
         with correlation_context("test1234"):
             scraper._fetch("https://example.invalid/x")
 
         summaries = [
             r for r in caplog.records
-            if r.name == "ffn_dl"
+            if r.name == "ficary"
             and "transient 403" in r.getMessage()
         ]
         assert len(summaries) == 1

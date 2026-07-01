@@ -7,9 +7,9 @@ layer is a fake session, so nothing here touches fichub.net or FFN.
 
 import pytest
 
-from ffn_dl import fichub
-from ffn_dl.models import Chapter, Story, parse_chapter_spec
-from ffn_dl.scraper import CloudflareBlockError, FFNScraper
+from ficary import fichub
+from ficary.models import Chapter, Story, parse_chapter_spec
+from ficary.scraper import CloudflareBlockError, FFNScraper
 
 
 # ── Fixtures: a FicHub-shaped EPUB and API JSON ──────────────────────

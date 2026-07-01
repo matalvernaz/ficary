@@ -3,8 +3,8 @@
 
 import pytest
 
-from ffn_dl.ao3 import AO3LockedError, AO3Scraper
-from ffn_dl.search import _build_ao3_search_url
+from ficary.ao3 import AO3LockedError, AO3Scraper
+from ficary.search import _build_ao3_search_url
 
 _LOGIN_REQUIRED_HTML = (
     "<html><body><p>Sorry, you don't have permission to access this "

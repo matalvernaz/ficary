@@ -7,9 +7,9 @@ from pathlib import Path
 
 import pytest
 
-from ffn_dl.doctor import check_all, heal_all
-from ffn_dl.library.index import LibraryIndex
-from ffn_dl.watchlist import (
+from ficary.doctor import check_all, heal_all
+from ficary.library.index import LibraryIndex
+from ficary.watchlist import (
     Watch,
     WATCH_TYPE_STORY,
     WatchlistStore,

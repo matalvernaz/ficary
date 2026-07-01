@@ -6,41 +6,41 @@ from pathlib import Path
 
 import pytest
 
-from ffn_dl.library.candidate import Confidence
-from ffn_dl.library.identifier import adapter_for_url, identify
-from ffn_dl.updater import extract_metadata
+from ficary.library.candidate import Confidence
+from ficary.library.identifier import adapter_for_url, identify
+from ficary.updater import extract_metadata
 
 from .library_fixtures import (
     bare_html_with_url,
     bare_txt_no_url,
     bare_txt_with_url,
     fanficfare_epub,
-    ffndl_epub,
-    ffndl_html,
-    ffndl_txt,
+    ficary_epub,
+    ficary_html,
+    ficary_txt,
     fichub_epub,
 )
 
 
-# ── Metadata extraction — ffn-dl's own exports ─────────────────
+# ── Metadata extraction — ficary's own exports ─────────────────
 
 
-def test_extract_metadata_ffndl_epub(tmp_path: Path):
-    path = ffndl_epub(tmp_path)
+def test_extract_metadata_ficary_epub(tmp_path: Path):
+    path = ficary_epub(tmp_path)
     md = extract_metadata(path)
     assert md.format == "epub"
     assert md.source_url == "https://www.fanfiction.net/s/12345/1/"
     assert md.title == "The Sample Fic"
     assert md.author == "Test Author"
-    # ffn-dl puts Category in the title-page table, not dc:subject
+    # ficary puts Category in the title-page table, not dc:subject
     assert "Harry Potter" in md.fandoms
     assert md.status == "In-Progress"
     assert md.rating == "T"
     assert md.chapter_count == 2
 
 
-def test_extract_metadata_ffndl_html(tmp_path: Path):
-    path = ffndl_html(tmp_path)
+def test_extract_metadata_ficary_html(tmp_path: Path):
+    path = ficary_html(tmp_path)
     md = extract_metadata(path)
     assert md.format == "html"
     assert md.source_url == "https://www.fanfiction.net/s/12345/1/"
@@ -50,8 +50,8 @@ def test_extract_metadata_ffndl_html(tmp_path: Path):
     assert md.chapter_count == 2
 
 
-def test_extract_metadata_ffndl_txt(tmp_path: Path):
-    path = ffndl_txt(tmp_path)
+def test_extract_metadata_ficary_txt(tmp_path: Path):
+    path = ficary_txt(tmp_path)
     md = extract_metadata(path)
     assert md.format == "txt"
     assert md.source_url == "https://www.fanfiction.net/s/12345/1/"
@@ -141,7 +141,7 @@ def test_adapter_for_url(url: str, expected: str | None):
 
 
 def test_identify_high_confidence_from_url(tmp_path: Path):
-    path = ffndl_epub(tmp_path)
+    path = ficary_epub(tmp_path)
     md = extract_metadata(path)
     candidate = identify(path, md)
     assert candidate.confidence == Confidence.HIGH
@@ -171,8 +171,8 @@ def test_identify_low_confidence_no_url(tmp_path: Path):
 def test_identify_low_confidence_unknown_site(tmp_path: Path):
     # A URL that doesn't match any supported adapter — indexed but
     # not trackable, with a clear note
-    from ffn_dl.library.candidate import StoryCandidate
-    from ffn_dl.updater import FileMetadata
+    from ficary.library.candidate import StoryCandidate
+    from ficary.updater import FileMetadata
 
     md = FileMetadata(
         source_url="https://example.com/story/1",

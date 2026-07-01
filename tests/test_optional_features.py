@@ -14,7 +14,7 @@ from unittest.mock import patch
 
 import pytest
 
-from ffn_dl import optional_features as of
+from ficary import optional_features as of
 
 
 # ── Registry shape ───────────────────────────────────────────────
@@ -46,7 +46,7 @@ def test_pip_hint_matches_extra_name():
     for name, info in of.FEATURES.items():
         hint = of.pip_hint(name)
         assert hint is not None
-        assert f"ffn-dl[{info['extra']}]" in hint
+        assert f"ficary[{info['extra']}]" in hint
 
 
 def test_pip_hint_returns_none_for_unknown():
@@ -88,7 +88,7 @@ def test_unsupported_reason_for_unknown_feature():
 
 
 def test_unsupported_reason_none_on_non_frozen(monkeypatch):
-    """Pip-installed ffn-dl has a usable ``sys.executable`` so every
+    """Pip-installed ficary has a usable ``sys.executable`` so every
     feature is installable."""
     monkeypatch.setattr(of, "_is_frozen", lambda: False)
     for name in of.available():
@@ -204,11 +204,11 @@ def test_install_refuses_unsupported_platform(monkeypatch):
 
 def test_install_frozen_routes_through_neural_env(monkeypatch):
     """On frozen Windows, install must go through
-    :mod:`ffn_dl.neural_env` rather than ``sys.executable -m pip`` —
+    :mod:`ficary.neural_env` rather than ``sys.executable -m pip`` —
     the frozen .exe's ``sys.executable`` points at the PyInstaller
     bootloader, not at a Python interpreter."""
-    import ffn_dl
-    import ffn_dl.neural_env as real_neural_env
+    import ficary
+    import ficary.neural_env as real_neural_env
 
     monkeypatch.setattr(of, "_is_frozen", lambda: True)
     calls: dict[str, list] = {"pip": [], "activate": 0}
@@ -231,12 +231,12 @@ def test_install_frozen_routes_through_neural_env(monkeypatch):
         def python_exe():
             return "/fake/python.exe"
 
-    # ``from . import neural_env`` in :mod:`ffn_dl.optional_features`
-    # resolves via ``getattr(ffn_dl, 'neural_env')`` once the module
+    # ``from . import neural_env`` in :mod:`ficary.optional_features`
+    # resolves via ``getattr(ficary, 'neural_env')`` once the module
     # is already loaded, so patching sys.modules alone isn't enough —
     # we also have to swap the package attribute.
-    monkeypatch.setattr(ffn_dl, "neural_env", FakeNeural, raising=False)
-    monkeypatch.setitem(sys.modules, "ffn_dl.neural_env", FakeNeural)
+    monkeypatch.setattr(ficary, "neural_env", FakeNeural, raising=False)
+    monkeypatch.setitem(sys.modules, "ficary.neural_env", FakeNeural)
     monkeypatch.setattr(of, "install_unsupported_reason", lambda f: None)
     monkeypatch.setattr(of, "_stream_subprocess", lambda cmd, log_cb: True)
 
@@ -247,4 +247,4 @@ def test_install_frozen_routes_through_neural_env(monkeypatch):
     # Sanity: the real module wasn't replaced permanently — undo'd
     # by monkeypatch cleanup, but let's prove we didn't just delete
     # the real reference.
-    assert real_neural_env.__name__ == "ffn_dl.neural_env"
+    assert real_neural_env.__name__ == "ficary.neural_env"

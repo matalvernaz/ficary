@@ -1,6 +1,6 @@
 """Offline tests for the watchlist feature.
 
-These cover the pieces of :mod:`ffn_dl.watchlist` that don't require
+These cover the pieces of :mod:`ficary.watchlist` that don't require
 real HTTP: the storage layer (load/save/corrupt-recovery) and the
 polling runner (diffing + cooldown), using fake scrapers and a fake
 notification dispatcher. Per-scraper HTTP paths already have their own
@@ -14,9 +14,9 @@ from pathlib import Path
 
 import pytest
 
-from ffn_dl import watchlist
-from ffn_dl.notifications import Notification
-from ffn_dl.watchlist import (
+from ficary import watchlist
+from ficary.notifications import Notification
+from ficary.watchlist import (
     NOTIFICATION_COOLDOWN_S,
     SCHEMA_VERSION,
     SEARCH_WATCH_RESULT_CAP,
@@ -341,7 +341,7 @@ def test_search_watch_caps_tracked_urls(tmp_path, monkeypatch):
 
     # watchlist._poll_search imports `search` lazily, so we monkeypatch
     # the attribute on the real module after import-time.
-    import ffn_dl.search as search_module
+    import ficary.search as search_module
     monkeypatch.setattr(search_module, "search_ao3", fake_search, raising=False)
 
     spy = _NotifierSpy()

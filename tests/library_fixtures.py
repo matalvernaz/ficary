@@ -8,8 +8,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from ffn_dl.exporters import export_epub, export_html, export_txt
-from ffn_dl.models import Chapter, Story
+from ficary.exporters import export_epub, export_html, export_txt
+from ficary.models import Chapter, Story
 
 
 def _story(
@@ -24,7 +24,7 @@ def _story(
     chapters: int = 2,
     story_id: int = 12345,
 ) -> Story:
-    """Build a Story with predictable metadata. Category is what ffn-dl
+    """Build a Story with predictable metadata. Category is what ficary
     uses as its fandom field in the metadata header."""
     s = Story(
         id=story_id,
@@ -51,16 +51,16 @@ def _story(
     return s
 
 
-def ffndl_epub(tmp_path: Path, **kwargs) -> Path:
-    """ffn-dl's own EPUB export: dc:source + title-page Category table."""
+def ficary_epub(tmp_path: Path, **kwargs) -> Path:
+    """ficary's own EPUB export: dc:source + title-page Category table."""
     return export_epub(_story(**kwargs), str(tmp_path))
 
 
-def ffndl_html(tmp_path: Path, **kwargs) -> Path:
+def ficary_html(tmp_path: Path, **kwargs) -> Path:
     return export_html(_story(**kwargs), str(tmp_path))
 
 
-def ffndl_txt(tmp_path: Path, **kwargs) -> Path:
+def ficary_txt(tmp_path: Path, **kwargs) -> Path:
     return export_txt(_story(**kwargs), str(tmp_path))
 
 
@@ -74,7 +74,7 @@ def fanficfare_epub(
     extra_subjects: tuple[str, ...] = ("Harry/Hermione", "Rated T", "Complete"),
 ) -> Path:
     """FanFicFare-style EPUB: fandoms live in dc:subject alongside
-    ratings and relationships. No ffn-dl-style title-page table."""
+    ratings and relationships. No ficary-style title-page table."""
     from ebooklib import epub
 
     book = epub.EpubBook()

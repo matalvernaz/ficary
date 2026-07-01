@@ -6,23 +6,23 @@ from pathlib import Path
 
 import pytest
 
-from ffn_dl.library.candidate import Confidence, StoryCandidate
-from ffn_dl.library.index import LibraryIndex, SCHEMA_VERSION
-from ffn_dl.library.scanner import scan
-from ffn_dl.library.template import (
+from ficary.library.candidate import Confidence, StoryCandidate
+from ficary.library.index import LibraryIndex, SCHEMA_VERSION
+from ficary.library.scanner import scan
+from ficary.library.template import (
     DEFAULT_MISC_FOLDER,
     DEFAULT_TEMPLATE,
     render,
 )
-from ffn_dl.updater import FileMetadata, extract_metadata
+from ficary.updater import FileMetadata, extract_metadata
 
 from .library_fixtures import (
     bare_html_with_url,
     bare_txt_no_url,
     fanficfare_epub,
-    ffndl_epub,
-    ffndl_html,
-    ffndl_txt,
+    ficary_epub,
+    ficary_html,
+    ficary_txt,
     fichub_epub,
 )
 
@@ -121,14 +121,14 @@ def test_render_missing_fields_use_fallbacks():
 
 def _candidate_at(path: Path) -> StoryCandidate:
     md = extract_metadata(path)
-    from ffn_dl.library.identifier import identify
+    from ficary.library.identifier import identify
     return identify(path, md)
 
 
 def test_index_save_load_roundtrip(tmp_path: Path):
     library = tmp_path / "lib"
     library.mkdir()
-    story_path = ffndl_epub(library)
+    story_path = ficary_epub(library)
 
     index_file = tmp_path / "idx.json"
     idx = LibraryIndex.load(index_file)
@@ -178,12 +178,12 @@ def test_index_wrong_schema_version_snapshots_before_emptying(tmp_path: Path):
     returns empty — otherwise the next save() atomically overwrites the
     user's library with {} and the data is gone.
 
-    The downgrade case (running an older ffn-dl on a newer index file)
+    The downgrade case (running an older ficary on a newer index file)
     is what makes this critical: the file is structurally valid, just
     unreadable by this build, so we can't fall back to "corrupt → empty"
     semantics without losing real data."""
     import json
-    from ffn_dl.library.backup import list_backups
+    from ficary.library.backup import list_backups
 
     path = tmp_path / "library-index.json"
     payload = {
@@ -218,8 +218,8 @@ def test_index_multiple_libraries_keyed_separately(tmp_path: Path):
     lib_b = tmp_path / "b"
     lib_a.mkdir()
     lib_b.mkdir()
-    ffndl_epub(lib_a, title="A's Fic", url="https://www.fanfiction.net/s/1/1/")
-    ffndl_epub(lib_b, title="B's Fic", url="https://archiveofourown.org/works/2")
+    ficary_epub(lib_a, title="A's Fic", url="https://www.fanfiction.net/s/1/1/")
+    ficary_epub(lib_b, title="B's Fic", url="https://archiveofourown.org/works/2")
 
     idx_file = tmp_path / "idx.json"
     idx = LibraryIndex.load(idx_file)
@@ -238,7 +238,7 @@ def test_index_multiple_libraries_keyed_separately(tmp_path: Path):
 def test_index_update_in_place(tmp_path: Path):
     lib = tmp_path / "lib"
     lib.mkdir()
-    story_path = ffndl_epub(lib)
+    story_path = ficary_epub(lib)
 
     idx = LibraryIndex.load(tmp_path / "idx.json")
     idx.record(lib, _candidate_at(story_path))
@@ -266,7 +266,7 @@ def test_index_low_confidence_goes_to_untrackable(tmp_path: Path):
 def test_index_clear_library_removes_entries(tmp_path: Path):
     lib = tmp_path / "lib"
     lib.mkdir()
-    story_path = ffndl_epub(lib)
+    story_path = ficary_epub(lib)
 
     idx = LibraryIndex.load(tmp_path / "idx.json")
     idx.record(lib, _candidate_at(story_path))
@@ -283,10 +283,10 @@ def test_scan_mixed_library(tmp_path: Path):
     lib = tmp_path / "library"
     lib.mkdir()
 
-    # Mixed provenance: ffn-dl's own, FFF, FicHub, bare-with-URL, no-URL
-    ffndl_epub(lib, title="Own Epub")
-    ffndl_html(lib, title="Own Html", url="https://www.royalroad.com/fiction/1")
-    ffndl_txt(lib, title="Own Txt", url="https://archiveofourown.org/works/1")
+    # Mixed provenance: ficary's own, FFF, FicHub, bare-with-URL, no-URL
+    ficary_epub(lib, title="Own Epub")
+    ficary_html(lib, title="Own Html", url="https://www.royalroad.com/fiction/1")
+    ficary_txt(lib, title="Own Txt", url="https://archiveofourown.org/works/1")
     fanficfare_epub(lib)
     fichub_epub(lib)
     bare_html_with_url(lib, "https://www.fanfiction.net/s/88/1/")
@@ -312,8 +312,8 @@ def test_scan_recursive_walks_subdirs(tmp_path: Path):
     sub = lib / "sub"
     sub.mkdir(parents=True)
 
-    ffndl_epub(lib, title="Top")
-    ffndl_epub(sub, title="Nested", url="https://www.royalroad.com/fiction/7")
+    ficary_epub(lib, title="Top")
+    ficary_epub(sub, title="Nested", url="https://www.royalroad.com/fiction/7")
 
     result = scan(lib, index_path=tmp_path / "idx.json", recursive=True)
     assert result.total_files == 2
@@ -325,8 +325,8 @@ def test_scan_non_recursive_skips_subdirs(tmp_path: Path):
     sub = lib / "sub"
     sub.mkdir(parents=True)
 
-    ffndl_epub(lib, title="Top")
-    ffndl_epub(sub, title="Nested", url="https://www.royalroad.com/fiction/7")
+    ficary_epub(lib, title="Top")
+    ficary_epub(sub, title="Nested", url="https://www.royalroad.com/fiction/7")
 
     result = scan(lib, index_path=tmp_path / "idx.json", recursive=False)
     assert result.total_files == 1
@@ -336,8 +336,8 @@ def test_scan_clear_existing_drops_orphans(tmp_path: Path):
     lib = tmp_path / "lib"
     lib.mkdir()
 
-    a = ffndl_epub(lib, title="A", url="https://www.fanfiction.net/s/1/1/")
-    ffndl_epub(lib, title="B", url="https://archiveofourown.org/works/2")
+    a = ficary_epub(lib, title="A", url="https://www.fanfiction.net/s/1/1/")
+    ficary_epub(lib, title="B", url="https://archiveofourown.org/works/2")
 
     idx_file = tmp_path / "idx.json"
     scan(lib, index_path=idx_file)

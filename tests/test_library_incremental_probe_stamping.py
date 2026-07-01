@@ -51,7 +51,7 @@ def test_probe_entry_skips_network_when_remote_prefilled(monkeypatch):
     treat those as answered and never call ``get_chapter_count`` —
     otherwise the resume path still spends a full probe budget on
     entries we already know the answer for."""
-    from ffn_dl import cli
+    from ficary import cli
     from pathlib import Path
 
     call_count = [0]
@@ -109,8 +109,8 @@ def test_probe_complete_callback_fires_on_definitive_answers(monkeypatch):
     ``last_probed`` so the TTL suppresses the next probe. Transient
     failures (rate-limit, Cloudflare block, timeout, parse errors)
     stay unstamped so the next run retries them."""
-    from ffn_dl import cli
-    from ffn_dl.scraper import (
+    from ficary import cli
+    from ficary.scraper import (
         CloudflareBlockError,
         RateLimitError,
         StoryNotFoundError,
@@ -167,7 +167,7 @@ def test_gui_batching_flushes_every_n_probes(tmp_path, monkeypatch):
     """End-to-end: simulate the GUI's stamp-flush batch and confirm
     that disk state reflects successful probes as they roll in, not
     only at the cycle's end."""
-    from ffn_dl.library.index import LibraryIndex
+    from ficary.library.index import LibraryIndex
 
     index_path = tmp_path / "library-index.json"
     root = tmp_path / "lib"
@@ -232,7 +232,7 @@ def test_final_flush_handles_remainder_under_batch_size(tmp_path):
     """The final flush-locked call in the worker's ``finally`` tail
     picks up the trailing <25 stamps that never crossed the batch
     threshold — without it we'd lose the last chunk on every run."""
-    from ffn_dl.library.index import LibraryIndex
+    from ficary.library.index import LibraryIndex
 
     index_path = tmp_path / "library-index.json"
     root = tmp_path / "lib"

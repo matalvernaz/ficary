@@ -1,4 +1,4 @@
-"""Unit tests for ffn_dl.merge — combining a series into one Story.
+"""Unit tests for ficary.merge — combining a series into one Story.
 
 Uses synthetic Story/Chapter objects so nothing hits the network. Guards
 the two things the merge path must get right: chapter renumbering across
@@ -6,8 +6,8 @@ parts, and labelling the merged book by its actual source (the bug that
 made a merged Literotica series claim every part was "Original on AO3").
 """
 
-from ffn_dl.merge import merge_stories, source_display_name
-from ffn_dl.models import Chapter, Story
+from ficary.merge import merge_stories, source_display_name
+from ficary.models import Chapter, Story
 
 LIT = "https://www.literotica.com/s/"
 AO3 = "https://archiveofourown.org/works/"

@@ -1,4 +1,4 @@
-"""Tests for ffn_dl.url_classifier.
+"""Tests for ficary.url_classifier.
 
 Covers the dispatch table — which URL maps to which scraper + which
 extractor — across all the list-page shapes the bulk-import feature
@@ -9,11 +9,11 @@ from __future__ import annotations
 
 import pytest
 
-from ffn_dl import url_classifier
-from ffn_dl.ao3 import AO3Scraper
-from ffn_dl.scraper import FFNScraper
-from ffn_dl.royalroad import RoyalRoadScraper
-from ffn_dl.wattpad import WattpadScraper
+from ficary import url_classifier
+from ficary.ao3 import AO3Scraper
+from ficary.scraper import FFNScraper
+from ficary.royalroad import RoyalRoadScraper
+from ficary.wattpad import WattpadScraper
 
 
 # (url, expected_scraper_cls, expected_kind, expected_extractor)

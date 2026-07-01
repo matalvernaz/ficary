@@ -5,7 +5,7 @@ import re
 import pytest
 from bs4 import BeautifulSoup
 
-from ffn_dl.ao3 import AO3LockedError, AO3Scraper
+from ficary.ao3 import AO3LockedError, AO3Scraper
 
 
 class TestURLParsing:

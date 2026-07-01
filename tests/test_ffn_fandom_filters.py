@@ -5,7 +5,7 @@ import logging
 
 import pytest
 
-from ffn_dl.search import (
+from ficary.search import (
     _build_ffn_fandom_url,
     _parse_fandom_filter_options,
     _resolve_named,
@@ -96,7 +96,7 @@ class TestFandomUrl:
 
 class TestKeywordModeWarning:
     def test_warns_on_fandom_only_filters_without_fandom(self, monkeypatch, caplog):
-        from ffn_dl import search as S
+        from ficary import search as S
         monkeypatch.setattr(S, "_build_search_url", lambda *a, **k: "http://x")
         monkeypatch.setattr(S, "_fetch_search_page", lambda url: "<html></html>")
         monkeypatch.setattr(S, "_parse_results", lambda html: [])

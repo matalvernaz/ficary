@@ -13,7 +13,7 @@ from unittest import mock
 
 import pytest
 
-from ffn_dl import neural_env
+from ficary import neural_env
 
 
 # ── is_supported / path computation ─────────────────────────────────
@@ -170,7 +170,7 @@ def test_ensure_embed_python_is_idempotent(tmp_path, monkeypatch):
     py_dir = tmp_path / "py"
     py_dir.mkdir()
     (py_dir / "python.exe").write_text("fake", encoding="utf-8")
-    sentinel = py_dir / ".ffn-dl-bootstrap-ok"
+    sentinel = py_dir / ".ficary-bootstrap-ok"
     sentinel.write_text("ok", encoding="utf-8")
 
     monkeypatch.setattr(neural_env, "PY_DIR", py_dir)

@@ -6,16 +6,16 @@ from pathlib import Path
 
 import pytest
 
-from ffn_dl.library.fulltext import (
+from ficary.library.fulltext import (
     BootstrapReport,
     FullTextIndex,
     chapter_text,
     populate_from_library,
 )
-from ffn_dl.library.scanner import scan
-from ffn_dl.models import Chapter
+from ficary.library.scanner import scan
+from ficary.models import Chapter
 
-from .library_fixtures import bare_txt_no_url, ffndl_epub
+from .library_fixtures import bare_txt_no_url, ficary_epub
 
 
 # ── chapter_text ─────────────────────────────────────────────────
@@ -232,11 +232,11 @@ def _index(tmp_path: Path) -> Path:
 def test_populate_indexes_scanned_library(tmp_path: Path):
     lib = tmp_path / "lib"
     lib.mkdir()
-    ffndl_epub(
+    ficary_epub(
         lib, title="Alpha",
         url="https://www.fanfiction.net/s/1/1/",
     )
-    ffndl_epub(
+    ficary_epub(
         lib, title="Beta",
         url="https://archiveofourown.org/works/2",
     )
@@ -278,7 +278,7 @@ def test_populate_skips_unsupported_formats(tmp_path: Path):
 def test_populate_drops_missing_files(tmp_path: Path):
     lib = tmp_path / "lib"
     lib.mkdir()
-    path = ffndl_epub(
+    path = ficary_epub(
         lib, title="Vanishing",
         url="https://www.fanfiction.net/s/9/1/",
     )
@@ -296,7 +296,7 @@ def test_populate_rebuilds_cleanly(tmp_path: Path):
     duplicates — drop_root + re-insert is the expected semantics."""
     lib = tmp_path / "lib"
     lib.mkdir()
-    ffndl_epub(
+    ficary_epub(
         lib, title="Once",
         url="https://www.fanfiction.net/s/1/1/",
     )

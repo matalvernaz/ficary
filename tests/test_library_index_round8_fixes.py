@@ -15,7 +15,7 @@ from pathlib import Path
 
 import pytest
 
-from ffn_dl.library.index import (
+from ficary.library.index import (
     IndexConflictError,
     LibraryIndex,
     SCHEMA_VERSION,
@@ -43,7 +43,7 @@ def test_save_blocker_set_when_snapshot_fails(tmp_path: Path, monkeypatch):
 
     # Make the snapshot helper raise from inside _snapshot_unreadable_index.
     monkeypatch.setattr(
-        "ffn_dl.library.backup.backup",
+        "ficary.library.backup.backup",
         boom,
     )
 
@@ -65,7 +65,7 @@ def test_discard_save_blocker_unblocks_save(tmp_path: Path, monkeypatch):
     _write_index(idx_path, {"version": 999, "libraries": {}})
 
     monkeypatch.setattr(
-        "ffn_dl.library.backup.backup", lambda _p: (_ for _ in ()).throw(OSError("nope")),
+        "ficary.library.backup.backup", lambda _p: (_ for _ in ()).throw(OSError("nope")),
     )
 
     idx = LibraryIndex.load(idx_path)

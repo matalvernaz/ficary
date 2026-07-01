@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from ffn_dl.atomic import (
+from ficary.atomic import (
     atomic_path,
     atomic_write_bytes,
     atomic_write_text,
@@ -132,7 +132,7 @@ class TestPermissionPreservation:
     """``mkstemp`` creates files with mode 0600. Without explicit
     preservation, the atomic replace clobbers the target's prior mode
     — a shared NAS file becomes private and other tools (Plex,
-    Calibre, the next ffn-dl run under a different uid) lose read
+    Calibre, the next ficary run under a different uid) lose read
     access. The fix mirrors the existing target's mode onto the temp
     before the rename.
 
@@ -192,7 +192,7 @@ class TestAtomicPathReplaceFailure:
         target = tmp_path / "out.epub"
         target.write_bytes(b"existing")
 
-        import ffn_dl.atomic as atomic_mod
+        import ficary.atomic as atomic_mod
         orig_replace = atomic_mod.os.replace
 
         def boom(src, dst):

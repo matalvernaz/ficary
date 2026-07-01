@@ -8,7 +8,7 @@ from unittest.mock import patch
 
 import pytest
 
-from ffn_dl import exporters
+from ficary import exporters
 
 
 class _FakeResp:
@@ -21,8 +21,8 @@ class _FakeResp:
 @pytest.fixture
 def cover_cache_dir(tmp_path, monkeypatch):
     """Point the cover cache at a tmpdir so tests don't scribble over
-    the real ``~/.cache/ffn-dl``."""
-    from ffn_dl import portable
+    the real ``~/.cache/ficary``."""
+    from ficary import portable
     monkeypatch.setattr(portable, "cache_dir", lambda: tmp_path)
     return tmp_path
 
@@ -235,7 +235,7 @@ class TestV2414CoverValidation:
         cache_path = exporters._cover_cache_path(url)
         assert cache_path is not None
         bad_html = b"<html>not an image</html>" + b"\x00" * 600
-        from ffn_dl.atomic import atomic_write_bytes
+        from ficary.atomic import atomic_write_bytes
         atomic_write_bytes(cache_path, b"image/jpeg\n" + bad_html)
         # Cache read should reject + evict; fetch path should be invoked.
         with patch(

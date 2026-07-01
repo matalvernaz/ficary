@@ -7,14 +7,14 @@ from pathlib import Path
 
 import pytest
 
-from ffn_dl.cli import _apply_library_autosort, _library_subdir_for
-from ffn_dl.library.refresh import build_refresh_queue, default_refresh_args
-from ffn_dl.library.scanner import scan
-from ffn_dl.models import Chapter, Story
+from ficary.cli import _apply_library_autosort, _library_subdir_for
+from ficary.library.refresh import build_refresh_queue, default_refresh_args
+from ficary.library.scanner import scan
+from ficary.models import Chapter, Story
 
 from .library_fixtures import (
     bare_txt_no_url,
-    ffndl_epub,
+    ficary_epub,
 )
 
 
@@ -60,8 +60,8 @@ def test_default_refresh_args_has_every_attribute_download_reads():
 def test_build_refresh_queue_from_indexed_library(tmp_path: Path):
     lib = tmp_path / "lib"
     lib.mkdir()
-    ffndl_epub(lib, title="A", url="https://www.fanfiction.net/s/1/1/")
-    ffndl_epub(lib, title="B", url="https://archiveofourown.org/works/2")
+    ficary_epub(lib, title="A", url="https://www.fanfiction.net/s/1/1/")
+    ficary_epub(lib, title="B", url="https://archiveofourown.org/works/2")
     scan(lib, index_path=_index(tmp_path))
 
     queue, skipped = build_refresh_queue(lib, index_path=_index(tmp_path))
@@ -85,7 +85,7 @@ def test_build_refresh_queue_from_indexed_library(tmp_path: Path):
 def test_build_refresh_queue_skips_missing_files(tmp_path: Path):
     lib = tmp_path / "lib"
     lib.mkdir()
-    path = ffndl_epub(lib, title="Vanished")
+    path = ficary_epub(lib, title="Vanished")
     scan(lib, index_path=_index(tmp_path))
     path.unlink()
 
@@ -101,7 +101,7 @@ def test_build_refresh_queue_skips_missing_files(tmp_path: Path):
 def test_build_refresh_queue_accepts_index_count_for_foreign_format(
     tmp_path: Path,
 ):
-    # A foreign-format file whose chapter files don't match ffn-dl's
+    # A foreign-format file whose chapter files don't match ficary's
     # `chapter_*` convention makes count_chapters return 0. The
     # refresh engine should fall back to the index's recorded count
     # so the story still gets probed.
@@ -450,7 +450,7 @@ def test_apply_library_autosort_noop_when_output_explicit():
 def test_apply_library_autosort_noop_when_no_library_configured(
     monkeypatch: pytest.MonkeyPatch,
 ):
-    from ffn_dl import prefs as _prefs
+    from ficary import prefs as _prefs
 
     # Simulate an unset preference by forcing Prefs.get to return "".
     # The DEFAULTS dict doesn't include KEY_LIBRARY_PATH, so a fresh
@@ -469,7 +469,7 @@ def test_apply_library_autosort_noop_when_no_library_configured(
 def test_apply_library_autosort_sets_routing_when_configured(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ):
-    from ffn_dl import prefs as _prefs
+    from ficary import prefs as _prefs
 
     lib = tmp_path / "my-library"
 
@@ -500,11 +500,11 @@ def test_build_refresh_queue_ttl_skips_recently_probed(tmp_path: Path):
     """A story whose last_probed stamp is inside the TTL window should
     fall into ``skipped`` rather than the probe queue. The skip message
     explicitly names the time-since-probe so the user can see why."""
-    from ffn_dl.library.index import LibraryIndex
+    from ficary.library.index import LibraryIndex
 
     lib = tmp_path / "lib"
     lib.mkdir()
-    ffndl_epub(lib, title="Recent", url="https://www.fanfiction.net/s/10/1/")
+    ficary_epub(lib, title="Recent", url="https://www.fanfiction.net/s/10/1/")
     idx_path = _index(tmp_path)
     scan(lib, index_path=idx_path)
 
@@ -529,11 +529,11 @@ def test_build_refresh_queue_ttl_skips_recently_probed(tmp_path: Path):
 def test_build_refresh_queue_ttl_zero_probes_everything(tmp_path: Path):
     """TTL=0 (the CLI default) preserves the pre-TTL behaviour — every
     indexed story lands in the probe queue regardless of last_probed."""
-    from ffn_dl.library.index import LibraryIndex
+    from ficary.library.index import LibraryIndex
 
     lib = tmp_path / "lib"
     lib.mkdir()
-    ffndl_epub(lib, title="Freshly probed", url="https://www.fanfiction.net/s/11/1/")
+    ficary_epub(lib, title="Freshly probed", url="https://www.fanfiction.net/s/11/1/")
     idx_path = _index(tmp_path)
     scan(lib, index_path=idx_path)
 
@@ -554,7 +554,7 @@ def test_build_refresh_queue_ttl_missing_last_probed_is_probed(tmp_path: Path):
     from the first update-library run."""
     lib = tmp_path / "lib"
     lib.mkdir()
-    ffndl_epub(lib, title="Unstamped", url="https://www.fanfiction.net/s/12/1/")
+    ficary_epub(lib, title="Unstamped", url="https://www.fanfiction.net/s/12/1/")
     idx_path = _index(tmp_path)
     scan(lib, index_path=idx_path)
     # Deliberately skip mark_probed so last_probed stays absent.
@@ -574,13 +574,13 @@ def test_build_refresh_queue_uses_mtime_size_cache(
     is the Phase 1 hot path for big libraries of untouched files."""
     lib = tmp_path / "lib"
     lib.mkdir()
-    ffndl_epub(lib, title="Cached", url="https://www.fanfiction.net/s/20/1/")
+    ficary_epub(lib, title="Cached", url="https://www.fanfiction.net/s/20/1/")
     idx_path = _index(tmp_path)
     scan(lib, index_path=idx_path)
 
     # Patch count_chapters to fail loudly — if the cache path doesn't
     # kick in, the test falls through to here and we know immediately.
-    import ffn_dl.library.refresh as refresh_mod
+    import ficary.library.refresh as refresh_mod
 
     def _exploder(*args, **kwargs):
         raise AssertionError(
@@ -605,7 +605,7 @@ def test_build_refresh_queue_cache_invalidates_on_file_change(
 
     lib = tmp_path / "lib"
     lib.mkdir()
-    path = ffndl_epub(
+    path = ficary_epub(
         lib, title="Changes", url="https://www.fanfiction.net/s/21/1/",
     )
     idx_path = _index(tmp_path)
@@ -620,7 +620,7 @@ def test_build_refresh_queue_cache_invalidates_on_file_change(
         f.write(b"\x00" * 16)
 
     calls: list[Path] = []
-    import ffn_dl.library.refresh as refresh_mod
+    import ficary.library.refresh as refresh_mod
     real = refresh_mod.count_chapters
 
     def _recording(p):
@@ -648,7 +648,7 @@ def test_build_refresh_queue_old_index_without_mtime_falls_through(
 
     lib = tmp_path / "lib"
     lib.mkdir()
-    path = ffndl_epub(
+    path = ficary_epub(
         lib, title="Legacy", url="https://www.fanfiction.net/s/22/1/",
     )
     idx_path = _index(tmp_path)
@@ -672,11 +672,11 @@ def test_mark_probed_survives_rescan(tmp_path: Path):
     the entry. Without this, the post-update rescan after
     --update-library would wipe the stamp we just set, defeating the
     TTL on the very next run."""
-    from ffn_dl.library.index import LibraryIndex
+    from ficary.library.index import LibraryIndex
 
     lib = tmp_path / "lib"
     lib.mkdir()
-    ffndl_epub(lib, title="Sticky", url="https://www.fanfiction.net/s/13/1/")
+    ficary_epub(lib, title="Sticky", url="https://www.fanfiction.net/s/13/1/")
     idx_path = _index(tmp_path)
     scan(lib, index_path=idx_path)
 
@@ -698,11 +698,11 @@ def test_mark_probed_dict_form_stamps_remote_chapter_count(tmp_path: Path):
     """The dict form of mark_probed records remote counts on every
     entry so a later refresh can see remote > local and resume
     without re-probing."""
-    from ffn_dl.library.index import LibraryIndex
+    from ficary.library.index import LibraryIndex
 
     lib = tmp_path / "lib"
     lib.mkdir()
-    ffndl_epub(
+    ficary_epub(
         lib, title="Pending",
         url="https://www.fanfiction.net/s/20/1/",
     )
@@ -722,11 +722,11 @@ def test_mark_probed_none_count_clears_pending(tmp_path: Path):
     """A probe that answered but with no count (StoryNotFoundError)
     must clear any prior remote_chapter_count — otherwise a deleted
     story would stay flagged as "needs update" forever."""
-    from ffn_dl.library.index import LibraryIndex
+    from ficary.library.index import LibraryIndex
 
     lib = tmp_path / "lib"
     lib.mkdir()
-    ffndl_epub(
+    ficary_epub(
         lib, title="Ghost",
         url="https://www.fanfiction.net/s/21/1/",
     )
@@ -754,13 +754,13 @@ def test_build_refresh_queue_resumes_pending_without_reprobing(tmp_path: Path):
     upstream call. This is the resume-mid-batch path: an interrupted
     run can finish its downloads on the next invocation without
     re-probing the whole library."""
-    from ffn_dl.library.index import LibraryIndex
+    from ficary.library.index import LibraryIndex
 
     lib = tmp_path / "lib"
     lib.mkdir()
     # File has 3 chapters on disk; remote has 5 (pending update from a
     # previous probe that never got downloaded).
-    ffndl_epub(
+    ficary_epub(
         lib, title="Pending Update",
         url="https://www.fanfiction.net/s/30/1/",
         chapters=3,
@@ -786,11 +786,11 @@ def test_build_refresh_queue_pending_bypasses_ttl(tmp_path: Path):
     skip it — the whole point of the resume path is that the probe
     already happened once, so we don't need to wait for TTL expiry
     to finish the download it surfaced."""
-    from ffn_dl.library.index import LibraryIndex
+    from ficary.library.index import LibraryIndex
 
     lib = tmp_path / "lib"
     lib.mkdir()
-    ffndl_epub(
+    ficary_epub(
         lib, title="Pending Within TTL",
         url="https://www.fanfiction.net/s/31/1/",
         chapters=2,
@@ -815,11 +815,11 @@ def test_build_refresh_queue_pending_resolved_falls_back_to_normal(tmp_path: Pat
     """If remote_chapter_count == local, there's no pending work — the
     entry goes through the normal TTL + probe flow, not the resume
     shortcut."""
-    from ffn_dl.library.index import LibraryIndex
+    from ficary.library.index import LibraryIndex
 
     lib = tmp_path / "lib"
     lib.mkdir()
-    ffndl_epub(
+    ficary_epub(
         lib, title="Resolved",
         url="https://www.fanfiction.net/s/32/1/",
         chapters=3,
@@ -846,11 +846,11 @@ def test_index_record_preserves_remote_chapter_count_across_rescan(
     entries — otherwise the resume-on-next-run path gets defeated by
     the rescan that --update-library runs at the end of every
     library-update pass."""
-    from ffn_dl.library.index import LibraryIndex
+    from ficary.library.index import LibraryIndex
 
     lib = tmp_path / "lib"
     lib.mkdir()
-    ffndl_epub(
+    ficary_epub(
         lib, title="Keep Remote",
         url="https://www.fanfiction.net/s/33/1/",
     )
@@ -892,7 +892,7 @@ def test_stale_complete_skips_old_complete_story(tmp_path: Path):
     """
     lib = tmp_path / "lib"
     lib.mkdir()
-    path = ffndl_epub(
+    path = ficary_epub(
         lib,
         title="Ancient Complete",
         url="https://www.fanfiction.net/s/40/1/",
@@ -925,7 +925,7 @@ def test_stale_complete_keeps_fresh_complete_story(tmp_path: Path):
     """
     lib = tmp_path / "lib"
     lib.mkdir()
-    ffndl_epub(
+    ficary_epub(
         lib,
         title="Fresh Complete",
         url="https://www.fanfiction.net/s/41/1/",
@@ -949,7 +949,7 @@ def test_stale_complete_keeps_old_in_progress_story(tmp_path: Path):
     abandoned WIPs don't get silently dropped from updates."""
     lib = tmp_path / "lib"
     lib.mkdir()
-    path = ffndl_epub(
+    path = ficary_epub(
         lib,
         title="Old WIP",
         url="https://www.fanfiction.net/s/42/1/",
@@ -971,11 +971,11 @@ def test_stale_complete_bypassed_for_pending_resume(tmp_path: Path):
     """If a previous probe recorded remote > local, the resume shortcut
     must fire even when the file is old and Complete — the download is
     already owed and shouldn't wait another N days to land."""
-    from ffn_dl.library.index import LibraryIndex
+    from ficary.library.index import LibraryIndex
 
     lib = tmp_path / "lib"
     lib.mkdir()
-    path = ffndl_epub(
+    path = ficary_epub(
         lib,
         title="Old Complete With Pending",
         url="https://www.fanfiction.net/s/43/1/",
@@ -1006,7 +1006,7 @@ def test_stale_complete_disabled_by_default(tmp_path: Path):
     """
     lib = tmp_path / "lib"
     lib.mkdir()
-    path = ffndl_epub(
+    path = ficary_epub(
         lib,
         title="Old Complete (no gate)",
         url="https://www.fanfiction.net/s/44/1/",
@@ -1030,7 +1030,7 @@ def test_skip_complete_default_skips_complete_story(tmp_path: Path):
     a typical user wants from `--update-library`."""
     lib = tmp_path / "lib"
     lib.mkdir()
-    ffndl_epub(
+    ficary_epub(
         lib,
         title="Default Complete",
         url="https://www.fanfiction.net/s/45/1/",
@@ -1052,7 +1052,7 @@ def test_skip_complete_default_skips_completed_alias(tmp_path: Path):
     in addition to the normalised "Complete"."""
     lib = tmp_path / "lib"
     lib.mkdir()
-    ffndl_epub(
+    ficary_epub(
         lib,
         title="Completed Spelling",
         url="https://www.fanfiction.net/s/46/1/",
@@ -1074,7 +1074,7 @@ def test_skip_complete_default_skips_abandoned_status(tmp_path: Path):
     ``abandoned_at`` timestamp — both mean "stop probing"."""
     lib = tmp_path / "lib"
     lib.mkdir()
-    ffndl_epub(
+    ficary_epub(
         lib,
         title="Author Walked Away",
         url="https://www.fanfiction.net/s/47/1/",
@@ -1095,7 +1095,7 @@ def test_skip_complete_default_keeps_in_progress(tmp_path: Path):
     default — that's the whole point of the update sweep."""
     lib = tmp_path / "lib"
     lib.mkdir()
-    ffndl_epub(
+    ficary_epub(
         lib,
         title="Active WIP",
         url="https://www.fanfiction.net/s/48/1/",
@@ -1115,11 +1115,11 @@ def test_skip_complete_default_lets_pending_through(tmp_path: Path):
     """A Complete story with a recorded remote > local count has work
     owed locally — the gate must release it so the resume path fires
     instead of silently swallowing the pending download."""
-    from ffn_dl.library.index import LibraryIndex
+    from ficary.library.index import LibraryIndex
 
     lib = tmp_path / "lib"
     lib.mkdir()
-    ffndl_epub(
+    ficary_epub(
         lib,
         title="Complete With Pending",
         url="https://www.fanfiction.net/s/49/1/",

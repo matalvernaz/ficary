@@ -37,7 +37,7 @@ def _patch_fetch(scraper, page_html_factory):
 
 
 def test_ao3_scrape_search_works_parses_blurbs():
-    from ffn_dl.ao3 import AO3Scraper
+    from ficary.ao3 import AO3Scraper
 
     html = (FIXTURES / "ao3_search.html").read_text(encoding="utf-8")
     pages = {"first": html, "empty": ""}
@@ -68,7 +68,7 @@ def test_ao3_scrape_search_works_parses_blurbs():
 
 
 def test_ao3_scrape_tag_works_url_decodes_label():
-    from ffn_dl.ao3 import AO3Scraper
+    from ficary.ao3 import AO3Scraper
 
     scraper = AO3Scraper()
     _patch_fetch(scraper, lambda url: "<html></html>")
@@ -82,7 +82,7 @@ def test_ao3_scrape_tag_works_url_decodes_label():
 
 
 def test_ffn_scrape_search_works():
-    from ffn_dl.scraper import FFNScraper
+    from ficary.scraper import FFNScraper
 
     html = (FIXTURES / "ffn_search.html").read_text(encoding="utf-8")
     calls = []
@@ -110,7 +110,7 @@ def test_ffn_scrape_community_works_parses_z_list_rows():
     """FFN community pages reuse the ``z-list`` row markup. Build a
     minimal community page with two rows so the test pins the
     parser against the same shape ``_parse_results`` expects."""
-    from ffn_dl.scraper import FFNScraper
+    from ficary.scraper import FFNScraper
 
     minimal = """
     <html><head><title>Best Of Harry | FanFiction</title></head>
@@ -153,7 +153,7 @@ def test_ffn_scrape_community_works_parses_z_list_rows():
 
 
 def test_rr_scrape_search_works_parses_fiction_list_items():
-    from ffn_dl.royalroad import RoyalRoadScraper
+    from ficary.royalroad import RoyalRoadScraper
 
     minimal = """
     <html><body>
@@ -200,7 +200,7 @@ def test_wattpad_scrape_reading_list_works():
     """Wattpad reading lists go through the v4/lists endpoint, not
     the HTML page. Mock ``_api_get_json`` directly so we don't have
     to construct fake HTTP responses."""
-    from ffn_dl.wattpad import WattpadScraper
+    from ficary.wattpad import WattpadScraper
 
     page_one = {
         "name": "My Reading List",
@@ -241,7 +241,7 @@ def test_wattpad_scrape_reading_list_works():
 def test_wattpad_reading_list_short_url_form():
     """The /list/<id> short share link must classify and extract
     just like the canonical /user/X/lists/<id> form."""
-    from ffn_dl.wattpad import WattpadScraper
+    from ficary.wattpad import WattpadScraper
 
     scraper = WattpadScraper()
     scraper._api_get_json = lambda url: {
@@ -263,7 +263,7 @@ def test_ffn_search_pagination_caps_at_max_pages():
     """A site that hands back the same row on every page would
     otherwise loop forever; the per-method cap mirrors the global
     ``fetch_until_limit`` guard added in 2.3.3."""
-    from ffn_dl.scraper import FFNScraper
+    from ficary.scraper import FFNScraper
 
     same_row = """
     <html><body>

@@ -22,9 +22,9 @@ from pathlib import Path
 
 import pytest
 
-from ffn_dl.cli import _download_one, _merge_chapter_lists, _merge_with_existing
-from ffn_dl.exporters import DEFAULT_TEMPLATE, export_epub, export_html, export_txt
-from ffn_dl.models import Chapter, Story
+from ficary.cli import _download_one, _merge_chapter_lists, _merge_with_existing
+from ficary.exporters import DEFAULT_TEMPLATE, export_epub, export_html, export_txt
+from ficary.models import Chapter, Story
 
 
 def _ch(number: int, body: str) -> Chapter:
@@ -302,13 +302,13 @@ def _download_args(format_: str = "html") -> argparse.Namespace:
 
 def _patch_scraper(monkeypatch, stub):
     """Pin ``_build_scraper`` to return our stub regardless of URL."""
-    from ffn_dl import cli
+    from ficary import cli
 
     monkeypatch.setattr(cli, "_build_scraper", lambda url, args: stub)
 
 
 def test_download_one_legacy_format_makes_one_full_download(tmp_path, monkeypatch):
-    """A non-ffn-dl HTML file (no ``<div class="chapter">`` blocks)
+    """A non-ficary HTML file (no ``<div class="chapter">`` blocks)
     used to trigger the merge fallback's *second* metadata fetch
     after a wasted skip=N first pass. The pre-check now catches it
     up front, so the single download fires with skip=0."""
@@ -365,8 +365,8 @@ def test_download_one_legacy_format_preserves_filename(tmp_path, monkeypatch):
     assert siblings == ["User Hand-Named.html"]
 
 
-def test_download_one_ffn_dl_format_uses_skip_existing(tmp_path, monkeypatch):
-    """For a real ffn-dl-format file, the pre-check parses out the
+def test_download_one_ficary_format_uses_skip_existing(tmp_path, monkeypatch):
+    """For a real ficary-format file, the pre-check parses out the
     existing chapters so the scraper can ask for only the new ones —
     no behaviour change for the well-formed case."""
     existing = _story("https://x", chapters=_baseline_chapters(3))
@@ -399,7 +399,7 @@ def test_download_one_update_keeps_original_filename_even_when_template_differs(
     the user named the file. The export still lands at update_path
     so the user's filename choice survives."""
     update_path = tmp_path / "My Custom Name.html"
-    # Build a valid ffn-dl HTML so the merge path runs.
+    # Build a valid ficary HTML so the merge path runs.
     seed = _story("https://x", chapters=_baseline_chapters(2))
     seed.title = "Original Title"
     written = export_html(seed, str(tmp_path))

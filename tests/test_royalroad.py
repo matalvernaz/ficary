@@ -3,7 +3,7 @@
 from bs4 import BeautifulSoup
 from pathlib import Path
 
-from ffn_dl.royalroad import RoyalRoadScraper
+from ficary.royalroad import RoyalRoadScraper
 
 FIXTURE = Path(__file__).parent / "fixtures" / "royalroad_fiction.html"
 

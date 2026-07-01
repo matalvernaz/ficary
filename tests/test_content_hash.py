@@ -2,14 +2,14 @@
 
 from __future__ import annotations
 
-from ffn_dl.content_hash import (
+from ficary.content_hash import (
     diff_hashes,
     hash_chapter,
     hash_chapters,
     normalise_chapter_html,
     story_chapter_hashes,
 )
-from ffn_dl.models import Chapter, Story
+from ficary.models import Chapter, Story
 
 
 class TestNormalise:

@@ -1,0 +1,4684 @@
+"""Command-line interface for ficary."""
+
+import argparse
+import copy
+import logging
+import os
+import sys
+import threading
+from pathlib import Path
+from typing import Callable
+
+from . import legacy as _legacy
+from .ao3 import AO3LockedError
+from .download_queue import DownloadQueues
+from .exporters import DEFAULT_TEMPLATE, EXPORTERS, check_format_deps
+from .merge import merge_stories
+from .erotica import LiteroticaScraper
+from .models import Story, parse_chapter_spec
+from .scraper import (
+    CloudflareBlockError,
+    RateLimitError,
+    StoryNotFoundError,
+)
+from .sites import (
+    detect_scraper as _detect_site,
+    extract_story_url,
+    is_author_url as _is_author_url,
+    is_series_url as _is_series_url,
+)
+from .updater import (
+    ChaptersNotReadableError,
+    count_chapters,
+    extract_source_url,
+    extract_status,
+    read_chapters,
+)
+from .wattpad import WattpadPaidStoryError
+
+logger = logging.getLogger(__name__)
+
+# Errors that a per-item download can raise and that we want to handle
+# by recording the failure and moving on, rather than aborting the
+# whole batch. Kept narrower than bare ``Exception`` so programming
+# bugs (AttributeError, KeyError on missing fields) still surface.
+_DOWNLOAD_EXPECTED_ERRORS = (
+    RateLimitError,
+    CloudflareBlockError,
+    StoryNotFoundError,
+    AO3LockedError,
+    WattpadPaidStoryError,
+    ValueError,
+    OSError,
+    ImportError,
+)
+
+
+def _tts_providers_from_args(args: argparse.Namespace) -> list[str] | None:
+    """Resolve the ``--tts-providers`` flag into a list, or None to
+    mean "all installed providers". Order is preserved so a user-
+    listed sequence determines voice-pool priority."""
+    raw = getattr(args, "tts_providers", None)
+    if not raw:
+        return None
+    out: list[str] = []
+    for tok in str(raw).split(","):
+        name = tok.strip().lower()
+        if name and name not in out:
+            out.append(name)
+    return out or None
+
+
+def _llm_config_from_args(args: argparse.Namespace) -> dict | None:
+    """Build the kwargs dict that ``generate_audiobook`` forwards to the
+    LLM attribution backend, or None if --attribution != llm.
+
+    Resolution order: explicit --llm-* flag > matching env var > GUI
+    pref (read via ``prefs.Prefs``) > sensible default. The provider
+    determines which env var supplies the key when --llm-api-key is
+    omitted (``OPENAI_API_KEY`` / ``ANTHROPIC_API_KEY`` /
+    ``OPENROUTER_API_KEY`` for the openai-compatible bucket)."""
+    if getattr(args, "attribution", None) != "llm":
+        return None
+
+    from . import prefs as _prefs_mod
+
+    cli_prefs = _prefs_mod.Prefs()
+
+    provider = (
+        getattr(args, "llm_provider", None)
+        or cli_prefs.get(_prefs_mod.KEY_LLM_PROVIDER)
+        or "ollama"
+    )
+    model = (
+        getattr(args, "llm_model", None)
+        or cli_prefs.get(_prefs_mod.KEY_LLM_MODEL)
+        or ""
+    )
+    endpoint = (
+        getattr(args, "llm_endpoint", None)
+        or cli_prefs.get(_prefs_mod.KEY_LLM_ENDPOINT)
+        or ""
+    )
+
+    api_key = getattr(args, "llm_api_key", None) or ""
+    if not api_key:
+        env_for_provider = {
+            "openai": "OPENAI_API_KEY",
+            "anthropic": "ANTHROPIC_API_KEY",
+            "openai-compatible": "OPENROUTER_API_KEY",
+        }
+        env_var = env_for_provider.get(provider)
+        if env_var:
+            api_key = os.environ.get(env_var, "")
+    if not api_key:
+        api_key = cli_prefs.get(_prefs_mod.KEY_LLM_API_KEY) or ""
+
+    config = {
+        "provider": provider,
+        "model": model,
+        "api_key": api_key,
+        "endpoint": endpoint,
+    }
+    timeout_s = _resolve_llm_timeout(args, cli_prefs, _prefs_mod)
+    if timeout_s > 0:
+        config["request_timeout_s"] = timeout_s
+    return config
+
+
+def _resolve_llm_timeout(args, cli_prefs, _prefs_mod) -> int:
+    """Resolve the per-request LLM timeout in seconds. Priority:
+    ``--llm-timeout-s`` CLI flag → saved GUI pref → 0 (which signals
+    attribution.py to fall back to ``FICARY_LLM_TIMEOUT_S`` then the
+    300s built-in default). Never raises on bad input — non-positive
+    or non-numeric values fall through as 0."""
+    raw = getattr(args, "llm_timeout_s", None)
+    if raw is not None:
+        try:
+            value = int(raw)
+        except (TypeError, ValueError):
+            value = 0
+        if value > 0:
+            return value
+    try:
+        pref = int(cli_prefs.get(_prefs_mod.KEY_LLM_REQUEST_TIMEOUT_S) or 0)
+    except (TypeError, ValueError):
+        pref = 0
+    return pref if pref > 0 else 0
+
+
+def _llm_strip_notes_config(args: argparse.Namespace) -> dict | None:
+    """Resolve the LLM config used by ``--llm-strip-notes`` exports.
+
+    Mirrors :func:`_llm_config_from_args` but gates on
+    ``args.llm_strip_notes`` (a separate user-facing toggle from the
+    audiobook attribution backend) so a user can run an HTML/EPUB
+    export with the LLM A/N backstop on without having opted in to
+    the LLM-backed audiobook narrator. Reuses the same prefs/env
+    plumbing so credentials / provider choice / model are configured
+    once and shared between the two features.
+    """
+    if not getattr(args, "llm_strip_notes", False):
+        return None
+
+    from . import prefs as _prefs_mod
+
+    cli_prefs = _prefs_mod.Prefs()
+
+    provider = (
+        getattr(args, "llm_provider", None)
+        or cli_prefs.get(_prefs_mod.KEY_LLM_PROVIDER)
+        or "ollama"
+    )
+    model = (
+        getattr(args, "llm_model", None)
+        or cli_prefs.get(_prefs_mod.KEY_LLM_MODEL)
+        or ""
+    )
+    endpoint = (
+        getattr(args, "llm_endpoint", None)
+        or cli_prefs.get(_prefs_mod.KEY_LLM_ENDPOINT)
+        or ""
+    )
+
+    api_key = getattr(args, "llm_api_key", None) or ""
+    if not api_key:
+        env_for_provider = {
+            "openai": "OPENAI_API_KEY",
+            "anthropic": "ANTHROPIC_API_KEY",
+            "openai-compatible": "OPENROUTER_API_KEY",
+        }
+        env_var = env_for_provider.get(provider)
+        if env_var:
+            api_key = os.environ.get(env_var, "")
+    if not api_key:
+        api_key = cli_prefs.get(_prefs_mod.KEY_LLM_API_KEY) or ""
+
+    config = {
+        "provider": provider,
+        "model": model,
+        "api_key": api_key,
+        "endpoint": endpoint,
+    }
+    timeout_s = _resolve_llm_timeout(args, cli_prefs, _prefs_mod)
+    if timeout_s > 0:
+        config["request_timeout_s"] = timeout_s
+    return config
+
+
+def _scrape_author_stories(
+    url: str, args: argparse.Namespace,
+) -> tuple[str, list[str]]:
+    """Scrape an author page and return (author_name, [story_urls])."""
+    scraper = _build_scraper(url, args)
+    return scraper.scrape_author_stories(url)
+
+
+def _scrape_series_works(
+    url: str, args: argparse.Namespace,
+) -> tuple[str, list[str]]:
+    """Scrape an AO3 series and return (series_name, [work_urls])."""
+    scraper = _build_scraper(url, args)
+    return scraper.scrape_series_works(url)
+
+
+def _bulk_extract(
+    url: str, args: argparse.Namespace,
+) -> tuple[str, list[dict]]:
+    """Classify ``url`` and run the matching list-page extractor.
+
+    Returns ``(label, [work_dict, ...])``. The label is the page's
+    human-readable name (author, series title, search keywords, etc.)
+    or "Search results" / similar fallback. Single-story URLs come
+    back as a one-element list so the CLI dispatch is uniform.
+    """
+    from . import url_classifier
+
+    ref = url_classifier.classify(url)
+    if ref is None or ref.kind == "unknown":
+        raise ValueError(
+            f"Could not classify URL as a known list page: {url}"
+        )
+    if ref.kind == "story":
+        # A single-story URL is a degenerate list — return it as one
+        # entry so callers can treat both shapes the same.
+        return url, [{
+            "url": url,
+            "title": "",
+            "author": "",
+            "words": "",
+            "chapters": "",
+            "rating": "",
+            "fandom": "",
+            "status": "",
+            "updated": "",
+        }]
+    scraper = _build_scraper(url, args)
+    method = getattr(scraper, ref.extractor)
+    return method(url)
+
+
+def _handle_merge_series(
+    series_urls: list[str],
+    args: argparse.Namespace,
+    output_dir: Path,
+) -> bool:
+    """Download each series URL (AO3 or Literotica), merge its works, export as one file."""
+    try:
+        check_format_deps(args.format)
+    except ImportError as exc:
+        print(f"Missing dependency: {exc}", file=sys.stderr)
+        return False
+    all_ok = True
+    for series_url in series_urls:
+        scraper = _build_scraper(series_url, args)
+        try:
+            series_name, work_urls = scraper.scrape_series_works(series_url)
+        except (RateLimitError, CloudflareBlockError, StoryNotFoundError) as exc:
+            print(f"Error fetching series {series_url}: {exc}", file=sys.stderr)
+            all_ok = False
+            continue
+        if not work_urls:
+            print(f"No works found in series: {series_url}", file=sys.stderr)
+            all_ok = False
+            continue
+
+        print(f"\nSeries: {series_name}")
+        print(f"Downloading and merging {len(work_urls)} works...\n")
+        stories = []
+        for i, work_url in enumerate(work_urls, 1):
+            print(f"  [{i}/{len(work_urls)}] {work_url}")
+            def progress(current, total, title, cached):
+                tag = " (cached)" if cached else ""
+                print(f"      [{current}/{total}] {title}{tag}")
+            work_scraper = _build_scraper(work_url, args)
+            try:
+                story = work_scraper.download(work_url, progress_callback=progress)
+                stories.append(story)
+            except _DOWNLOAD_EXPECTED_ERRORS as exc:
+                logger.debug("Series part download failed: %s", exc, exc_info=True)
+                print(f"    Error: {exc}", file=sys.stderr)
+                all_ok = False
+
+        if not stories:
+            print(f"Nothing downloaded for series {series_name}.", file=sys.stderr)
+            all_ok = False
+            continue
+
+        merged = merge_stories(series_name, series_url, stories)
+
+        print(f"\n  Merged {len(stories)} works / {len(merged.chapters)} sections")
+        if args.format == "audio":
+            from .tts import generate_audiobook
+            def audio_progress(current, total, title):
+                print(f"  Synthesizing [{current}/{total}] {title}")
+            path = generate_audiobook(
+                merged, str(output_dir),
+                progress_callback=audio_progress,
+                speech_rate=args.speech_rate,
+                attribution_backend=args.attribution,
+                attribution_model_size=args.attribution_model_size,
+                attribution_llm_config=_llm_config_from_args(args),
+                enabled_tts_providers=_tts_providers_from_args(args),
+                strip_notes=args.strip_notes,
+                hr_as_stars=args.hr_as_stars,
+            )
+        else:
+            exporter = EXPORTERS[args.format]
+            path = exporter(
+                merged, str(output_dir), template=args.name,
+                hr_as_stars=args.hr_as_stars,
+                strip_notes=args.strip_notes,
+                llm_config=_llm_strip_notes_config(args),
+                progress=print,
+            )
+        print(f"  Saved: {path}")
+    return all_ok
+
+
+def _handle_merge_parts(
+    series_name: str,
+    series_url: str,
+    work_urls: list[str],
+    args: argparse.Namespace,
+    output_dir: Path,
+) -> bool:
+    """Download an explicit list of work URLs and merge them into one file.
+    Used for Literotica-style "series" detected from search-result titles.
+    Tries to resolve the anchor part's canonical /series/se/<id> first so
+    chapters that didn't appear in the search are still included; falls
+    back to the passed-in work URLs if no series link can be found.
+    """
+    if not work_urls:
+        print(f"No parts to merge for {series_name}.", file=sys.stderr)
+        return False
+
+    try:
+        check_format_deps(args.format)
+    except ImportError as exc:
+        print(f"Missing dependency: {exc}", file=sys.stderr)
+        return False
+
+    # Resolve the anchor part to its canonical series (Literotica only).
+    try:
+        anchor_scraper = _build_scraper(work_urls[0], args)
+        if isinstance(anchor_scraper, LiteroticaScraper):
+            resolved = anchor_scraper.resolve_series_url(work_urls[0])
+            if resolved:
+                print(f"Resolved full series: {resolved}")
+                try:
+                    s_name, s_urls = anchor_scraper.scrape_series_works(resolved)
+                    if s_urls:
+                        series_url = resolved
+                        series_name = s_name or series_name
+                        work_urls = s_urls
+                except _DOWNLOAD_EXPECTED_ERRORS as exc:
+                    logger.debug("Series scrape failed", exc_info=True)
+                    print(
+                        f"  (Series scrape failed: {exc}); using known parts.",
+                        file=sys.stderr,
+                    )
+    except _DOWNLOAD_EXPECTED_ERRORS as exc:
+        logger.debug("Series URL resolution failed", exc_info=True)
+        print(f"  (Couldn't resolve series URL: {exc})", file=sys.stderr)
+
+    print(f"\nSeries: {series_name}")
+    print(f"Downloading and merging {len(work_urls)} parts...\n")
+    stories = []
+    for i, work_url in enumerate(work_urls, 1):
+        print(f"  [{i}/{len(work_urls)}] {work_url}")
+        def progress(current, total, title, cached):
+            tag = " (cached)" if cached else ""
+            print(f"      [{current}/{total}] {title}{tag}")
+        work_scraper = _build_scraper(work_url, args)
+        try:
+            stories.append(
+                work_scraper.download(work_url, progress_callback=progress)
+            )
+        except _DOWNLOAD_EXPECTED_ERRORS as exc:
+            logger.debug("Merge-parts download failed", exc_info=True)
+            print(f"    Error: {exc}", file=sys.stderr)
+
+    if not stories:
+        print(f"Nothing downloaded for {series_name}.", file=sys.stderr)
+        return False
+
+    merged = merge_stories(series_name, series_url, stories)
+    print(f"\n  Merged {len(stories)} parts / {len(merged.chapters)} sections")
+    if args.format == "audio":
+        from .tts import generate_audiobook
+        def audio_progress(current, total, title):
+            print(f"  Synthesizing [{current}/{total}] {title}")
+        path = generate_audiobook(
+            merged, str(output_dir),
+            progress_callback=audio_progress,
+            speech_rate=args.speech_rate,
+            attribution_backend=args.attribution,
+            attribution_model_size=args.attribution_model_size,
+            attribution_llm_config=_llm_config_from_args(args),
+            enabled_tts_providers=_tts_providers_from_args(args),
+            strip_notes=args.strip_notes,
+            hr_as_stars=args.hr_as_stars,
+        )
+    else:
+        exporter = EXPORTERS[args.format]
+        path = exporter(
+            merged, str(output_dir), template=args.name,
+            hr_as_stars=args.hr_as_stars,
+            strip_notes=args.strip_notes,
+            llm_config=_llm_strip_notes_config(args),
+            progress=print,
+        )
+    print(f"  Saved: {path}")
+    return True
+
+
+def _apply_library_autosort(args: argparse.Namespace) -> None:
+    """If no explicit --output was passed and a library is configured,
+    route fresh downloads into it. Sets args.output to the library
+    root and stashes the template + misc folder on args so
+    _download_one can compute the per-story subdirectory once the
+    story metadata is known.
+
+    No-op when the user passed --output or when the library path pref
+    is empty. Safe to call multiple times.
+    """
+    if args.output is not None:
+        return
+    from .library.template import (
+        DEFAULT_ADULT_FOLDER,
+        DEFAULT_MISC_FOLDER,
+        DEFAULT_ORIGINAL_FOLDER,
+        DEFAULT_TEMPLATE,
+    )
+    from .prefs import (
+        KEY_LIBRARY_ADULT_FOLDER,
+        KEY_LIBRARY_MISC_FOLDER,
+        KEY_LIBRARY_ORIGINAL_FOLDER,
+        KEY_LIBRARY_PATH,
+        KEY_LIBRARY_PATH_TEMPLATE,
+        Prefs,
+    )
+
+    prefs = Prefs()
+    library_path = (prefs.get(KEY_LIBRARY_PATH, "") or "").strip()
+    if not library_path:
+        return
+
+    args.output = library_path
+    args._library_autosort = True
+    args._library_template = (
+        prefs.get(KEY_LIBRARY_PATH_TEMPLATE) or DEFAULT_TEMPLATE
+    )
+    args._library_misc = (
+        prefs.get(KEY_LIBRARY_MISC_FOLDER) or DEFAULT_MISC_FOLDER
+    )
+    args._library_original = (
+        prefs.get(KEY_LIBRARY_ORIGINAL_FOLDER) or DEFAULT_ORIGINAL_FOLDER
+    )
+    args._library_adult = (
+        prefs.get(KEY_LIBRARY_ADULT_FOLDER) or DEFAULT_ADULT_FOLDER
+    )
+
+
+def _library_subdir_for(
+    story: Story, args: argparse.Namespace,
+) -> Path | None:
+    """Compute the library-relative directory for a just-scraped story.
+
+    Returns None when auto-sort isn't enabled on these args (caller
+    should use output_dir as-is). Uses only the directory part of
+    the library template — the filename still comes from the usual
+    name template so --name overrides keep working.
+    """
+    if not getattr(args, "_library_autosort", False):
+        return None
+    from .library.identifier import adapter_for_url
+    from .library.template import (
+        ADULT_FICTION_ADAPTERS,
+        ORIGINAL_FICTION_ADAPTERS,
+        parse_category,
+        render,
+    )
+    from .updater import FileMetadata
+
+    # Adapter-specific routing: the original-fiction and adult-only
+    # sites get dedicated top-level folders rather than falling
+    # through to per-fandom or misc buckets. Same justification in
+    # both cases — a single visible subtree keeps that category of
+    # work browsable on its own and surfaces "here is what I have
+    # of this kind" without burying it in the fandom list.
+    #
+    # Original-fiction adapters (Royal Road today) keep a category
+    # escape hatch: a user who manually attaches a category to an RR
+    # download still gets that as the fandom. The category there is
+    # a user-supplied override, not site-emitted noise.
+    #
+    # Adult adapters intentionally lose that escape hatch. The
+    # erotica scrapers populate ``metadata['category']`` from URL
+    # slugs (Lushstories' ``"bdsm"`` / ``"celebrity"`` / etc.) — a
+    # kink or genre, not a fandom. Earlier code skipped the adult
+    # routing whenever any ``category`` was set, which leaked
+    # stories into per-kink folders like ``bdsm/`` instead of
+    # ``Adult/``. The bucket is determined by the source site
+    # adapter; that's exactly what :data:`ADULT_FICTION_ADAPTERS`
+    # enumerates, and there's no legitimate reason an AFF / Lush /
+    # Chyoa story should land under a kink-named folder.
+    adapter = adapter_for_url(story.url or "")
+    story_category = story.metadata.get("category")
+    if adapter in ORIGINAL_FICTION_ADAPTERS and not story_category:
+        fandoms: list[str] = [
+            getattr(args, "_library_original", None)
+            or "Original Works"
+        ]
+    elif adapter in ADULT_FICTION_ADAPTERS:
+        fandoms = [
+            getattr(args, "_library_adult", None)
+            or "Adult"
+        ]
+    else:
+        # ``parse_category`` strips FFN's ``Books > `` breadcrumb prefix
+        # and splits AO3's `` / ``-joined crossovers into individual
+        # fandoms, while leaving clean single-fandom strings (FicWad,
+        # MediaMiner, etc.) untouched.
+        fandoms = parse_category(story_category)
+
+    md = FileMetadata(
+        title=story.title,
+        author=story.author,
+        fandoms=fandoms,
+        rating=story.metadata.get("rating"),
+        status=story.metadata.get("status"),
+        format=args.format or "epub",
+    )
+    full = render(
+        md,
+        template=args._library_template,
+        misc_folder=args._library_misc,
+    )
+    return full.parent
+
+
+def _build_scraper(url: str, args: argparse.Namespace):
+    """Build a scraper instance for the given URL using CLI args."""
+    scraper_cls = _detect_site(url)
+    kwargs = {
+        "max_retries": args.max_retries,
+        "use_cache": not args.no_cache,
+    }
+    if args.delay_min is not None and args.delay_max is not None:
+        kwargs["delay_range"] = (args.delay_min, args.delay_max)
+    elif args.delay_min is not None or args.delay_max is not None:
+        d_min = args.delay_min if args.delay_min is not None else 1.0
+        d_max = args.delay_max if args.delay_max is not None else 5.0
+        kwargs["delay_range"] = (d_min, d_max)
+    if args.chunk_size is not None:
+        kwargs["chunk_size"] = args.chunk_size
+    if getattr(args, "use_wayback", False):
+        kwargs["use_wayback"] = True
+    if getattr(args, "cf_solve", False):
+        kwargs["cf_solve"] = True
+    # FicHub fast-path is FFN-only and a first-download optimisation:
+    # suppress it for --refetch-all (a deliberate fresh re-pull) so we
+    # don't serve FicHub's possibly-stale copy when the user explicitly
+    # asked to re-fetch from the source. ``use_fichub`` is an FFN-only
+    # constructor kwarg, so guard the class like the chyoa case below.
+    if getattr(args, "fichub", False) and not getattr(args, "refetch_all", False):
+        from .scraper import FFNScraper
+        if scraper_cls is FFNScraper:
+            kwargs["use_fichub"] = True
+    # Chyoa-specific: tree-walk depth cap. Only forward to the
+    # ChyoaScraper constructor — other scrapers don't accept it and
+    # ``**kwargs`` would surface an unrelated TypeError.
+    from .erotica import ChyoaScraper
+    if scraper_cls is ChyoaScraper:
+        depth = getattr(args, "chyoa_max_depth", None)
+        if depth is not None:
+            kwargs["max_depth"] = depth
+    # webnovel.com optional auth: a logged-in session cookie unlocks the
+    # chapters the user has purchased. Guard by class like the cases above
+    # so the kwarg never reaches a scraper that doesn't accept it.
+    from .webnovel import WebnovelScraper
+    if scraper_cls is WebnovelScraper:
+        cookie = (
+            getattr(args, "webnovel_cookie", None)
+            or _legacy.getenv_compat("FICARY_WEBNOVEL_COOKIE")
+        )
+        if cookie:
+            kwargs["session_cookie"] = cookie
+    # AO3 optional auth: a logged-in session cookie unlocks restricted works
+    # and private bookmarks. Same guard-by-class shape as webnovel above.
+    from .ao3 import AO3Scraper
+    if scraper_cls is AO3Scraper:
+        cookie = (
+            getattr(args, "ao3_cookie", None)
+            or _legacy.getenv_compat("FICARY_AO3_COOKIE")
+        )
+        if cookie:
+            kwargs["session_cookie"] = cookie
+    return scraper_cls(**kwargs)
+
+
+def _merge_chapter_lists(existing, new):
+    """Merge two chapter lists, deduping by chapter number with the
+    freshly-downloaded chapter winning. Returns ``(merged_sorted,
+    duplicate_count)``.
+
+    Without the dedupe, an author re-publishing chapter N (a routine
+    occurrence — fixing typos, re-numbering after edits) produces a
+    merged file with two chapter-N rows. The freshly-downloaded body
+    is the one we keep. Both the disk-read merge path
+    (``_merge_with_existing``) and the in-memory update path in
+    ``_download_one`` route through here so the dedupe is applied
+    identically and tested once.
+    """
+    by_number: dict[int, "object"] = {}
+    for ch in existing:
+        by_number[ch.number] = ch
+    duplicates = 0
+    for ch in new:
+        if ch.number in by_number:
+            duplicates += 1
+        by_number[ch.number] = ch
+    merged = sorted(by_number.values(), key=lambda c: c.number)
+    return merged, duplicates
+
+
+def _merge_with_existing(
+    new_story: Story,
+    scraper,
+    url: str,
+    chapter_spec,
+    *,
+    update_path: Path,
+    refetch_all: bool,
+    status: Callable[[str], None],
+    progress_callback,
+) -> Story:
+    """Return a complete Story by combining existing-file chapters with new ones.
+
+    The update flow downloads only the new chapters (skip_chapters=existing)
+    to save bandwidth, but the exporter needs the full chapter list. Rather
+    than re-downloading chapters 1..existing from the upstream site — which
+    burns minutes per story when the local chapter cache is empty — we read
+    them back out of ``update_path``. A roundtrip through our own HTML/EPUB
+    exporter recovers title, number, and body HTML verbatim.
+
+    Falls back to a full re-download when:
+
+    * ``refetch_all`` is set (user explicitly asked for a fresh copy —
+      surfaces as ``--refetch-all`` on the CLI and a Force Full Refresh
+      option in the GUI; covers the case where an author silently edited
+      old chapters).
+    * ``read_chapters`` raises — unsupported format (TXT), non-ficary
+      export, or any other reason the existing file can't be parsed
+      back. Keeps the update working even when the shortcut can't.
+    """
+    if refetch_all:
+        status("\n  Re-downloading full story (--refetch-all)...")
+        return scraper.download(
+            url, skip_chapters=0, chapters=chapter_spec,
+            progress_callback=progress_callback,
+        )
+
+    try:
+        existing = read_chapters(update_path)
+    except ChaptersNotReadableError as exc:
+        logger.info("Can't merge in place (%s); re-downloading", exc)
+        status(f"\n  Couldn't read existing chapters ({exc}); re-downloading...")
+        return scraper.download(
+            url, skip_chapters=0, chapters=chapter_spec,
+            progress_callback=progress_callback,
+        )
+
+    status(
+        f"\n  Merging {len(existing)} existing chapter(s) with "
+        f"{len(new_story.chapters)} new."
+    )
+    merged, duplicates = _merge_chapter_lists(existing, new_story.chapters)
+    if duplicates:
+        status(
+            f"  ({duplicates} chapter(s) replaced by re-downloaded versions)"
+        )
+    new_story.chapters = merged
+    return new_story
+
+
+def _download_one(
+    url: str,
+    args: argparse.Namespace,
+    output_dir: Path,
+    *,
+    update_path: Path | None = None,
+    existing_chapters: int = 0,
+    status_callback: Callable[[str], None] | None = None,
+) -> bool:
+    """Download and export a single story. Returns True on success, False on error.
+
+    ``status_callback`` receives every human-readable status line —
+    the initial "Downloading..." message, each ``[N/T] chapter title``
+    progress line, and the final "Saved to:" summary. Defaults to
+    :func:`print` for CLI use; the library GUI passes its own callback
+    so the per-chapter lines show up in the update log window (without
+    this, the GUI goes silent for the duration of the download and
+    feels like a hang).
+    """
+    scraper = _build_scraper(url, args)
+    status = status_callback if status_callback is not None else print
+
+    def progress(current, total, title, cached):
+        tag = " (cached)" if cached else ""
+        status(f"  [{current}/{total}] {title}{tag}")
+
+    try:
+        check_format_deps(args.format)
+        story_id = scraper.parse_story_id(url)
+        if update_path:
+            status(
+                f"Checking story {story_id} on {scraper.site_name} "
+                f"(existing file has {existing_chapters} chapters)..."
+            )
+        else:
+            status(f"Downloading story {story_id} from {scraper.site_name}...")
+
+        chapter_spec = parse_chapter_spec(getattr(args, "chapters", None))
+        # Fresh-copies updates re-fetch every chapter, so skipping the
+        # existing ones on the first download is pure waste — we'd
+        # fetch the new chapters, throw them away, then re-fetch
+        # everything from 1. Short-circuit to a single full fetch and
+        # bypass the merge helper entirely below.
+        refetch_all_update = bool(
+            update_path and getattr(args, "refetch_all", False)
+        )
+
+        # Merge-feasibility pre-check. The merge-in-place shortcut
+        # only works on ficary's own export shapes; foreign-format
+        # files (FicLab, Calibre, older home-brew exports) raise
+        # ChaptersNotReadableError when ``read_chapters`` runs against
+        # them. Detecting that *before* the first download lets us
+        # skip straight to a clean re-export with skip=0 — otherwise
+        # we'd download with skip=existing, fail the merge, and
+        # re-download with skip=0 (an extra metadata fetch and a
+        # confusing "Downloading … re-downloading …" log pair). Also
+        # caches the parsed chapters so the merge step below doesn't
+        # re-read the file.
+        existing_chapters_list: list | None = None
+        legacy_format = False
+        if update_path is not None and not refetch_all_update:
+            try:
+                existing_chapters_list = read_chapters(update_path)
+                # Authoritative count from the actual parsed file.
+                # The caller-supplied ``existing_chapters`` came from
+                # ``count_chapters``/the index and can disagree with
+                # the parsed list (e.g., index out-of-date); trust
+                # the file we just opened.
+                existing_chapters = len(existing_chapters_list)
+            except ChaptersNotReadableError as exc:
+                legacy_format = True
+                existing_chapters = 0
+                status(
+                    f"\n  [legacy-format] {update_path.name}: {exc}.\n"
+                    "  Doing a clean re-export under the existing "
+                    "filename — this is a one-time conversion."
+                )
+
+        initial_skip = (
+            0 if (refetch_all_update or legacy_format) else existing_chapters
+        )
+        if refetch_all_update:
+            status(
+                "  Fresh-copies mode — re-downloading every chapter."
+            )
+        story = scraper.download(
+            url,
+            progress_callback=progress,
+            skip_chapters=initial_skip,
+            chapters=chapter_spec,
+        )
+
+        new_count = len(story.chapters)
+        words = story.metadata.get("words", "")
+        if not words:
+            from .exporters import _count_story_words
+            counted = _count_story_words(story)
+            words = f"{counted:,}" if counted else "?"
+        story_status = story.metadata.get("status", "Unknown")
+
+        if update_path and new_count == 0:
+            status("\n  Up to date — no new chapters.")
+            return True
+
+        status("")
+        status(f"  Title:    {story.title}")
+        status(f"  Author:   {story.author}")
+        if update_path and not refetch_all_update:
+            total = existing_chapters + new_count
+            status(f"  Chapters: {total} ({new_count} new)")
+        else:
+            # Fresh-copies re-download and plain downloads both already
+            # have the full chapter count in ``new_count`` — no math.
+            status(f"  Chapters: {new_count}")
+        status(f"  Words:    {words}")
+        status(f"  Status:   {story_status}")
+
+        if (
+            update_path
+            and not refetch_all_update
+            and not legacy_format
+            and existing_chapters_list is not None
+        ):
+            # refetch_all and legacy-format both already pulled the
+            # full story in the initial download — ``story`` is
+            # complete, nothing to merge. Otherwise, splice the
+            # cached existing chapters with the freshly-downloaded
+            # new ones. We use the chapters from the pre-check rather
+            # than re-reading the file.
+            status(
+                f"\n  Merging {len(existing_chapters_list)} existing "
+                f"chapter(s) with {len(story.chapters)} new."
+            )
+            merged, duplicates = _merge_chapter_lists(
+                existing_chapters_list, story.chapters
+            )
+            if duplicates:
+                status(
+                    f"  ({duplicates} chapter(s) replaced by "
+                    f"re-downloaded versions)"
+                )
+            story.chapters = merged
+
+        # Library auto-sort: for fresh downloads only, route into
+        # <library>/<fandom>/... based on the story's metadata.
+        # Updates stay where they were (update_path already points to
+        # the existing file's parent).
+        if update_path is None:
+            subdir = _library_subdir_for(story, args)
+            if subdir is not None:
+                output_dir = output_dir / subdir
+                output_dir.mkdir(parents=True, exist_ok=True)
+
+        if args.format == "audio":
+            from .tts import generate_audiobook
+
+            def audio_progress(current, total, title):
+                status(f"  Synthesizing [{current}/{total}] {title}")
+
+            status("\nGenerating audiobook...")
+            path = generate_audiobook(
+                story, str(output_dir),
+                progress_callback=audio_progress,
+                speech_rate=args.speech_rate,
+                attribution_backend=args.attribution,
+                attribution_model_size=args.attribution_model_size,
+                attribution_llm_config=_llm_config_from_args(args),
+                enabled_tts_providers=_tts_providers_from_args(args),
+                strip_notes=args.strip_notes,
+                hr_as_stars=args.hr_as_stars,
+            )
+        else:
+            exporter = EXPORTERS[args.format]
+            path = exporter(
+                story,
+                str(output_dir),
+                template=args.name,
+                hr_as_stars=args.hr_as_stars,
+                strip_notes=args.strip_notes,
+                llm_config=_llm_strip_notes_config(args),
+                progress=status,
+            )
+
+        # Filename preservation on update: if the user's existing
+        # file lives at a name that differs from what the template
+        # produces (e.g., they hand-named "Muggle-Raised Champion.html"
+        # but FFN's title is "Dragon Chronicles 1: Muggle-Raised
+        # Champion"), keep the original name. Without this rename,
+        # the export writes the templated name and orphans the old
+        # file — leaving two copies of the same fic and the legacy
+        # one stuck in the re-download loop forever. ``Path.replace``
+        # is atomic on POSIX and Windows.
+        if update_path is not None:
+            try:
+                same_path = path.resolve() == update_path.resolve()
+            except OSError:
+                same_path = False
+            if not same_path:
+                path.replace(update_path)
+                path = update_path
+        status(f"\nSaved to: {path}")
+
+        if getattr(args, "send_to_kindle", None):
+            try:
+                from .mailer import SMTPConfigError, send_file
+
+                send_file(args.send_to_kindle, path)
+                status(f"Emailed to: {args.send_to_kindle}")
+            except SMTPConfigError as exc:
+                print(f"Could not send: {exc}", file=sys.stderr)
+            except (OSError, RuntimeError) as exc:
+                logger.debug("Kindle email failed", exc_info=True)
+                print(f"Email failed: {exc}", file=sys.stderr)
+
+        if args.clean_cache:
+            scraper.clean_cache(story_id)
+
+        return True
+
+    except (ValueError, FileNotFoundError) as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return False
+    except StoryNotFoundError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return False
+    except AO3LockedError as exc:
+        print(f"Locked: {exc}", file=sys.stderr)
+        return False
+    except WattpadPaidStoryError as exc:
+        print(f"Paywalled: {exc}", file=sys.stderr)
+        return False
+    except CloudflareBlockError as exc:
+        print(f"Blocked: {exc}", file=sys.stderr)
+        return False
+    except RateLimitError as exc:
+        print(f"\nRate limited: {exc}", file=sys.stderr)
+        print(
+            "Try increasing --delay-min / --delay-max or wait before retrying.",
+            file=sys.stderr,
+        )
+        return False
+    except ImportError as exc:
+        print(f"Missing dependency: {exc}", file=sys.stderr)
+        return False
+
+
+def _read_batch_file(path: str) -> list[str]:
+    """Read URLs from a batch file, skipping blank lines and comments.
+
+    ``utf-8-sig`` instead of plain ``utf-8`` so Windows Notepad's
+    BOM-prefixed UTF-8 saves don't leak ``\\ufeff`` into the first
+    URL — the resulting fetch then fails with an opaque
+    ``Invalid URL`` from curl_cffi and the user has no way to see
+    the invisible character at the head of their first line."""
+    urls = []
+    batch_path = Path(path)
+    if not batch_path.is_file():
+        raise FileNotFoundError(f"Batch file not found: {path}")
+    with open(batch_path, "r", encoding="utf-8-sig") as f:
+        for line in f:
+            line = line.strip()
+            if line and not line.startswith("#"):
+                urls.append(line)
+    return urls
+
+
+def _build_search_spec(args: argparse.Namespace):
+    """Return (site_label, search_fn, filters) for the chosen --site.
+
+    Each site carries a different flag set; this function maps the
+    argparse namespace to the keyword dict that the per-site search
+    function expects. Unset filter keys are dropped so we don't pass
+    ``None`` through to the downstream URL builders.
+    """
+    from .search import (
+        search_ao3, search_ffn, search_literotica, search_royalroad,
+        search_wattpad,
+    )
+
+    if args.site == "ao3":
+        site_label = "archiveofourown.org"
+        filters = {
+            "rating": args.rating,
+            "language": args.language,
+            "complete": args.status,
+            "crossover": args.crossover,
+            "category": getattr(args, "ao3_category", None),
+            "sort": args.sort,
+            "fandom": args.fandom,
+            "word_count": args.word_count,
+            "character": args.character,
+            "relationship": args.relationship,
+            "freeform": getattr(args, "ao3_freeform", None),
+            "warning": getattr(args, "ao3_warning", None),
+            "title": getattr(args, "ao3_title", None),
+            "creator": getattr(args, "ao3_creator", None),
+            "single_chapter": args.single_chapter,
+        }
+        search_fn = search_ao3
+    elif args.site == "royalroad":
+        site_label = "royalroad.com"
+        filters = {
+            "status": args.status,
+            "type": getattr(args, "rr_type", None),
+            "order_by": getattr(args, "rr_order_by", None),
+            "tags": getattr(args, "rr_tags", None),
+            "genres": getattr(args, "rr_genres", None),
+            "warnings": getattr(args, "rr_warnings", None),
+            "min_words": getattr(args, "rr_min_words", None),
+            "max_words": getattr(args, "rr_max_words", None),
+            "min_pages": getattr(args, "rr_min_pages", None),
+            "max_pages": getattr(args, "rr_max_pages", None),
+            "min_rating": getattr(args, "rr_min_rating", None),
+            "list": getattr(args, "rr_list", None),
+        }
+        search_fn = search_royalroad
+    elif args.site == "literotica":
+        site_label = "literotica.com (tag browse)"
+        filters = {"category": getattr(args, "lit_category", None)}
+        search_fn = search_literotica
+        if getattr(args, "lit_page", None):
+            args.start_page = max(args.start_page, int(args.lit_page))
+    elif args.site == "wattpad":
+        site_label = "wattpad.com"
+        filters = {
+            "mature": getattr(args, "wp_mature", None),
+            "completed": getattr(args, "wp_completed", None),
+        }
+        search_fn = search_wattpad
+    else:
+        site_label = "fanfiction.net"
+        filters = {
+            "rating": args.rating,
+            "language": args.language,
+            "status": args.status,
+            "genre": args.genre,
+            "genre2": getattr(args, "genre2", None),
+            "exclude_genre": getattr(args, "ffn_exclude_genre", None),
+            "min_words": args.min_words,
+            "crossover": args.crossover,
+            "match": args.match,
+            "sort": args.sort,
+            "time": getattr(args, "ffn_time", None),
+            "characters": getattr(args, "ffn_characters", None),
+            "world": getattr(args, "ffn_world", None),
+            "exclude_characters": getattr(args, "ffn_exclude_characters", None),
+            "exclude_world": getattr(args, "ffn_exclude_world", None),
+            "pairing": getattr(args, "ffn_pairing", None),
+        }
+        search_fn = search_ffn
+    filters = {k: v for k, v in filters.items() if v}
+    return site_label, search_fn, filters
+
+
+def _collapse_results(raw_results: list, site: str) -> list:
+    """Apply per-site series collapsing. Sites without a series concept
+    (FFN, Royal Road, Wattpad) return the raw list unchanged."""
+    from .search import collapse_ao3_series, collapse_literotica_series
+
+    if site == "ao3":
+        return collapse_ao3_series(raw_results)
+    if site == "literotica":
+        return collapse_literotica_series(raw_results)
+    return list(raw_results)
+
+
+def _print_search_results(results: list, start_idx: int = 1) -> None:
+    """Render the search results list the interactive prompt picks from."""
+    for i, r in enumerate(results, start=start_idx):
+        if r.get("is_series"):
+            parts = len(r.get("series_parts") or [])
+            print(f"  {i:>2}. {r['title']}  [Series · {parts} part(s) seen]")
+            print(f"      by {r.get('author', '')} | {r.get('fandom', '')}")
+        else:
+            status_tag = " [Complete]" if r.get("status") == "Complete" else ""
+            print(f"  {i:>2}. {r['title']}")
+            print(
+                f"      by {r['author']} | {r['fandom']} | "
+                f"{r['words']} words | {r['chapters']} ch | "
+                f"Rated {r['rating']}{status_tag}"
+            )
+        summary = r.get("summary") or ""
+        if summary:
+            s = summary if len(summary) <= 120 else summary[:117] + "..."
+            print(f"      {s}")
+        print()
+
+
+def _prompt_search_choice(results: list):
+    """Prompt for a numeric pick, 'm' for more, or 'q' to quit.
+
+    Returns an integer index (1-based), the string ``"more"``, or
+    calls ``sys.exit(0)`` on quit / Ctrl-C — the search loop has no
+    fallback path if the user bails out.
+    """
+    prompt = (
+        f"Enter a number (1-{len(results)}) to download, 'm' to load more, "
+        f"or 'q' to quit: "
+    )
+    while True:
+        try:
+            choice = input(prompt)
+        except (EOFError, KeyboardInterrupt):
+            print()
+            sys.exit(0)
+        choice = choice.strip().lower()
+        if choice == "q":
+            sys.exit(0)
+        if choice in ("m", "more"):
+            return "more"
+        try:
+            idx = int(choice)
+        except ValueError:
+            print("Invalid input. Enter a number, 'm', or 'q'.")
+            continue
+        if not 1 <= idx <= len(results):
+            print(f"Pick a number between 1 and {len(results)}.")
+            continue
+        return idx
+
+
+def _download_picked_result(picked: dict, args: argparse.Namespace) -> bool:
+    """Download one search-pick (work, series, or multi-part) via the
+    appropriate handler. Returns the success flag from that handler."""
+    print(f"\nDownloading: {picked['title']}")
+    print(f"  {picked['url']}\n")
+
+    if args.format is None:
+        args.format = "epub"
+    if args.output is None:
+        args.output = "."
+
+    output_dir = Path(args.output)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    if picked.get("is_series"):
+        args.merge_series = True
+        if picked.get("parts_only"):
+            part_urls = [
+                p["url"] for p in (picked.get("series_parts") or [])
+                if p.get("url")
+            ]
+            return _handle_merge_parts(
+                picked.get("title") or "Series",
+                picked.get("url") or "",
+                part_urls,
+                args,
+                output_dir,
+            )
+        return _handle_merge_series([picked["url"]], args, output_dir)
+    return _download_one(picked["url"], args, output_dir)
+
+
+def _handle_search(args: argparse.Namespace) -> None:
+    """Interactive search mode: search the chosen site, display results, download on pick."""
+    from .search import fetch_until_limit
+
+    site_label, search_fn, filters = _build_search_spec(args)
+
+    query_desc = args.search if args.search else "(no query — list browse)"
+    print(f"Searching {site_label} for: {query_desc}")
+    if filters:
+        print("Filters: " + ", ".join(f"{k}={v}" for k, v in filters.items()))
+    print()
+
+    limit = max(1, int(args.limit))
+    try:
+        raw_fetched, next_page = fetch_until_limit(
+            search_fn, args.search,
+            limit=limit, start_page=args.start_page, **filters,
+        )
+    except (RuntimeError, ValueError) as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        sys.exit(1)
+
+    if not raw_fetched:
+        print("No results found.")
+        sys.exit(0)
+
+    # Keep the raw uncollapsed list so load-more can re-collapse the
+    # full set — series parts that cross page boundaries need to see
+    # each other to group correctly.
+    raw_results = list(raw_fetched)
+    results = _collapse_results(raw_results, args.site)
+    _print_search_results(results)
+
+    while True:
+        picked_n = _prompt_search_choice(results)
+        if picked_n == "more":
+            try:
+                more_raw, next_page = fetch_until_limit(
+                    search_fn, args.search,
+                    limit=limit, start_page=next_page, **filters,
+                )
+            except (RuntimeError, ValueError) as exc:
+                print(f"Error loading more: {exc}", file=sys.stderr)
+                continue
+            if not more_raw:
+                print("(No more results.)")
+                continue
+            raw_results.extend(more_raw)
+            results = _collapse_results(raw_results, args.site)
+            # Reprint the full list so numbering matches the merged view.
+            print()
+            _print_search_results(results)
+            continue
+
+        picked = results[picked_n - 1]
+        ok = _download_picked_result(picked, args)
+        sys.exit(0 if ok else 1)
+
+
+def _handle_update_all(args: argparse.Namespace) -> None:
+    """Scan a folder for previously-downloaded exports and update each."""
+    folder = Path(args.update_all)
+    if not folder.is_dir():
+        print(f"Error: {folder} is not a directory.", file=sys.stderr)
+        sys.exit(1)
+
+    try:
+        check_format_deps(args.format)
+    except ImportError as exc:
+        print(f"Missing dependency: {exc}", file=sys.stderr)
+        sys.exit(1)
+
+    iterator = folder.rglob("*") if args.recursive else folder.iterdir()
+    files = sorted(
+        p for p in iterator
+        if p.is_file() and p.suffix.lower() in _FMT_MAP
+    )
+    if not files:
+        where = "recursively in" if args.recursive else "in"
+        print(f"No .epub, .html, or .txt files {where} {folder}.")
+        sys.exit(0)
+
+    workers = max(1, int(args.probe_workers))
+    mode_bits = []
+    if args.recursive:
+        mode_bits.append("recursive")
+    if args.dry_run:
+        mode_bits.append("dry-run")
+    if args.skip_complete:
+        mode_bits.append("skipping Complete/Abandoned")
+    else:
+        mode_bits.append("probing every status")
+    mode_bits.append(f"{workers} probe worker{'s' if workers != 1 else ''}")
+    mode = f" ({', '.join(mode_bits)})"
+    print(f"Scanning {len(files)} files in {folder}{mode}...\n")
+
+    skipped: list[str] = []
+
+    # Phase 1 (serial, fast): read local state. Anything that can be
+    # resolved without a network call — missing source URL, unreadable
+    # file, skip-complete — is decided here and never queues a probe.
+    probe_queue = []
+    for path in files:
+        rel = str(path.relative_to(folder)) if args.recursive else path.name
+
+        try:
+            url = extract_source_url(path)
+        except (ValueError, FileNotFoundError) as exc:
+            print(f"  [skip] {rel}: no source URL ({exc})")
+            skipped.append(rel)
+            continue
+
+        try:
+            local = count_chapters(path)
+        except (OSError, ValueError) as exc:
+            logger.debug("count_chapters failed for %s", path, exc_info=True)
+            print(f"  [skip] {rel}: couldn't read ({exc})")
+            skipped.append(rel)
+            continue
+
+        if local == 0:
+            print(f"  [skip] {rel}: local chapter count is 0 (probably not an ficary export)")
+            skipped.append(rel)
+            continue
+
+        if args.skip_complete:
+            try:
+                status = extract_status(path)
+            except (OSError, ValueError) as exc:
+                logger.debug("extract_status failed for %s", path, exc_info=True)
+                status = ""
+            status_lc = status.strip().lower()
+            if status_lc.startswith("complete") or status_lc == "abandoned":
+                label = status.strip() or "Complete"
+                print(f"  [skip] {rel}: marked {label} ({local} chapters)")
+                skipped.append(rel)
+                continue
+
+        probe_queue.append({"path": path, "rel": rel, "url": url, "local": local})
+
+    exit_code = _run_update_queue(
+        probe_queue, args, workers, skipped_count=len(skipped),
+        label="Update-all",
+    )
+    sys.exit(exit_code)
+
+
+_FMT_MAP = {".epub": "epub", ".html": "html", ".txt": "txt"}
+
+
+def _run_update_queue(
+    probe_queue: list[dict],
+    args,
+    workers: int,
+    *,
+    skipped_count: int,
+    label: str = "Update-all",
+    progress=print,
+    on_probe_complete=None,
+    on_download_complete=None,
+    cancel_event: "threading.Event | None" = None,
+) -> int:
+    """Run the probe + download cycle on a pre-built queue.
+
+    ``probe_queue`` entries need ``path`` (absolute), ``rel`` (display
+    name), ``url``, and ``local`` (existing chapter count). Phase 1
+    (reading each of those from disk or from the library index) is
+    the caller's job; this helper owns Phase 2 (concurrent remote
+    probes), Phase 3 (serial downloads), and the summary emission.
+
+    ``progress`` is a one-arg callable that receives each line of
+    output. Defaults to ``print`` for CLI use; the GUI passes its own
+    callback that marshals onto the main thread.
+
+    ``on_probe_complete`` (optional) is a callable fired with the
+    story URL after each *successful* probe — so the GUI can stamp
+    ``last_probed`` incrementally rather than in one shot at the end.
+    Failures are not reported because the TTL should allow a retry
+    on the next update. Runs from inside the probe thread pool, so
+    the callback must be thread-safe.
+
+    ``cancel_event`` (optional) is a ``threading.Event`` the caller
+    may set to request an early, cooperative abort — worker probes
+    short-circuit to a "cancelled" outcome and Phase 3 breaks before
+    starting the next story. Used by the GUI's library window so
+    closing it mid-run stops upstream traffic instead of leaving a
+    zombie worker grinding for another hour.
+
+    Returns the exit code: 0 on success, 1 if any story failed.
+    """
+    from concurrent.futures import ThreadPoolExecutor
+
+    updated: list[str] = []
+    up_to_date: list[str] = []
+    # ``failed`` is a list of ``(relpath, reason)`` tuples so the
+    # end-of-run summary can show *why* each story failed, not just
+    # which ones — previously users had to scroll back through the
+    # log and re-correlate names with exceptions by hand.
+    failed: list[tuple[str, str]] = []
+    would_update: list[tuple[str, int, int]] = []
+
+    # Phase 2 (concurrent): remote chapter-count probes.
+    #
+    # Partition by site class so we can (a) share one scraper per site
+    # across every probe, which reuses its curl_cffi HTTP/2 connection
+    # and skips the ~300–600 ms TLS handshake after the first request;
+    # and (b) honour the site's own ``concurrency`` attribute — FFN
+    # captcha-bans on bulk regardless of pacing, so its group must
+    # stay at 1 worker even when ``--probe-workers`` is higher. The
+    # global ``workers`` value is now an upper cap, not a fan-out count.
+    if probe_queue:
+        total = len(probe_queue)
+        progress(f"\nProbing {total} stories for new chapters...")
+
+        _PROBE_EXPECTED_ERRORS = (
+            RateLimitError, CloudflareBlockError, StoryNotFoundError,
+            AO3LockedError, ValueError,
+        )
+
+        by_site: dict[type, list[dict]] = {}
+        for entry in probe_queue:
+            site_cls = _detect_site(entry["url"])
+            by_site.setdefault(site_cls, []).append(entry)
+
+        # Progress output during Phase 2. Without this, a library with
+        # 700+ FFN stories goes silent for an hour+ while the serial
+        # 6-second-floor probes grind through — the user can't tell
+        # whether the app has hung or is just waiting on FFN's rate
+        # limit. One line per probe shows liveness and lets them
+        # estimate remaining time. Lock-guarded because probe_entry
+        # runs inside ThreadPoolExecutor workers.
+        probe_progress_lock = threading.Lock()
+        completed_count = [0]
+
+        def probe_entry(scraper, entry):
+            # Caller-requested abort: drop out before the HTTP call so
+            # closing the library window doesn't keep hammering upstream.
+            if cancel_event is not None and cancel_event.is_set():
+                entry["error"] = "cancelled"
+                entry["cancelled"] = True
+                with probe_progress_lock:
+                    completed_count[0] += 1
+                return
+            # ``probe_answered`` = we got a definitive answer from upstream,
+            # whether the story exists (chapter count) or is confirmed gone
+            # (StoryNotFoundError). Both deserve a ``last_probed`` stamp so
+            # TTL can suppress the next probe. Transient failures (rate
+            # limit, Cloudflare block, timeout) do *not* answer the
+            # question and must stay unstamped so the retry happens.
+            probe_answered = False
+            # Pre-filled by build_refresh_queue for resumed-pending entries
+            # (remote_chapter_count in the index beats local → skip probe).
+            if "remote" in entry:
+                with probe_progress_lock:
+                    completed_count[0] += 1
+                    progress(
+                        f"  [probe {completed_count[0]}/{total}] "
+                        f"{entry['rel']}: "
+                        f"{entry['remote']} chapter(s) upstream "
+                        "(from index — probe skipped)"
+                    )
+                return
+            remote_count: int | None = None
+            try:
+                entry["remote"] = scraper.get_chapter_count(entry["url"])
+                remote_count = entry["remote"]
+                outcome = f"{entry['remote']} chapter(s) upstream"
+                probe_answered = True
+            except StoryNotFoundError as exc:
+                entry["error"] = exc
+                entry["upstream_missing"] = True
+                outcome = f"no longer on upstream: {exc}"
+                probe_answered = True
+            except _PROBE_EXPECTED_ERRORS as exc:
+                entry["error"] = exc
+                outcome = f"probe failed: {exc}"
+            except (OSError, RuntimeError) as exc:
+                logger.debug("Chapter-count probe failed", exc_info=True)
+                entry["error"] = exc
+                outcome = f"probe failed: {exc}"
+            with probe_progress_lock:
+                completed_count[0] += 1
+                progress(
+                    f"  [probe {completed_count[0]}/{total}] "
+                    f"{entry['rel']}: {outcome}"
+                )
+            # Fire the completion callback *outside* the progress lock
+            # so the GUI's stamp-flush disk I/O doesn't block other
+            # probe workers from reporting their own progress lines.
+            if probe_answered and on_probe_complete is not None:
+                try:
+                    on_probe_complete(entry["url"], remote_count)
+                except Exception:  # pragma: no cover — callback is best-effort
+                    logger.debug(
+                        "on_probe_complete callback raised", exc_info=True,
+                    )
+
+        def run_site_group(site_cls, entries):
+            scraper = _build_scraper(entries[0]["url"], args)
+            site_workers = max(1, min(workers, scraper.concurrency))
+            progress(
+                f"  Probing {len(entries)} {site_cls.site_name} "
+                f"stor{'y' if len(entries) == 1 else 'ies'} "
+                f"(concurrency={site_workers})..."
+            )
+            with ThreadPoolExecutor(
+                max_workers=site_workers,
+                thread_name_prefix=f"probe-{site_cls.site_name}",
+            ) as pool:
+                for _ in pool.map(
+                    lambda e: probe_entry(scraper, e), entries,
+                ):
+                    pass
+
+        if len(by_site) == 1:
+            cls, entries = next(iter(by_site.items()))
+            run_site_group(cls, entries)
+        else:
+            # Run every site group in parallel so a slow-rate-limited
+            # group (e.g. FFN, serialised) doesn't gate the others.
+            with ThreadPoolExecutor(
+                max_workers=len(by_site),
+                thread_name_prefix="probe-site",
+            ) as outer:
+                site_futures = [
+                    outer.submit(run_site_group, cls, entries)
+                    for cls, entries in by_site.items()
+                ]
+                for fut in site_futures:
+                    fut.result()
+        progress("")
+
+    # Phase 3 (per-site fan-out): partition the downloadable entries
+    # by site and hand each one to the shared ``DownloadQueues``
+    # worker for that site. Same-site jobs still run serially behind
+    # the scraper's rate-limit floor; different sites run in parallel
+    # so a 700-story FFN sweep doesn't gate the AO3 entries behind
+    # it. The queue is a process-wide singleton shared with the
+    # manual GUI downloads — a user clicking Download on an AO3 URL
+    # mid-sweep queues behind this run's AO3 jobs rather than
+    # running in parallel and tripping AO3's rate limit.
+    from concurrent.futures import FIRST_COMPLETED, wait
+
+    total = len(probe_queue)
+    cancelled = False
+    result_lock = threading.Lock()
+
+    # Classify up front: entries that don't need a download (errors,
+    # already up to date, dry-run) emit their progress lines
+    # immediately and drop out of the queue fan-out.
+    #
+    # ``failed`` carries ``(relpath, reason)`` tuples so the end-of-run
+    # summary can surface what actually went wrong instead of just a
+    # list of names the user has to re-correlate with the scrollback.
+    downloadable: list[dict] = []
+    for i, entry in enumerate(probe_queue, 1):
+        rel = entry["rel"]
+        if entry.get("cancelled"):
+            progress(f"[{i}/{total}] {rel}")
+            progress(f"  Cancelled before probe.")
+            continue
+        if "error" in entry:
+            progress(f"[{i}/{total}] {rel}")
+            progress(f"  Probe failed: {entry['error']}")
+            failed.append((rel, f"probe: {entry['error']}"))
+            continue
+
+        local = entry["local"]
+        remote = entry["remote"]
+        if remote <= local:
+            msg = (
+                "up to date"
+                if remote == local
+                else (
+                    f"remote has fewer chapters ({remote} < {local}) "
+                    "— leaving alone"
+                )
+            )
+            progress(f"[{i}/{total}] {rel}")
+            progress(f"  {local} local / {remote} remote — {msg}")
+            up_to_date.append(rel)
+            continue
+
+        new_count = remote - local
+        if args.dry_run:
+            progress(f"[{i}/{total}] {rel}")
+            progress(
+                f"  {local} local / {remote} remote — "
+                f"{new_count} new chapter(s)"
+            )
+            would_update.append((rel, local, remote))
+            continue
+
+        downloadable.append(entry)
+
+    download_total = len(downloadable)
+    started_count = [0]
+
+    def run_entry(entry):
+        """Download one story. Runs on a ``dlq-<site>`` worker thread
+        so the GUI's ``_log`` helpers auto-prefix output with
+        ``[<site>] ``. Exits promptly on cancel-event so a closed
+        library window doesn't keep hammering upstream."""
+        if cancel_event is not None and cancel_event.is_set():
+            return
+        rel = entry["rel"]
+        local = entry["local"]
+        remote = entry["remote"]
+        new_count = remote - local
+        with result_lock:
+            started_count[0] += 1
+            position = started_count[0]
+        progress(f"[{position}/{download_total}] {rel}")
+        progress(
+            f"  {local} local / {remote} remote — "
+            f"{new_count} new chapter(s)"
+        )
+        path = entry["path"]
+        # Clone args so concurrent sites don't race on the shared
+        # namespace's ``format``/``output`` fields. Only those two
+        # scalars are mutated today, but this runs on parallel
+        # per-site worker threads, so deep-copy to stay safe if a
+        # future callee ever mutates a shared mutable args field.
+        per_args = copy.deepcopy(args)
+        per_args.format = _FMT_MAP.get(path.suffix.lower(), "epub")
+        per_args.output = str(path.parent)
+        ok = False
+        failure_reason: str | None = None
+        try:
+            ok = _download_one(
+                entry["url"], per_args, Path(per_args.output),
+                update_path=path, existing_chapters=local,
+                status_callback=progress,
+            )
+            if not ok:
+                # _download_one swallowed an error and logged it; we
+                # don't have the exception message, but the scrollback
+                # already shows it. "download failed" is all we can
+                # surface in the summary.
+                failure_reason = "download failed (see log above)"
+        except KeyboardInterrupt:
+            # Re-raise so the outer wait loop sees the cancel.
+            raise
+        except Exception as exc:
+            logger.debug("Phase 3 download raised", exc_info=True)
+            progress(f"  Download failed: {exc}")
+            failure_reason = f"{type(exc).__name__}: {exc}"
+        with result_lock:
+            if ok:
+                updated.append(rel)
+            else:
+                failed.append((rel, failure_reason or "unknown failure"))
+        # Library-update hands us a callback here that re-hashes the
+        # freshly-written file and persists the list to the library
+        # index — that way ``--scan-edits`` always has a current
+        # baseline without the user having to re-run ``--populate-hashes``.
+        # Failures in the callback mustn't fail the download (the file
+        # is already on disk and the user wants the download counted
+        # as successful); the callback itself is responsible for
+        # logging its own errors.
+        if ok and on_download_complete is not None:
+            try:
+                on_download_complete(entry["url"], path)
+            except Exception:
+                logger.debug(
+                    "on_download_complete callback raised for %s",
+                    entry["url"], exc_info=True,
+                )
+
+    futures = []
+    for entry in downloadable:
+        site_cls = _detect_site(entry["url"])
+        site_name = getattr(site_cls, "site_name", "unknown")
+        fut = DownloadQueues.enqueue(
+            site_name, lambda e=entry: run_entry(e),
+        )
+        futures.append(fut)
+
+    # Drain the futures with periodic cancel-event checks. ``wait``
+    # with a timeout lets us surface a cancel even when the longest
+    # in-flight download (FFN's 6s-per-chapter pacing on a 100-
+    # chapter story) is still grinding — pending jobs get cancelled
+    # immediately; the running one will notice the event at its next
+    # ``run_entry`` entrypoint check if it hasn't already started.
+    pending = set(futures)
+    try:
+        while pending:
+            if cancel_event is not None and cancel_event.is_set():
+                for fut in pending:
+                    fut.cancel()
+                progress(f"\n{label} cancelled by user.")
+                cancelled = True
+                break
+            done, pending = wait(
+                pending, timeout=0.5, return_when=FIRST_COMPLETED,
+            )
+            for fut in done:
+                try:
+                    fut.result()
+                except KeyboardInterrupt:
+                    progress("\nCancelled.")
+                    cancelled = True
+                    for f in pending:
+                        f.cancel()
+                    pending = set()
+                    break
+                except Exception:
+                    logger.exception("queued update-all job raised")
+    finally:
+        # If we exit the wait loop with futures still outstanding
+        # (unexpected), don't leave them orphaned on the queue —
+        # cancel pending, let running ones finish naturally.
+        for fut in pending:
+            fut.cancel()
+
+    progress(f"\n{'='*60}")
+    if args.dry_run:
+        progress(
+            f"Dry run — would update {len(would_update)}, "
+            f"{len(up_to_date)} up to date, {len(failed)} failed, "
+            f"{skipped_count} skipped."
+        )
+        if would_update:
+            progress("Would update:")
+            for name, local, remote in would_update:
+                progress(f"  {name}  ({local} -> {remote})")
+    else:
+        progress(
+            f"{label} complete — {len(updated)} updated, "
+            f"{len(up_to_date)} up to date, {len(failed)} failed, "
+            f"{skipped_count} skipped."
+        )
+    if failed:
+        progress("Failed:")
+        for entry in failed:
+            # Entries are ``(relpath, reason)`` tuples; fall back to
+            # ``str(entry)`` if anything older snuck in during the
+            # transition so the summary never crashes on a malformed
+            # failure list.
+            if isinstance(entry, tuple) and len(entry) == 2:
+                name, reason = entry
+                progress(f"  {name}")
+                progress(f"    → {reason}")
+            else:
+                progress(f"  {entry}")
+    progress('='*60)
+    return 0 if not failed else 1
+
+
+def _handle_scan_library(args: argparse.Namespace) -> None:
+    """Scan a directory, record findings in the library index."""
+    from .library.scanner import scan
+
+    root = Path(args.scan_library)
+    if not root.is_dir():
+        print(f"Error: {root} is not a directory.", file=sys.stderr)
+        sys.exit(1)
+
+    print(f"Scanning {root}...")
+    # Library scans always recurse — a library is by definition a tree.
+    # The --recursive flag is kept only for --update-all's existing
+    # per-folder semantics.
+    result = scan(
+        root,
+        recursive=True,
+        clear_existing=args.clear_library,
+        abandoned_after_days=getattr(args, "abandoned_after_days", None),
+    )
+    print(
+        f"Scanned {result.total_files} file(s): "
+        f"{result.identified_via_url} tracked by URL, "
+        f"{result.ambiguous} indexed-only (no embedded URL — run "
+        f"--review-library to resolve), "
+        f"{result.errors} error(s)."
+    )
+    if result.newly_abandoned:
+        print(
+            f"Marked {result.newly_abandoned} WIP(s) as abandoned "
+            "(unchanged beyond the configured threshold). "
+            "--list-abandoned to review, --revive-abandoned URL to undo."
+        )
+    if result.duplicates:
+        print(
+            f"{result.duplicates} file(s) share a source URL with another "
+            "copy on disk. The index tracks a primary path per story and "
+            "records the extras in `duplicate_relpaths`; review and delete "
+            "the copy you don't want."
+        )
+        _print_duplicate_pairs(result.root)
+    if result.error_files:
+        print("Errors:")
+        for path, msg in result.error_files[:20]:
+            try:
+                rel = path.relative_to(root.resolve())
+            except ValueError:
+                rel = path
+            print(f"  {rel}: {msg}")
+        if len(result.error_files) > 20:
+            print(f"  ... and {len(result.error_files) - 20} more")
+    sys.exit(0 if result.errors == 0 else 1)
+
+
+# How many duplicate pairs to print inline before falling back to
+# "… and N more" to keep a 800-file library scan's output readable.
+_MAX_INLINE_DUPLICATE_PAIRS = 20
+
+
+def _print_duplicate_pairs(root: Path) -> None:
+    """Print ``primary -> duplicate`` pairs for the library at ``root``.
+
+    Reads from the on-disk index rather than the scan result because
+    the scanner doesn't keep a per-entry log — the index is where the
+    ``duplicate_relpaths`` list was written, so that's where we read
+    it back from.
+    """
+    from .library.index import LibraryIndex
+
+    idx = LibraryIndex.load()
+    printed = 0
+    total = 0
+    for url, entry in idx.stories_in(root.resolve()):
+        dupes = entry.get("duplicate_relpaths") or []
+        if not dupes:
+            continue
+        primary = entry.get("relpath") or "(unknown)"
+        for dup in dupes:
+            total += 1
+            if printed < _MAX_INLINE_DUPLICATE_PAIRS:
+                print(f"  {primary}  <->  {dup}")
+                printed += 1
+    remaining = total - printed
+    if remaining > 0:
+        print(f"  ... and {remaining} more")
+
+
+def _handle_review_library(args: argparse.Namespace) -> None:
+    """Interactive TUI for promoting untrackable library entries."""
+    from .library.index import LibraryIndex
+    from .library.review import promote_untrackable, untrackable_for_root
+
+    root = Path(args.review_library)
+    if not root.is_dir():
+        print(f"Error: {root} is not a directory.", file=sys.stderr)
+        sys.exit(1)
+    root_resolved = root.resolve()
+
+    idx = LibraryIndex.load()
+    untrackable = untrackable_for_root(idx, root_resolved)
+    if not untrackable:
+        print(
+            f"No untrackable files for {root_resolved}. "
+            "(Either everything is identified, or --scan-library hasn't run.)"
+        )
+        sys.exit(0)
+
+    print(
+        f"{len(untrackable)} untrackable file(s) in {root_resolved}.\n"
+        "For each, enter a source URL to promote it (blank to skip, "
+        "'q' to quit the review).\n"
+    )
+
+    promoted = 0
+    skipped = 0
+    for i, entry in enumerate(untrackable, 1):
+        rel = entry.get("relpath") or "(unknown path)"
+        title = entry.get("title") or "(unknown title)"
+        author = entry.get("author") or "(unknown author)"
+        reason = entry.get("reason") or ""
+        print(f"[{i}/{len(untrackable)}] {rel}")
+        print(f"  Title:  {title}")
+        print(f"  Author: {author}")
+        if reason:
+            print(f"  Note:   {reason}")
+        try:
+            answer = input("  URL: ").strip()
+        except EOFError:
+            print("\nCancelled.")
+            break
+        if answer.lower() == "q":
+            print("Stopping review.")
+            break
+        if not answer:
+            print("  (skipped)\n")
+            skipped += 1
+            continue
+        result = promote_untrackable(
+            idx, root_resolved, rel, answer, save=False,
+        )
+        if result.ok:
+            print(f"  ✓ Matched {result.adapter} — promoted.\n")
+            promoted += 1
+        else:
+            print(f"  ✗ {result.message}\n")
+            skipped += 1
+
+    if promoted:
+        idx.save()
+    print(
+        f"\nReview complete: {promoted} promoted, {skipped} skipped, "
+        f"{len(untrackable) - promoted - skipped} not shown."
+    )
+    sys.exit(0)
+
+
+def _handle_library_doctor(args: argparse.Namespace) -> None:
+    """Diagnose (and optionally heal) drift between the library index
+    and the files on disk. Read-only unless ``--heal`` is passed."""
+    from .library import check_integrity, heal
+    from .library.backup import snapshot_before
+    from .library.index import LibraryIndex
+
+    root = Path(args.library_doctor)
+    if not root.is_dir():
+        print(f"Error: {root} is not a directory.", file=sys.stderr)
+        sys.exit(1)
+    root_resolved = root.resolve()
+
+    idx = LibraryIndex.load()
+    report = check_integrity(root_resolved, idx)
+    print(report.summary())
+
+    if report.is_clean():
+        sys.exit(0)
+
+    if not args.heal:
+        print(
+            "\nRun again with --heal to apply fixes "
+            "(drop missing entries, index orphan files, refresh stat "
+            "cache, prune stale records).",
+        )
+        # Exit non-zero so shell callers can detect drift programmatically.
+        sys.exit(2)
+
+    # Take a snapshot before mutating the index so a misdiagnosed heal
+    # can be rolled back with --restore-index. snapshot_before logs at
+    # INFO with the operation label so the operator can later map the
+    # backup file back to the user action that triggered it.
+    backup_path = snapshot_before(f"--heal on {root_resolved}", idx.path)
+
+    result = heal(
+        root_resolved,
+        idx,
+        report,
+        drop_missing=True,
+        refresh_drift=True,
+        prune_untrackable=True,
+        prune_duplicates=True,
+        scan_orphans=True,
+    )
+    idx.save()
+    print("\n" + result.summary())
+    if backup_path is not None:
+        print(f"(Pre-heal backup: {backup_path})")
+    sys.exit(0)
+
+
+def _handle_library_stats(args: argparse.Namespace) -> None:
+    """Print a one-paragraph summary of DIR's library: totals, per-site
+    and per-status counts, top fandoms, and freshness breakdown."""
+    from .library import compute_stats
+    from .library.index import LibraryIndex
+
+    root = Path(args.library_stats)
+    if not root.is_dir():
+        print(f"Error: {root} is not a directory.", file=sys.stderr)
+        sys.exit(1)
+    root_resolved = root.resolve()
+
+    idx = LibraryIndex.load()
+    stats = compute_stats(root_resolved, idx)
+    if stats.total_stories == 0 and stats.untrackable_files == 0:
+        print(
+            f"No stories indexed for {root_resolved}. "
+            "Run --scan-library first.",
+        )
+        sys.exit(0)
+    print(stats.summary())
+    sys.exit(0)
+
+
+def _handle_library_find(args: argparse.Namespace) -> None:
+    """Search the library index for stories matching a query."""
+    from .library import search_index
+    from .library.index import LibraryIndex
+
+    if not args.library_find.strip():
+        print("Error: --library-find query must not be empty.", file=sys.stderr)
+        sys.exit(1)
+
+    idx = LibraryIndex.load()
+    if args.library_dir:
+        root = Path(args.library_dir)
+        if not root.is_dir():
+            print(
+                f"Error: {root} is not a directory.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        roots: list[Path] | None = [root.resolve()]
+    else:
+        roots = None  # all indexed libraries
+
+    matches = search_index(idx, args.library_find, roots=roots)
+    if not matches:
+        print(f"No stories match {args.library_find!r}.")
+        sys.exit(1)
+
+    # Group the matches by library root so the output reads the way
+    # users think of their libraries ("show me the hits in library X").
+    # ``search_index`` already returns matches in per-root order, but
+    # we track the boundary explicitly so the header only prints once
+    # per root.
+    last_root: Path | None = None
+    for m in matches:
+        if m.root != last_root:
+            if last_root is not None:
+                print()
+            print(f"Library: {m.root}")
+            last_root = m.root
+        fandoms = ", ".join(m.fandoms) or "(no fandom)"
+        status = m.entry.get("status") or "?"
+        chapters = m.entry.get("chapter_count") or "?"
+        print(f"  {m.title or '(no title)'} — {m.author or '(no author)'}")
+        print(f"    {fandoms}  |  {status}  |  {chapters} chapter(s)")
+        print(f"    {m.relpath or '(unknown path)'}")
+        print(f"    {m.url}")
+
+    print(f"\n{len(matches)} match(es).")
+    sys.exit(0)
+
+
+_FIND_MIRRORS_ALL_SENTINEL = "ALL"
+"""Argparse ``const=`` value when ``--find-mirrors`` is given without
+an argument. Any string would work; ``"ALL"`` is chosen as a visible
+self-documenting marker so a CLI invocation logged somewhere is
+readable without having to reach for the source. Users who happen
+to have a directory literally named ``ALL`` in the current working
+folder can disambiguate by passing ``./ALL``."""
+
+_REVIVE_ABANDONED_ALL_SENTINEL = "ALL"
+"""Argparse ``const=`` value for ``--revive-abandoned`` when invoked
+without a specific URL. Chosen for the same readability rationale
+as ``_FIND_MIRRORS_ALL_SENTINEL``. A URL beginning with ``ALL`` is
+vanishingly unlikely, so the sentinel won't collide with a real
+story identifier."""
+
+
+def _handle_find_mirrors(args: argparse.Namespace) -> None:
+    """Report suspected cross-site mirror pairs."""
+    from .library import find_mirrors
+    from .library.index import LibraryIndex
+    from .library.mirrors import summarise
+
+    idx = LibraryIndex.load()
+    roots: list[Path] | None
+    if args.find_mirrors and args.find_mirrors != _FIND_MIRRORS_ALL_SENTINEL:
+        root = Path(args.find_mirrors)
+        if not root.is_dir():
+            print(f"Error: {root} is not a directory.", file=sys.stderr)
+            sys.exit(1)
+        roots = [root.resolve()]
+    else:
+        roots = None  # all indexed libraries
+
+    candidates = find_mirrors(
+        idx,
+        roots=roots,
+        use_first_chapter=not args.mirrors_metadata_only,
+    )
+    print(summarise(candidates))
+    # Exit 2 when candidates were found so shell callers can branch
+    # (mirrors the convention --scan-edits uses for drift detection).
+    sys.exit(2 if candidates else 0)
+
+
+def _handle_populate_search(args: argparse.Namespace) -> None:
+    """Rebuild the full-text search index for a library root."""
+    from .library import (
+        FullTextIndex,
+        default_search_db_path,
+        populate_fulltext_from_library,
+    )
+
+    root = Path(args.populate_search)
+    if not root.is_dir():
+        print(f"Error: {root} is not a directory.", file=sys.stderr)
+        sys.exit(1)
+    root_resolved = root.resolve()
+
+    db_path = default_search_db_path()
+    print(
+        f"Building full-text index for {root_resolved}\n"
+        f"(DB: {db_path})...\n"
+    )
+    with FullTextIndex(db_path) as fti:
+        report = populate_fulltext_from_library(
+            fti, root_resolved, progress=print,
+        )
+    print("\n" + report.summary())
+    sys.exit(0)
+
+
+def _handle_library_search(args: argparse.Namespace) -> None:
+    """Full-text search across the library index's chapter content."""
+    from .library import FullTextIndex, default_search_db_path
+
+    if not args.library_search.strip():
+        print(
+            "Error: --library-search query must not be empty.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    db_path = default_search_db_path()
+    if not db_path.exists():
+        print(
+            f"No full-text index at {db_path}. "
+            "Run --populate-search DIR first.",
+        )
+        sys.exit(1)
+
+    root_filter: str | None = None
+    if args.library_dir:
+        root = Path(args.library_dir)
+        if not root.is_dir():
+            print(f"Error: {root} is not a directory.", file=sys.stderr)
+            sys.exit(1)
+        root_filter = str(root.resolve())
+
+    with FullTextIndex(db_path) as fti:
+        try:
+            hits = fti.search(
+                args.library_search,
+                root=root_filter,
+                limit=args.library_search_limit,
+            )
+        except ValueError as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            sys.exit(1)
+
+    if not hits:
+        print(f"No chapters match {args.library_search!r}.")
+        sys.exit(1)
+
+    last_root: str | None = None
+    for hit in hits:
+        if hit.root != last_root:
+            if last_root is not None:
+                print()
+            print(f"Library: {hit.root}")
+            last_root = hit.root
+        title = hit.title or "(no title)"
+        author = hit.author or "(no author)"
+        ch = hit.chapter_number or "?"
+        ch_title = hit.chapter_title or ""
+        ch_label = f"ch. {ch}"
+        if ch_title:
+            ch_label += f" — {ch_title}"
+        print(f"  {title} — {author}")
+        print(f"    {hit.relpath or '(unknown path)'} [{ch_label}]")
+        print(f"    {hit.url}")
+        print(f"    {hit.snippet}")
+
+    print(f"\n{len(hits)} hit(s).")
+    sys.exit(0)
+
+
+def _handle_cache_doctor(args: argparse.Namespace) -> None:
+    """Report (and optionally prune) scraper cache contents."""
+    from .cache_doctor import check_cache, prune
+    from .library.index import LibraryIndex
+
+    idx = LibraryIndex.load()
+    report = check_cache(index=idx)
+    print(report.summary())
+    if args.prune and report.orphan_entries:
+        result = prune(report)
+        print("\n" + result.summary())
+    elif report.orphan_entries and not args.prune:
+        print(
+            "\nRun again with --prune to delete the orphan entries.",
+        )
+    sys.exit(0)
+
+
+def _handle_revive_abandoned(args: argparse.Namespace) -> None:
+    """Clear the abandoned flag on one or every marked story."""
+    from .library import revive_abandoned
+    from .library.index import LibraryIndex
+
+    idx = LibraryIndex.load()
+    roots: list[Path] | None
+    if args.library_dir:
+        r = Path(args.library_dir)
+        if not r.is_dir():
+            print(f"Error: {r} is not a directory.", file=sys.stderr)
+            sys.exit(1)
+        roots = [r.resolve()]
+    else:
+        roots = None
+
+    value = args.revive_abandoned
+    urls: list[str] | None
+    revive_all = False
+    if value == _REVIVE_ABANDONED_ALL_SENTINEL:
+        urls = None
+        # Explicit opt-in required by the library helper to bulk-clear
+        # — the sentinel here IS that opt-in from the CLI's POV.
+        revive_all = True
+    else:
+        urls = [value]
+
+    report = revive_abandoned(idx, urls=urls, roots=roots, revive_all=revive_all)
+    if report.revived:
+        idx.save()
+    print(report.summary())
+    for url, rel in report.revived:
+        print(f"  revived: {rel or '(no path)'}  {url}")
+    for url in report.missing:
+        print(f"  no abandoned entry for: {url}")
+    sys.exit(0 if report.revived else 1)
+
+
+def _handle_list_abandoned(args: argparse.Namespace) -> None:
+    """Print every currently-abandoned story across the library."""
+    from .library import list_abandoned
+    from .library.index import LibraryIndex
+
+    idx = LibraryIndex.load()
+    roots: list[Path] | None
+    if args.library_dir:
+        r = Path(args.library_dir)
+        if not r.is_dir():
+            print(f"Error: {r} is not a directory.", file=sys.stderr)
+            sys.exit(1)
+        roots = [r.resolve()]
+    else:
+        roots = None
+
+    rows = list_abandoned(idx, roots=roots)
+    if not rows:
+        print("No abandoned stories in the indexed libraries.")
+        sys.exit(0)
+
+    last_root: Path | None = None
+    for row in rows:
+        if row.root != last_root:
+            if last_root is not None:
+                print()
+            print(f"Library: {row.root}")
+            last_root = row.root
+        marked = row.abandoned_at[:10] if row.abandoned_at else "?"
+        title = row.title or "(no title)"
+        author = row.author or "(no author)"
+        print(f"  {title} — {author}  [marked {marked}]")
+        print(f"    {row.relpath or '(unknown path)'}")
+        print(f"    {row.url}")
+    print(f"\n{len(rows)} abandoned stor{'y' if len(rows) == 1 else 'ies'}.")
+    sys.exit(0)
+
+
+def _handle_full_doctor(args: argparse.Namespace) -> None:
+    """Run every health check in one pass: library / watchlist / cache."""
+    from .doctor import check_all, heal_all
+
+    report = check_all()
+    print(report.summary())
+    if report.is_clean():
+        sys.exit(0)
+    if not args.heal:
+        print("\nRun again with --heal to apply all safe fixes.")
+        sys.exit(2)
+    result = heal_all(report)
+    print("\n" + result.summary())
+    sys.exit(0)
+
+
+def _handle_populate_hashes(args: argparse.Namespace) -> None:
+    """Seed chapter-content hashes for every story in DIR by parsing
+    local EPUB/HTML files. Read-only against the network."""
+    from .library import bootstrap_hashes
+    from .library.index import LibraryIndex
+
+    root = Path(args.populate_hashes)
+    if not root.is_dir():
+        print(f"Error: {root} is not a directory.", file=sys.stderr)
+        sys.exit(1)
+
+    idx = LibraryIndex.load()
+    report = bootstrap_hashes(
+        root.resolve(), idx, force=args.force_rehash,
+    )
+    if report.populated:
+        idx.save()
+    print(report.summary())
+    sys.exit(0)
+
+
+def _handle_scan_edits(args: argparse.Namespace) -> None:
+    """Probe every story in DIR and compare fresh hashes to stored."""
+    from .library import scan_edits
+    from .library.index import LibraryIndex
+
+    root = Path(args.scan_edits)
+    if not root.is_dir():
+        print(f"Error: {root} is not a directory.", file=sys.stderr)
+        sys.exit(1)
+
+    idx = LibraryIndex.load()
+
+    def progress(n, total, url):
+        print(f"  [{n}/{total}] {url}", flush=True)
+
+    report = scan_edits(root.resolve(), idx, progress=progress)
+    print()
+    print(report.summary())
+    # Exit non-zero when drift was found so shell callers can branch.
+    sys.exit(0 if report.is_clean() else 2)
+
+
+def _handle_watchlist_doctor(args: argparse.Namespace) -> None:
+    """Diagnose (and optionally heal) the watchlist file."""
+    from .watchlist import WatchlistStore
+    from .watchlist_doctor import check_watchlist, heal_watchlist
+
+    store = WatchlistStore.load_default()
+    report = check_watchlist(store)
+    print(report.summary())
+    if report.is_clean():
+        sys.exit(0)
+    if not args.heal:
+        print(
+            "\nRun again with --heal to drop unrepairable entries "
+            "(invalid type, empty target, unsupported site, "
+            "unresolvable URL, duplicates).",
+        )
+        sys.exit(2)
+    result = heal_watchlist(
+        store,
+        report,
+        drop_invalid_type=True,
+        drop_empty_target=True,
+        drop_unsupported_site=True,
+        drop_unresolvable_url=True,
+        drop_duplicates=True,
+    )
+    print("\n" + result.summary())
+    sys.exit(0)
+
+
+def _handle_backup_index() -> None:
+    """Write a timestamped copy of the current library index."""
+    from .library.backup import backup
+    from .library.index import default_index_path
+
+    idx_path = default_index_path()
+    if not idx_path.exists():
+        print(
+            f"No library index at {idx_path} — nothing to back up.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    backup_path = backup(idx_path)
+    print(f"Backup created: {backup_path}")
+    sys.exit(0)
+
+
+def _handle_list_backups() -> None:
+    """Print every existing library-index backup, newest first."""
+    from .library.backup import list_backups
+    from .library.index import default_index_path
+
+    idx_path = default_index_path()
+    backups = list_backups(idx_path)
+    if not backups:
+        print(f"No backups for {idx_path}.")
+        sys.exit(0)
+    print(f"Library-index backups (newest first):")
+    for p in backups:
+        size = p.stat().st_size
+        print(f"  {p.name}  ({size} bytes)")
+    sys.exit(0)
+
+
+def _handle_discard_bad_index() -> None:
+    """Clear the save-blocker flag set by load() when the original
+    library index was unreadable and couldn't be snapshotted.
+
+    The blocker is a safety gate — it stops the next save() from
+    atomically overwriting a corrupt-but-recoverable original. Once
+    the user has either manually rescued the original (by hand-editing
+    or restoring from filesystem backup) or accepted that it's
+    unrecoverable, this flag clears the gate so subsequent saves
+    proceed normally.
+    """
+    from .library.index import LibraryIndex, default_index_path
+
+    idx = LibraryIndex.load()
+    if idx.save_blocker is None:
+        print(
+            f"No save blocker on {default_index_path()}; nothing to discard."
+        )
+        sys.exit(0)
+    print(f"Discarding save-blocker: {idx.save_blocker}")
+    idx.discard_save_blocker()
+    # Empty in-memory state + cleared blocker → safe to save the
+    # new state. We don't auto-save here; the user runs --scan-library
+    # next, or another flow that mutates+saves.
+    print(
+        "Save-blocker cleared. The next ficary operation that saves "
+        "the library index will write the (currently empty) in-memory "
+        "state. If you intended to recover from the unreadable file, "
+        "run --list-backups and --restore-index <BACKUP> before "
+        "anything else."
+    )
+    sys.exit(0)
+
+
+def _handle_restore_index(args: argparse.Namespace) -> None:
+    """Overwrite the current library index with a previously-taken
+    backup file's contents. Atomic: succeeds fully or not at all."""
+    from .library.backup import restore
+    from .library.index import default_index_path
+
+    backup_path = Path(args.restore_index)
+    if not backup_path.exists():
+        print(f"Error: {backup_path} does not exist.", file=sys.stderr)
+        sys.exit(1)
+    idx_path = default_index_path()
+    restore(backup_path, idx_path)
+    print(f"Restored {idx_path} from {backup_path}.")
+    sys.exit(0)
+
+
+def _refresh_fulltext_for(
+    index: "LibraryIndex",
+    root: Path,
+    url: str,
+    path: Path,
+) -> None:
+    """Re-index one story into the full-text DB if the DB already exists.
+
+    This is best-effort: if the FTS DB hasn't been built yet (user
+    never ran ``--populate-search``) we skip silently — the update
+    path shouldn't force a full bootstrap on them. If the DB does
+    exist, we keep it in sync so the next ``--library-search`` sees
+    the newly-downloaded chapters without requiring a rebuild.
+    """
+    try:
+        from .library import FullTextIndex, default_search_db_path
+        from .updater import read_chapters
+    except ImportError:
+        return
+    db_path = default_search_db_path()
+    if not db_path.exists():
+        return
+    entry = index.lookup_by_url(root, url) if hasattr(index, "lookup_by_url") else None
+    try:
+        chapters = read_chapters(path)
+    except Exception:
+        logger.debug(
+            "fulltext refresh skipped for %s: cannot read chapters",
+            url, exc_info=True,
+        )
+        return
+    try:
+        with FullTextIndex(db_path) as fti:
+            fti.index_story(
+                root=str(root),
+                url=url,
+                relpath=(entry or {}).get("relpath") or "",
+                title=(entry or {}).get("title") or "",
+                author=(entry or {}).get("author") or "",
+                chapters=chapters,
+            )
+    except Exception:
+        logger.debug(
+            "fulltext refresh failed for %s", url, exc_info=True,
+        )
+
+
+def _handle_update_library(args: argparse.Namespace) -> None:
+    """Check every indexed story in a library for new chapters upstream."""
+    from .library.refresh import build_refresh_queue
+    from .library.scanner import scan as rescan_library
+
+    root = Path(args.update_library)
+    if not root.is_dir():
+        print(f"Error: {root} is not a directory.", file=sys.stderr)
+        sys.exit(1)
+    root_resolved = root.resolve()
+
+    try:
+        check_format_deps(args.format)
+    except ImportError as exc:
+        print(f"Missing dependency: {exc}", file=sys.stderr)
+        sys.exit(1)
+
+    workers = max(1, int(args.probe_workers))
+    recheck_interval = 0 if args.force_recheck else int(
+        args.recheck_interval or 0
+    )
+    stale_complete_days = 0 if args.force_recheck else int(
+        getattr(args, "skip_stale_complete", 0) or 0
+    )
+    # --force-recheck is the global "probe everything" escape hatch:
+    # it bypasses the TTL, the stale-complete gate, AND the default
+    # Complete/Abandoned skip. A user who wants to specifically
+    # include completed fics for one run can also pass
+    # --no-skip-complete on its own.
+    skip_complete_eff = (
+        False if args.force_recheck else bool(args.skip_complete)
+    )
+    mode_bits = []
+    if args.dry_run:
+        mode_bits.append("dry-run")
+    if skip_complete_eff:
+        mode_bits.append("skipping Complete/Abandoned")
+    else:
+        mode_bits.append("probing every status")
+    if stale_complete_days > 0:
+        mode_bits.append(f"skip stale-complete >{stale_complete_days}d")
+    mode_bits.append(f"{workers} probe worker{'s' if workers != 1 else ''}")
+    mode = f" ({', '.join(mode_bits)})"
+
+    probe_queue, skipped = build_refresh_queue(
+        root_resolved,
+        skip_complete=skip_complete_eff,
+        recheck_interval_s=recheck_interval,
+        skip_stale_complete_days=stale_complete_days,
+    )
+    if not probe_queue and not skipped:
+        print(
+            f"No indexed stories for {root}. "
+            "Run --scan-library first."
+        )
+        sys.exit(0)
+
+    total_indexed = len(probe_queue) + len(skipped)
+    print(
+        f"Checking {total_indexed} indexed "
+        f"stor{'y' if total_indexed == 1 else 'ies'} "
+        f"in {root_resolved}{mode}...\n"
+    )
+
+    # Incremental stamping: same pattern as the GUI's Check for
+    # Updates. Flushes every N probes so a Ctrl+C mid-run keeps the
+    # work done so far — previously an interrupted 800-story probe
+    # left no trace of the completed entries and the next run
+    # re-checked every one of them. As of the resume-aware refactor
+    # we also carry the per-URL remote chapter count so build_refresh_queue
+    # on the next run can spot pending downloads without re-probing.
+    _STAMP_FLUSH_EVERY = 25
+    # Single lock guards every read-modify-write of the LibraryIndex on
+    # disk. Previously a separate ``_stamp_lock`` (probe completions) and
+    # ``_hash_lock`` (download completions) each serialised their own RMW
+    # cycle, but neither blocked the other — so a probe-flush and a
+    # hash-write running concurrently both ``LibraryIndex.load()``'d the
+    # same on-disk state, applied disjoint mutations, and saved. The
+    # second save overwrote the first's mutation. Unifying the locks
+    # makes the index update strictly serial.
+    _index_lock = threading.Lock()
+    _pending_stamps: dict[str, int | None] = {}
+
+    def _flush_stamps_locked() -> None:
+        if not _pending_stamps or args.dry_run:
+            return
+        try:
+            from .library.index import LibraryIndex
+            idx = LibraryIndex.load()
+            idx.mark_probed(root_resolved, dict(_pending_stamps))
+        except (OSError, ValueError) as exc:
+            logger.exception(
+                "probe-stamp flush failed (pending=%d)",
+                len(_pending_stamps),
+            )
+            print(f"Warning: probe-stamp flush failed: {exc}")
+        _pending_stamps.clear()
+
+    def _on_probe_complete(url: str, remote_count: int | None = None) -> None:
+        with _index_lock:
+            _pending_stamps[url] = remote_count
+            if len(_pending_stamps) >= _STAMP_FLUSH_EVERY:
+                _flush_stamps_locked()
+
+    # Per-download hash refresh. After every story is successfully
+    # written to disk, re-hash its chapters and persist the list to
+    # the library index so the next ``--scan-edits`` run has a
+    # current baseline. The hashing is cheap (microseconds per
+    # chapter); the index save is batched inside the helper by only
+    # saving when something actually changed.
+
+    def _on_download_complete(url: str, path: "Path") -> None:
+        if args.dry_run:
+            return
+        try:
+            from .library import compute_local_hashes, store_hashes
+            from .library.index import LibraryIndex
+        except ImportError:
+            return
+        try:
+            hashes = compute_local_hashes(path)
+        except Exception:
+            logger.debug(
+                "chapter-hash refresh skipped for %s", url,
+                exc_info=True,
+            )
+            return
+        with _index_lock:
+            try:
+                idx_local = LibraryIndex.load()
+                if store_hashes(idx_local, root_resolved, url, hashes):
+                    idx_local.save()
+                _refresh_fulltext_for(idx_local, root_resolved, url, path)
+            except (OSError, ValueError):
+                logger.debug(
+                    "chapter-hash write skipped for %s", url,
+                    exc_info=True,
+                )
+
+    exit_code = _run_update_queue(
+        probe_queue, args, workers,
+        skipped_count=len(skipped),
+        label="Library update",
+        on_probe_complete=_on_probe_complete,
+        on_download_complete=_on_download_complete,
+    )
+
+    # Final flush of any stamps under the batch threshold, plus a
+    # belt-and-braces pass over the entire probe_queue so any entry
+    # whose probe raised something unexpected (and so never hit
+    # on_probe_complete) still gets its timestamp. The double-stamp
+    # is cheap — a touched URL is skipped on the second pass.
+    if probe_queue and not args.dry_run:
+        # Hold _index_lock around BOTH the flush and the belt-and-braces
+        # mark_probed. Without this, a download-complete callback firing
+        # from another worker between the two could load + save the index
+        # in the middle of our flush+mark sequence and lose stamps.
+        with _index_lock:
+            _flush_stamps_locked()
+            try:
+                from .library.index import LibraryIndex
+                idx = LibraryIndex.load()
+                idx.mark_probed(
+                    root_resolved, [item["url"] for item in probe_queue],
+                )
+            except (OSError, ValueError) as exc:
+                logger.debug("Failed to stamp last_probed", exc_info=True)
+                print(f"\nWarning: could not record probe timestamps: {exc}")
+
+    # Refresh the index so chapter counts reflect any updates we just
+    # applied. Cheap compared to the downloads themselves, and keeps
+    # the next --update-library run from re-probing unchanged stories.
+    if not args.dry_run:
+        try:
+            rescan_library(root_resolved)
+        except (OSError, ValueError) as exc:
+            logger.debug("Post-update rescan failed", exc_info=True)
+            print(f"\nWarning: post-update index refresh failed: {exc}")
+
+    sys.exit(exit_code)
+
+
+def _handle_reorganize(args: argparse.Namespace) -> None:
+    """Plan (and optionally apply) file moves to match the library template."""
+    from .library.backup import snapshot_before
+    from .library.index import default_index_path
+    from .library.reorganizer import apply as apply_moves
+    from .library.reorganizer import plan_with_conflicts
+    from .library.template import DEFAULT_MISC_FOLDER, DEFAULT_TEMPLATE
+    from .prefs import (
+        KEY_LIBRARY_MISC_FOLDER,
+        KEY_LIBRARY_PATH_TEMPLATE,
+        Prefs,
+    )
+
+    root = Path(args.reorganize)
+    if not root.is_dir():
+        print(f"Error: {root} is not a directory.", file=sys.stderr)
+        sys.exit(1)
+
+    prefs = Prefs()
+    template = prefs.get(KEY_LIBRARY_PATH_TEMPLATE) or DEFAULT_TEMPLATE
+    misc_folder = prefs.get(KEY_LIBRARY_MISC_FOLDER) or DEFAULT_MISC_FOLDER
+
+    plan_result = plan_with_conflicts(
+        root, template=template, misc_folder=misc_folder,
+    )
+    moves = plan_result.moves
+    conflicts = plan_result.conflicts
+
+    if not moves and not conflicts:
+        print(f"Library at {root} is already organized — no moves needed.")
+        sys.exit(0)
+
+    root_resolved = root.resolve()
+    print(f"{len(moves)} move(s) planned for {root_resolved}:\n")
+    for op in moves:
+        src_rel = op.source.relative_to(root_resolved) if op.source.is_relative_to(
+            root_resolved
+        ) else op.source
+        tgt_rel = op.target.relative_to(root_resolved)
+        arrow = "renamed to" if op.is_rename else "->"
+        print(f"  {src_rel}  {arrow}  {tgt_rel}")
+
+    if conflicts:
+        # Surface collisions at plan time so the user knows why N moves
+        # were planned but only K will land. Each cluster is two or more
+        # distinct stories rendering to the same target path; the user
+        # has to decide which one wins (rename a fandom, edit metadata,
+        # ...) before --apply will move both.
+        print(
+            f"\n{len(conflicts)} planned move(s) collide on the same "
+            "target path and were not queued for apply. Resolve before "
+            "re-running --apply:\n"
+        )
+        for target, ops in conflicts:
+            tgt_rel = (
+                target.relative_to(root_resolved)
+                if target.is_relative_to(root_resolved) else target
+            )
+            print(f"  conflict at {tgt_rel}:")
+            for op in ops:
+                src_rel = (
+                    op.source.relative_to(root_resolved)
+                    if op.source.is_relative_to(root_resolved) else op.source
+                )
+                print(f"    {src_rel}  ({op.source_url})")
+
+    if not args.apply:
+        print(
+            "\nDry run. Re-run with --apply to execute these moves."
+        )
+        sys.exit(0)
+
+    if not moves:
+        print(
+            "\nNothing to apply — every planned move collided with another."
+        )
+        sys.exit(1)
+
+    # V2 — snapshot before the destructive op so a misdiagnosed
+    # reorganize can be rolled back with ``--restore-index``. Closes
+    # the documentation-claim/code-reality gap where the help text
+    # promised an auto-backup that never actually happened.
+    snapshot_before(f"--reorganize --apply on {root_resolved}", default_index_path())
+
+    print("\nApplying...")
+    result = apply_moves(root, moves)
+    print(
+        f"Applied {result.applied}, skipped {result.skipped}, "
+        f"errors {result.errors}."
+    )
+    if result.messages:
+        for msg in result.messages[:20]:
+            print(f"  {msg}")
+        if len(result.messages) > 20:
+            print(f"  ... and {len(result.messages) - 20} more")
+    sys.exit(0 if result.errors == 0 else 1)
+
+
+def _handle_watch(args: argparse.Namespace) -> None:
+    """Clipboard watch mode: poll clipboard for FFN/FicWad URLs."""
+    try:
+        import pyperclip
+    except ImportError:
+        print(
+            "Error: pyperclip is required for --watch mode.\n"
+            "Install it with:  pip install ficary[clipboard]",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    import time
+
+    if args.format is None:
+        args.format = "epub"
+
+    # Library auto-sort: if --output wasn't given and a library path
+    # is configured in prefs, route fresh downloads into the library
+    # and let _download_one derive the per-story subdir from metadata.
+    # An explicit --output always wins so power users keep their
+    # one-off overrides.
+    _apply_library_autosort(args)
+
+    if args.output is None:
+        args.output = "."
+
+    output_dir = Path(args.output)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    downloaded = set()
+    last_clip = ""
+
+    print(
+        "Watching clipboard... paste any fanfiction URL "
+        "(FFN, AO3, Royal Road, Wattpad, FicWad, MediaMiner, Literotica, "
+        "AFF, StoriesOnline, Nifty, SexStories, MCStories, Lushstories, "
+        "Fictionmania, TGStorytime, Chyoa, Dark Wanderer, GreatFeet) "
+        "to download."
+    )
+    print("Press Ctrl+C to stop.\n")
+
+    try:
+        # Grab current clipboard so we don't immediately trigger on old content
+        try:
+            last_clip = pyperclip.paste() or ""
+        except Exception:
+            last_clip = ""
+
+        while True:
+            time.sleep(2)
+            try:
+                clip = pyperclip.paste() or ""
+            except Exception:
+                continue
+
+            if clip == last_clip:
+                continue
+            last_clip = clip
+
+            url = extract_story_url(clip)
+            if not url:
+                continue
+
+            if url in downloaded:
+                continue
+
+            downloaded.add(url)
+            print(f"Detected URL: {url}")
+            ok = _download_one(url, args, output_dir)
+            if ok:
+                print(f"\nDone. Still watching... ({len(downloaded)} downloaded so far)\n")
+            else:
+                print(f"\nFailed. Still watching...\n")
+
+    except KeyboardInterrupt:
+        print(f"\nStopped. Downloaded {len(downloaded)} stories this session.")
+        sys.exit(0)
+
+
+def _build_parser() -> argparse.ArgumentParser:
+    """Build the argparse parser for the CLI.
+
+    All command-line flags are defined here. Kept separate from
+    ``main`` so the dispatch logic stays readable and the parser can
+    be tested / introspected (e.g. for shell completion) without
+    running the full program.
+    """
+    parser = argparse.ArgumentParser(
+        prog="ficary",
+        description="Cross-platform fanfiction + erotica downloader",
+        epilog=(
+            "Supported sites: fanfiction.net, ficwad.com, "
+            "archiveofourown.org, royalroad.com, mediaminer.org, "
+            "literotica.com, wattpad.com, adult-fanfiction.org, "
+            "storiesonline.net, nifty.org, sexstories.com, mcstories.com, "
+            "lushstories.com, fictionmania.tv, tgstorytime.com, chyoa.com, "
+            "darkwanderer.net, greatfeet.com\n"
+            "Name template placeholders: "
+            "{title} {author} {id} {words} {status} {rating} {language} {chapters}"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument(
+        "url",
+        nargs="*",
+        help=(
+            "One or more story URLs or numeric IDs "
+            "(e.g. https://www.fanfiction.net/s/12345, "
+            "https://ficwad.com/story/76962, or just 12345)"
+        ),
+    )
+    parser.add_argument(
+        "-b",
+        "--batch",
+        metavar="FILE",
+        help=(
+            "Read URLs from a file (one per line; blank lines and "
+            "lines starting with # are skipped)"
+        ),
+    )
+    parser.add_argument(
+        "-u",
+        "--update",
+        metavar="FILE",
+        help="Update an existing file — reads source URL, downloads new chapters",
+    )
+    parser.add_argument(
+        "-U",
+        "--update-all",
+        metavar="DIR",
+        help=(
+            "Update every .epub/.html/.txt in DIR. Uses a cheap chapter-count "
+            "probe per story so unchanged fics cost one HTTP request."
+        ),
+    )
+    parser.add_argument(
+        "--scan-library",
+        metavar="DIR",
+        help=(
+            "Scan DIR for story files (.epub/.html/.txt) from any source — "
+            "ficary, FanFicFare, FicHub, or bare scrapes — and record what "
+            "was found in the library index. No moves, no downloads."
+        ),
+    )
+    parser.add_argument(
+        "--clear-library",
+        action="store_true",
+        help=(
+            "With --scan-library: drop this library's existing index entries "
+            "before scanning, so orphan files (deleted off disk) are removed."
+        ),
+    )
+    parser.add_argument(
+        "--abandoned-after-days",
+        type=int,
+        default=None,
+        metavar="DAYS",
+        help=(
+            "With --scan-library: auto-mark WIPs (status != Complete) "
+            "whose file mtime is older than DAYS days as abandoned, "
+            "so subsequent --update-library runs skip them. Overrides "
+            "the KEY_LIBRARY_ABANDONED_AFTER_DAYS user pref for this "
+            "run. 0 disables the sweep regardless of pref. Unset: "
+            "use the pref (default: 0 / off)."
+        ),
+    )
+    parser.add_argument(
+        "--revive-abandoned",
+        nargs="?",
+        const=_REVIVE_ABANDONED_ALL_SENTINEL,
+        default=None,
+        metavar="URL",
+        help=(
+            "Clear the abandoned flag on one URL, or every abandoned "
+            "story across the library when invoked with no argument. "
+            "Use --library-dir to scope to a single library root. "
+            "Revived stories re-enter the --update-library probe "
+            "queue on the next run."
+        ),
+    )
+    parser.add_argument(
+        "--list-abandoned",
+        action="store_true",
+        help=(
+            "Print every story currently marked abandoned, newest "
+            "mark first. Use --library-dir to scope to a single "
+            "library root; otherwise every indexed library is listed."
+        ),
+    )
+    parser.add_argument(
+        "--reorganize",
+        metavar="DIR",
+        help=(
+            "Plan the moves that would bring DIR into alignment with the "
+            "library path template (default: <fandom>/<title> - "
+            "<author>.<ext>). Reads from the library index; run "
+            "--scan-library first. Dry-run by default — use --apply to "
+            "actually move files."
+        ),
+    )
+    parser.add_argument(
+        "--update-library",
+        metavar="DIR",
+        help=(
+            "Check every indexed story in DIR for new chapters upstream "
+            "and download any updates in place. Uses the library index, "
+            "so --scan-library must have run first. Works across all "
+            "supported sources (ficary's own exports, FanFicFare, FicHub)."
+        ),
+    )
+    parser.add_argument(
+        "--review-library",
+        metavar="DIR",
+        help=(
+            "Walk the untrackable list for DIR's library and prompt for "
+            "a source URL per file. Confirmed entries are promoted into "
+            "the stories list with MEDIUM confidence so subsequent "
+            "--update-library runs pick them up."
+        ),
+    )
+    parser.add_argument(
+        "--library-doctor",
+        metavar="DIR",
+        help=(
+            "Report index/disk drift for DIR's library: missing files, "
+            "orphan files on disk not in the index, mtime/size cache "
+            "drift, and stale untrackable records. Read-only by default "
+            "— add --heal to apply fixes."
+        ),
+    )
+    parser.add_argument(
+        "--library-stats",
+        metavar="DIR",
+        help=(
+            "Print a summary of DIR's library: total stories, counts "
+            "by site/status/format, top fandoms, and freshness "
+            "(never-probed, stale, pending updates). Read-only."
+        ),
+    )
+    parser.add_argument(
+        "--library-find",
+        metavar="QUERY",
+        help=(
+            "Search the library index for stories whose title, "
+            "author, fandom, or URL contains QUERY (case-insensitive). "
+            "Use --library-dir to limit the search to one library "
+            "root; otherwise all indexed libraries are searched."
+        ),
+    )
+    parser.add_argument(
+        "--library-dir",
+        metavar="DIR",
+        help=(
+            "With --library-find / --library-search: limit the "
+            "search to this library root instead of searching every "
+            "indexed library."
+        ),
+    )
+    parser.add_argument(
+        "--library-search",
+        metavar="QUERY",
+        help=(
+            "Full-text search across indexed chapter content (not "
+            "just metadata). Uses SQLite FTS5 syntax: bare terms are "
+            "AND-joined, and prefix wildcards (dragon*), NEAR(a b), "
+            "and boolean operators (OR / AND / NOT) work. Requires "
+            "--populate-search DIR to have been run at least once. "
+            "Stories downloaded via direct URL (not --update-library) "
+            "land in the text index on the next --populate-search run."
+        ),
+    )
+    parser.add_argument(
+        "--library-search-limit",
+        type=int,
+        default=50,
+        metavar="N",
+        help=(
+            "With --library-search: cap the number of hits returned "
+            "(default: 50, ranked by FTS5 BM25 relevance)."
+        ),
+    )
+    parser.add_argument(
+        "--populate-search",
+        metavar="DIR",
+        help=(
+            "Build or rebuild the full-text search index for DIR's "
+            "library by re-parsing each story's EPUB/HTML body. "
+            "Bootstrap step before --library-search; subsequent "
+            "downloads refresh affected entries automatically."
+        ),
+    )
+    parser.add_argument(
+        "--find-mirrors",
+        nargs="?",
+        const=_FIND_MIRRORS_ALL_SENTINEL,
+        default=None,
+        metavar="DIR",
+        help=(
+            "Scan every indexed story for possible cross-site "
+            "mirrors (same work posted to FFN and AO3, Literotica "
+            "and StoriesOnline, etc.). Requires at least two of "
+            "three signals to flag a pair — normalised title match, "
+            "normalised author match, and first-chapter word "
+            "overlap — so common titles alone don't cause false "
+            "positives. Pass DIR to scope to one library root; "
+            "omit it to sweep every indexed library. Read-only — "
+            "never deletes; the caller decides what to act on. "
+            "Exits 2 when candidates are found so shell callers "
+            "can branch."
+        ),
+    )
+    parser.add_argument(
+        "--mirrors-metadata-only",
+        action="store_true",
+        help=(
+            "With --find-mirrors: skip the first-chapter overlap "
+            "signal so the scan runs without touching story files. "
+            "Faster on huge libraries, at the cost of missing pairs "
+            "whose titles/authors drifted between mirrors."
+        ),
+    )
+    parser.add_argument(
+        "--populate-hashes",
+        metavar="DIR",
+        help=(
+            "Seed chapter-content hashes for every story in DIR's "
+            "library by re-parsing the local EPUB/HTML files. One-off "
+            "bootstrap before the first --scan-edits run; subsequent "
+            "downloads populate hashes automatically. Read-only "
+            "against the network."
+        ),
+    )
+    parser.add_argument(
+        "--force-rehash",
+        action="store_true",
+        help=(
+            "With --populate-hashes: re-compute hashes even for "
+            "entries that already have a stored list. Default is to "
+            "skip them so repeated bootstrap runs are cheap."
+        ),
+    )
+    parser.add_argument(
+        "--scan-edits",
+        metavar="DIR",
+        help=(
+            "Probe every story in DIR's library and compare its "
+            "upstream chapters to the stored hashes from "
+            "--populate-hashes. Flags silent edits (content changed "
+            "under an unchanged chapter count) and count changes. "
+            "Expensive: fetches every story from upstream. Read-only "
+            "— re-download flagged stories with --update-library or "
+            "single-file --refetch-all."
+        ),
+    )
+    parser.add_argument(
+        "--watchlist-doctor",
+        action="store_true",
+        help=(
+            "Check the watchlist file for malformed entries: invalid "
+            "type, empty target URL, unsupported site, URL that no "
+            "scraper recognises, and duplicates. Read-only by default "
+            "— add --heal to drop unrepairable entries."
+        ),
+    )
+    parser.add_argument(
+        "--doctor",
+        action="store_true",
+        help=(
+            "Run every health check in one pass: library (all indexed "
+            "roots), watchlist, and scraper cache. Read-only by "
+            "default; add --heal to apply all safe fixes."
+        ),
+    )
+    parser.add_argument(
+        "--cache-doctor",
+        action="store_true",
+        help=(
+            "Report on the scraper cache (~/.cache/ficary): size, "
+            "per-site distribution, largest entries, and — when a "
+            "library index exists — orphan cache directories for "
+            "stories no longer tracked. Add --prune to remove the "
+            "orphans."
+        ),
+    )
+    parser.add_argument(
+        "--prune",
+        action="store_true",
+        help=(
+            "With --cache-doctor: delete orphan cache directories "
+            "(stories no longer in any known library)."
+        ),
+    )
+    parser.add_argument(
+        "--backup-index",
+        action="store_true",
+        help=(
+            "Copy the current library index to a timestamped sibling "
+            "file for safe-keeping before risky operations. The "
+            "destructive flows (--heal, --reorganize --apply) also "
+            "auto-snapshot before mutating; this flag is for manual "
+            "checkpoints outside those flows."
+        ),
+    )
+    parser.add_argument(
+        "--discard-bad-index",
+        action="store_true",
+        help=(
+            "Clear the save-blocker flag set when ficary loaded an "
+            "unreadable library index it couldn't snapshot. Use only "
+            "after manually rescuing the original index, or when you "
+            "accept that the original is unrecoverable and the empty "
+            "in-memory copy may be saved over it."
+        ),
+    )
+    parser.add_argument(
+        "--list-backups",
+        action="store_true",
+        help=(
+            "List every library-index backup on disk, newest first."
+        ),
+    )
+    parser.add_argument(
+        "--restore-index",
+        metavar="BACKUP_FILE",
+        help=(
+            "Replace the current library index with BACKUP_FILE's "
+            "contents. Atomic: the swap either completes fully or "
+            "leaves the current index untouched."
+        ),
+    )
+    parser.add_argument(
+        "--heal",
+        action="store_true",
+        help=(
+            "With --library-doctor: apply every recommended fix "
+            "(drop missing entries, index orphan files, refresh stat "
+            "cache, prune stale untrackable/duplicate records)."
+        ),
+    )
+    parser.add_argument(
+        "--apply",
+        action="store_true",
+        help=(
+            "With --reorganize: execute the planned moves instead of just "
+            "listing them."
+        ),
+    )
+    parser.add_argument(
+        "-r",
+        "--recursive",
+        action="store_true",
+        help="With --update-all or --scan-library: descend into subdirectories",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help=(
+            "With --update-all: report what would be updated, skipped, or "
+            "is up to date, without downloading any new chapters"
+        ),
+    )
+    parser.add_argument(
+        "--skip-complete",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help=(
+            "With --update-library / --update-all: skip stories whose "
+            "index status is Complete, Completed, or Abandoned (saves "
+            "the remote probe). Default: on. Pass --no-skip-complete "
+            "to probe every story regardless of status. --force-recheck "
+            "implies --no-skip-complete for that run."
+        ),
+    )
+    parser.add_argument(
+        "--probe-workers",
+        type=int,
+        default=5,
+        metavar="N",
+        help=(
+            "Concurrent chapter-count probes during --update-all "
+            "(default: 5; set to 1 to serialise)"
+        ),
+    )
+    parser.add_argument(
+        "--recheck-interval",
+        type=int,
+        default=0,
+        metavar="SECONDS",
+        help=(
+            "With --update-library: skip stories whose index "
+            "last_probed timestamp is within SECONDS of now. Useful "
+            "when iterating on a big library — a value like 3600 "
+            "makes a second pass minutes later near-instant. "
+            "Default: 0 (probe every story)."
+        ),
+    )
+    parser.add_argument(
+        "--force-recheck",
+        action="store_true",
+        help=(
+            "With --update-library: ignore --recheck-interval, "
+            "--skip-stale-complete, and --skip-complete — probe every "
+            "indexed story regardless of TTL or status. The blunt "
+            "escape hatch when you suspect the index is wrong."
+        ),
+    )
+    parser.add_argument(
+        "--skip-stale-complete",
+        type=int,
+        default=0,
+        metavar="DAYS",
+        help=(
+            "With --update-library: skip stories that are marked "
+            "Complete AND whose file hasn't been touched for at least "
+            "DAYS days. Gentler than --skip-complete — a fic completed "
+            "yesterday is still probed (author may add an epilogue), "
+            "but one untouched for a year stops costing an HTTP probe "
+            "each run. Default: 0 (disabled)."
+        ),
+    )
+    parser.add_argument(
+        "--refetch-all",
+        action="store_true",
+        help=(
+            "During updates, re-download every chapter from upstream "
+            "instead of merging newly-downloaded chapters with the "
+            "ones already in your existing file. Use when you suspect "
+            "an author silently revised old chapters — the default "
+            "merge-in-place reuses the existing file's chapter bodies."
+        ),
+    )
+    parser.add_argument(
+        "--merge-series",
+        action="store_true",
+        help=(
+            "When given an AO3 series URL, download every work and combine "
+            "them into a single file instead of one file per work. Each work "
+            "is rendered as a title chapter followed by its own chapters."
+        ),
+    )
+    parser.add_argument(
+        "-a",
+        "--author",
+        metavar="URL",
+        help=(
+            "Download all stories from an author page "
+            "(e.g. https://www.fanfiction.net/u/123/Name, "
+            "https://ficwad.com/a/Name)"
+        ),
+    )
+    parser.add_argument(
+        "--extract",
+        metavar="URL",
+        help=(
+            "Print the list of fic URLs found at any list page "
+            "(author profile, AO3 series/tag/search, FFN community, "
+            "Wattpad reading list) as TSV — url, title, author, "
+            "words — to stdout, then exit. No download."
+        ),
+    )
+    parser.add_argument(
+        "--bulk",
+        metavar="URL",
+        help=(
+            "Like --extract, but download every fic the page lists. "
+            "Use --max-results N to cap, e.g. on a popular AO3 tag "
+            "with thousands of works."
+        ),
+    )
+    parser.add_argument(
+        "--max-results",
+        type=int,
+        default=0,
+        metavar="N",
+        help=(
+            "Truncate --extract / --bulk to the first N works (0 "
+            "means no cap). Pagination still walks every page until "
+            "N is reached or results run out."
+        ),
+    )
+    all_formats = sorted(EXPORTERS) + ["audio"]
+    parser.add_argument(
+        "-f",
+        "--format",
+        choices=all_formats,
+        default=None,
+        help="Output format (default: epub, or inferred from --update file)",
+    )
+    parser.add_argument(
+        "--speech-rate",
+        type=int,
+        default=0,
+        metavar="PCT",
+        help=(
+            "Audiobook speech rate delta, integer percent "
+            "(e.g. -20 = 20%% slower, +30 = 30%% faster). Default: 0."
+        ),
+    )
+    parser.add_argument(
+        "--attribution",
+        choices=["builtin", "fastcoref", "booknlp", "llm"],
+        default="builtin",
+        help=(
+            "Audiobook speaker attribution backend. 'builtin' is the "
+            "default regex parser. 'fastcoref' and 'booknlp' are optional "
+            "neural models you must pip-install separately — see "
+            "`ficary --install-attribution BACKEND`. 'llm' sends each "
+            "chapter to a local Ollama instance or a remote LLM API "
+            "(see --llm-provider / --llm-model / --llm-api-key)."
+        ),
+    )
+    parser.add_argument(
+        "--attribution-model-size",
+        choices=["small", "big"],
+        default=None,
+        help=(
+            "Size variant for attribution backends that offer them "
+            "(BookNLP: 'small' ~150 MB or 'big' ~1 GB). Ignored "
+            "for 'builtin', 'fastcoref', and 'llm'."
+        ),
+    )
+    parser.add_argument(
+        "--llm-provider",
+        choices=["ollama", "openai", "anthropic", "openai-compatible"],
+        default=None,
+        help=(
+            "LLM provider when --attribution=llm. 'ollama' is local and "
+            "needs no API key; 'openai' / 'anthropic' / 'openai-compatible' "
+            "use the provider's HTTPS API. Defaults to the GUI pref or "
+            "'ollama' if unset."
+        ),
+    )
+    parser.add_argument(
+        "--llm-model",
+        default=None,
+        metavar="MODEL",
+        help=(
+            "LLM model identifier — e.g. 'llama3.1:8b' for Ollama, "
+            "'gpt-4o-mini' for OpenAI, 'claude-haiku-4-5' for Anthropic. "
+            "Defaults to the GUI pref."
+        ),
+    )
+    parser.add_argument(
+        "--llm-api-key",
+        default=None,
+        metavar="KEY",
+        help=(
+            "API key for the chosen LLM provider. Falls back to env "
+            "vars OPENAI_API_KEY / ANTHROPIC_API_KEY / OPENROUTER_API_KEY "
+            "when this flag is omitted, then to the GUI pref. Ignored "
+            "for Ollama."
+        ),
+    )
+    parser.add_argument(
+        "--llm-endpoint",
+        default=None,
+        metavar="URL",
+        help=(
+            "Override the LLM provider's base URL. Useful for "
+            "self-hosted Ollama on another machine, or any "
+            "OpenAI-compatible endpoint (Groq, OpenRouter, vLLM, ...)."
+        ),
+    )
+    parser.add_argument(
+        "--llm-timeout-s",
+        default=None,
+        type=int,
+        metavar="SECONDS",
+        help=(
+            "Per-request timeout for LLM calls. Bump to 600-900 if a "
+            "14B model on CPU or partial-GPU offload is timing out on "
+            "long chapters. Falls back to the GUI pref, then the env "
+            "var FICARY_LLM_TIMEOUT_S, then 300s."
+        ),
+    )
+    parser.add_argument(
+        "--tts-providers",
+        default=None,
+        metavar="LIST",
+        help=(
+            "Comma-separated list of TTS providers to draw voices "
+            "from when synthesising audiobooks (default: all "
+            "installed providers). Choices: 'edge', 'piper'. The "
+            "voice catalog the VoiceMapper picks from is the union "
+            "of every listed provider, filtered per-character by the "
+            "accent map and detected gender."
+        ),
+    )
+    parser.add_argument(
+        "--install-piper",
+        action="store_true",
+        help=(
+            "Download and install the Piper TTS binary into ficary's "
+            "managed dir, then exit. Voice models download lazily on "
+            "first use of each Piper voice."
+        ),
+    )
+    parser.add_argument(
+        "--install-attribution",
+        choices=["fastcoref", "booknlp"],
+        default=None,
+        metavar="BACKEND",
+        help="Install an optional attribution backend and exit.",
+    )
+    parser.add_argument(
+        "-o",
+        "--output",
+        default=None,
+        help="Output directory (default: current directory, or --update file's dir)",
+    )
+    parser.add_argument(
+        "-n",
+        "--name",
+        default=DEFAULT_TEMPLATE,
+        metavar="TEMPLATE",
+        help=(
+            "Filename template (default: '%(default)s'). "
+            "See --help footer for available placeholders."
+        ),
+    )
+    parser.add_argument(
+        "--delay-min",
+        type=float,
+        default=None,
+        metavar="SEC",
+        help=(
+            "Override the adaptive (AIMD) inter-chapter delay with a fixed "
+            "random range. By default the scraper starts fast and only "
+            "slows down if the site returns 429/503 (FFN holds a steady "
+            "6s/chapter; see --fichub for a faster path)."
+        ),
+    )
+    parser.add_argument(
+        "--delay-max",
+        type=float,
+        default=None,
+        metavar="SEC",
+        help="Upper end of the fixed delay range when --delay-min is set.",
+    )
+    parser.add_argument(
+        "--max-retries",
+        type=int,
+        default=5,
+        help="Maximum retries per request on rate-limit or error (default: 5)",
+    )
+    parser.add_argument(
+        "--chunk-size",
+        type=int,
+        default=None,
+        metavar="N",
+        help=(
+            "Pause ~60s after every N chapter fetches "
+            "(default: disabled — FFN now uses a steady 6s/chapter). "
+            "Use 0 to disable."
+        ),
+    )
+    parser.add_argument(
+        "--chapters",
+        metavar="SPEC",
+        help=(
+            "Restrict download to specific chapters. "
+            "SPEC is a comma-separated list of single chapters and/or "
+            "ranges. Examples: '1-5', '1,3,5', '1-5,10', '20-', '-3'. "
+            "'20-' means chapter 20 through the end; '-3' means 1 through 3."
+        ),
+    )
+    parser.add_argument(
+        "--use-wayback",
+        action="store_true",
+        help=(
+            "If a story 404s or the site keeps failing, try fetching "
+            "the latest archive.org snapshot instead. Useful for deleted "
+            "fics and during site outages."
+        ),
+    )
+    parser.add_argument(
+        "--cf-solve",
+        action="store_true",
+        help=(
+            "On persistent HTTP 403, launch a headless Chromium via "
+            "Playwright to solve the Cloudflare challenge and inject "
+            "the resulting cookies into the scraper session. Solved "
+            "cookies are cached on disk for 24h so subsequent runs "
+            "reuse them without re-invoking the browser. Requires "
+            "the 'cf-solve' extra: "
+            "pip install 'ficary[cf-solve]' && playwright install chromium."
+        ),
+    )
+    parser.add_argument(
+        "--fichub",
+        action="store_true",
+        help=(
+            "For fanfiction.net, try FicHub's shared cache first "
+            "(https://fichub.net) and re-ingest its EPUB instead of "
+            "crawling FFN chapter-by-chapter. One request for the whole "
+            "fic vs the ~6s/chapter rate limit. FicHub's copy can lag "
+            "the source, so this is for first-time downloads, not "
+            "updates; it falls back to a direct scrape on any miss."
+        ),
+    )
+    parser.add_argument(
+        "--no-cache",
+        action="store_true",
+        help="Disable chapter caching (re-download everything)",
+    )
+    parser.add_argument(
+        "--chyoa-max-depth",
+        type=int,
+        default=None,
+        metavar="N",
+        help=(
+            "For Chyoa (interactive CYOA) downloads, cap how deep the "
+            "tree walker descends from the entry URL. 0 = entry "
+            "chapter only, 1 = entry + immediate children, etc. "
+            "Omit for an unbounded walk. Skipped branches are logged "
+            "by URL so nothing is silently hidden."
+        ),
+    )
+    parser.add_argument(
+        "--webnovel-cookie",
+        type=str,
+        default=None,
+        metavar="COOKIE",
+        help=(
+            "For webnovel.com, a logged-in browser 'Cookie:' header "
+            "string (e.g. 'a=1; b=2'). Lets you download chapters your "
+            "account has personally unlocked; without it only free "
+            "chapters are fetched and locked ones become placeholders. "
+            "Reads $FICARY_WEBNOVEL_COOKIE if the flag is omitted. Note: "
+            "downloading purchased chapters is for personal backup and is "
+            "against webnovel's terms; coins are never spent."
+        ),
+    )
+    parser.add_argument(
+        "--ao3-cookie",
+        type=str,
+        default=None,
+        metavar="COOKIE",
+        help=(
+            "For AO3, a logged-in browser 'Cookie:' header string. Lets you "
+            "download restricted / Archive-locked works and your own private "
+            "bookmarks and marked-for-later. Reads $FICARY_AO3_COOKIE if the "
+            "flag is omitted."
+        ),
+    )
+    parser.add_argument(
+        "--hr-as-stars",
+        action="store_true",
+        help=(
+            "Mark scene breaks clearly. In HTML/EPUB/TXT output, each "
+            "<hr/> becomes a centred '* * *' marker. In audio (-f audio) "
+            "output, every scene divider — <hr/> tags plus text-based "
+            "dividers like '---', '* * *', 'oOo' — is replaced with a "
+            "1.5-second silence clip instead of being read aloud as "
+            "'asterisk asterisk asterisk'."
+        ),
+    )
+    parser.add_argument(
+        "--strip-notes",
+        action="store_true",
+        help=(
+            "Remove paragraphs that start with 'A/N', \"Author's Note\", etc. "
+            "Applies to every output format including audio. Heuristic — "
+            "catches the common FFN pattern; AO3's structured notes are "
+            "already excluded at scrape time."
+        ),
+    )
+    parser.add_argument(
+        "--llm-strip-notes",
+        action="store_true",
+        help=(
+            "Pair with --strip-notes to send each top-level paragraph the "
+            "regex pass kept through the configured LLM (--llm-provider / "
+            "--llm-model / --llm-api-key, or the GUI's LLM prefs) for a "
+            "second-pass A/N decision. Catches outros that don't trip the "
+            "regex's keyword gate and shout-outs buried mid-chapter. "
+            "Costs one LLM call per chapter — local Ollama is free but "
+            "slow, OpenAI/Anthropic charge per token. Off by default. "
+            "Results are cached per story so re-exports don't re-spend."
+        ),
+    )
+    parser.add_argument(
+        "--send-to-kindle",
+        metavar="EMAIL",
+        help=(
+            "After each successful download, email the exported file to "
+            "EMAIL. Configure SMTP via SMTP_HOST / SMTP_USER / SMTP_PASSWORD "
+            "(and optional SMTP_PORT / SMTP_FROM). EMAIL must be on Amazon's "
+            "approved personal-document list for Kindle delivery."
+        ),
+    )
+    parser.add_argument(
+        "--clean-cache",
+        action="store_true",
+        help="Remove cached chapters after successful export",
+    )
+    parser.add_argument(
+        "-s",
+        "--search",
+        metavar="QUERY",
+        help="Search for stories matching QUERY (see --site to pick FFN, AO3, Royal Road, or Literotica)",
+    )
+    parser.add_argument(
+        "--site",
+        choices=["ffn", "ao3", "royalroad", "literotica", "wattpad"],
+        default="ffn",
+        help=(
+            "Which site to search (default: ffn). Literotica's public "
+            "search is JS-only, so --site literotica browses "
+            "tags.literotica.com/<tag> instead."
+        ),
+    )
+    # Search filters (only apply when --search is used). Values accepted
+    # depend on --site; see the search module for the full tables.
+    from .search import (
+        FFN_GENRE, FFN_WORDS, AO3_RATING, AO3_SORT,
+        RR_ORDER_BY,
+    )
+    parser.add_argument(
+        "--rating",
+        metavar="R",
+        help=(
+            "Rating filter. FFN: K, K+, T, M, K-T. "
+            f"AO3: {', '.join(k for k in AO3_RATING if k != 'all')}."
+        ),
+    )
+    parser.add_argument(
+        "--language",
+        metavar="LANG",
+        help=(
+            "Language filter. FFN: english, spanish, french, german, ... "
+            "AO3: ISO code (e.g. en, fr)."
+        ),
+    )
+    parser.add_argument(
+        "--status",
+        metavar="S",
+        help=(
+            "Completion status: in-progress, complete "
+            "(mapped to AO3's 'complete' field automatically)."
+        ),
+    )
+    parser.add_argument(
+        "--genre",
+        metavar="G",
+        help=f"FFN-only: {', '.join(list(FFN_GENRE)[1:8])}, ... (see search.FFN_GENRE)",
+    )
+    parser.add_argument(
+        "--genre2",
+        metavar="G",
+        help="FFN-only: second genre (AND filter). Same values as --genre.",
+    )
+    parser.add_argument(
+        "--min-words",
+        metavar="N",
+        help=f"FFN-only word-count bucket: {', '.join(list(FFN_WORDS)[1:])}",
+    )
+    parser.add_argument(
+        "--crossover",
+        metavar="X",
+        help="Crossover filter: any, only, exclude",
+    )
+    parser.add_argument(
+        "--match",
+        metavar="M",
+        help="FFN-only: match keywords in title or summary (any, title, summary)",
+    )
+    parser.add_argument(
+        "--sort",
+        metavar="S",
+        help=(
+            f"Sort order. FFN: updated, published, reviews, favorites, "
+            f"follows. AO3: {', '.join(list(AO3_SORT)[:4])}, ..."
+        ),
+    )
+    parser.add_argument(
+        "--fandom",
+        metavar="NAME",
+        help="AO3-only: filter by fandom name(s)",
+    )
+    parser.add_argument(
+        "--word-count",
+        metavar="RANGE",
+        help="AO3-only word-count range, e.g. '<5000', '>10000', '1000-5000'",
+    )
+    parser.add_argument(
+        "--character",
+        metavar="NAME",
+        help="AO3-only: filter by character name(s)",
+    )
+    parser.add_argument(
+        "--relationship",
+        metavar="NAME",
+        help="AO3-only: filter by relationship tag(s)",
+    )
+    parser.add_argument(
+        "--ao3-category",
+        metavar="CAT",
+        help="AO3-only relationship category: gen, f/m, m/m, f/f, multi, other",
+    )
+    parser.add_argument(
+        "--ao3-freeform",
+        metavar="TAG",
+        help="AO3-only: additional free-form tag(s) (comma-separated)",
+    )
+    parser.add_argument(
+        "--single-chapter",
+        action="store_true",
+        help="AO3-only: one-shots only",
+    )
+    parser.add_argument(
+        "--ao3-warning",
+        metavar="W",
+        help=(
+            "AO3-only Archive Warning: none apply, creator chose not to "
+            "warn, graphic violence, major character death, rape/non-con, "
+            "underage."
+        ),
+    )
+    parser.add_argument(
+        "--ao3-title", metavar="TEXT", help="AO3-only: match the work title",
+    )
+    parser.add_argument(
+        "--ao3-creator", metavar="NAME", help="AO3-only: match the author/creator",
+    )
+    parser.add_argument(
+        "--ffn-time",
+        metavar="T",
+        help=(
+            "FFN fandom-browse time range: updated 24h / 1 week / 1 month / "
+            "6 months / 1 year (or published 24h / 1 week / ...)."
+        ),
+    )
+    parser.add_argument(
+        "--ffn-characters",
+        metavar="NAMES",
+        help=(
+            "FFN fandom-browse: up to 4 character names (comma-separated), "
+            "resolved against the chosen fandom. Requires a fandom."
+        ),
+    )
+    parser.add_argument(
+        "--ffn-world", metavar="NAME",
+        help="FFN fandom-browse: world/verse name (requires a fandom).",
+    )
+    parser.add_argument(
+        "--ffn-exclude-genre", metavar="G",
+        help="FFN fandom-browse: exclude a genre. Same values as --genre.",
+    )
+    parser.add_argument(
+        "--ffn-exclude-characters", metavar="NAMES",
+        help="FFN fandom-browse: up to 2 character names to exclude (comma-sep).",
+    )
+    parser.add_argument(
+        "--ffn-exclude-world", metavar="NAME",
+        help="FFN fandom-browse: world/verse name to exclude.",
+    )
+    parser.add_argument(
+        "--ffn-pairing",
+        action="store_true",
+        help=(
+            "FFN fandom-browse: require the selected characters to be a "
+            "pairing (relationship)."
+        ),
+    )
+    parser.add_argument(
+        "--rr-type",
+        metavar="T",
+        help="Royal Road-only story type: original / fanfiction / any",
+    )
+    parser.add_argument(
+        "--rr-order-by",
+        metavar="SORT",
+        help=f"Royal Road-only sort: {', '.join(list(RR_ORDER_BY)[:5])}, ...",
+    )
+    parser.add_argument(
+        "--rr-tags",
+        metavar="TAGS",
+        help="Royal Road-only: comma-separated raw tag slugs (e.g. 'progression,magic')",
+    )
+    parser.add_argument(
+        "--rr-genres",
+        metavar="GENRES",
+        help=(
+            "Royal Road-only: comma-separated genre labels (e.g. "
+            "'Fantasy,Sci-fi'). See search.RR_GENRES for the full list."
+        ),
+    )
+    parser.add_argument(
+        "--rr-warnings",
+        metavar="WARN",
+        help=(
+            "Royal Road-only: comma-separated content warnings required "
+            "(e.g. 'Profanity,Gore'). See search.RR_WARNINGS."
+        ),
+    )
+    parser.add_argument(
+        "--rr-min-words",
+        metavar="N",
+        help="Royal Road-only: minimum word count",
+    )
+    parser.add_argument(
+        "--rr-max-words",
+        metavar="N",
+        help="Royal Road-only: maximum word count",
+    )
+    parser.add_argument(
+        "--rr-min-pages",
+        metavar="N",
+        help="Royal Road-only: minimum page count",
+    )
+    parser.add_argument(
+        "--rr-max-pages",
+        metavar="N",
+        help="Royal Road-only: maximum page count",
+    )
+    parser.add_argument(
+        "--rr-min-rating",
+        metavar="R",
+        help="Royal Road-only: minimum average rating (0.0-5.0)",
+    )
+    parser.add_argument(
+        "--lit-category",
+        metavar="CAT",
+        help=(
+            "Literotica-only: browse one of Literotica's top-level "
+            "categories instead of a query tag (e.g. 'Loving Wives', "
+            "'Sci-Fi & Fantasy'). See search.LIT_CATEGORIES."
+        ),
+    )
+    parser.add_argument(
+        "--rr-list",
+        metavar="LIST",
+        help=(
+            "Royal Road-only: browse one of RR's curated lists instead of "
+            "free-text search. Options: best rated / trending / active "
+            "popular / weekly popular / monthly popular / latest updates / "
+            "new releases / complete / rising stars. The query argument is "
+            "ignored when this is set."
+        ),
+    )
+    parser.add_argument(
+        "--lit-page",
+        type=int,
+        metavar="N",
+        help="Literotica-only: which page of tag results to fetch (default 1)",
+    )
+    parser.add_argument(
+        "--wp-mature",
+        choices=["any", "exclude", "only"],
+        default=None,
+        help=(
+            "Wattpad-only: filter by mature flag. 'exclude' drops mature "
+            "results, 'only' keeps just mature."
+        ),
+    )
+    parser.add_argument(
+        "--wp-completed",
+        choices=["any", "complete", "in-progress"],
+        default=None,
+        help="Wattpad-only: filter by completion state.",
+    )
+    parser.add_argument(
+        "--limit",
+        type=int,
+        default=25,
+        metavar="N",
+        help="Minimum search results to fetch (default 25). Pages keep "
+             "loading until N is reached or the site runs out.",
+    )
+    parser.add_argument(
+        "--start-page",
+        type=int,
+        default=1,
+        metavar="P",
+        help="Results page to start from (default 1). Useful for scripted "
+             "'load more' workflows that want to pick up where a previous "
+             "run left off.",
+    )
+    parser.add_argument(
+        "-w",
+        "--watch",
+        action="store_true",
+        help=(
+            "Watch clipboard for fanfiction URLs and download automatically "
+            "(requires pyperclip: pip install ficary[clipboard])"
+        ),
+    )
+
+    # --- Watchlist / notifications -----------------------------------------
+    # `--watchlist-*` is a separate namespace from `-w/--watch` (clipboard)
+    # on purpose: they're unrelated features and sharing the prefix would
+    # trip argparse's abbreviation matching.
+    watch_group = parser.add_argument_group(
+        "watchlist",
+        "Subscribe to stories, authors, or saved searches and receive "
+        "Pushover/Discord/email alerts when they change. See --watchlist-* "
+        "flags below.",
+    )
+    watch_group.add_argument(
+        "--watchlist-add",
+        metavar="URL",
+        help=(
+            "Add a watch for URL. Auto-detects story vs author from the URL; "
+            "use --watchlist-label / --watchlist-channel to customise."
+        ),
+    )
+    watch_group.add_argument(
+        "--watchlist-add-search",
+        nargs=2,
+        metavar=("SITE", "QUERY"),
+        help=(
+            "Add a saved-search watch. SITE is one of ffn/ao3/royalroad/"
+            "literotica/wattpad; QUERY is the search string. Pair with "
+            "--watchlist-label for a friendly name."
+        ),
+    )
+    watch_group.add_argument(
+        "--watchlist-label",
+        metavar="LABEL",
+        help="Display label for the watch being added (optional).",
+    )
+    watch_group.add_argument(
+        "--watchlist-channel",
+        action="append",
+        metavar="CHANNEL",
+        help=(
+            "Notification channel to enable on the watch being added: "
+            "pushover, discord, or email. Repeat for multiple channels. "
+            "If omitted, every configured channel is used."
+        ),
+    )
+    watch_group.add_argument(
+        "--watchlist-list",
+        action="store_true",
+        help="List all watches with their id, type, target, and status.",
+    )
+    watch_group.add_argument(
+        "--watchlist-remove",
+        metavar="ID",
+        help="Remove a watch by id (or unambiguous id prefix).",
+    )
+    watch_group.add_argument(
+        "--watchlist-run",
+        action="store_true",
+        help=(
+            "Poll every enabled watch once and dispatch notifications for "
+            "new items. Suitable for cron / Windows Task Scheduler."
+        ),
+    )
+    watch_group.add_argument(
+        "--watchlist-test",
+        metavar="CHANNEL",
+        help=(
+            "Send a test notification through CHANNEL (pushover, discord, "
+            "or email) using the currently-configured credentials."
+        ),
+    )
+
+    parser.add_argument(
+        "-v", "--verbose", action="store_true", help="Enable debug logging"
+    )
+    return parser
+
+
+def _handle_install_attribution(backend: str) -> int:
+    """Install an optional attribution backend and return an exit code."""
+    from . import attribution as _attr
+
+    reason = _attr.install_unsupported_reason(backend)
+    if reason:
+        # Running as a frozen PyInstaller .exe — surface the
+        # explanation rather than attempting a doomed subprocess.
+        print(reason)
+        return 1
+    print(f"Installing {backend} (this may take a minute)...")
+    if _attr.install(backend, log_callback=print):
+        print(f"\n{backend} installed successfully.")
+        return 0
+    print(f"\nFailed to install {backend}.")
+    return 1
+
+
+def _is_search_mode(args: argparse.Namespace) -> bool:
+    """Return True if the args request an interactive search.
+
+    Most searches need --search, but several flags stand in for a
+    free-text query on their own: RR list browse, RR filter-only
+    browse (tags/genres/warnings/bounds), and Literotica category.
+    """
+    rr_filter_only = any(
+        getattr(args, attr, None)
+        for attr in (
+            "rr_list", "rr_tags", "rr_genres", "rr_warnings",
+            "rr_min_words", "rr_max_words", "rr_min_pages",
+            "rr_max_pages", "rr_min_rating",
+        )
+    )
+    return bool(
+        args.search or rr_filter_only or getattr(args, "lit_category", None)
+    )
+
+
+def _handle_update_file(args: argparse.Namespace) -> int:
+    """Single-file --update: read source URL, download new chapters, re-export."""
+    update_path = Path(args.update)
+    # ``extract_source_url`` raises ``FileNotFoundError`` for a missing
+    # path and ``ValueError`` when the file isn't an ficary export. Both
+    # were uncaught before, so a typo or a non-ficary file produced a
+    # raw traceback instead of a one-line error. ``count_chapters``
+    # can raise ``OSError`` on a corrupt EPUB. Surface each as a
+    # structured one-liner and exit non-zero so scripts can branch.
+    try:
+        url = extract_source_url(update_path)
+    except FileNotFoundError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+    except ValueError as exc:
+        print(
+            f"Error: could not read source URL from "
+            f"{update_path.name}: {exc}",
+            file=sys.stderr,
+        )
+        return 1
+    try:
+        existing_chapters = count_chapters(update_path)
+    except (OSError, ValueError) as exc:
+        print(
+            f"Error: could not count chapters in "
+            f"{update_path.name}: {exc}",
+            file=sys.stderr,
+        )
+        return 1
+    if args.format is None:
+        args.format = _FMT_MAP.get(update_path.suffix.lower(), "epub")
+    if args.output is None:
+        args.output = str(update_path.parent)
+    output_dir = Path(args.output)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    try:
+        ok = _download_one(
+            url, args, output_dir,
+            update_path=update_path,
+            existing_chapters=existing_chapters,
+        )
+    except KeyboardInterrupt:
+        print("\nCancelled. Re-run the same command to resume.")
+        return 130
+    return 0 if ok else 1
+
+
+def _collect_urls(args: argparse.Namespace) -> list[str]:
+    """Gather story URLs from positional args and --batch file."""
+    urls = list(args.url) if args.url else []
+    if args.batch:
+        urls.extend(_read_batch_file(args.batch))
+    return urls
+
+
+def _expand_author_and_series_urls(
+    urls: list[str], args: argparse.Namespace,
+) -> list[str]:
+    """Resolve any author-page or series-page URLs into per-story URLs.
+
+    Each author URL expands to the author's own-stories list; each
+    AO3/Literotica series URL expands to its constituent works.
+    Raises SystemExit on fetch failure — the caller treats these as
+    fatal because the user explicitly asked for a collection.
+    """
+    expanded: list[str] = []
+    for url in urls:
+        if _is_author_url(url):
+            try:
+                author_name, story_urls = _scrape_author_stories(url, args)
+            except (RateLimitError, CloudflareBlockError, StoryNotFoundError) as exc:
+                print(f"Error fetching author page {url}: {exc}", file=sys.stderr)
+                sys.exit(1)
+            if not story_urls:
+                print(f"No stories found on author page: {url}", file=sys.stderr)
+                sys.exit(1)
+            print(f"Author: {author_name}")
+            print(f"Found {len(story_urls)} stories.")
+            expanded.extend(story_urls)
+        elif _is_series_url(url):
+            try:
+                series_name, work_urls = _scrape_series_works(url, args)
+            except (RateLimitError, CloudflareBlockError, StoryNotFoundError) as exc:
+                print(f"Error fetching series page {url}: {exc}", file=sys.stderr)
+                sys.exit(1)
+            if not work_urls:
+                print(f"No works found in series: {url}", file=sys.stderr)
+                sys.exit(1)
+            print(f"Series: {series_name}")
+            print(f"Found {len(work_urls)} works.")
+            expanded.extend(work_urls)
+        else:
+            expanded.append(url)
+    return expanded
+
+
+def _run_batch(
+    urls: list[str], args: argparse.Namespace, output_dir: Path,
+) -> int:
+    """Download each URL in turn, printing a per-run summary at the end.
+
+    Single-URL case preserves the original exit-code behaviour
+    (0/1 from the one download); multi-URL case always prints a
+    summary and exits non-zero if any story failed. Interrupts
+    surface as exit code 130 with a partial summary.
+    """
+    if len(urls) == 1:
+        try:
+            ok = _download_one(urls[0], args, output_dir)
+        except KeyboardInterrupt:
+            print("\nCancelled. Re-run the same command to resume.")
+            return 130
+        return 0 if ok else 1
+
+    succeeded = 0
+    failed = 0
+    failures: list[str] = []
+    try:
+        for i, url in enumerate(urls, 1):
+            print(f"\n{'='*60}")
+            print(f"[{i}/{len(urls)}] {url}")
+            print(f"{'='*60}")
+            if _download_one(url, args, output_dir):
+                succeeded += 1
+            else:
+                failed += 1
+                failures.append(url)
+    except KeyboardInterrupt:
+        print("\nCancelled.")
+        remaining = len(urls) - (succeeded + failed)
+        print(f"\n{'='*60}")
+        print(
+            f"Batch interrupted — {succeeded} succeeded, {failed} failed, "
+            f"{remaining} not attempted."
+        )
+        if failures:
+            print("Failed URLs:")
+            for u in failures:
+                print(f"  {u}")
+        return 130
+
+    print(f"\n{'='*60}")
+    print(
+        f"Batch complete — {succeeded} succeeded, {failed} failed "
+        f"out of {len(urls)} total."
+    )
+    if failures:
+        print("Failed URLs:")
+        for u in failures:
+            print(f"  {u}")
+    print(f"{'='*60}")
+    return 0 if failed == 0 else 1
+
+
+# ---------------------------------------------------------------------------
+# Watchlist handlers
+#
+# Each handler is a self-contained exit path: it loads the store, does one
+# thing (list / add / remove / poll / test), prints a human-readable result,
+# and returns an exit code. None of them return to the regular URL-dispatch
+# flow — watchlist commands are their own mode.
+# ---------------------------------------------------------------------------
+
+# CLI exit codes. Named so the handlers don't sprinkle 0/1/2 magic integers.
+_EXIT_OK = 0
+_EXIT_GENERIC_FAILURE = 1
+_EXIT_USAGE_ERROR = 2
+
+# How many hex chars of a watch id to show in --watchlist-list. Full ids
+# are 32 chars (uuid4().hex); 8 chars is enough to disambiguate in any
+# realistic watchlist while staying narrow enough to fit in a terminal.
+_WATCHLIST_ID_DISPLAY_CHARS = 8
+
+
+def _watchlist_channels_from_args(args: argparse.Namespace) -> list[str]:
+    """Resolve the channel list for a new watch from ``--watchlist-channel``.
+
+    If the flag was omitted, every supported channel is enabled — the
+    user presumably configured the creds they want; letting unused
+    channels no-op on missing config is less surprising than a watch
+    that silently never notifies.
+    """
+    from .notifications import ALL_CHANNELS
+
+    requested = args.watchlist_channel or []
+    if not requested:
+        return list(ALL_CHANNELS)
+
+    valid = set(ALL_CHANNELS)
+    cleaned: list[str] = []
+    for raw in requested:
+        # Accept comma-separated values too — `--watchlist-channel pushover,email`
+        # is ergonomically nicer than repeating the flag.
+        for chunk in raw.split(","):
+            name = chunk.strip().lower()
+            if not name:
+                continue
+            if name not in valid:
+                raise ValueError(
+                    f"Unknown notification channel: {name!r}. "
+                    f"Valid channels: {', '.join(sorted(valid))}."
+                )
+            if name not in cleaned:
+                cleaned.append(name)
+    return cleaned
+
+
+def _handle_watchlist_list() -> int:
+    """Print every watch in the store with its type, target, and status."""
+    from .watchlist import WatchlistStore
+
+    store = WatchlistStore.load_default()
+    watches = store.all()
+    if not watches:
+        print("Watchlist is empty. Add one with --watchlist-add URL.")
+        return _EXIT_OK
+
+    print(f"{len(watches)} watch(es):\n")
+    for w in watches:
+        short_id = w.id[:_WATCHLIST_ID_DISPLAY_CHARS]
+        enabled = "on " if w.enabled else "off"
+        channels = ",".join(w.channels) or "(none)"
+        last = w.last_checked_at or "never"
+        error = f"  ERR: {w.last_error}" if w.last_error else ""
+        target = w.target or (f"search: {w.query!r}" if w.type == "search" else "")
+        label = w.label or target
+        print(
+            f"  {short_id}  [{enabled}]  {w.type:7s}  {w.site or '-':10s}  "
+            f"{label}"
+        )
+        print(
+            f"             channels={channels}  last_checked={last}{error}"
+        )
+    return _EXIT_OK
+
+
+def _handle_watchlist_add(args: argparse.Namespace) -> int:
+    """Add an author or story watch for ``args.watchlist_add``."""
+    from .watchlist import (
+        VALID_WATCH_TYPES,
+        Watch,
+        WatchlistStore,
+        classify_target,
+        site_key_for_url,
+    )
+
+    url = args.watchlist_add.strip()
+    watch_type = classify_target(url)
+    if watch_type is None or watch_type not in VALID_WATCH_TYPES:
+        print(
+            f"Error: {url!r} is neither a recognised author page nor a "
+            "story URL on any supported site.",
+            file=sys.stderr,
+        )
+        return _EXIT_USAGE_ERROR
+
+    try:
+        channels = _watchlist_channels_from_args(args)
+    except ValueError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return _EXIT_USAGE_ERROR
+
+    store = WatchlistStore.load_default()
+    watch = Watch(
+        type=watch_type,
+        site=site_key_for_url(url),
+        target=url,
+        label=(args.watchlist_label or "").strip(),
+        channels=channels,
+    )
+    store.add(watch)
+    print(
+        f"Added {watch_type} watch {watch.id[:_WATCHLIST_ID_DISPLAY_CHARS]} "
+        f"for {watch.display_label()}"
+    )
+    return _EXIT_OK
+
+
+def _handle_watchlist_add_search(args: argparse.Namespace) -> int:
+    """Add a saved-search watch from ``args.watchlist_add_search``."""
+    from .watchlist import (
+        SEARCH_SUPPORTED_SITES,
+        WATCH_TYPE_SEARCH,
+        Watch,
+        WatchlistStore,
+    )
+
+    site_raw, query = args.watchlist_add_search
+    site = site_raw.strip().lower()
+    if site not in SEARCH_SUPPORTED_SITES:
+        print(
+            f"Error: search watches not supported on {site!r}. "
+            f"Supported: {', '.join(SEARCH_SUPPORTED_SITES)}.",
+            file=sys.stderr,
+        )
+        return _EXIT_USAGE_ERROR
+
+    try:
+        channels = _watchlist_channels_from_args(args)
+    except ValueError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return _EXIT_USAGE_ERROR
+
+    store = WatchlistStore.load_default()
+    watch = Watch(
+        type=WATCH_TYPE_SEARCH,
+        site=site,
+        target=f"{site} search: {query}",
+        label=(args.watchlist_label or "").strip(),
+        channels=channels,
+        query=query,
+    )
+    store.add(watch)
+    print(
+        f"Added search watch {watch.id[:_WATCHLIST_ID_DISPLAY_CHARS]} "
+        f"on {site}: {query!r}"
+    )
+    return _EXIT_OK
+
+
+def _handle_watchlist_remove(watch_id: str) -> int:
+    """Remove the watch matching ``watch_id`` (full id or unambiguous prefix)."""
+    from .watchlist import WatchlistStore
+
+    store = WatchlistStore.load_default()
+    if store.remove(watch_id):
+        print(f"Removed watch {watch_id}.")
+        return _EXIT_OK
+    print(
+        f"No watch matches {watch_id!r}. Use --watchlist-list to see ids.",
+        file=sys.stderr,
+    )
+    return _EXIT_USAGE_ERROR
+
+
+def _handle_watchlist_run() -> int:
+    """Poll every enabled watch once; print a per-watch summary."""
+    from .prefs import Prefs
+    from .watchlist import WatchlistStore, run_once
+
+    store = WatchlistStore.load_default()
+    if not store.all():
+        print("Watchlist is empty — nothing to poll.")
+        return _EXIT_OK
+
+    prefs = Prefs()
+    results = run_once(store, prefs)
+
+    any_error = False
+    new_total = 0
+    for result in results:
+        watch = store.get(result.watch_id)
+        label = watch.display_label() if watch else result.watch_id[:_WATCHLIST_ID_DISPLAY_CHARS]
+        if not result.ok:
+            any_error = True
+            print(f"  [!] {label}: {result.error}", file=sys.stderr)
+            continue
+        if result.new_items:
+            new_total += len(result.new_items)
+            if result.chapter_delta:
+                print(
+                    f"  [+] {label}: {result.chapter_delta} new chapter"
+                    f"{'s' if result.chapter_delta != 1 else ''}"
+                )
+            else:
+                print(f"  [+] {label}: {len(result.new_items)} new item(s)")
+        else:
+            print(f"  [=] {label}: no change")
+
+    print(
+        f"Poll complete — {len(results)} watch(es) checked, "
+        f"{new_total} new item(s)."
+    )
+    return _EXIT_GENERIC_FAILURE if any_error else _EXIT_OK
+
+
+def _handle_watchlist_test(channel: str) -> int:
+    """Send a test notification through ``channel`` via the current creds."""
+    from .notifications import (
+        ALL_CHANNELS,
+        Notification,
+        NotificationError,
+        dispatch,
+    )
+    from .prefs import Prefs
+
+    channel = channel.strip().lower()
+    if channel not in ALL_CHANNELS:
+        print(
+            f"Error: unknown channel {channel!r}. "
+            f"Valid: {', '.join(ALL_CHANNELS)}.",
+            file=sys.stderr,
+        )
+        return _EXIT_USAGE_ERROR
+
+    prefs = Prefs()
+    notification = Notification(
+        title="ficary watchlist test",
+        message=(
+            "If you're reading this, your ficary notification credentials "
+            "for this channel are working."
+        ),
+        url="https://github.com/matalvernaz/ficary",
+    )
+    # dispatch() catches NotificationError per-channel and returns a list
+    # of (channel, message) failures. We still handle the import-time
+    # exception class here as a belt-and-braces.
+    try:
+        delivered, failures = dispatch([channel], notification, prefs)
+    except NotificationError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return _EXIT_GENERIC_FAILURE
+
+    if failures:
+        for ch, reason in failures:
+            print(f"  [!] {ch}: {reason}", file=sys.stderr)
+        return _EXIT_GENERIC_FAILURE
+    print(f"Test notification delivered via {', '.join(delivered)}.")
+    return _EXIT_OK
+
+
+def main(argv: list[str] | None = None) -> None:
+    """CLI entry point. Parses args and dispatches to a handler."""
+    parser = _build_parser()
+    args = parser.parse_args(argv)
+
+    logging.basicConfig(
+        level=logging.DEBUG if args.verbose else logging.INFO,
+        format="%(message)s",
+    )
+
+    if getattr(args, "install_attribution", None):
+        sys.exit(_handle_install_attribution(args.install_attribution))
+
+    if getattr(args, "install_piper", False):
+        from .tts_providers import piper as _piper
+
+        ok = _piper.install_piper_binary(log_callback=lambda m: print(m))
+        sys.exit(0 if ok else 1)
+
+    # --- Watchlist modes: all self-contained (no positional URLs) ---
+    # Checked before search / library / URL dispatch so none of those
+    # paths treats a watchlist flag as "no arguments, show help".
+    if getattr(args, "watchlist_list", False):
+        sys.exit(_handle_watchlist_list())
+    if getattr(args, "watchlist_run", False):
+        sys.exit(_handle_watchlist_run())
+    if getattr(args, "watchlist_add", None):
+        sys.exit(_handle_watchlist_add(args))
+    if getattr(args, "watchlist_add_search", None):
+        sys.exit(_handle_watchlist_add_search(args))
+    if getattr(args, "watchlist_remove", None):
+        sys.exit(_handle_watchlist_remove(args.watchlist_remove))
+    if getattr(args, "watchlist_test", None):
+        sys.exit(_handle_watchlist_test(args.watchlist_test))
+
+    # --- Search mode ---
+    if _is_search_mode(args):
+        if not args.search:
+            args.search = ""
+        _handle_search(args)
+        return
+
+    # --- Library / bulk modes: each handler owns its own sys.exit ---
+    if args.scan_library:
+        _handle_scan_library(args)
+        return
+    if args.reorganize:
+        _handle_reorganize(args)
+        return
+    if args.update_library:
+        _handle_update_library(args)
+        return
+    if args.review_library:
+        _handle_review_library(args)
+        return
+    if args.library_doctor:
+        _handle_library_doctor(args)
+        return
+    if args.library_stats:
+        _handle_library_stats(args)
+        return
+    if args.library_find:
+        _handle_library_find(args)
+        return
+    if args.library_search:
+        _handle_library_search(args)
+        return
+    if args.populate_search:
+        _handle_populate_search(args)
+        return
+    if args.find_mirrors is not None:
+        _handle_find_mirrors(args)
+        return
+    if args.revive_abandoned is not None:
+        _handle_revive_abandoned(args)
+        return
+    if args.list_abandoned:
+        _handle_list_abandoned(args)
+        return
+    if args.cache_doctor:
+        _handle_cache_doctor(args)
+        return
+    if args.populate_hashes:
+        _handle_populate_hashes(args)
+        return
+    if args.scan_edits:
+        _handle_scan_edits(args)
+        return
+    if args.watchlist_doctor:
+        _handle_watchlist_doctor(args)
+        return
+    if args.doctor:
+        _handle_full_doctor(args)
+        return
+    if args.backup_index:
+        _handle_backup_index()
+        return
+    if args.list_backups:
+        _handle_list_backups()
+        return
+    if args.restore_index:
+        _handle_restore_index(args)
+        return
+    if args.discard_bad_index:
+        _handle_discard_bad_index()
+        return
+    if args.update_all:
+        _handle_update_all(args)
+        return
+    if args.watch:
+        _handle_watch(args)
+        return
+
+    # --- Single-file --update (not batch) ---
+    if args.update:
+        if args.batch:
+            parser.error("--update and --batch cannot be used together")
+        if args.url:
+            # _handle_update_file derives the URL from the file's
+            # source-url metadata, so any extra positional URLs would
+            # be silently ignored. Reject up front so the user doesn't
+            # think they kicked off a download alongside the update.
+            parser.error(
+                "--update accepts only the file argument; pass other URLs "
+                "in a separate invocation"
+            )
+        sys.exit(_handle_update_file(args))
+
+    # --- --extract / --bulk: any list-page URL → list of fic URLs ---
+    if args.extract or args.bulk:
+        if args.author or args.batch:
+            parser.error(
+                "--extract / --bulk cannot be combined with "
+                "--author or --batch"
+            )
+        target_url = args.extract or args.bulk
+        try:
+            label, works = _bulk_extract(target_url, args)
+        except (RateLimitError, CloudflareBlockError, StoryNotFoundError, ValueError) as exc:
+            print(f"Error extracting URL list: {exc}", file=sys.stderr)
+            sys.exit(1)
+        if args.max_results and args.max_results > 0:
+            works = works[: args.max_results]
+        if not works:
+            print("No fics found at that URL.", file=sys.stderr)
+            sys.exit(1)
+        if args.extract:
+            # TSV out so callers can pipe through `cut`, `column -t`,
+            # etc. Headerless on purpose — easier to feed back into
+            # `--batch -`. Use \t as the separator, replace any
+            # embedded tabs with a single space defensively.
+            print(f"# {len(works)} works at {label}", file=sys.stderr)
+            for w in works:
+                row = "\t".join(
+                    str(w.get(k, "")).replace("\t", " ")
+                    for k in ("url", "title", "author", "words")
+                )
+                print(row)
+            sys.exit(0)
+        # --bulk: feed the URLs into the regular download path.
+        urls = [w["url"] for w in works if w.get("url")]
+        if not urls:
+            print("Extracted works carried no URLs.", file=sys.stderr)
+            sys.exit(1)
+        print(f"List: {label}")
+        print(f"Found {len(urls)} fics — starting batch download.")
+
+    # --- --author: fetch the author's own stories, then batch-download ---
+    elif args.author:
+        if args.batch:
+            parser.error("--author and --batch cannot be used together")
+        try:
+            author_name, story_urls = _scrape_author_stories(args.author, args)
+        except (RateLimitError, CloudflareBlockError, StoryNotFoundError) as exc:
+            print(f"Error fetching author page: {exc}", file=sys.stderr)
+            sys.exit(1)
+        if not story_urls:
+            print("No stories found on the author page.", file=sys.stderr)
+            sys.exit(1)
+        print(f"Author: {author_name}")
+        print(f"Found {len(story_urls)} stories.")
+        urls = story_urls
+
+    else:
+        try:
+            urls = _collect_urls(args)
+        except FileNotFoundError as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            sys.exit(1)
+
+        # --merge-series: peel off series URLs and render each as one file.
+        if args.merge_series:
+            series_urls = [u for u in urls if _is_series_url(u)]
+            if series_urls:
+                if args.format is None:
+                    args.format = "epub"
+                if args.output is None:
+                    args.output = "."
+                output_dir = Path(args.output)
+                output_dir.mkdir(parents=True, exist_ok=True)
+                ok = _handle_merge_series(series_urls, args, output_dir)
+                urls = [u for u in urls if not _is_series_url(u)]
+                if not urls:
+                    sys.exit(0 if ok else 1)
+
+        urls = _expand_author_and_series_urls(urls, args)
+
+        if not urls:
+            parser.error(
+                "either a URL, --batch FILE, --update FILE, or "
+                "--author URL is required"
+            )
+
+    if args.format is None:
+        args.format = "epub"
+
+    # Fail fast on a missing export dependency (e.g. ebooklib for epub,
+    # edge-tts for audio) before any fetching, so a multi-URL batch /
+    # --author run doesn't download every story and then fail per-story
+    # at export time. Mirrors the pre-flight in the bulk-update handlers.
+    try:
+        check_format_deps(args.format)
+    except ImportError as exc:
+        print(f"Missing dependency: {exc}", file=sys.stderr)
+        sys.exit(1)
+
+    # Library auto-sort: if --output wasn't given and a library path is
+    # configured, route fresh downloads into the library and let
+    # _download_one derive the per-story subdir from metadata. Explicit
+    # --output always wins so power users keep their one-off overrides.
+    _apply_library_autosort(args)
+    if args.output is None:
+        args.output = "."
+    output_dir = Path(args.output)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    sys.exit(_run_batch(urls, args, output_dir))

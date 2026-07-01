@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from ffn_dl.library.index import LibraryIndex
-from ffn_dl.library.mirrors import (
+from ficary.library.index import LibraryIndex
+from ficary.library.mirrors import (
     FIRST_CHAPTER_OVERLAP_THRESHOLD,
     MIN_FIRST_CHAPTER_TOKENS,
     TITLE_JACCARD_THRESHOLD,
@@ -15,8 +15,8 @@ from ffn_dl.library.mirrors import (
     normalise_title,
     summarise,
 )
-from ffn_dl.library.scanner import scan
-from ffn_dl.models import Chapter, Story
+from ficary.library.scanner import scan
+from ficary.models import Chapter, Story
 
 
 # ── Pure helpers ────────────────────────────────────────────────
@@ -41,7 +41,7 @@ def test_normalise_title_preserves_non_ascii_letters():
     result = normalise_title("А Tale")
     assert "tale" in result
     # Single-token CJK title still yields a non-empty token set
-    from ffn_dl.library.mirrors import _token_set
+    from ficary.library.mirrors import _token_set
     assert _token_set(normalise_title("失われた物語"))
 
 
@@ -86,7 +86,7 @@ def _write_long_chapter_story(
     chapter is too short for the first-chapter signal to fire. Writes
     into a per-story subdir so mirror pairs sharing a title+author
     don't overwrite each other's files."""
-    from ffn_dl.exporters import export_epub
+    from ficary.exporters import export_epub
 
     sub = tmp_path / f"s{story_id}"
     sub.mkdir(exist_ok=True)
@@ -124,11 +124,11 @@ def _drabble_epub(
     """Fixture EPUB with the stock 7-word first chapter (too short to
     clear the first-chapter signal threshold). Per-story subdir so
     title+author twins don't clobber each other on disk."""
-    from .library_fixtures import ffndl_epub as _ffndl_epub
+    from .library_fixtures import ficary_epub as _ficary_epub
 
     sub = tmp_path / f"s{story_id}"
     sub.mkdir(exist_ok=True)
-    return _ffndl_epub(
+    return _ficary_epub(
         sub, title=title, author=author, url=url, story_id=story_id,
     )
 

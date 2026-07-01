@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from ffn_dl.cache_doctor import check_cache, prune
-from ffn_dl.library.index import LibraryIndex
+from ficary.cache_doctor import check_cache, prune
+from ficary.library.index import LibraryIndex
 
 
 def _fresh_index(tmp_path: Path) -> LibraryIndex:
@@ -200,7 +200,7 @@ class TestNonIntegerCacheKeys:
     """
 
     def test_chyoa_cache_entry_indexed_is_not_orphan(self, tmp_path):
-        from ffn_dl.erotica import ChyoaScraper
+        from ficary.erotica import ChyoaScraper
 
         url = "https://chyoa.com/chapter/Foo.42"
         sid = ChyoaScraper.cache_key_for_url(url)
@@ -227,7 +227,7 @@ class TestNonIntegerCacheKeys:
         assert report.total_entries == 0  # node dirs aren't story entries
 
     def test_literotica_cache_entry_indexed_is_not_orphan(self, tmp_path):
-        from ffn_dl.erotica import LiteroticaScraper
+        from ficary.erotica import LiteroticaScraper
 
         url = "https://www.literotica.com/s/some-fic"
         sid = LiteroticaScraper.cache_key_for_url(url)
@@ -240,7 +240,7 @@ class TestNonIntegerCacheKeys:
         assert report.orphan_entries == []
 
     def test_lushstories_cache_entry_indexed_is_not_orphan(self, tmp_path):
-        from ffn_dl.erotica import LushStoriesScraper
+        from ficary.erotica import LushStoriesScraper
 
         url = "https://www.lushstories.com/stories/feet/foot-worship"
         sid = LushStoriesScraper.cache_key_for_url(url)
@@ -253,7 +253,7 @@ class TestNonIntegerCacheKeys:
         assert report.orphan_entries == []
 
     def test_mcstories_cache_entry_indexed_is_not_orphan(self, tmp_path):
-        from ffn_dl.erotica import MCStoriesScraper
+        from ficary.erotica import MCStoriesScraper
 
         url = "https://mcstories.com/SomeStory/"
         sid = MCStoriesScraper.cache_key_for_url(url)
@@ -266,7 +266,7 @@ class TestNonIntegerCacheKeys:
         assert report.orphan_entries == []
 
     def test_nifty_cache_entry_indexed_is_not_orphan(self, tmp_path):
-        from ffn_dl.erotica import NiftyScraper
+        from ficary.erotica import NiftyScraper
 
         url = "https://www.nifty.org/nifty/gay/college/the-brotherhood/"
         sid = NiftyScraper.cache_key_for_url(url)
@@ -283,7 +283,7 @@ class TestNonIntegerCacheKeys:
         # (FFN, AO3, RoyalRoad, FicWad, MediaMiner, Wattpad, AFF, SOL,
         # Sexstories, Fictionmania, TGStorytime, DarkWanderer, GreatFeet)
         # inherit the default and must not regress.
-        from ffn_dl.scraper import FFNScraper
+        from ficary.scraper import FFNScraper
 
         assert FFNScraper.cache_key_for_url(
             "https://www.fanfiction.net/s/12345",

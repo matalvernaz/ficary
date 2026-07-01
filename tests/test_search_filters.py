@@ -2,7 +2,7 @@
 
 import pytest
 
-from ffn_dl.search import (
+from ficary.search import (
     _build_ao3_search_url,
     _build_rr_search_url,
     _build_search_url,
@@ -164,7 +164,7 @@ class TestCollapseSeries:
 
 class TestCollapseLiteroticaSeries:
     def test_two_parts_same_slug_collapse(self):
-        from ffn_dl.search import collapse_literotica_series
+        from ficary.search import collapse_literotica_series
         results = [
             {
                 "title": "Sample Story Ch. 06",
@@ -195,7 +195,7 @@ class TestCollapseLiteroticaSeries:
         assert series_row["series_id"] == "lit:sample-story"
 
     def test_lone_chapter_stays_as_work(self):
-        from ffn_dl.search import collapse_literotica_series
+        from ficary.search import collapse_literotica_series
         results = [
             {
                 "title": "Lone Part Ch. 03",
@@ -208,7 +208,7 @@ class TestCollapseLiteroticaSeries:
         assert collapsed[0].get("is_series") is not True
 
     def test_different_authors_do_not_collapse(self):
-        from ffn_dl.search import collapse_literotica_series
+        from ficary.search import collapse_literotica_series
         results = [
             {
                 "title": "Shared Slug Ch. 01",
@@ -229,7 +229,7 @@ class TestCollapseLiteroticaSeries:
         # Literotica's convention: Part 1 is posted with no suffix, then
         # Pt. 02 / Ch. 02 / etc. show up later. The bare-titled work
         # needs to be grouped with its own subsequent parts.
-        from ffn_dl.search import collapse_literotica_series
+        from ficary.search import collapse_literotica_series
         results = [
             {
                 "title": "Miss Abby Pt. 02",
@@ -252,7 +252,7 @@ class TestCollapseLiteroticaSeries:
         assert row["series_parts"][1]["url"].endswith("/miss-abby-pt-02")
 
     def test_dash_number_suffix_collapses(self):
-        from ffn_dl.search import collapse_literotica_series
+        from ficary.search import collapse_literotica_series
         results = [
             {
                 "title": "Housewife Comes Out - 5",
@@ -271,12 +271,12 @@ class TestCollapseLiteroticaSeries:
         assert len(collapsed[0]["series_parts"]) == 2
 
     def test_rr_list_browse_ignores_query(self):
-        from ffn_dl.search import _build_rr_search_url
+        from ficary.search import _build_rr_search_url
         url = _build_rr_search_url("chickens", {"list": "rising stars"})
         assert url.endswith("/fictions/rising-stars"), url
 
     def test_rr_list_browse_preserves_tags_and_page(self):
-        from ffn_dl.search import _build_rr_search_url
+        from ficary.search import _build_rr_search_url
         url = _build_rr_search_url(
             "", {"list": "best rated", "tags": "progression,magic"},
             page=3,
@@ -287,13 +287,13 @@ class TestCollapseLiteroticaSeries:
         assert "tagsAdd=magic" in url
 
     def test_rr_search_default_uses_search_endpoint(self):
-        from ffn_dl.search import _build_rr_search_url
+        from ficary.search import _build_rr_search_url
         url = _build_rr_search_url("dungeon", {})
         assert "/fictions/search?" in url
         assert "title=dungeon" in url
 
     def test_rr_stub_with_completion_label_shows_combined(self):
-        from ffn_dl.search import _parse_rr_results
+        from ficary.search import _parse_rr_results
         html = '''
         <div class="fiction-list-item">
           <h2 class="fiction-title"><a href="/fiction/1/x">X</a></h2>
@@ -308,7 +308,7 @@ class TestCollapseLiteroticaSeries:
         assert results[0].get("_stubbed_unknown") is False
 
     def test_rr_stub_without_completion_flagged_for_enrichment(self):
-        from ffn_dl.search import _parse_rr_results
+        from ficary.search import _parse_rr_results
         html = '''
         <div class="fiction-list-item">
           <h2 class="fiction-title"><a href="/fiction/1/x">X</a></h2>
@@ -325,7 +325,7 @@ class TestCollapseLiteroticaSeries:
         row rather than crash the whole search. Users reporting ``zero
         results`` is a visible, diagnosable failure; a crashed search
         silently loses the UI."""
-        from ffn_dl.search import _parse_rr_results
+        from ficary.search import _parse_rr_results
         html = '''
         <div class="fiction-list-item">
           <h2 class="fiction-title"><span>Broken — no anchor</span></h2>
@@ -343,7 +343,7 @@ class TestCollapseLiteroticaSeries:
         # /s/foo-2023 and /s/foo-2024 are common for annual one-shots.
         # Without a chapter marker in the title, they should NOT be
         # collapsed into a series.
-        from ffn_dl.search import collapse_literotica_series
+        from ficary.search import collapse_literotica_series
         results = [
             {
                 "title": "New Year's Eve 2023",
@@ -366,7 +366,7 @@ class TestCollapseLiteroticaSeries:
         # should stay standalone — its slug stem collision with the serial
         # is accidental, and the serial already has its own explicit
         # chapter 1.
-        from ffn_dl.search import collapse_literotica_series
+        from ficary.search import collapse_literotica_series
         results = [
             {
                 "title": "Foo",
@@ -393,7 +393,7 @@ class TestCollapseLiteroticaSeries:
         assert standalone["title"] == "Foo"
 
     def test_compact_p_suffix_collapses(self):
-        from ffn_dl.search import collapse_literotica_series
+        from ficary.search import collapse_literotica_series
         results = [
             {
                 "title": "Under the Heels of Eleonora Vane P3",
@@ -416,7 +416,7 @@ class TestCollapseLiteroticaSeries:
         first-class match. Earlier the suffix-only regex missed the
         whole class, so two prefix-style chapters of the same work
         appeared as two unrelated rows."""
-        from ffn_dl.search import collapse_literotica_series
+        from ficary.search import collapse_literotica_series
         results = [
             {
                 "title": "Chapter 2. The Package",
@@ -442,7 +442,7 @@ class TestCollapseLiteroticaSeries:
         """``"Ch. 16-18"`` covers a range; we still take the first
         number as the part anchor so range chapters sort alongside
         single ones in the same series."""
-        from ffn_dl.search import collapse_literotica_series
+        from ficary.search import collapse_literotica_series
         results = [
             {
                 "title": "Punishment Of Nonagon Ch. 15",
@@ -467,7 +467,7 @@ class TestCollapseLushstoriesSeries:
     real-world results. Title-based fallback path."""
 
     def test_title_based_collapse_groups_chapter_siblings(self):
-        from ffn_dl.search import collapse_lushstories_series
+        from ficary.search import collapse_lushstories_series
         results = [
             {
                 "title": "Schoolgirl Chapter 4 The Guidance Counselor",
@@ -497,7 +497,7 @@ class TestCollapseLushstoriesSeries:
     def test_url_slug_path_still_works(self):
         """The canonical ``slug-2`` / ``slug-3`` shape continues to
         collapse — title fallback is additive, not a replacement."""
-        from ffn_dl.search import collapse_lushstories_series
+        from ficary.search import collapse_lushstories_series
         results = [
             {
                 "title": "Foo",
@@ -531,7 +531,7 @@ class TestDedupErotica:
     a row, as Matt's "Angelica the Latex Mob Wife" report demonstrated."""
 
     def test_identical_url_rows_dropped(self):
-        from ffn_dl.search import collapse_erotica_series
+        from ficary.search import collapse_erotica_series
         results = [
             {
                 "title": "Angelica the Latex Mob Wife",
@@ -555,7 +555,7 @@ class TestDedupErotica:
         """Even when URLs differ slightly (a series-card link vs.
         a chapter-card link both labelled with the same title), the
         identity key (title + author + site) catches them."""
-        from ffn_dl.search import collapse_erotica_series
+        from ficary.search import collapse_erotica_series
         results = [
             {
                 "title": "Angelica the Latex Mob Wife",
@@ -576,7 +576,7 @@ class TestDedupErotica:
     def test_dedup_preserves_distinct_works(self):
         """Different titles by the same author on the same site stay
         as distinct rows."""
-        from ffn_dl.search import collapse_erotica_series
+        from ficary.search import collapse_erotica_series
         results = [
             {
                 "title": "Work A",
@@ -598,7 +598,7 @@ class TestDedupErotica:
         """The dedup pass executes downstream of the series collapse,
         so a collapsed series row's title doesn't clash with the part
         rows it absorbed — only standalone duplicates are dropped."""
-        from ffn_dl.search import collapse_erotica_series
+        from ficary.search import collapse_erotica_series
         results = [
             {
                 "title": "Foo Ch. 02",
@@ -622,7 +622,7 @@ class TestDedupErotica:
 
 class TestExpandedRRFilters:
     def test_genres_label_resolves_to_tagsadd(self):
-        from ffn_dl.search import _build_rr_search_url
+        from ficary.search import _build_rr_search_url
         url = _build_rr_search_url(
             "dungeon", {"genres": "Fantasy, Sci-fi"},
         )
@@ -630,7 +630,7 @@ class TestExpandedRRFilters:
         assert "tagsAdd=sci_fi" in url
 
     def test_tags_picked_label_resolves_to_tagsadd(self):
-        from ffn_dl.search import _build_rr_search_url
+        from ficary.search import _build_rr_search_url
         url = _build_rr_search_url(
             "dungeon", {"tags_picked": "LitRPG, Progression"},
         )
@@ -638,7 +638,7 @@ class TestExpandedRRFilters:
         assert "tagsAdd=progression" in url
 
     def test_warnings_label_resolves_to_warningsadd(self):
-        from ffn_dl.search import _build_rr_search_url
+        from ficary.search import _build_rr_search_url
         url = _build_rr_search_url(
             "dungeon", {"warnings": "Gore, Profanity"},
         )
@@ -646,7 +646,7 @@ class TestExpandedRRFilters:
         assert "warningsAdd=profanity" in url
 
     def test_raw_slug_passthrough(self):
-        from ffn_dl.search import _build_rr_search_url
+        from ficary.search import _build_rr_search_url
         url = _build_rr_search_url(
             "dungeon", {"tags_picked": "raw_unknown_slug"},
         )
@@ -655,7 +655,7 @@ class TestExpandedRRFilters:
         assert "tagsAdd=raw_unknown_slug" in url
 
     def test_duplicate_slugs_deduped_across_sources(self):
-        from ffn_dl.search import _build_rr_search_url
+        from ficary.search import _build_rr_search_url
         url = _build_rr_search_url(
             "dungeon",
             {"genres": "Fantasy", "tags_picked": "Fantasy", "tags": "fantasy"},
@@ -664,7 +664,7 @@ class TestExpandedRRFilters:
         assert url.count("tagsAdd=fantasy") == 1
 
     def test_numeric_bounds_pass_through(self):
-        from ffn_dl.search import _build_rr_search_url
+        from ficary.search import _build_rr_search_url
         url = _build_rr_search_url(
             "dungeon",
             {
@@ -681,18 +681,18 @@ class TestExpandedRRFilters:
 
     def test_min_rating_out_of_range_raises(self):
         import pytest
-        from ffn_dl.search import _build_rr_search_url
+        from ficary.search import _build_rr_search_url
         with pytest.raises(ValueError):
             _build_rr_search_url("x", {"min_rating": "9.0"})
 
     def test_min_words_non_numeric_raises(self):
         import pytest
-        from ffn_dl.search import _build_rr_search_url
+        from ficary.search import _build_rr_search_url
         with pytest.raises(ValueError):
             _build_rr_search_url("x", {"min_words": "lots"})
 
     def test_list_browse_keeps_new_tags_and_warnings(self):
-        from ffn_dl.search import _build_rr_search_url
+        from ficary.search import _build_rr_search_url
         url = _build_rr_search_url(
             "", {
                 "list": "rising stars",
@@ -707,27 +707,27 @@ class TestExpandedRRFilters:
 
 class TestAO3CategoryAndLanguage:
     def test_category_resolves(self):
-        from ffn_dl.search import _build_ao3_search_url
+        from ficary.search import _build_ao3_search_url
         url = _build_ao3_search_url("foo", {"category": "m/m"})
         # m/m is id 23 — urlencode escapes the [] in the param name.
         assert "category_ids" in url
         assert "=23" in url
 
     def test_language_label_resolves_to_code(self):
-        from ffn_dl.search import _build_ao3_search_url
+        from ficary.search import _build_ao3_search_url
         url = _build_ao3_search_url("foo", {"language": "French"})
         assert "language_id" in url
         assert "fr" in url
 
     def test_language_raw_code_passes_through(self):
-        from ffn_dl.search import _build_ao3_search_url
+        from ficary.search import _build_ao3_search_url
         url = _build_ao3_search_url("foo", {"language": "ja"})
         assert "ja" in url
 
 
 class TestFFNGenre2:
     def test_second_genre_adds_genreid2(self):
-        from ffn_dl.search import _build_search_url
+        from ficary.search import _build_search_url
         url = _build_search_url(
             "foo", {"genre": "romance", "genre2": "angst"},
         )
@@ -738,7 +738,7 @@ class TestFFNGenre2:
 class TestLiteroticaCategory:
     def test_category_overrides_query(self, monkeypatch):
         # We don't want to hit the network; stub the session.get.
-        import ffn_dl.search as S
+        import ficary.search as S
 
         captured = {}
 
@@ -761,7 +761,7 @@ class TestLiteroticaCategory:
         assert "loving-wives" in captured["url"]
 
     def test_category_unknown_label_falls_back_to_slug(self, monkeypatch):
-        import ffn_dl.search as S
+        import ficary.search as S
 
         captured = {}
 

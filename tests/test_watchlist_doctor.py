@@ -7,14 +7,14 @@ from pathlib import Path
 
 import pytest
 
-from ffn_dl.watchlist import (
+from ficary.watchlist import (
     Watch,
     WatchlistStore,
     WATCH_TYPE_AUTHOR,
     WATCH_TYPE_SEARCH,
     WATCH_TYPE_STORY,
 )
-from ffn_dl.watchlist_doctor import check_watchlist, heal_watchlist
+from ficary.watchlist_doctor import check_watchlist, heal_watchlist
 
 
 @pytest.fixture

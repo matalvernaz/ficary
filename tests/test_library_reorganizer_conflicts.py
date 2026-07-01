@@ -6,8 +6,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from ffn_dl.library.index import LibraryIndex
-from ffn_dl.library.reorganizer import plan, plan_with_conflicts
+from ficary.library.index import LibraryIndex
+from ficary.library.reorganizer import plan, plan_with_conflicts
 
 
 def _seed_entry(idx, root: Path, url: str, relpath: str, **fields) -> None:

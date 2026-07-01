@@ -1,6 +1,6 @@
 name: Build Linux Binary
 
-# Produces a portable x86_64 Linux binary (ffn-dl folder, tar.gz
+# Produces a portable x86_64 Linux binary (ficary folder, tar.gz
 # bundled) for each v-tag release. Accessibility: wxPython on
 # Linux wraps GTK3 widgets, which Orca (the GNOME screen reader)
 # reads natively. The CLI is plain text and works in any
@@ -88,36 +88,36 @@ jobs:
 
       - name: Build executable
         run: |
-          pyinstaller --onedir --name ffn-dl --console \
+          pyinstaller --onedir --name ficary --console \
             --add-binary "ffmpeg_bin/ffmpeg:." \
             --add-binary "ffmpeg_bin/ffprobe:." \
-            --collect-submodules ffn_dl \
+            --collect-submodules ficary \
             --hidden-import edge_tts \
             --hidden-import ebooklib \
             --hidden-import curl_cffi \
             --hidden-import wx \
             --collect-all curl_cffi \
             --collect-all wx \
-            ffn_dl/__main__.py
+            ficary/__main__.py
 
       - name: Smoke-test executable
-        run: dist/ffn-dl/ffn-dl --help
+        run: dist/ficary/ficary --help
 
       - name: Package
         # tar.gz preserves the executable bit so the binary stays
         # runnable after extraction.
         run: |
-          cd dist && tar czf ffn-dl-linux-x86_64.tar.gz ffn-dl
-          ls -la ffn-dl-linux-x86_64.tar.gz
+          cd dist && tar czf ficary-linux-x86_64.tar.gz ficary
+          ls -la ficary-linux-x86_64.tar.gz
 
       - name: Upload artifact
         uses: actions/upload-artifact@v7
         with:
-          name: ffn-dl-linux-x86_64
-          path: dist/ffn-dl-linux-x86_64.tar.gz
+          name: ficary-linux-x86_64
+          path: dist/ficary-linux-x86_64.tar.gz
 
       - name: Upload to release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v3
         with:
-          files: dist/ffn-dl-linux-x86_64.tar.gz
+          files: dist/ficary-linux-x86_64.tar.gz

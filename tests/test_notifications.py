@@ -12,7 +12,7 @@ from urllib import error as urlerror
 
 import pytest
 
-from ffn_dl import notifications
+from ficary import notifications
 
 
 def test_safe_endpoint_label_redacts_discord_webhook():
@@ -118,7 +118,7 @@ def test_notification_url_title_is_settable():
         sent.update(fields)
 
     # send_pushover routes through _post_form; intercept that.
-    import ffn_dl.notifications as nm
+    import ficary.notifications as nm
 
     real_post_form = nm._post_form
     try:

@@ -4,7 +4,7 @@ from pathlib import Path
 
 from bs4 import BeautifulSoup
 
-from ffn_dl.mediaminer import MediaMinerScraper, _split_mm_breadcrumb_title
+from ficary.mediaminer import MediaMinerScraper, _split_mm_breadcrumb_title
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -128,7 +128,7 @@ class TestEdgeCases:
         The parser should raise ``StoryNotFoundError`` rather than
         silently returning an empty meta dict — library-update needs
         the clean "definitively gone" signal to stamp the entry."""
-        from ffn_dl.scraper import StoryNotFoundError
+        from ficary.scraper import StoryNotFoundError
         soup = BeautifulSoup(
             "<html><body><p>That story does not exist.</p></body></html>",
             "lxml",

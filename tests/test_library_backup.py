@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from ffn_dl.library.backup import (
+from ficary.library.backup import (
     _MAX_BACKUPS,
     backup,
     list_backups,

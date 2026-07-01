@@ -6,9 +6,9 @@ from pathlib import Path
 
 import pytest
 
-from ffn_dl.library.index import LibraryIndex
-from ffn_dl.library.review import promote_untrackable, untrackable_for_root
-from ffn_dl.library.scanner import scan
+from ficary.library.index import LibraryIndex
+from ficary.library.review import promote_untrackable, untrackable_for_root
+from ficary.library.scanner import scan
 
 from .library_fixtures import bare_txt_no_url
 

@@ -2,7 +2,7 @@
 
 from bs4 import BeautifulSoup
 
-from ffn_dl.ficwad import FicWadScraper
+from ficary.ficwad import FicWadScraper
 
 
 class TestURLParsing:

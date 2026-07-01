@@ -3,14 +3,14 @@
 import tempfile
 from pathlib import Path
 
-from ffn_dl.exporters import (
+from ficary.exporters import (
     _apply_hr_as_stars,
     _site_info,
     export_html,
     export_txt,
     format_filename,
 )
-from ffn_dl.models import Chapter, Story
+from ficary.models import Chapter, Story
 
 
 def _make_story(url="https://www.fanfiction.net/s/1"):
@@ -52,7 +52,7 @@ class TestSiteInfo:
 
 class TestStripNotes:
     def test_strips_common_an_markers(self):
-        from ffn_dl.exporters import strip_note_paragraphs
+        from ficary.exporters import strip_note_paragraphs
         cases = [
             "<p>Story.</p><p>A/N: late update</p>",
             "<p>Story.</p><p>AN: thanks!</p>",
@@ -67,7 +67,7 @@ class TestStripNotes:
             assert out.count("<p>") == 1, f"should strip: {html}"
 
     def test_keeps_prose_that_looks_similar(self):
-        from ffn_dl.exporters import strip_note_paragraphs
+        from ficary.exporters import strip_note_paragraphs
         cases = [
             "<p>An arrow hit him.</p>",
             "<p>note to self: be careful</p>",
@@ -89,7 +89,7 @@ class TestStructuralNoteStripping:
     """
 
     def _strip(self, html):
-        from ffn_dl.exporters import strip_note_paragraphs
+        from ficary.exporters import strip_note_paragraphs
         return strip_note_paragraphs(html)
 
     def test_strips_top_block_when_all_bold_and_banner_present(self):
@@ -210,7 +210,7 @@ class TestChapterHeaderCutoff:
     regex used by the existing structural pass missed those."""
 
     def _strip(self, html):
-        from ffn_dl.exporters import strip_note_paragraphs
+        from ficary.exporters import strip_note_paragraphs
         return strip_note_paragraphs(html)
 
     def test_strips_disclaimer_before_chapter_header(self):
@@ -302,7 +302,7 @@ class TestEndMarkerCutoff:
     onward as back-matter."""
 
     def _strip(self, html):
-        from ffn_dl.exporters import strip_note_paragraphs
+        from ficary.exporters import strip_note_paragraphs
         return strip_note_paragraphs(html)
 
     def test_strips_outro_after_end_marker(self):
@@ -415,7 +415,7 @@ class TestNewLabelStripping:
     sentence starting with the literal word doesn't get swept."""
 
     def _strip(self, html):
-        from ffn_dl.exporters import strip_note_paragraphs
+        from ficary.exporters import strip_note_paragraphs
         return strip_note_paragraphs(html)
 
     def test_strips_disclaimer_label(self):
@@ -570,7 +570,7 @@ class TestStructuralRelaxedPreDivider:
     keyword and drops them without needing a banner."""
 
     def _strip(self, html):
-        from ffn_dl.exporters import strip_note_paragraphs
+        from ficary.exporters import strip_note_paragraphs
         return strip_note_paragraphs(html)
 
     def test_strips_bold_disclaimer_before_divider(self):
@@ -774,7 +774,7 @@ class TestUniversalMetadata:
 
 class TestFFMetaEscaping:
     def test_escapes_all_special_chars(self):
-        from ffn_dl.tts import _escape_ffmeta
+        from ficary.tts import _escape_ffmeta
         # Each of these chars must be backslash-escaped per the
         # FFMETADATA1 spec, otherwise ffmpeg silently fails to parse.
         assert _escape_ffmeta("with = sign") == "with \\= sign"
@@ -785,7 +785,7 @@ class TestFFMetaEscaping:
         assert _escape_ffmeta("crlf\r\nend") == "crlf\\\nend"
 
     def test_leaves_plain_text_untouched(self):
-        from ffn_dl.tts import _escape_ffmeta
+        from ficary.tts import _escape_ffmeta
         assert _escape_ffmeta("A Simple Title") == "A Simple Title"
 
     def test_orphan_carriage_return_normalised(self):
@@ -795,7 +795,7 @@ class TestFFMetaEscaping:
         value when a raw CR slips through, silently dropping every
         subsequent chapter marker.
         """
-        from ffn_dl.tts import _escape_ffmeta
+        from ficary.tts import _escape_ffmeta
         # Just a CR mid-string → treated as a newline (escaped).
         assert _escape_ffmeta("first\rsecond") == "first\\\nsecond"
         # CR at end of string.
@@ -806,7 +806,7 @@ class TestFetchParallel:
     def test_returns_results_in_input_order(self):
         # Even though workers complete in arbitrary order, the returned
         # list must line up with the input URL order.
-        from ffn_dl.scraper import FFNScraper
+        from ficary.scraper import FFNScraper
         s = FFNScraper(use_cache=False, concurrency=4)
         urls = [f"https://example.com/{i}" for i in range(8)]
 
@@ -824,7 +824,7 @@ class TestFetchParallel:
     def test_concurrency_halves_on_rate_limit(self):
         # When _fetch bumps _current_delay (the AIMD signal for "we got
         # rate-limited"), the next batch shrinks its concurrency.
-        from ffn_dl.scraper import FFNScraper
+        from ficary.scraper import FFNScraper
         s = FFNScraper(use_cache=False, concurrency=4)
         urls = [f"u{i}" for i in range(8)]
 
@@ -846,7 +846,7 @@ class TestFetchParallel:
         assert results == [f"html-u{i}" for i in range(8)]
 
     def test_single_url_uses_sequential_path(self):
-        from ffn_dl.scraper import FFNScraper
+        from ficary.scraper import FFNScraper
         s = FFNScraper(use_cache=False, concurrency=3)
         from unittest.mock import patch
         with patch.object(s, "_fetch", return_value="html") as m:
@@ -858,7 +858,7 @@ class TestFetchParallel:
 class TestRoyalRoadDates:
     def test_chapter_list_captures_publish_unixtime(self):
         from bs4 import BeautifulSoup
-        from ffn_dl.royalroad import RoyalRoadScraper
+        from ficary.royalroad import RoyalRoadScraper
         html = '''
         <table id="chapters"><tbody>
           <tr><td><a href="/fiction/1/x/chapter/10">Ch 1</a></td>
@@ -878,7 +878,7 @@ class TestV2414EpubMetadataResilience:
     and leave the user with no file."""
 
     def _story_with(self, **meta_overrides):
-        from ffn_dl.models import Chapter, Story
+        from ficary.models import Chapter, Story
         story = Story(
             id=1, title="T", author="A", summary="s",
             url="https://archiveofourown.org/works/1",
@@ -889,25 +889,25 @@ class TestV2414EpubMetadataResilience:
         return story
 
     def test_language_none_does_not_crash(self, tmp_path):
-        from ffn_dl.exporters import export_epub
+        from ficary.exporters import export_epub
         story = self._story_with(language=None)
         path = export_epub(story, output_dir=str(tmp_path))
         assert path.exists()
 
     def test_genre_none_does_not_crash(self, tmp_path):
-        from ffn_dl.exporters import export_epub
+        from ficary.exporters import export_epub
         story = self._story_with(genre=None)
         path = export_epub(story, output_dir=str(tmp_path))
         assert path.exists()
 
     def test_characters_none_does_not_crash(self, tmp_path):
-        from ffn_dl.exporters import export_epub
+        from ficary.exporters import export_epub
         story = self._story_with(characters=None)
         path = export_epub(story, output_dir=str(tmp_path))
         assert path.exists()
 
     def test_date_updated_none_does_not_crash(self, tmp_path):
-        from ffn_dl.exporters import export_epub
+        from ficary.exporters import export_epub
         story = self._story_with(date_updated=None)
         path = export_epub(story, output_dir=str(tmp_path))
         assert path.exists()
@@ -916,7 +916,7 @@ class TestV2414EpubMetadataResilience:
         # A scraper that wrote the published date as ``"2024-01-01"``
         # rather than an epoch shouldn't crash the export — the field
         # is best-effort metadata.
-        from ffn_dl.exporters import export_epub
+        from ficary.exporters import export_epub
         story = self._story_with(date_published="not-an-int")
         path = export_epub(story, output_dir=str(tmp_path))
         assert path.exists()
@@ -925,7 +925,7 @@ class TestV2414EpubMetadataResilience:
         """ebooklib emits its own ``dcterms:modified``; we must not add
         a second one (the OPF spec allows exactly one)."""
         import zipfile
-        from ffn_dl.exporters import export_epub
+        from ficary.exporters import export_epub
         story = self._story_with(date_updated=1700000000)
         path = export_epub(story, output_dir=str(tmp_path))
         with zipfile.ZipFile(path) as z:

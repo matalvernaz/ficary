@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from ffn_dl.webnovel import (
+from ficary.webnovel import (
     WebnovelLockedStoryError,
     WebnovelScraper,
     _LOCKED_NOTICE,

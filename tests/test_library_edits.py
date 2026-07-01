@@ -6,14 +6,14 @@ from pathlib import Path
 
 import pytest
 
-from ffn_dl.content_hash import hash_chapter
-from ffn_dl.library import (
+from ficary.content_hash import hash_chapter
+from ficary.library import (
     bootstrap_hashes,
     scan_edits,
     stored_hashes,
 )
-from ffn_dl.library.index import LibraryIndex
-from ffn_dl.models import Chapter, Story
+from ficary.library.index import LibraryIndex
+from ficary.models import Chapter, Story
 
 
 def _fresh_index(tmp_path: Path) -> LibraryIndex:
@@ -46,7 +46,7 @@ def _seed_entry(
 
 
 def _export_html(path: Path, chapters: list[tuple[int, str, str]]) -> None:
-    """Write a minimal ffn-dl-shaped HTML export that ``read_chapters``
+    """Write a minimal ficary-shaped HTML export that ``read_chapters``
     can parse back. Chapters are ``(number, title, body_html)``."""
     path.parent.mkdir(parents=True, exist_ok=True)
     parts = [
@@ -174,7 +174,7 @@ class _FakeScraper:
         self.calls.append(url)
         story = self.stories_by_url.get(url)
         if story is None:
-            from ffn_dl.scraper import StoryNotFoundError
+            from ficary.scraper import StoryNotFoundError
             raise StoryNotFoundError(f"no such story: {url}")
         return story
 

@@ -8,7 +8,7 @@ which the word-boundary splitter can't break on its own.
 
 from __future__ import annotations
 
-from ffn_dl.tts import _MAX_SEGMENT_CHARS, _split_oversized_text
+from ficary.tts import _MAX_SEGMENT_CHARS, _split_oversized_text
 
 
 def test_short_text_unchanged():

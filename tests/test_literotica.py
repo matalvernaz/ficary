@@ -4,7 +4,7 @@ from pathlib import Path
 
 from bs4 import BeautifulSoup
 
-from ffn_dl.erotica.literotica import LiteroticaScraper, _slug_to_id
+from ficary.erotica.literotica import LiteroticaScraper, _slug_to_id
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -214,7 +214,7 @@ class TestParseTagBrowseResults:
         """
 
     def test_parses_modern_card_markup(self):
-        from ffn_dl.search import _parse_literotica_results
+        from ficary.search import _parse_literotica_results
         html = "<html><body>" + "".join([
             self._card_html(
                 "first-card", "First Card", "AuthorOne",
@@ -240,7 +240,7 @@ class TestParseTagBrowseResults:
         anchored ``literotica.com/s/<slug>`` URL keeps tag-page chrome
         (bookmark / login dialog / category nav) from being mistaken
         for cards."""
-        from ffn_dl.search import _parse_literotica_results
+        from ficary.search import _parse_literotica_results
         # No rel="external" → not a card. Path-only links and series
         # links → not a card either.
         html = """
@@ -254,7 +254,7 @@ class TestParseTagBrowseResults:
         assert _parse_literotica_results(html) == []
 
     def test_dedupes_repeat_card_anchors(self):
-        from ffn_dl.search import _parse_literotica_results
+        from ficary.search import _parse_literotica_results
         html = (
             "<html><body>"
             + self._card_html("same", "Same Card", "A", "summary", "BDSM", "5")

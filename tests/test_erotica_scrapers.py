@@ -1,14 +1,14 @@
 """Smoke tests for the erotica subpackage.
 
 Each scraper gets: URL parsing (happy + error paths), site registration
-in ``ffn_dl.sites``, and ``canonical_url`` round-trip. Full end-to-end
+in ``ficary.sites``, and ``canonical_url`` round-trip. Full end-to-end
 download tests would require live HTTP and are deliberately omitted —
 these tests run offline in <1s so they gate every commit.
 """
 
 import pytest
 
-from ffn_dl.erotica import (
+from ficary.erotica import (
     AFFScraper,
     BDSMLibraryScraper,
     ChyoaScraper,
@@ -23,7 +23,7 @@ from ffn_dl.erotica import (
     StoriesOnlineScraper,
     TGStorytimeScraper,
 )
-from ffn_dl.erotica.search import (
+from ficary.erotica.search import (
     EROTICA_SITE_SLUGS,
     EROTICA_TAG_VOCABULARY,
     ErotiCAResults,
@@ -35,7 +35,7 @@ from ffn_dl.erotica.search import (
     tag_site_count,
     tag_sites_for,
 )
-from ffn_dl.sites import EROTICA_SCRAPERS, canonical_url, detect_scraper
+from ficary.sites import EROTICA_SCRAPERS, canonical_url, detect_scraper
 
 
 # ── Registration ──────────────────────────────────────────────────
@@ -386,7 +386,7 @@ def test_erotica_tag_vocabulary_includes_key_fetishes():
 
 
 def test_erotica_site_slugs_have_labels():
-    from ffn_dl.erotica.search import EROTICA_SITE_LABELS
+    from ficary.erotica.search import EROTICA_SITE_LABELS
     for slug in EROTICA_SITE_SLUGS:
         assert slug in EROTICA_SITE_LABELS
 
@@ -404,7 +404,7 @@ def test_site_supports_all_tags_matches_coverage_table():
     :data:`TAG_SITE_COVERAGE` — the dispatcher and the GUI tag-picker
     annotation both consult this dict, so a disagreement would leak
     noise back into the fan-out."""
-    from ffn_dl.erotica.search import _site_supports_all_tags
+    from ficary.erotica.search import _site_supports_all_tags
 
     # Literotica is one of the well-covered sites; bdsm is in the
     # vocabulary and Literotica covers it.
@@ -441,8 +441,8 @@ def test_search_erotica_tag_only_drops_tag_ignoring_sites(monkeypatch):
     :func:`_translate_tag` — Lush now returns ``[]`` for tags it
     doesn't carry, so the gate no longer needs to wave it through.
     """
-    from ffn_dl.erotica import search as erotica_search
-    from ffn_dl.erotica.search import _TAG_TEXT_FOLD_SITES
+    from ficary.erotica import search as erotica_search
+    from ficary.erotica.search import _TAG_TEXT_FOLD_SITES
 
     called: set = set()
 
@@ -477,7 +477,7 @@ def test_search_erotica_tag_only_drops_tag_ignoring_sites(monkeypatch):
 def test_search_erotica_skips_filter_when_site_explicitly_picked(monkeypatch):
     """A user who explicitly picked a single site has opted into
     whatever that site returns — don't second-guess them."""
-    from ffn_dl.erotica import search as erotica_search
+    from ficary.erotica import search as erotica_search
 
     called: set = set()
 
@@ -500,7 +500,7 @@ def test_normalise_sites_extracts_slug_from_label():
     """The Site dropdown shows ``Adult-FanFiction.org (aff)`` etc. for
     readability; ``_normalise_sites`` must strip the label and return
     the bare slug so the fan-out can look it up in ``_SITE_FNS``."""
-    from ffn_dl.erotica.search import _normalise_sites, _extract_slug
+    from ficary.erotica.search import _normalise_sites, _extract_slug
 
     # Direct slug extraction
     assert _extract_slug("Adult-FanFiction.org (aff)") == "aff"
@@ -526,7 +526,7 @@ def test_search_erotica_promotes_known_tag_query(monkeypatch):
     search. Tag-capable sites then use their native tag URL instead of
     falling back to title filtering, which is dramatically better for
     broad discovery queries."""
-    from ffn_dl.erotica import search as erotica_search
+    from ficary.erotica import search as erotica_search
 
     seen_tags: dict = {}
 
@@ -560,7 +560,7 @@ def test_search_erotica_does_not_promote_multiword_query(monkeypatch):
     a tag word aren't promoted. Otherwise a query like ``"feet first"``
     would be silently rewritten to the ``feet`` tag, which is far too
     aggressive."""
-    from ffn_dl.erotica import search as erotica_search
+    from ficary.erotica import search as erotica_search
 
     seen_tags: dict = {}
 
@@ -589,7 +589,7 @@ def test_search_erotica_total_sites_captures_eligible_cohort(monkeypatch):
     invoke ``search_erotica`` with a shrunken active set (skip_sites
     pruned the exhausted ones) and the GUI's len-based comparison
     spuriously claims end-of-results."""
-    from ffn_dl.erotica import search as erotica_search
+    from ficary.erotica import search as erotica_search
 
     def stub(query, **kwargs):
         return []
@@ -615,8 +615,8 @@ def test_search_aff_returns_empty_when_no_fandom():
     silently, leaking Harry Potter results into every empty-fandom
     erotica search. Now an empty fandom yields ``[]`` so the site is
     obviously skipped in the per-site stats panel."""
-    from ffn_dl.erotica.search import search_aff
-    import ffn_dl.erotica.search as erotica_search
+    from ficary.erotica.search import search_aff
+    import ficary.erotica.search as erotica_search
 
     fetched: list = []
     original_fetch = erotica_search._fetch
@@ -639,10 +639,10 @@ def test_search_nifty_returns_empty_for_unsupported_tag_only():
     """Direct callers (or fan-outs that bypass the dispatcher
     filter) get an explicit ``[]`` for an unsupported tag-only
     query — no fallback to ``/gay/`` directory noise."""
-    from ffn_dl.erotica.search import search_nifty
+    from ficary.erotica.search import search_nifty
 
     # Patch the fetch helper inline so this test stays offline.
-    import ffn_dl.erotica.search as erotica_search
+    import ficary.erotica.search as erotica_search
     original_fetch = erotica_search._fetch
     try:
         erotica_search._fetch = lambda url: ""  # would-be category page
@@ -655,9 +655,9 @@ def test_search_mcstories_returns_empty_for_unmapped_tag_only():
     """Same defensive contract for MCStories — an unmapped tag with
     no free-text query returns ``[]`` instead of dumping the entire
     Titles index."""
-    from ffn_dl.erotica.search import search_mcstories
+    from ficary.erotica.search import search_mcstories
 
-    import ffn_dl.erotica.search as erotica_search
+    import ficary.erotica.search as erotica_search
     original_fetch = erotica_search._fetch
     try:
         erotica_search._fetch = lambda url: ""
@@ -671,9 +671,9 @@ def test_search_greatfeet_returns_empty_for_non_feet_tag_only():
     """GreatFeet's whole catalogue is the feet tag — a tag-only
     ``bdsm`` lookup must return ``[]`` rather than the homepage
     contents."""
-    from ffn_dl.erotica.search import search_greatfeet
+    from ficary.erotica.search import search_greatfeet
 
-    import ffn_dl.erotica.search as erotica_search
+    import ficary.erotica.search as erotica_search
     original_fetch = erotica_search._fetch
     try:
         erotica_search._fetch = lambda url: ""
@@ -693,8 +693,8 @@ def test_fetch_erotica_until_limit_accumulates_across_pages():
     preserving the ``ErotiCAResults`` wrapper that carries the
     per-site stats panel the GUI binds to.
     """
-    from ffn_dl.erotica.search import ErotiCAResults
-    from ffn_dl.search import fetch_erotica_until_limit
+    from ficary.erotica.search import ErotiCAResults
+    from ficary.search import fetch_erotica_until_limit
 
     call_pages = []
 
@@ -734,8 +734,8 @@ def test_fetch_erotica_until_limit_stops_when_all_sites_exhausted():
     """If every active site flips its ``exhausted`` flag on page 1,
     the driver stops immediately — no point burning more page budget
     re-polling sites that already said they're done."""
-    from ffn_dl.erotica.search import ErotiCAResults
-    from ffn_dl.search import fetch_erotica_until_limit
+    from ficary.erotica.search import ErotiCAResults
+    from ficary.search import fetch_erotica_until_limit
 
     call_pages = []
 
@@ -769,8 +769,8 @@ def test_fetch_erotica_until_limit_stops_when_all_sites_exhausted():
 def test_fetch_erotica_until_limit_forwards_exhausted_sites_as_skip():
     """A site exhausted on page N gets added to ``skip_sites`` for
     page N+1, so the dispatcher doesn't bother re-polling it."""
-    from ffn_dl.erotica.search import ErotiCAResults
-    from ffn_dl.search import fetch_erotica_until_limit
+    from ficary.erotica.search import ErotiCAResults
+    from ficary.search import fetch_erotica_until_limit
 
     skip_seen_per_call = []
 
@@ -1000,7 +1000,7 @@ def test_wattpad_in_erotica_fan_out():
     """Wattpad must be a fan-out site after 2.4.43, with a real
     adapter wired in. Verifying via the registry rather than calling
     live so the test stays offline."""
-    from ffn_dl.erotica.search import _SITE_FNS, EROTICA_SITE_LABELS
+    from ficary.erotica.search import _SITE_FNS, EROTICA_SITE_LABELS
     assert "wattpad" in _SITE_FNS, "wattpad not registered in fan-out"
     assert callable(_SITE_FNS["wattpad"])
     assert EROTICA_SITE_LABELS.get("wattpad") == "Wattpad"
@@ -1013,8 +1013,8 @@ def test_wattpad_adapter_parses_json_ld_listitems(monkeypatch):
     Verify a representative ListItem shape extracts cleanly without
     going to the network.
     """
-    from ffn_dl.erotica import search as erotica_search
-    from ffn_dl.erotica.search import search_wattpad_erotica
+    from ficary.erotica import search as erotica_search
+    from ficary.erotica.search import search_wattpad_erotica
 
     fake_html = """
     <html><body>
@@ -1054,7 +1054,7 @@ def test_translate_tag_resolves_matts_interests():
     future regression hits a test instead of a quiet zero-result
     fan-out.
     """
-    from ffn_dl.erotica.search import _translate_tag
+    from ficary.erotica.search import _translate_tag
 
     # Feet: literotica permissive, SOL has its own slug, Lush has
     # only the umbrella ``fetish`` category, AO3 uses title-case.
@@ -1083,7 +1083,7 @@ def test_translate_tag_resolves_matts_interests():
 def test_translate_tag_returns_none_for_untranslatable():
     """Sites with no representation for a tag must return ``None`` —
     not a vocab passthrough that would 404 into a stub page."""
-    from ffn_dl.erotica.search import _translate_tag
+    from ficary.erotica.search import _translate_tag
 
     # MCStories has only 26 codes; cunnilingus / face-sitting / etc.
     # aren't among them.
@@ -1103,7 +1103,7 @@ def test_mcstories_tag_codes_no_longer_misroute():
     / ``hm=hypnosis`` / ``hu=humiliation`` / ``la=interracial`` /
     ``ma=transgender`` confusion that sent users to unrelated tag
     pages."""
-    from ffn_dl.erotica.search import _MCS_TAG_CODES
+    from ficary.erotica.search import _MCS_TAG_CODES
 
     # Tags that USED to map but had no real MCStories representation
     # must now be absent. Adding them back without verifying the code

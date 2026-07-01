@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from ffn_dl.scraper import BaseScraper
+from ficary.scraper import BaseScraper
 
 
 class _ProbeScraper(BaseScraper):
@@ -98,7 +98,7 @@ class TestMaterialiseChapters:
         assert [c.number for c in chapters] == [2, 3, 4, 8, 9]
 
     def test_cached_chapters_bypass_fetch(self, scraper):
-        from ffn_dl.models import Chapter as ModelChapter
+        from ficary.models import Chapter as ModelChapter
 
         # Pre-warm chapters 2 and 4 in the cache.
         for n in (2, 4):
@@ -146,7 +146,7 @@ class TestMaterialiseChapters:
         assert called == []
 
     def test_progress_callback_receives_cache_flag(self, scraper):
-        from ffn_dl.models import Chapter as ModelChapter
+        from ficary.models import Chapter as ModelChapter
 
         scraper._save_chapter_cache(
             1, ModelChapter(number=2, title="Chapter 2", html="<p>c2</p>"),
@@ -262,7 +262,7 @@ class TestConcreteScrapersImplementContract:
     NotImplementedError."""
 
     def test_ao3_declares_all_three(self):
-        from ffn_dl.ao3 import AO3Scraper
+        from ficary.ao3 import AO3Scraper
         # AO3 is the one site with all three optional interfaces.
         assert AO3Scraper.is_author_url(
             "https://archiveofourown.org/users/x"
@@ -286,7 +286,7 @@ class TestConcreteScrapersImplementContract:
         )
 
     def test_wattpad_has_no_series_but_has_author(self):
-        from ffn_dl.wattpad import WattpadScraper
+        from ficary.wattpad import WattpadScraper
         assert WattpadScraper.is_series_url(
             "https://www.wattpad.com/story/6315313"
         ) is False
@@ -376,7 +376,7 @@ class TestV2415CFCookieSeedingOn200:
         Verified by checking that after a 200-CF response, if seeding
         succeeds, no rotation happens before the next request.
         """
-        from ffn_dl.scraper import BaseScraper, CloudflareBlockError
+        from ficary.scraper import BaseScraper, CloudflareBlockError
 
         scraper = BaseScraper(use_cache=False, max_retries=2)
         scraper._delay = lambda *a, **kw: None

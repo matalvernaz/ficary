@@ -1,5 +1,22 @@
 # Changelog
 
+## 2.5.0 — 2026-07-01
+
+**Renamed to Ficary**
+
+ffn-dl is now Ficary. The "ffn" name undersold a tool that pulls from twenty
+sites, not just FanFiction.net. Same app, friendlier name.
+
+* **The command is now `ficary`** (was `ffn-dl`). Portable builds ship as
+  `ficary-portable.zip`, `ficary-macos-arm64.tar.gz`, and
+  `ficary-linux-x86_64.tar.gz`.
+* **Your data comes with you.** On first launch Ficary moves an existing
+  `~/.ffn-dl` config, library index, and cache to `~/.ficary`, copies your
+  saved GUI preferences, and renames per-story voice/accent/pronunciation
+  maps alongside your books. Nothing to do by hand.
+* **Old `FFN_DL_*` environment variables still work** as a fallback for the
+  new `FICARY_*` names.
+
 ## 2.4.51 — 2026-07-01
 
 **Combine a series into one book from the download box**

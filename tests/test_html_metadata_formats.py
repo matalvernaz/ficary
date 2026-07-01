@@ -1,10 +1,10 @@
 """Tests for ``updater._fill_from_html`` across third-party HTML formats.
 
 The library scanner needs to read fanfic metadata out of any HTML
-download the user points it at, not just ffn-dl's own exports. These
+download the user points it at, not just ficary's own exports. These
 tests cover the four dominant formats observed in real user libraries:
 
-* ffn-dl's own exports (``<tr><th>Title</th><td>…</td></tr>``)
+* ficary's own exports (``<tr><th>Title</th><td>…</td></tr>``)
 * FicLab (same shape, but lowercase labels)
 * "Simple" paragraph dumps (``<p>Title: …</p>``)
 * Bold-prefix paragraph dumps (``<b>Title:</b> …<br/>``)
@@ -16,7 +16,7 @@ doesn't require the user's real library on disk.
 """
 from __future__ import annotations
 
-from ffn_dl.updater import (
+from ficary.updater import (
     _parse_kv_table,
     _parse_paragraph_labels,
     extract_metadata,
@@ -261,9 +261,9 @@ _FFNDL_NATIVE_HTML = """
 """
 
 
-def test_ffndl_native_html_still_works(tmp_path):
+def test_ficary_native_html_still_works(tmp_path):
     """Regression: the lowercase-normalisation refactor must not break
-    ffn-dl's own exports, which use capitalised labels."""
+    ficary's own exports, which use capitalised labels."""
     path = _write(tmp_path, "native.html", _FFNDL_NATIVE_HTML)
     md = extract_metadata(path)
     assert md.title == "Brightest In Shadow"
@@ -485,7 +485,7 @@ def test_flag_chapter_count_from_toc_anchors(tmp_path):
 
 def test_metadata_chapter_count_beats_dom_count(tmp_path):
     """When the kv-table gives us a chapter count, don't overwrite it
-    with count_chapters() which only recognises ffn-dl's own markup
+    with count_chapters() which only recognises ficary's own markup
     and would return 0 for every third-party format."""
     html = """
     <html><body>

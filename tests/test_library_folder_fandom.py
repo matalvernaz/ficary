@@ -10,8 +10,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from ffn_dl.library.identifier import identify
-from ffn_dl.updater import FileMetadata
+from ficary.library.identifier import identify
+from ficary.updater import FileMetadata
 
 
 def _mk_metadata(**overrides) -> FileMetadata:
