@@ -13,7 +13,7 @@ import logging
 
 import wx
 
-from ..audio.engine import get_engine
+from ..audio.engine import CHANNEL_AMBIENT, get_engine
 from ..audio.events import Event, ReaderEvent
 from ..soundscape import library as _sc_library
 from ..soundscape.session import SoundscapeSession
@@ -25,6 +25,7 @@ from ..prefs import (
 )
 from . import theme as _theme
 from .live_tts import LiveTTSController
+from .sleep_timer import MAX_MINUTES, MIN_MINUTES, SleepTimer
 from .state import ReaderStateDB
 from .source import StorySource
 
@@ -51,6 +52,7 @@ class ReaderFrame(wx.Frame):
         self._engine = get_engine()
         self._live = None
         self._soundscape_session = None
+        self._sleep_timer = SleepTimer(on_expire=lambda: wx.CallAfter(self._on_sleep_expire))
 
         self._build_menu()
         self._build_ui()
@@ -79,6 +81,8 @@ class ReaderFrame(wx.Frame):
         self._mi_play = menu.Append(wx.ID_ANY, "&Play/Pause (app voice)\tCtrl+P")
         self._mi_stop = menu.Append(wx.ID_ANY, "&Stop reading\tCtrl+.")
         self._mi_soundscape = menu.Append(wx.ID_ANY, "&Soundscape for this story...\tCtrl+Shift+A")
+        self._mi_sleep = menu.Append(wx.ID_ANY, "Set sleep &timer...\tCtrl+Shift+T")
+        self._mi_sleep_status = menu.Append(wx.ID_ANY, "Sleep timer stat&us\tCtrl+Shift+S")
         menu.AppendSeparator()
         self._mi_close = menu.Append(wx.ID_CLOSE, "&Close\tCtrl+W")
         bar.Append(menu, "&Reader")
@@ -94,6 +98,8 @@ class ReaderFrame(wx.Frame):
         self.Bind(wx.EVT_MENU, self._on_play_pause, self._mi_play)
         self.Bind(wx.EVT_MENU, self._on_stop_tts, self._mi_stop)
         self.Bind(wx.EVT_MENU, self._on_pick_soundscape, self._mi_soundscape)
+        self.Bind(wx.EVT_MENU, self._on_set_sleep, self._mi_sleep)
+        self.Bind(wx.EVT_MENU, self._on_sleep_status, self._mi_sleep_status)
         self.Bind(wx.EVT_MENU, lambda e: self.Close(), self._mi_close)
 
     def _build_ui(self) -> None:
@@ -355,9 +361,39 @@ class ReaderFrame(wx.Frame):
         if self._soundscape_session is not None:
             self._soundscape_session.set_soundscape(sc)
 
+    # ── sleep timer ───────────────────────────────────────────────
+    def _on_set_sleep(self, event) -> None:
+        with wx.NumberEntryDialog(
+            self, "Stop reading after how many minutes?", "Minutes",
+            "Sleep timer", 30, MIN_MINUTES, MAX_MINUTES) as dlg:
+            if dlg.ShowModal() != wx.ID_OK:
+                return
+            minutes = dlg.GetValue()
+        used = self._sleep_timer.start(minutes)
+        wx.MessageBox(f"Sleep timer set for {used} minutes.", "Sleep timer",
+                      wx.OK | wx.ICON_INFORMATION, self)
+
+    def _on_sleep_status(self, event) -> None:
+        if self._sleep_timer.active:
+            mins = (self._sleep_timer.remaining_seconds() + 59) // 60
+            msg = f"Sleep timer active: about {mins} minute(s) remaining."
+        else:
+            msg = "No sleep timer set."
+        wx.MessageBox(msg, "Sleep timer", wx.OK | wx.ICON_INFORMATION, self)
+
+    def _on_sleep_expire(self) -> None:
+        if not self._alive:
+            return
+        self._on_stop_tts(None)
+        if self._soundscape_session is not None:
+            self._soundscape_session.fade_out()
+        wx.MessageBox("Sleep timer expired. Reading stopped.", "Sleep timer",
+                      wx.OK | wx.ICON_INFORMATION, self)
+
     # ── lifecycle ─────────────────────────────────────────────────
     def _on_close(self, event) -> None:
         self._alive = False
+        self._sleep_timer.cancel()
         if self._live is not None:
             try:
                 self._live.stop()

@@ -78,6 +78,10 @@ class SoundscapeSession:
             self._started = True
             self._engine.fade_in(CHANNEL_AMBIENT, _FADE_IN_MS, to=sc.master_volume)
 
+    def fade_out(self) -> None:
+        """Public fade-out of the ambient bed (used by the sleep timer)."""
+        self._fade_out()
+
     def _fade_out(self) -> None:
         if self._started:
             self._engine.fade_out(CHANNEL_AMBIENT, _FADE_OUT_MS, then_stop=True)

@@ -1,5 +1,30 @@
 # Changelog
 
+## 2.6.0 — 2026-07-01
+
+**In-app reader**
+
+Ficary can now open a downloaded story and read it, not just fetch it. Open a
+story from Reader → Open reader (Ctrl+R).
+
+* **Screen-reader-native reading.** The chapter opens in an accessible
+  read-only view your own screen reader reads with say-all. Chapter list,
+  next/previous/jump, adjustable font, and light / dark / high-contrast themes.
+* **Reading position and bookmarks** are saved per story and restored when you
+  reopen it.
+* **App-voice reading (optional).** Switch reading mode to App voice and Ficary
+  reads aloud with edge/Piper voices, following along with a highlight.
+* **Soundscapes (optional).** Assign an ambient audio bed to a story (build
+  them in Reader → Soundscape editor). The bed fades in while reading, ducks
+  under the narration, and fades out when you leave; positional placement and
+  reverb included.
+* **Sleep timer.** Stop reading after 5–120 minutes; a shortcut reports the
+  time left.
+
+The `playback` feature (app-voice + soundscapes) is optional: `pip install
+'ficary[playback]'` or install it from the Optional Features dialog. Without
+it, screen-reader reading and offline audiobook export are unaffected.
+
 ## 2.5.0 — 2026-07-01
 
 **Renamed to Ficary**

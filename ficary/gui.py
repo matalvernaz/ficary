@@ -265,7 +265,7 @@ class MainFrame(wx.Frame):
         from . import __version__
         super().__init__(
             None,
-            title=f"Ficary {__version__} - Fanfiction Downloader",
+            title=f"Ficary {__version__} - Fanfiction Downloader & Reader",
             size=(820, 720),
             style=wx.DEFAULT_FRAME_STYLE,
         )
