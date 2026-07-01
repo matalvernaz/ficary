@@ -303,6 +303,7 @@ class MainFrame(wx.Frame):
         self._search_frames = {}
         self._watchlist_frame = None
         self._library_frame = None
+        self._reader_frame = None
         # Per-session record of fandom-subfolder create decisions:
         # fandom-folder name → True (create) / False (don't create).
         # Re-asked every launch so the user stays in control if they
@@ -3094,6 +3095,13 @@ class MainFrame(wx.Frame):
         self.Bind(wx.EVT_MENU, self._on_library_menu, library_item)
         bar.Append(library_menu, "&Library")
 
+        reader_menu = wx.Menu()
+        reader_item = reader_menu.Append(
+            wx.ID_ANY, "&Open reader...\tCtrl+R",
+        )
+        self.Bind(wx.EVT_MENU, self._on_reader_menu, reader_item)
+        bar.Append(reader_menu, "&Reader")
+
         watchlist_menu = wx.Menu()
         watchlist_item = watchlist_menu.Append(
             wx.ID_ANY, "&Manage watchlist...\tCtrl+W",
@@ -3265,6 +3273,44 @@ class MainFrame(wx.Frame):
     def _notify_library_frame_closed(self):
         """Called by LibraryFrame._on_close so the menu reopens cleanly."""
         self._library_frame = None
+
+    def _on_reader_menu(self, event):
+        """Open a downloaded story (EPUB/HTML) in the in-app reader."""
+        with wx.FileDialog(
+            self, "Open a downloaded story to read",
+            wildcard="Stories (*.epub;*.html;*.htm)|*.epub;*.html;*.htm",
+            style=wx.FD_OPEN | wx.FD_FILE_MUST_EXIST,
+        ) as dlg:
+            if dlg.ShowModal() != wx.ID_OK:
+                return
+            path = dlg.GetPath()
+        self._open_reader_for_file(path)
+
+    def _open_reader_for_file(self, path, *, url="", title="", author=""):
+        """Build a StorySource from an exported file and show the reader."""
+        from .reader.source import StorySource, ReaderSourceError
+        try:
+            source = StorySource.from_file(path, url=url, title=title, author=author)
+        except ReaderSourceError as exc:
+            wx.MessageBox(str(exc), "Reader", wx.OK | wx.ICON_ERROR, self)
+            return
+        self._show_reader(source)
+
+    def _show_reader(self, source):
+        """Show the reader for a story, replacing any currently-open one."""
+        if self._reader_frame is not None:
+            try:
+                self._reader_frame.Close()
+            except RuntimeError:
+                pass
+            self._reader_frame = None
+        from .reader.gui import ReaderFrame
+        frame = ReaderFrame(self, self.prefs, source)
+        self._reader_frame = frame
+        frame.Show()
+
+    def _notify_reader_frame_closed(self):
+        self._reader_frame = None
 
     def _on_watchlist_menu(self, event):
         """Open the watchlist manager (non-modal). Reuses the same

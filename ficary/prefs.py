@@ -157,6 +157,15 @@ KEY_NOTIFY_EMAIL = "notify_email"
 KEY_WATCH_AUTOPOLL = "watch_autopoll"
 KEY_WATCH_POLL_INTERVAL_S = "watch_poll_interval_s"
 
+# In-app reader. Font size + theme apply to the chapter text control;
+# tts_mode is "screenreader" (let the user's screen reader read the text) or
+# "appvoice" (the app speaks via edge/piper — Phase 2). autoadvance moves to
+# the next chapter when app-voice reaches the end of one.
+KEY_READER_FONT_PT = "reader_font_pt"
+KEY_READER_THEME = "reader_theme"
+KEY_READER_TTS_MODE = "reader_tts_mode"
+KEY_READER_AUTOADVANCE = "reader_autoadvance"
+
 # Default GUI polling interval for the watchlist background thread, in
 # seconds. One hour balances freshness against site politeness — FFN's
 # 6s/request floor means even a 50-watch list fits comfortably inside
@@ -192,6 +201,10 @@ DEFAULTS = {
     KEY_LIBRARY_REORGANIZE_CONFIRM_EACH: True,
     KEY_WATCH_AUTOPOLL: False,
     KEY_WATCH_POLL_INTERVAL_S: DEFAULT_WATCH_POLL_INTERVAL_S,
+    KEY_READER_FONT_PT: 14,
+    KEY_READER_THEME: "light",
+    KEY_READER_TTS_MODE: "screenreader",
+    KEY_READER_AUTOADVANCE: True,
 }
 
 
