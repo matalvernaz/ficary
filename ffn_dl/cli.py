@@ -12,6 +12,7 @@ from typing import Callable
 from .ao3 import AO3LockedError
 from .download_queue import DownloadQueues
 from .exporters import DEFAULT_TEMPLATE, EXPORTERS, check_format_deps
+from .merge import merge_stories
 from .erotica import LiteroticaScraper
 from .models import Story, parse_chapter_spec
 from .scraper import (
@@ -256,80 +257,6 @@ def _bulk_extract(
     return method(url)
 
 
-def _merge_stories(series_name: str, series_url: str, stories: list):
-    """Combine a series of Story objects into one Story for single-file export.
-
-    The merged Story gets a computed title (the series name), a
-    combined author (single author if all works share one, otherwise
-    comma-joined), and a per-work summary block. Each source work
-    becomes a title chapter followed by its own chapters, preserving
-    chapter numbering across the merged document so exporters can
-    render a proper table of contents.
-    """
-    from html import escape
-    from .models import Chapter, Story
-
-    authors = []
-    for s in stories:
-        if s.author and s.author not in authors:
-            authors.append(s.author)
-    combined_author = authors[0] if len(authors) == 1 else ", ".join(authors)
-
-    summaries = []
-    for s in stories:
-        if s.summary:
-            summaries.append(f"<strong>{escape(s.title)}</strong>: {escape(s.summary)}")
-    combined_summary = "\n".join(summaries) or "A series of works."
-
-    total_words = 0
-    per_work_words = []
-    for s in stories:
-        w = s.metadata.get("words", "").replace(",", "").strip()
-        if w.isdigit():
-            total_words += int(w)
-            per_work_words.append(int(w))
-
-    all_complete = all(
-        s.metadata.get("status", "").lower() == "complete" for s in stories
-    )
-
-    merged = Story(
-        id=0,
-        title=series_name,
-        author=combined_author or "Various",
-        summary=combined_summary,
-        url=series_url,
-    )
-    if total_words:
-        merged.metadata["words"] = f"{total_words:,}"
-    merged.metadata["status"] = "Complete" if all_complete else "In-Progress"
-    merged.metadata["category"] = "AO3 series"
-
-    ch_num = 1
-    for s in stories:
-        header_html = (
-            f"<h1>{escape(s.title)}</h1>"
-            f"<p><em>by {escape(s.author)}</em></p>"
-        )
-        if s.summary:
-            header_html += f"<blockquote>{escape(s.summary)}</blockquote>"
-        if s.url:
-            header_html += (
-                f'<p><a href="{escape(s.url)}">Original on AO3</a></p>'
-            )
-        merged.chapters.append(
-            Chapter(number=ch_num, title=s.title, html=header_html)
-        )
-        ch_num += 1
-        for ch in s.chapters:
-            merged.chapters.append(
-                Chapter(number=ch_num, title=ch.title, html=ch.html)
-            )
-            ch_num += 1
-
-    return merged
-
-
 def _handle_merge_series(
     series_urls: list[str],
     args: argparse.Namespace,
@@ -377,7 +304,7 @@ def _handle_merge_series(
             all_ok = False
             continue
 
-        merged = _merge_stories(series_name, series_url, stories)
+        merged = merge_stories(series_name, series_url, stories)
 
         print(f"\n  Merged {len(stories)} works / {len(merged.chapters)} sections")
         if args.format == "audio":
@@ -475,7 +402,7 @@ def _handle_merge_parts(
         print(f"Nothing downloaded for {series_name}.", file=sys.stderr)
         return False
 
-    merged = _merge_stories(series_name, series_url, stories)
+    merged = merge_stories(series_name, series_url, stories)
     print(f"\n  Merged {len(stories)} parts / {len(merged.chapters)} sections")
     if args.format == "audio":
         from .tts import generate_audiobook

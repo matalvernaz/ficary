@@ -52,6 +52,7 @@ class _DownloadParams:
     speech_rate: Optional[int] = None
     enabled_tts_providers: tuple = ()
     use_fichub: bool = False
+    merge_series: bool = False
     webnovel_cookie: str = ""
     ao3_cookie: str = ""
 
@@ -420,6 +421,28 @@ class MainFrame(wx.Frame):
             "the fic."
         )
         opts2.Add(self.fichub_ctrl, 0, wx.ALIGN_CENTER_VERTICAL | wx.LEFT, 16)
+
+        # Combine a series (AO3 /series/ or Literotica /series/se/) pasted
+        # into the download box into a single file with every part as a
+        # chapter, instead of one file per part. Off by default so upgrading
+        # doesn't change the behavior existing users already get; persisted
+        # so a user who always wants merged series sets it once.
+        self.merge_series_ctrl = wx.CheckBox(
+            root,
+            label="Combine a &series into one book (instead of one file per part)",
+        )
+        self.merge_series_ctrl.SetName(
+            "Combine a series into one book instead of one file per part"
+        )
+        self.merge_series_ctrl.SetToolTip(
+            "When you download an AO3 or Literotica series URL, produce one "
+            "file in the selected format with every part as a chapter, "
+            "instead of one file per part. Leave off to keep one file per "
+            "part."
+        )
+        opts2.Add(
+            self.merge_series_ctrl, 0, wx.ALIGN_CENTER_VERTICAL | wx.LEFT, 16
+        )
 
         # Always-visible shortcut to the LLM settings dialog. The
         # audio toolbar has its own copy that surfaces only when
@@ -1308,6 +1331,9 @@ class MainFrame(wx.Frame):
             self.prefs.get_bool(_p.KEY_LLM_STRIP_NOTES)
         )
         self.fichub_ctrl.SetValue(self.prefs.get_bool(_p.KEY_FICHUB))
+        self.merge_series_ctrl.SetValue(
+            self.prefs.get_bool(_p.KEY_MERGE_SERIES)
+        )
         self.webnovel_cookie_ctrl.SetValue(
             self.prefs.get(_p.KEY_WEBNOVEL_COOKIE) or ""
         )
@@ -1362,6 +1388,9 @@ class MainFrame(wx.Frame):
             _p.KEY_LLM_STRIP_NOTES, self.llm_strip_notes_ctrl.GetValue(),
         )
         self.prefs.set_bool(_p.KEY_FICHUB, self.fichub_ctrl.GetValue())
+        self.prefs.set_bool(
+            _p.KEY_MERGE_SERIES, self.merge_series_ctrl.GetValue()
+        )
         self.prefs.set(
             _p.KEY_WEBNOVEL_COOKIE,
             self.webnovel_cookie_ctrl.GetValue().strip(),
@@ -2065,14 +2094,14 @@ class MainFrame(wx.Frame):
 
     def _run_series_merge_download(
         self, series_url, *, series_name=None, part_urls=None,
-        params: Optional[_DownloadParams] = None,
+        params: Optional[_DownloadParams] = None, manage_busy: bool = True,
     ):
         if params is None:
             params = self._snapshot_download_params()
         try:
             from .ao3 import AO3Scraper
-            from .cli import _merge_stories
             from .erotica import LiteroticaScraper
+            from .merge import merge_stories
 
             name = series_name
             work_urls = None
@@ -2122,6 +2151,7 @@ class MainFrame(wx.Frame):
                 self._log(f"    [{current}/{total}] {title}{tag}")
 
             stories = []
+            failed = []
             for i, work_url in enumerate(work_urls, 1):
                 self._log(f"\n[{i}/{len(work_urls)}] {work_url}")
                 try:
@@ -2131,12 +2161,21 @@ class MainFrame(wx.Frame):
                     )
                 except Exception as exc:
                     self._log(f"  Error: {exc}")
+                    failed.append(work_url)
+
+            if failed:
+                self._log(
+                    f"\n{len(failed)} of {len(work_urls)} part(s) failed and "
+                    "were left out of the book:"
+                )
+                for u in failed:
+                    self._log(f"  Failed: {u}")
 
             if not stories:
                 self._log("Nothing downloaded.")
                 return
 
-            merged = _merge_stories(series_name, series_url, stories)
+            merged = merge_stories(series_name, series_url, stories)
             self._log(
                 f"\nMerged {len(stories)} works / {len(merged.chapters)} sections"
             )
@@ -2145,7 +2184,8 @@ class MainFrame(wx.Frame):
         except Exception as exc:
             self._log(f"Series download failed: {exc}")
         finally:
-            self._set_busy(False)
+            if manage_busy:
+                self._set_busy(False)
 
     # ── Clipboard watch ──────────────────────────────────────
 
@@ -2293,6 +2333,7 @@ class MainFrame(wx.Frame):
                 tuple(self._enabled_tts_providers()) if fmt == "audio" else ()
             ),
             use_fichub=self.fichub_ctrl.GetValue(),
+            merge_series=self.merge_series_ctrl.GetValue(),
             webnovel_cookie=self.webnovel_cookie_ctrl.GetValue().strip(),
             ao3_cookie=self.ao3_cookie_ctrl.GetValue().strip(),
         )
@@ -2655,7 +2696,15 @@ class MainFrame(wx.Frame):
                     scraper = AO3Scraper()
                 elif LiteroticaScraper.is_series_url(url) and not isinstance(scraper, LiteroticaScraper):
                     scraper = LiteroticaScraper()
-                self._run_series_download(url, scraper, params=params)
+                if params.merge_series:
+                    # Runs synchronously on this (raw) thread; let
+                    # _run_download's own finally clear busy so it isn't
+                    # cleared twice.
+                    self._run_series_merge_download(
+                        url, params=params, manage_busy=False
+                    )
+                else:
+                    self._run_series_download(url, scraper, params=params)
                 return
 
             scraper.parse_story_id(url)
@@ -3145,6 +3194,9 @@ class MainFrame(wx.Frame):
             self.prefs.get_bool(_p.KEY_LLM_STRIP_NOTES)
         )
         self.fichub_ctrl.SetValue(self.prefs.get_bool(_p.KEY_FICHUB))
+        self.merge_series_ctrl.SetValue(
+            self.prefs.get_bool(_p.KEY_MERGE_SERIES)
+        )
 
         try:
             rate = int(self.prefs.get(_p.KEY_SPEECH_RATE) or "0")

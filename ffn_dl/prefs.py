@@ -63,6 +63,11 @@ KEY_LLM_STRIP_NOTES = "llm_strip_notes"
 # scrape. Off by default — FicHub's copy can lag the latest chapters, so
 # it's opt-in and ignored for updates. See ffn_dl/fichub.py.
 KEY_FICHUB = "fichub"
+# Combine a downloaded series (AO3 /series/, Literotica /series/se/) into a
+# single file with every part as a chapter, instead of one file per part.
+# Off by default so upgrading doesn't silently change the per-part behavior
+# existing users get when they paste a series URL.
+KEY_MERGE_SERIES = "merge_series"
 # webnovel.com logged-in session cookie (a raw "Cookie:" header string).
 # Optional — lets the user pull chapters their account has unlocked.
 # Plain-text in the config file, same as the LLM/Pushover/Discord secrets.
@@ -166,6 +171,7 @@ DEFAULTS = {
     KEY_STRIP_NOTES: False,
     KEY_LLM_STRIP_NOTES: False,
     KEY_FICHUB: False,
+    KEY_MERGE_SERIES: False,
     KEY_WEBNOVEL_COOKIE: "",
     KEY_AO3_COOKIE: "",
     KEY_SPEECH_RATE: "0",

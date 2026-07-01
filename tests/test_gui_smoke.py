@@ -83,6 +83,23 @@ def test_main_frame_constructs(wx_app):
         frame.Destroy()
 
 
+def test_merge_series_snapshot_roundtrips(wx_app):
+    """The "combine series into one book" checkbox must reach the worker
+    via the params snapshot — that snapshot is the only thing the series
+    dispatch reads. Off by default so pasting a series URL keeps the
+    existing one-file-per-part behavior until the user opts in."""
+    from ffn_dl.gui import MainFrame
+
+    frame = MainFrame()
+    try:
+        assert frame.merge_series_ctrl.GetValue() is False
+        assert frame._snapshot_download_params().merge_series is False
+        frame.merge_series_ctrl.SetValue(True)
+        assert frame._snapshot_download_params().merge_series is True
+    finally:
+        frame.Destroy()
+
+
 def test_show_update_dialog_helper_callable(wx_app):
     """``_show_update_dialog`` is the four-button update prompt
     introduced in 2.3.2. Confirms the helper survives import

@@ -1,5 +1,25 @@
 # Changelog
 
+## 2.4.51 — 2026-07-01
+
+**Combine a series into one book from the download box**
+
+Pasting an AO3 or Literotica series URL into the main download box gave you
+one file per part (a 22-chapter Literotica series came out as 22 separate
+EPUBs), while picking a series from the search results merged it into a
+single book. Same series, opposite result depending on where you started.
+
+* **New "Combine a series into one book" option** next to the FicHub
+  checkbox. When on, a series URL you download produces one file in the
+  selected format (txt, html, EPUB, or audio) with every part as a chapter,
+  instead of one file per part. Off by default, so existing per-part
+  behavior is unchanged until you tick it, and remembered between runs.
+* **Merged books now name their real source.** A merged Literotica (or
+  Royal Road) book previously labelled every part "Original on AO3" and its
+  category "AO3 series"; it now uses the actual site.
+* Merge reports how many parts failed and were left out of the book, so a
+  partial series is obvious.
+
 ## 2.4.50 — 2026-06-22
 
 **FFN character/pairing/world filters, AO3 login, deeper AO3 search**
