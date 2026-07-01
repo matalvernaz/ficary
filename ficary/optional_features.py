@@ -107,13 +107,28 @@ FEATURES: dict[str, dict] = {
         ),
         "post_install": ["-m", "playwright", "install", "chromium"],
     },
+    "playback": {
+        "extra": "playback",
+        "pip_name": "PyOpenAL>=0.7",
+        "import_name": "openal",
+        "display": "In-app reader audio (OpenAL)",
+        "size_hint": "~2 MB (plus OpenAL Soft, bundled in the .exe/.app)",
+        "description": (
+            "Enables app-voice reading and soundscapes in the in-app "
+            "reader: positional ambient audio, ducking under the "
+            "narration, and fades. Without it the reader still works in "
+            "screen-reader mode and offline audiobook export is "
+            "unaffected."
+        ),
+        "post_install": None,
+    },
 }
 
 
 def available() -> list[str]:
     """Ordered feature names for the UI. Stable so a test asserting
     against the list order doesn't churn when the registry grows."""
-    return ["epub", "audio", "clipboard", "cf-solve"]
+    return ["epub", "audio", "clipboard", "cf-solve", "playback"]
 
 
 def is_installed(feature: str) -> bool:

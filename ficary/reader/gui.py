@@ -13,11 +13,16 @@ import logging
 
 import wx
 
+from ..audio.engine import get_engine
+from ..audio.events import Event, ReaderEvent
 from ..prefs import (
     KEY_READER_FONT_PT,
     KEY_READER_THEME,
+    KEY_READER_TTS_MODE,
+    KEY_SPEECH_RATE,
 )
 from . import theme as _theme
+from .live_tts import LiveTTSController
 from .state import ReaderStateDB
 from .source import StorySource
 
@@ -38,6 +43,11 @@ class ReaderFrame(wx.Frame):
         self._alive = True
         self._state = ReaderStateDB()
         self._current_chapter = 1
+        self._current_rc = None
+        self._text_prefix_len = 0
+        self._paused = False
+        self._engine = get_engine()
+        self._live = None
 
         self._build_menu()
         self._build_ui()
@@ -45,6 +55,7 @@ class ReaderFrame(wx.Frame):
 
         self._populate_chapter_list()
         self._restore_position()
+        self._engine.emit(Event(ReaderEvent.READER_OPENED, story_key=self.source.story_key))
         self.Centre()
 
     # ── UI construction ───────────────────────────────────────────
@@ -61,6 +72,9 @@ class ReaderFrame(wx.Frame):
         self._mi_smaller = menu.Append(wx.ID_ANY, "&Smaller text\tCtrl+-")
         self._mi_theme = menu.Append(wx.ID_ANY, "Cycle &theme\tCtrl+T")
         menu.AppendSeparator()
+        self._mi_play = menu.Append(wx.ID_ANY, "&Play/Pause (app voice)\tCtrl+P")
+        self._mi_stop = menu.Append(wx.ID_ANY, "&Stop reading\tCtrl+.")
+        menu.AppendSeparator()
         self._mi_close = menu.Append(wx.ID_CLOSE, "&Close\tCtrl+W")
         bar.Append(menu, "&Reader")
         self.SetMenuBar(bar)
@@ -72,6 +86,8 @@ class ReaderFrame(wx.Frame):
         self.Bind(wx.EVT_MENU, lambda e: self._bump_font(1), self._mi_bigger)
         self.Bind(wx.EVT_MENU, lambda e: self._bump_font(-1), self._mi_smaller)
         self.Bind(wx.EVT_MENU, self._on_cycle_theme, self._mi_theme)
+        self.Bind(wx.EVT_MENU, self._on_play_pause, self._mi_play)
+        self.Bind(wx.EVT_MENU, self._on_stop_tts, self._mi_stop)
         self.Bind(wx.EVT_MENU, lambda e: self.Close(), self._mi_close)
 
     def _build_ui(self) -> None:
@@ -109,6 +125,22 @@ class ReaderFrame(wx.Frame):
         nav.Add(self.jump, 0, wx.ALL, 4)
         right.Add(nav, 0, wx.ALL, 4)
 
+        transport = wx.BoxSizer(wx.HORIZONTAL)
+        transport.Add(wx.StaticText(panel, label="&Reading mode"),
+                      0, wx.ALIGN_CENTER_VERTICAL | wx.LEFT, 4)
+        self.mode = wx.Choice(panel, choices=["Screen reader", "App voice"])
+        self.mode.SetName("Reading mode")
+        self.mode.SetSelection(1 if self.prefs.get(KEY_READER_TTS_MODE) == "appvoice" else 0)
+        self.mode.Bind(wx.EVT_CHOICE, self._on_mode)
+        transport.Add(self.mode, 0, wx.ALL, 4)
+        self.btn_play = wx.Button(panel, label="&Play / Pause")
+        self.btn_stop = wx.Button(panel, label="S&top")
+        self.btn_play.Bind(wx.EVT_BUTTON, self._on_play_pause)
+        self.btn_stop.Bind(wx.EVT_BUTTON, self._on_stop_tts)
+        transport.Add(self.btn_play, 0, wx.ALL, 4)
+        transport.Add(self.btn_stop, 0, wx.ALL, 4)
+        right.Add(transport, 0, wx.ALL, 4)
+
         root.Add(left, 0, wx.EXPAND)
         root.Add(right, 1, wx.EXPAND)
         panel.SetSizer(root)
@@ -138,6 +170,11 @@ class ReaderFrame(wx.Frame):
 
     # ── chapter loading ───────────────────────────────────────────
     def _load_chapter(self, number: int, caret: int = 0) -> None:
+        live = getattr(self, "_live", None)
+        if live is not None and live.is_active():
+            live.stop()
+            self._live = None
+            self._paused = False
         try:
             rc = self.source.load_chapter(number)
         except Exception as exc:  # ReaderSourceError or a corrupt chapter
@@ -145,6 +182,8 @@ class ReaderFrame(wx.Frame):
                           "Reader", wx.OK | wx.ICON_ERROR, self)
             return
         self._current_chapter = number
+        self._current_rc = rc
+        self._text_prefix_len = len(rc.heading) + 2
         self.text.SetValue(f"{rc.heading}\n\n{rc.text}")
         _theme.apply_to_textctrl(
             self.text,
@@ -216,9 +255,86 @@ class ReaderFrame(wx.Frame):
         self.prefs.set(KEY_READER_THEME, nxt)
         _theme.apply_to_textctrl(self.text, nxt, self.prefs.get(KEY_READER_FONT_PT))
 
+    # ── app-voice (live TTS) ──────────────────────────────────────
+    def _on_mode(self, event) -> None:
+        appvoice = self.mode.GetSelection() == 1
+        self.prefs.set(KEY_READER_TTS_MODE, "appvoice" if appvoice else "screenreader")
+        if not appvoice:
+            self._on_stop_tts(None)
+
+    def _on_play_pause(self, event) -> None:
+        if self.mode.GetSelection() != 1:
+            wx.MessageBox(
+                "Switch reading mode to 'App voice' to have Ficary read aloud. "
+                "In 'Screen reader' mode your own screen reader reads the text.",
+                "Reader", wx.OK | wx.ICON_INFORMATION, self)
+            return
+        if self._live is not None and self._live.is_active():
+            if self._paused:
+                self._live.resume()
+                self._paused = False
+            else:
+                self._live.pause()
+                self._paused = True
+            return
+        voice = self._default_voice()
+        if not voice:
+            wx.MessageBox(
+                "No TTS voice is available. Install the audio feature "
+                "(edge-tts or Piper) to use app-voice reading.",
+                "Reader", wx.OK | wx.ICON_INFORMATION, self)
+            return
+        self._paused = False
+        self._live = LiveTTSController(
+            self._engine, voice=voice,
+            rate=str(self.prefs.get(KEY_SPEECH_RATE) or "0"),
+            on_highlight=lambda c: wx.CallAfter(self._highlight_chunk, c),
+            story_key=self.source.story_key,
+        )
+        text = self._current_rc.text if self._current_rc else ""
+        self._live.start(text, self._current_chapter)
+
+    def _on_stop_tts(self, event) -> None:
+        if self._live is not None:
+            self._live.stop()
+            self._live = None
+        self._paused = False
+        self._clear_highlight()
+
+    def _highlight_chunk(self, chunk) -> None:
+        if not self._alive:
+            return
+        pal = _theme.palette(self.prefs.get(KEY_READER_THEME))
+        self._clear_highlight()
+        start = self._text_prefix_len + chunk.start
+        end = self._text_prefix_len + chunk.end
+        self.text.SetStyle(start, end,
+                           wx.TextAttr(wx.Colour(pal["hl_fg"]), wx.Colour(pal["hl_bg"])))
+        self.text.ShowPosition(start)
+
+    def _clear_highlight(self) -> None:
+        _theme.apply_to_textctrl(self.text, self.prefs.get(KEY_READER_THEME),
+                                 self.prefs.get(KEY_READER_FONT_PT))
+
+    def _default_voice(self) -> str:
+        try:
+            from ..tts_providers import all_voices
+            voices = all_voices()
+            if not voices:
+                return ""
+            return getattr(voices[0], "id", "") or getattr(voices[0], "name", "")
+        except Exception:
+            return ""
+
     # ── lifecycle ─────────────────────────────────────────────────
     def _on_close(self, event) -> None:
         self._alive = False
+        if self._live is not None:
+            try:
+                self._live.stop()
+            except Exception:
+                pass
+        self._engine.emit(Event(ReaderEvent.READER_CLOSED, story_key=self.source.story_key))
         self._save_position()
         try:
             self._state.close()

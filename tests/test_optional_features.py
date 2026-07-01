@@ -25,7 +25,7 @@ def test_available_lists_every_registered_feature():
     assert set(names) == set(of.FEATURES.keys())
     # Stability: the order surfaces in the GUI rows, so a regression
     # that reordered the registry shouldn't silently rearrange the UI.
-    assert names == ["epub", "audio", "clipboard", "cf-solve"]
+    assert names == ["epub", "audio", "clipboard", "cf-solve", "playback"]
 
 
 def test_every_feature_has_required_registry_fields():
