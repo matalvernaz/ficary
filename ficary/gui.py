@@ -400,52 +400,10 @@ class MainFrame(wx.Frame):
         )
         opts2.Add(self.llm_strip_notes_ctrl, 0, wx.ALIGN_CENTER_VERTICAL)
 
-        # FFN-only fast path. fanfiction.net throttles direct scraping
-        # to ~6s/chapter; FicHub (https://fichub.net) serves a shared,
-        # pre-built cache so the whole fic arrives in one request. Off
-        # by default because its copy can lag the latest chapters.
-        self.fichub_ctrl = wx.CheckBox(
-            root,
-            label="Fast fanfiction.net download via Fic&Hub (may lag latest chapters)",
-        )
-        self.fichub_ctrl.SetName(
-            "Fast fanfiction.net download via FicHub shared cache — "
-            "much faster but may lag the most recent chapters"
-        )
-        self.fichub_ctrl.SetToolTip(
-            "fanfiction.net rate-limits direct downloads to about six "
-            "seconds per chapter. FicHub keeps a shared cache of fics "
-            "and serves the whole story in one request, so a long fic "
-            "downloads in seconds instead of minutes. FicHub's copy can "
-            "lag the source by a few chapters, so leave this off when "
-            "you specifically want the very latest chapter or are "
-            "updating an existing download — it's ignored for updates "
-            "and falls back to a normal download if FicHub doesn't have "
-            "the fic."
-        )
-        opts2.Add(self.fichub_ctrl, 0, wx.ALIGN_CENTER_VERTICAL | wx.LEFT, 16)
-
-        # Combine a series (AO3 /series/ or Literotica /series/se/) pasted
-        # into the download box into a single file with every part as a
-        # chapter, instead of one file per part. Off by default so upgrading
-        # doesn't change the behavior existing users already get; persisted
-        # so a user who always wants merged series sets it once.
-        self.merge_series_ctrl = wx.CheckBox(
-            root,
-            label="Com&bine a series into one book (instead of one file per part)",
-        )
-        self.merge_series_ctrl.SetName(
-            "Combine a series into one book instead of one file per part"
-        )
-        self.merge_series_ctrl.SetToolTip(
-            "When you download an AO3 or Literotica series URL, produce one "
-            "file in the selected format with every part as a chapter, "
-            "instead of one file per part. Leave off to keep one file per "
-            "part."
-        )
-        opts2.Add(
-            self.merge_series_ctrl, 0, wx.ALIGN_CENTER_VERTICAL | wx.LEFT, 16
-        )
+        # FicHub, Combine-series, and the two site cookies moved to
+        # Preferences → Downloads (round-10 declutter): set-once options
+        # that were costing every download a tab stop. The download
+        # snapshot reads them from prefs now.
 
         # Always-visible shortcut to the LLM settings dialog. The
         # audio toolbar has its own copy that surfaces only when
@@ -467,60 +425,6 @@ class MainFrame(wx.Frame):
             wx.ALIGN_CENTER_VERTICAL | wx.LEFT, 8,
         )
         root_sizer.Add(opts2, 0, wx.EXPAND | wx.LEFT | wx.RIGHT, pad)
-
-        # webnovel.com optional auth. A logged-in browser "Cookie:" header
-        # lets the user download chapters their account has unlocked; left
-        # blank, only free chapters are fetched. Password-styled because
-        # the cookie is a session secret; stored plain-text in prefs, the
-        # same as the LLM API key / Pushover / Discord secrets already are.
-        wn_sizer = wx.BoxSizer(wx.HORIZONTAL)
-        wn_sizer.Add(
-            wx.StaticText(root, label="Webno&vel.com cookie:"),
-            0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 4,
-        )
-        self.webnovel_cookie_ctrl = wx.TextCtrl(
-            root, size=(260, -1), style=wx.TE_PASSWORD,
-        )
-        self.webnovel_cookie_ctrl.SetName(
-            "Webnovel.com session cookie — paste a logged-in browser Cookie "
-            "header to download chapters you have unlocked; leave blank for "
-            "free chapters only"
-        )
-        self.webnovel_cookie_ctrl.SetToolTip(
-            "Optional, only used for webnovel.com. Paste the 'Cookie:' "
-            "header from a logged-in webnovel.com browser session to fetch "
-            "chapters your account has unlocked. Leave blank to download "
-            "only the free chapters (locked ones become placeholders). "
-            "Stored in your local settings; coins are never spent."
-        )
-        wn_sizer.Add(self.webnovel_cookie_ctrl, 1, wx.ALIGN_CENTER_VERTICAL)
-        root_sizer.Add(wn_sizer, 0, wx.EXPAND | wx.LEFT | wx.RIGHT, pad)
-
-        # AO3 optional auth. A logged-in browser "Cookie:" header unlocks
-        # restricted / Archive-locked works and your private bookmarks;
-        # blank means anonymous. Same plain-text-in-prefs posture as above.
-        ao3c_sizer = wx.BoxSizer(wx.HORIZONTAL)
-        ao3c_sizer.Add(
-            wx.StaticText(root, label="A&O3 cookie:"),
-            0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 4,
-        )
-        self.ao3_cookie_ctrl = wx.TextCtrl(
-            root, size=(260, -1), style=wx.TE_PASSWORD,
-        )
-        self.ao3_cookie_ctrl.SetName(
-            "AO3 session cookie — paste a logged-in browser Cookie header to "
-            "download restricted works and private bookmarks; leave blank for "
-            "anonymous access"
-        )
-        self.ao3_cookie_ctrl.SetToolTip(
-            "Optional, only used for archiveofourown.org. Paste the 'Cookie:' "
-            "header from a logged-in AO3 browser session to download "
-            "restricted / Archive-locked works and your own private bookmarks "
-            "and marked-for-later. Leave blank for anonymous access. Stored "
-            "in your local settings."
-        )
-        ao3c_sizer.Add(self.ao3_cookie_ctrl, 1, wx.ALIGN_CENTER_VERTICAL)
-        root_sizer.Add(ao3c_sizer, 0, wx.EXPAND | wx.LEFT | wx.RIGHT, pad)
 
         # ── Audiobook settings (visible only when Format = audio) ────
         from . import attribution as _attribution_module
@@ -1374,14 +1278,8 @@ class MainFrame(wx.Frame):
         self.llm_strip_notes_ctrl.SetValue(
             self.prefs.get_bool(_p.KEY_LLM_STRIP_NOTES)
         )
-        self.fichub_ctrl.SetValue(self.prefs.get_bool(_p.KEY_FICHUB))
-        self.merge_series_ctrl.SetValue(
-            self.prefs.get_bool(_p.KEY_MERGE_SERIES)
-        )
-        self.webnovel_cookie_ctrl.SetValue(
-            self.prefs.get(_p.KEY_WEBNOVEL_COOKIE) or ""
-        )
-        self.ao3_cookie_ctrl.SetValue(self.prefs.get(_p.KEY_AO3_COOKIE) or "")
+        # FicHub / merge-series / cookies live in Preferences → Downloads
+        # now; the download snapshot reads them straight from prefs.
 
         try:
             rate = int(self.prefs.get(_p.KEY_SPEECH_RATE) or 0)
@@ -1431,17 +1329,9 @@ class MainFrame(wx.Frame):
         self.prefs.set_bool(
             _p.KEY_LLM_STRIP_NOTES, self.llm_strip_notes_ctrl.GetValue(),
         )
-        self.prefs.set_bool(_p.KEY_FICHUB, self.fichub_ctrl.GetValue())
-        self.prefs.set_bool(
-            _p.KEY_MERGE_SERIES, self.merge_series_ctrl.GetValue()
-        )
-        self.prefs.set(
-            _p.KEY_WEBNOVEL_COOKIE,
-            self.webnovel_cookie_ctrl.GetValue().strip(),
-        )
-        self.prefs.set(
-            _p.KEY_AO3_COOKIE, self.ao3_cookie_ctrl.GetValue().strip(),
-        )
+        # FicHub / merge-series / cookies are owned by the Preferences
+        # dialog now — saving them here would clobber its edits with
+        # stale values.
         self.prefs.set(_p.KEY_SPEECH_RATE, self.speech_rate_ctrl.GetValue())
         self.prefs.set(_p.KEY_ATTRIBUTION_BACKEND, self._selected_attribution_backend())
         self.prefs.set(_p.KEY_ATTRIBUTION_MODEL_SIZE, self._selected_size() or "")
@@ -2431,10 +2321,13 @@ class MainFrame(wx.Frame):
             enabled_tts_providers=(
                 tuple(self._enabled_tts_providers()) if fmt == "audio" else ()
             ),
-            use_fichub=self.fichub_ctrl.GetValue(),
-            merge_series=self.merge_series_ctrl.GetValue(),
-            webnovel_cookie=self.webnovel_cookie_ctrl.GetValue().strip(),
-            ao3_cookie=self.ao3_cookie_ctrl.GetValue().strip(),
+            # Set-once options read from prefs since the round-10
+            # declutter (Preferences → Downloads). Still snapshotted per
+            # click so a queued batch keeps the values it started with.
+            use_fichub=self.prefs.get_bool(_p.KEY_FICHUB),
+            merge_series=self.prefs.get_bool(_p.KEY_MERGE_SERIES),
+            webnovel_cookie=(self.prefs.get(_p.KEY_WEBNOVEL_COOKIE) or "").strip(),
+            ao3_cookie=(self.prefs.get(_p.KEY_AO3_COOKIE) or "").strip(),
             send_to_abs=(
                 self.abs_send_ctrl.GetValue() if fmt == "audio" else False
             ),
@@ -3209,13 +3102,17 @@ class MainFrame(wx.Frame):
         bar = wx.MenuBar()
 
         file_menu = wx.Menu()
+        # Ctrl+U / Ctrl+Shift+U now belong to the two "check for
+        # updates" actions (library bulk check + app self-update).
+        # The manual single-file update moves to Ctrl+Shift+F, and the
+        # force-refetch variant to Ctrl+Shift+R (Refetch).
         update_item = file_menu.Append(
-            wx.ID_ANY, "&Update File...\tCtrl+U",
+            wx.ID_ANY, "&Update File...\tCtrl+Shift+F",
         )
         self.Bind(wx.EVT_MENU, self._on_update, update_item)
         update_fresh_item = file_menu.Append(
             wx.ID_ANY,
-            "Update File with &Fresh Copy...\tCtrl+Shift+U",
+            "Update File with &Fresh Copy...\tCtrl+Shift+R",
         )
         self.Bind(
             wx.EVT_MENU, self._on_update_refetch_all, update_fresh_item,
@@ -3269,6 +3166,12 @@ class MainFrame(wx.Frame):
             wx.ID_ANY, "&Library...\tCtrl+L",
         )
         self.Bind(wx.EVT_MENU, self._on_library_menu, library_item)
+        check_updates_item = library_menu.Append(
+            wx.ID_ANY, "Check for Story &Updates\tCtrl+U",
+        )
+        self.Bind(
+            wx.EVT_MENU, self._on_check_library_updates, check_updates_item,
+        )
         bar.Append(library_menu, "&Library")
 
         reader_menu = wx.Menu()
@@ -3313,7 +3216,9 @@ class MainFrame(wx.Frame):
         help_menu = wx.Menu()
         manual_item = help_menu.Append(wx.ID_HELP, "Read the &Manual\tF1")
         self.Bind(wx.EVT_MENU, self._on_open_manual, manual_item)
-        check_item = help_menu.Append(wx.ID_ANY, "&Check for Updates...")
+        check_item = help_menu.Append(
+            wx.ID_ANY, "&Check for App Updates...\tCtrl+Shift+U",
+        )
         self.Bind(wx.EVT_MENU, self._on_check_updates_menu, check_item)
         help_menu.AppendSeparator()
         about_item = help_menu.Append(wx.ID_ABOUT, "&About Ficary")
@@ -3382,10 +3287,6 @@ class MainFrame(wx.Frame):
         self.llm_strip_notes_ctrl.SetValue(
             self.prefs.get_bool(_p.KEY_LLM_STRIP_NOTES)
         )
-        self.fichub_ctrl.SetValue(self.prefs.get_bool(_p.KEY_FICHUB))
-        self.merge_series_ctrl.SetValue(
-            self.prefs.get_bool(_p.KEY_MERGE_SERIES)
-        )
 
         try:
             rate = int(self.prefs.get(_p.KEY_SPEECH_RATE) or "0")
@@ -3426,29 +3327,48 @@ class MainFrame(wx.Frame):
         if getattr(self, "_watchlist_poller", None) is not None:
             self._watchlist_poller.reconfigure()
 
-    def _on_library_menu(self, event):
+    def _on_library_menu(self, event, *, check_updates: bool = False):
         """Open the library-management window (non-modal).
 
         Modeless so users can kick off a scan or update run and flip
         back to the main window to download something else in the
         meantime. Lazy import keeps gui.py's startup cost unaffected
         for users who never touch the library features.
+
+        ``check_updates`` (the Ctrl+U accelerator) also kicks off the
+        bulk update-check on the current library root once the frame is
+        shown, so the common "did anything I follow get new chapters?"
+        action is one keystroke from the main window instead of open-
+        window-then-find-the-button.
         """
-        if self._library_frame is not None:
+        already_open = self._library_frame is not None
+        if already_open:
             try:
                 self._library_frame.Raise()
                 self._library_frame.SetFocus()
-                return
             except RuntimeError:
                 # Frame was destroyed without going through our
                 # closed-notify callback — reset and open a fresh one.
                 self._library_frame = None
+                already_open = False
 
-        from .library.gui import LibraryFrame
+        if not already_open:
+            from .library.gui import LibraryFrame
 
-        frame = LibraryFrame(self, self.prefs)
-        self._library_frame = frame
-        frame.Show()
+            frame = LibraryFrame(self, self.prefs)
+            self._library_frame = frame
+            frame.Show()
+
+        if check_updates and self._library_frame is not None:
+            try:
+                self._library_frame.trigger_update_check()
+            except RuntimeError:
+                logger.debug("library update trigger failed", exc_info=True)
+
+    def _on_check_library_updates(self, event):
+        """Ctrl+U — open the library window (if needed) and start a
+        bulk update check on the current root."""
+        self._on_library_menu(event, check_updates=True)
 
     def _notify_library_frame_closed(self):
         """Called by LibraryFrame._on_close so the menu reopens cleanly."""

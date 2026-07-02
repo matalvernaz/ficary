@@ -289,6 +289,16 @@ class LibraryFrame(wx.Frame):
             str(int(self.abandoned_after_ctrl.GetValue())),
         )
 
+    def trigger_update_check(self) -> None:
+        """Public entry point for the main window's Ctrl+U accelerator.
+
+        Routes through the same handler as the Check-for-Updates button
+        (reading the adjacent force/refetch checkboxes). No-ops quietly
+        if a run is already in flight."""
+        if self._update_running:
+            return
+        self._on_check_updates(None)
+
     def _current_path(self) -> Path | None:
         raw = (self.path_ctrl.GetValue() or "").strip()
         if not raw:

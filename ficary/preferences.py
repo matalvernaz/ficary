@@ -243,10 +243,67 @@ class PreferencesDialog(wx.Dialog):
         )
         sizer.Add(self.strip_notes_ctrl, 0, wx.ALL, 6)
 
+        self.fichub_ctrl = wx.CheckBox(
+            panel,
+            label="Fast fanfiction.net download via Fic&Hub (may lag latest chapters)",
+        )
+        self.fichub_ctrl.SetName(
+            "Fast fanfiction.net download via FicHub. Pulls the bulk of a "
+            "fic in one request instead of the slow per-chapter crawl, then "
+            "tops up any newer chapters. May lag the source by a few "
+            "chapters; ignored for updates; falls back to a normal download "
+            "if FicHub doesn't have the fic."
+        )
+        sizer.Add(self.fichub_ctrl, 0, wx.ALL, 6)
+
+        self.merge_series_ctrl = wx.CheckBox(
+            panel,
+            label="Com&bine a series into one book (instead of one file per part)",
+        )
+        self.merge_series_ctrl.SetName(
+            "Combine a series into one book instead of one file per part. "
+            "Applies to AO3 and Literotica series URLs."
+        )
+        sizer.Add(self.merge_series_ctrl, 0, wx.ALL, 6)
+
+        sizer.AddSpacer(8)
+
+        # Optional per-site session cookies — set-once secrets, so they
+        # live here rather than cluttering the main window. Password-
+        # styled; stored plain-text in prefs like the other secrets.
+        self.webnovel_cookie_ctrl = wx.TextCtrl(panel, style=wx.TE_PASSWORD)
+        self.webnovel_cookie_ctrl.SetName(
+            "Webnovel.com session cookie — paste a logged-in browser Cookie "
+            "header to download chapters you have unlocked; leave blank for "
+            "free chapters only. Stored locally; coins are never spent."
+        )
+        sizer.Add(
+            self._make_labeled_row(
+                panel, "Webno&vel.com cookie:", self.webnovel_cookie_ctrl,
+            ),
+            0, wx.EXPAND | wx.ALL, 6,
+        )
+
+        self.ao3_cookie_ctrl = wx.TextCtrl(panel, style=wx.TE_PASSWORD)
+        self.ao3_cookie_ctrl.SetName(
+            "AO3 session cookie — paste a logged-in browser Cookie header to "
+            "download restricted works and your private bookmarks / "
+            "marked-for-later; leave blank for anonymous access. Stored "
+            "locally."
+        )
+        sizer.Add(
+            self._make_labeled_row(
+                panel, "A&O3 cookie:", self.ao3_cookie_ctrl,
+            ),
+            0, wx.EXPAND | wx.ALL, 6,
+        )
+
         self._add_help_text(
             sizer, panel,
-            "These set the defaults that load on launch. You can still "
-            "toggle them per-download on the main window.",
+            "These set the defaults that load on launch. Format, filename, "
+            "and Save-to still live on the main window; FicHub, Combine "
+            "series, and the site cookies moved here since they're set "
+            "once and left alone.",
         )
 
         panel.SetSizer(sizer)
@@ -568,6 +625,12 @@ class PreferencesDialog(wx.Dialog):
             self.format_ctrl.SetSelection(0)
         self.hr_stars_ctrl.SetValue(self.prefs.get_bool(_p.KEY_HR_AS_STARS))
         self.strip_notes_ctrl.SetValue(self.prefs.get_bool(_p.KEY_STRIP_NOTES))
+        self.fichub_ctrl.SetValue(self.prefs.get_bool(_p.KEY_FICHUB))
+        self.merge_series_ctrl.SetValue(
+            self.prefs.get_bool(_p.KEY_MERGE_SERIES))
+        self.webnovel_cookie_ctrl.SetValue(
+            self.prefs.get(_p.KEY_WEBNOVEL_COOKIE) or "")
+        self.ao3_cookie_ctrl.SetValue(self.prefs.get(_p.KEY_AO3_COOKIE) or "")
 
         # Audiobook
         try:
@@ -681,6 +744,17 @@ class PreferencesDialog(wx.Dialog):
         self.prefs.set_bool(_p.KEY_HR_AS_STARS, self.hr_stars_ctrl.GetValue())
         self.prefs.set_bool(
             _p.KEY_STRIP_NOTES, self.strip_notes_ctrl.GetValue(),
+        )
+        self.prefs.set_bool(_p.KEY_FICHUB, self.fichub_ctrl.GetValue())
+        self.prefs.set_bool(
+            _p.KEY_MERGE_SERIES, self.merge_series_ctrl.GetValue(),
+        )
+        self.prefs.set(
+            _p.KEY_WEBNOVEL_COOKIE,
+            self.webnovel_cookie_ctrl.GetValue().strip(),
+        )
+        self.prefs.set(
+            _p.KEY_AO3_COOKIE, self.ao3_cookie_ctrl.GetValue().strip(),
         )
 
         # Audiobook
