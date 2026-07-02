@@ -324,6 +324,40 @@ _SPEECH_VERBS = {
     "breathed", "whispered", "hissed", "growled",
 }
 
+# Verbs that genuinely INVERT in English prose — `"...," said Harry` —
+# so verb-then-name order safely names the speaker. The broad
+# _SPEECH_VERBS set deliberately includes action verbs ("shook",
+# "pressed", "nodded") for name-then-verb order, but in verb-then-name
+# order those usually take the name as OBJECT: `"...," shook Hermione's
+# hand` attributed the line to Hermione. _AFTER_VERB_NAME accepts a
+# non-canonical verb only when the name is already a confirmed speaker.
+_CANONICAL_SPEECH_VERBS = {
+    "said", "asked", "replied", "answered", "whispered", "murmured",
+    "muttered", "shouted", "yelled", "screamed", "exclaimed", "cried",
+    "called", "added", "continued", "began", "suggested", "demanded",
+    "insisted", "agreed", "protested", "snapped", "snarled", "growled",
+    "laughed", "chuckled", "giggled", "sobbed", "sighed", "groaned",
+    "moaned", "hissed", "bellowed", "wailed", "whimpered", "stammered",
+    "stuttered", "blurted", "joked", "remarked", "noted", "observed",
+    "commented", "declared", "announced", "explained", "offered",
+    "interrupted", "repeated", "admitted", "confessed", "acknowledged",
+    "rasped", "breathed", "grunted", "stated", "ordered", "commanded",
+    "barked", "warned", "retorted", "countered", "responded", "intoned",
+    "urged", "drawled", "mumbled", "complained", "whined", "grumbled",
+    "gasped", "snorted", "scoffed", "huffed", "sneered", "spat",
+    "pleaded", "begged", "crooned", "cooed", "spluttered", "babbled",
+    "squeaked", "squealed", "piped", "chirped", "quipped", "boasted",
+    "bragged", "promised", "vowed", "swore", "asserted", "argued",
+    "cautioned", "reasoned", "clarified", "elaborated", "finished",
+    "concluded", "corrected", "apologized", "apologised", "wondered",
+    "mused", "speculated", "pondered", "inquired", "queried", "echoed",
+    "conceded", "concurred", "spoke", "crowed", "cackled", "roared",
+    "hollered", "whooped", "purred", "rumbled", "deadpanned", "opined",
+    "ventured", "supplied", "volunteered", "proposed", "recommended",
+    "recited", "interjected", "teased", "soothed", "snickered",
+    "tittered", "confirmed", "denied", "disagreed",
+}
+
 
 class Segment:
     """A piece of text to be spoken."""
@@ -479,7 +513,10 @@ def _collect_confirmed_speakers(text):
         if am and am.group("verb").lower() in _SPEECH_VERBS:
             _add(am.group("name"))
         am = _AFTER_VERB_NAME.match(after)
-        if am and am.group("verb").lower() in _SPEECH_VERBS:
+        # Canonical verbs only: seeding from the broad set let object
+        # names ("..." shook Hermione's hand) poison the confirmed-
+        # speaker set that the soft branches then trust.
+        if am and am.group("verb").lower() in _CANONICAL_SPEECH_VERBS:
             _add(am.group("name"))
         before = text[max(0, m.start() - 80) : m.start()]
         bm = _BEFORE_ATTRIB.search(before)
@@ -623,11 +660,23 @@ def parse_segments(text):
                 name = am.group("name")
                 verb = am.group("verb").lower()
                 if name.lower() not in _PRONOUNS:
-                    speaker = _clean_speaker(name)
+                    candidate = _clean_speaker(name)
+                    # Non-canonical (action) verbs in verb-then-name
+                    # order usually take the name as object — `"...,"
+                    # shook Hermione's hand` is not Hermione speaking.
+                    # Require the name to be a confirmed speaker before
+                    # trusting the inversion.
+                    if (
+                        verb in _CANONICAL_SPEECH_VERBS
+                        or (candidate and candidate in confirmed_speakers)
+                    ):
+                        speaker = candidate
                 else:
-                    speaker = _resolve_pronoun(name)
-                emotion = EMOTION_MAP.get(verb)
-                attrib_end = match.end() + am.end()
+                    if verb in _CANONICAL_SPEECH_VERBS:
+                        speaker = _resolve_pronoun(name)
+                if speaker:
+                    emotion = EMOTION_MAP.get(verb)
+                    attrib_end = match.end() + am.end()
 
         if not speaker:
             before_text = text[max(0, match.start() - 80) : match.start()]
@@ -2185,6 +2234,7 @@ def _build_voice_pool(
 
 async def _generate_with_semaphore(
     sem, seg, voice, path, idx, ch_num, speech_rate=0, narrator_voice=None,
+    cancel_event=None,
 ):
     """Generate one segment with a concurrency limiter.
 
@@ -2223,8 +2273,14 @@ async def _generate_with_semaphore(
         attempts = attempts + (
             ("edge-default", NARRATOR_VOICE, seg_no_emotion),
         )
+    if cancel_event is not None and cancel_event.is_set():
+        return None
     async with sem:
         for attempt, (label, try_voice, try_seg) in enumerate(attempts, 1):
+            if cancel_event is not None and cancel_event.is_set():
+                # Cancellation granularity is one segment: whatever synth
+                # is in flight finishes, queued segments return here.
+                return None
             try:
                 ok = await _generate_segment_audio(
                     try_seg, try_voice, path, speech_rate=speech_rate,
@@ -2263,6 +2319,7 @@ async def _generate_with_semaphore(
 async def generate_chapter_audio(
     segments, voice_mapper, output_path,
     chapter_num=0, narrator_voice=None, speech_rate=0,
+    cancel_event=None,
 ):
     """Generate audio for a full chapter's worth of segments.
 
@@ -2281,7 +2338,7 @@ async def generate_chapter_audio(
         return await _generate_chapter_audio_inner(
             segments, voice_mapper, output_path, tmp_dir,
             chapter_num=chapter_num, narrator=narrator,
-            speech_rate=speech_rate,
+            speech_rate=speech_rate, cancel_event=cancel_event,
         )
     finally:
         # Single cleanup point — any exception path between here and the
@@ -2292,7 +2349,7 @@ async def generate_chapter_audio(
 
 async def _generate_chapter_audio_inner(
     segments, voice_mapper, output_path, tmp_dir,
-    *, chapter_num, narrator, speech_rate,
+    *, chapter_num, narrator, speech_rate, cancel_event=None,
 ):
     sem = asyncio.Semaphore(_TTS_CONCURRENCY)
 
@@ -2321,6 +2378,7 @@ async def _generate_chapter_audio_inner(
         tasks.append((i, seg_path, seg.speaker, _generate_with_semaphore(
             sem, seg, voice, seg_path, i, chapter_num,
             speech_rate=speech_rate, narrator_voice=narrator,
+            cancel_event=cancel_event,
         )))
         plan.append(("speech", seg.speaker, task_idx))
 
@@ -3078,6 +3136,12 @@ def _concat_mp3s(inputs, output):
         shutil.rmtree(tmp_dir, ignore_errors=True)
 
 
+class AudiobookCancelled(RuntimeError):
+    """Raised when a render is cancelled via ``cancel_event``. Unwinds
+    through the same cleanup paths as any other failure (tmp bodies
+    unlinked, build_tmp swept) — cancellation must not leave debris."""
+
+
 def generate_audiobook(
     story, output_dir,
     progress_callback=None,
@@ -3089,6 +3153,7 @@ def generate_audiobook(
     enabled_tts_providers=None,
     strip_notes=False,
     hr_as_stars=False,
+    cancel_event=None,
 ):
     """Generate an M4B audiobook from a Story with character voice mapping.
 
@@ -3434,6 +3499,7 @@ def generate_audiobook(
             speech_rate=speech_rate,
             progress_callback=progress_callback,
             all_segments=all_segments,
+            cancel_event=cancel_event,
         )
     finally:
         # Single cleanup point — any exception before the original
@@ -3448,6 +3514,7 @@ def _generate_audiobook_inner(
     *,
     story, output_dir, build_tmp, cache_root,
     mapper, narrator, speech_rate, progress_callback, all_segments,
+    cancel_event=None,
 ):
     chapter_files = []
     total = len(story.chapters)
@@ -3455,6 +3522,10 @@ def _generate_audiobook_inner(
     cache_misses = 0
 
     for i, (ch, segs) in enumerate(zip(story.chapters, all_segments), 1):
+        if cancel_event is not None and cancel_event.is_set():
+            raise AudiobookCancelled(
+                f"Audiobook render cancelled after chapter {i - 1} of {total}."
+            )
         body_key = _chapter_cache_key(segs, mapper, narrator, speech_rate)
         body_path = cache_root / f"{body_key}.mp3"
 
@@ -3477,8 +3548,17 @@ def _generate_audiobook_inner(
                         segs, mapper, tmp_body,
                         chapter_num=i, narrator_voice=narrator,
                         speech_rate=speech_rate,
+                        cancel_event=cancel_event,
                     )
                 )
+                if cancel_event is not None and cancel_event.is_set():
+                    # The chapter came back partial (queued segments
+                    # returned early) — don't cache it as complete.
+                    if tmp_body.exists():
+                        tmp_body.unlink(missing_ok=True)
+                    raise AudiobookCancelled(
+                        f"Audiobook render cancelled during chapter {i} of {total}."
+                    )
             except BaseException:
                 if tmp_body.exists():
                     tmp_body.unlink(missing_ok=True)

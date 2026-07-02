@@ -705,9 +705,31 @@ class MainFrame(wx.Frame):
         self.voices_btn = wx.Button(panel, label="Preview &Voices...")
         self.voices_btn.SetName("Preview character voices")
         self.voices_btn.Bind(wx.EVT_BUTTON, self._on_preview_voices)
-        btn_sizer.Add(self.voices_btn, 0)
+        btn_sizer.Add(self.voices_btn, 0, wx.RIGHT, 8)
+
+        # Enabled only while an audiobook render is running. Renders are
+        # hours-long and used to be uncancellable short of killing the
+        # app (which orphaned piper/ffmpeg children mid-write).
+        self._render_cancel = None
+        self.cancel_render_btn = wx.Button(panel, label="Cancel &render")
+        self.cancel_render_btn.SetName(
+            "Cancel the running audiobook render after the current segment"
+        )
+        self.cancel_render_btn.Bind(wx.EVT_BUTTON, self._on_cancel_render)
+        self.cancel_render_btn.Disable()
+        btn_sizer.Add(self.cancel_render_btn, 0)
 
         sizer.Add(btn_sizer, 0, wx.ALL, pad)
+
+    def _on_cancel_render(self, event):
+        cancel = self._render_cancel
+        if cancel is not None and not cancel.is_set():
+            cancel.set()
+            self._log(
+                "\nCancelling audiobook render — stopping after the "
+                "current segment..."
+            )
+            self.cancel_render_btn.Disable()
 
     # ── Helpers ───────────────────────────────────────────────
 
@@ -1806,14 +1828,12 @@ class MainFrame(wx.Frame):
                 cancel_event.set()
 
         def progress_cb(done, total):
-            # Read WasCancelled() directly so a user's Abort click is
-            # observed even when the throttle below skips the
-            # wx.CallAfter (e.g. during a single multi-second network
-            # read where _apply_update never fires). Reading it from
-            # the worker is safe enough — at worst we see a stale value
-            # for one extra callback before noticing.
-            if cancel_event.is_set() or progress.WasCancelled():
-                cancel_event.set()
+            # cancel_event is set by _apply_update on the main thread
+            # (ProgressDialog.Update returns False after Abort). The old
+            # direct progress.WasCancelled() read from this worker was a
+            # cross-thread widget access; dropping it costs at most one
+            # 0.1 s throttle window of Abort latency.
+            if cancel_event.is_set():
                 raise RuntimeError("Update cancelled by user.")
             now = time.monotonic()
             # Always push the final update; throttle intermediate ones
@@ -1843,6 +1863,25 @@ class MainFrame(wx.Frame):
 
     def _update_succeeded(self, progress, tag):
         progress.Destroy()
+        # _perform_update refused to start while work was active, but
+        # work can START during the download (the clipboard-watch timer
+        # keeps firing under the modal). sys.exit(0) below bypasses
+        # _on_close's confirmation, so re-check here. Declining is safe:
+        # ZipExtractor is blocked on our PID and simply waits until the
+        # app is closed normally.
+        if self._has_active_background_work():
+            choice = wx.MessageBox(
+                f"Updated to {tag}, but a download or render started "
+                "while the update was downloading.\n\nQuit now and "
+                "interrupt it? Choosing No lets the work finish — the "
+                "update is applied automatically the next time ficary "
+                "closes.",
+                "Update ready",
+                wx.YES_NO | wx.NO_DEFAULT | wx.ICON_WARNING,
+                self,
+            )
+            if choice != wx.YES:
+                return
         wx.MessageBox(
             f"Updated to {tag}. The app will now close and reopen "
             f"automatically once the new files are in place.",
@@ -2656,17 +2695,25 @@ class MainFrame(wx.Frame):
                 f"\nGenerating audiobook (attribution={backend}{size_note}{llm_note}, "
                 f"rate={rate:+d}%)..."
             )
-            return generate_audiobook(
-                story, output_dir,
-                progress_callback=audio_progress,
-                speech_rate=rate,
-                attribution_backend=backend,
-                attribution_model_size=size,
-                attribution_llm_config=llm_config,
-                enabled_tts_providers=list(params.enabled_tts_providers),
-                strip_notes=params.strip_notes,
-                hr_as_stars=params.hr_as_stars,
-            )
+            cancel = threading.Event()
+            self._render_cancel = cancel
+            wx.CallAfter(self.cancel_render_btn.Enable)
+            try:
+                return generate_audiobook(
+                    story, output_dir,
+                    progress_callback=audio_progress,
+                    speech_rate=rate,
+                    attribution_backend=backend,
+                    attribution_model_size=size,
+                    attribution_llm_config=llm_config,
+                    enabled_tts_providers=list(params.enabled_tts_providers),
+                    strip_notes=params.strip_notes,
+                    hr_as_stars=params.hr_as_stars,
+                    cancel_event=cancel,
+                )
+            finally:
+                self._render_cancel = None
+                wx.CallAfter(self.cancel_render_btn.Disable)
 
         from .exporters import EXPORTERS
         exporter = EXPORTERS[params.fmt]
@@ -3012,11 +3059,15 @@ class MainFrame(wx.Frame):
 
     def _run_picked_batch(self, urls, kind, *, params: Optional[_DownloadParams] = None):
         if params is None:
-            # Should never happen on the production path (the picker
-            # handler snapshots before spawning), but tests/synthetic
-            # callers without a main-thread snapshot still get a
-            # working fallback.
-            params = self._snapshot_download_params()
+            # This runs on a worker thread; the fallback used to call
+            # _snapshot_download_params() — a MAIN THREAD ONLY function
+            # reading ~10 wx widgets. Fail loudly instead of racing the
+            # GUI: the production path always snapshots in the picker
+            # handler before spawning.
+            raise RuntimeError(
+                "_run_picked_batch requires a main-thread _DownloadParams "
+                "snapshot; pass params from the spawning handler"
+            )
         try:
             # Each url may target a different scraper (e.g. bookmarks can
             # include works outside the owner's own, but on AO3 they're

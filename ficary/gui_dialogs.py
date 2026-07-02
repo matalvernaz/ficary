@@ -2181,9 +2181,8 @@ class AddFromUrlListDialog(wx.Dialog):
             panel, min=0, max=10_000, initial=self._default_max,
         )
         self.max_ctrl.SetName(
-            "Max results, 0 means no cap. Pagination still walks "
-            "every page until this many works are collected or "
-            "results run out."
+            "Max results, 0 means no cap. Extraction stops walking "
+            "pages once this many works are collected."
         )
         max_row.Add(self.max_ctrl, 0)
         sizer.Add(max_row, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 8)
@@ -2277,17 +2276,24 @@ class AddFromUrlListDialog(wx.Dialog):
         self.list_ctrl.Set([])
         self._works = []
         self._cancel_event = threading.Event()
+        # Main-thread snapshot of the cap; the worker passes it (and the
+        # cancel event) into the extractor so the walk stops early
+        # instead of collecting everything and slicing afterwards.
+        max_results = int(self.max_ctrl.GetValue()) or None
         self.status_ctrl.SetLabel(
             f"Detected: {ref.site_name} {ref.kind} — extracting…"
         )
         threading.Thread(
-            target=self._extract_worker, args=(ref,), daemon=True,
+            target=self._extract_worker,
+            args=(ref, max_results, self._cancel_event), daemon=True,
         ).start()
 
-    def _extract_worker(self, ref):
+    def _extract_worker(self, ref, max_results, cancel_event):
         from . import url_classifier
         try:
-            label, works = url_classifier.extract(ref)
+            label, works = url_classifier.extract(
+                ref, max_results=max_results, cancel_event=cancel_event,
+            )
         except Exception as exc:
             wx.CallAfter(self._extract_failed, exc)
             return

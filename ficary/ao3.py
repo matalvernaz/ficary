@@ -516,7 +516,7 @@ class AO3Scraper(CookieAuthMixin, BaseScraper):
 
         return author_name, story_urls
 
-    def scrape_author_works(self, url):
+    def scrape_author_works(self, url, max_results=None, cancel_event=None):
         """Return (author_name, [work_dict]) from an AO3 user's works page.
 
         AO3 works-list blurbs match the shape emitted by the search
@@ -531,9 +531,10 @@ class AO3Scraper(CookieAuthMixin, BaseScraper):
         user = match.group(1)
         return self._scrape_ao3_work_list(
             f"{AO3_BASE}/users/{user}/works", fallback_name=user,
+            max_results=max_results, cancel_event=cancel_event,
         )
 
-    def scrape_bookmark_works(self, url):
+    def scrape_bookmark_works(self, url, max_results=None, cancel_event=None):
         """Return (owner_name, [work_dict]) from an AO3 user's public
         bookmarks page. Same blurb shape as works — reuse the parser.
         """
@@ -545,9 +546,10 @@ class AO3Scraper(CookieAuthMixin, BaseScraper):
             f"{AO3_BASE}/users/{user}/bookmarks",
             fallback_name=user,
             section="bookmarks",
+            max_results=max_results, cancel_event=cancel_event,
         )
 
-    def scrape_search_works(self, url):
+    def scrape_search_works(self, url, max_results=None, cancel_event=None):
         """Return (query_label, [work_dict]) from an AO3 search URL.
 
         The user's pasted URL is passed through to ``_fetch`` verbatim;
@@ -570,9 +572,10 @@ class AO3Scraper(CookieAuthMixin, BaseScraper):
         )
         return self._scrape_ao3_work_list(
             url, fallback_name=label or "Search results", section="search",
+            max_results=max_results, cancel_event=cancel_event,
         )
 
-    def scrape_tag_works(self, url):
+    def scrape_tag_works(self, url, max_results=None, cancel_event=None):
         """Return (tag_label, [work_dict]) from an AO3 tag works listing.
 
         ``tag_label`` is the ``<name>`` portion of ``/tags/<name>/works``
@@ -587,6 +590,7 @@ class AO3Scraper(CookieAuthMixin, BaseScraper):
         label = unquote(match.group(1)).replace("*s*", "/") if match else ""
         return self._scrape_ao3_work_list(
             url, fallback_name=label or "Tag works", section="tag",
+            max_results=max_results, cancel_event=cancel_event,
         )
 
     def _scrape_ao3_work_list(
@@ -596,6 +600,8 @@ class AO3Scraper(CookieAuthMixin, BaseScraper):
         fallback_name,
         section="own",
         max_pages=200,
+        max_results=None,
+        cancel_event=None,
     ):
         from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
         from .search import _parse_ao3_results
@@ -625,6 +631,13 @@ class AO3Scraper(CookieAuthMixin, BaseScraper):
             return urlunsplit((parts.scheme, parts.netloc, parts.path, new_query, ""))
 
         while page <= max_pages:
+            if cancel_event is not None and cancel_event.is_set():
+                # Honoured between pagination steps — the Add-from-URL
+                # dialog's Cancel used to only suppress the UI callback
+                # while the walk ran every page to completion.
+                break
+            if max_results and len(works) >= max_results:
+                break
             page_url = _page_url(page)
             html = self._fetch(page_url)
             if page == 1:
@@ -684,7 +697,7 @@ class AO3Scraper(CookieAuthMixin, BaseScraper):
             )
         )
 
-    def scrape_reading_list_works(self, url):
+    def scrape_reading_list_works(self, url, max_results=None, cancel_event=None):
         """Return (owner_name, [work_dict]) from an AO3 reading-history /
         marked-for-later page. Login-only on AO3 (needs --ao3-cookie).
         The pasted URL is walked as-is so ``?show=to-read`` (the
@@ -697,6 +710,7 @@ class AO3Scraper(CookieAuthMixin, BaseScraper):
         user = match.group(1)
         return self._scrape_ao3_work_list(
             url, fallback_name=user, section="readings",
+            max_results=max_results, cancel_event=cancel_event,
         )
 
     def download(self, url_or_id, progress_callback=None, skip_chapters=0, chapters=None):

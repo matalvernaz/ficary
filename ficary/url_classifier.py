@@ -163,7 +163,8 @@ def classify(url: str) -> Optional[ListPageRef]:
     )
 
 
-def extract(ref: ListPageRef) -> tuple[str, list[dict]]:
+def extract(ref: ListPageRef, *, max_results: Optional[int] = None,
+            cancel_event=None) -> tuple[str, list[dict]]:
     """Run the appropriate extractor for ``ref`` and return
     ``(label, [work_dict, ...])``.
 
@@ -171,6 +172,12 @@ def extract(ref: ListPageRef) -> tuple[str, list[dict]]:
     author/bookmark pages, series title for series pages, query
     string for search pages, etc. — or empty if the extractor can't
     determine one.
+
+    ``max_results``/``cancel_event`` bound the pagination walk for
+    extractors that support them (checked by signature); for the rest,
+    ``max_results`` is applied to the returned list and the cancel
+    check happens on return. Either way callers never get more than
+    ``max_results`` rows.
 
     Single-story refs (``kind="story"``) return ``(url, [{url: ..,
     title: ""}])`` so the caller can treat them uniformly with the
@@ -193,7 +200,21 @@ def extract(ref: ListPageRef) -> tuple[str, list[dict]]:
         }]
     scraper = ref.scraper_cls()
     method = getattr(scraper, ref.extractor)
-    return method(ref.url)
+    kwargs = {}
+    if max_results or cancel_event is not None:
+        import inspect
+        try:
+            accepted = inspect.signature(method).parameters
+        except (TypeError, ValueError):
+            accepted = {}
+        if max_results and "max_results" in accepted:
+            kwargs["max_results"] = max_results
+        if cancel_event is not None and "cancel_event" in accepted:
+            kwargs["cancel_event"] = cancel_event
+    label, works = method(ref.url, **kwargs)
+    if max_results and max_results > 0:
+        works = list(works)[:max_results]
+    return label, works
 
 
 def _normalise_work(work: dict) -> dict:

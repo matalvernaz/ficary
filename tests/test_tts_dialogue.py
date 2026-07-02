@@ -263,3 +263,84 @@ def test_pronunciation_map_bad_json_does_not_crash(tmp_path):
 
 def test_pronunciation_map_missing_file_returns_empty(tmp_path):
     assert _load_pronunciation_map(tmp_path / "nope.json") == {}
+
+
+class TestVerbNameInversionGate:
+    """Round-10 B3: verb-then-name order only names the speaker for
+    verbs that genuinely invert in English prose. Action verbs from the
+    broad set usually take the name as OBJECT in that order."""
+
+    def test_canonical_verb_inverts(self):
+        from ficary.tts import parse_segments
+        segs = parse_segments('"Hello there," said Hermione.')
+        speakers = [s.speaker for s in segs if s.speaker]
+        assert speakers == ["Hermione"]
+
+    def test_action_verb_object_not_attributed(self):
+        from ficary.tts import parse_segments
+        # 'shook' is in the broad speech-verb set for name-then-verb
+        # order, but here Hermione is the OBJECT of the handshake.
+        segs = parse_segments('"Nice to meet you," shook Hermione\'s hand.')
+        speakers = [s.speaker for s in segs if s.speaker]
+        assert "Hermione" not in speakers
+
+    def test_action_verb_allowed_for_confirmed_speaker(self):
+        from ficary.tts import parse_segments
+        text = (
+            '"First line," said Draco.\n\n'
+            '"Second line," pressed Draco.'
+        )
+        segs = parse_segments(text)
+        speakers = [s.speaker for s in segs if s.speaker]
+        # Draco is confirmed by the canonical first line, so the
+        # non-canonical 'pressed' inversion is trusted for him.
+        assert speakers == ["Draco", "Draco"]
+
+    def test_object_name_does_not_poison_confirmed_set(self):
+        from ficary.tts import _collect_confirmed_speakers
+        text = '"Nice to meet you," shook Hermione\'s hand.'
+        assert "Hermione" not in _collect_confirmed_speakers(text)
+
+
+class TestRenderCancel:
+    """Round-10 B2: cancel_event unwinds the render cleanly."""
+
+    def test_cancel_before_first_chapter_raises(self, tmp_path, monkeypatch):
+        import threading
+        from ficary.models import Chapter, Story
+        from ficary import tts as tts_mod
+
+        story = Story(id=1, title="T", author="A", summary="",
+                      url="https://www.fanfiction.net/s/1")
+        story.chapters = [Chapter(1, "One", "<p>Hello.</p>")]
+        cancel = threading.Event()
+        cancel.set()
+        with pytest.raises(tts_mod.AudiobookCancelled):
+            tts_mod._generate_audiobook_inner(
+                story=story,
+                output_dir=tmp_path,
+                build_tmp=tmp_path,
+                cache_root=tmp_path / "cache",
+                mapper=None,
+                narrator="edge:x",
+                speech_rate=0,
+                progress_callback=None,
+                all_segments=[[]],
+                cancel_event=cancel,
+            )
+
+    def test_segment_semaphore_respects_cancel(self):
+        import asyncio
+        import threading
+        from pathlib import Path
+        from ficary.tts import Segment, _generate_with_semaphore
+
+        cancel = threading.Event()
+        cancel.set()
+        sem = asyncio.Semaphore(1)
+        seg = Segment("Hello.")
+        result = asyncio.run(_generate_with_semaphore(
+            sem, seg, "edge:x", Path("/nonexistent/x.mp3"), 0, 1,
+            cancel_event=cancel,
+        ))
+        assert result is None  # returned early, no synth attempted
