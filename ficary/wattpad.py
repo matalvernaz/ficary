@@ -469,19 +469,29 @@ class WattpadScraper(BaseScraper):
                 continue
             ch_title = chapter_titles.get(str(idx), f"Part {idx}")
 
-            cached = self._load_chapter_cache(story_id, idx)
-            if cached is not None:
-                story.chapters.append(cached)
-                if progress_callback:
-                    progress_callback(idx, num_chapters, cached.title, True)
-                continue
-
             part_id = part.get("id")
             if not part_id:
                 logger.warning(
                     "Wattpad part %d of story %s has no id; skipping.",
                     idx, story_id,
                 )
+                continue
+
+            # Cache is keyed on the stable part id, not the catalog
+            # ordinal: a draft published (or a part deleted) mid-story
+            # renumbers every later part, and an ordinal-keyed cache then
+            # serves the previous chapter's body under the new number.
+            # Old ordinal-keyed entries simply miss and refetch.
+            cached = self._load_chapter_cache(
+                story_id, idx, cache_key=f"part_{part_id}")
+            if cached is not None:
+                # The cached body is authoritative for this part id, but
+                # its position in the story is whatever the CURRENT
+                # catalog says.
+                cached = Chapter(number=idx, title=ch_title, html=cached.html)
+                story.chapters.append(cached)
+                if progress_callback:
+                    progress_callback(idx, num_chapters, cached.title, True)
                 continue
 
             # Pre-flagged paid parts from SSR JSON get a free ride to
@@ -507,7 +517,7 @@ class WattpadScraper(BaseScraper):
             # or upstream starts serving the full body again, we want
             # a real fetch next time rather than an old partial.
             if not is_paid and not is_truncated:
-                self._save_chapter_cache(story_id, ch)
+                self._save_chapter_cache(story_id, ch, cache_key=f"part_{part_id}")
             story.chapters.append(ch)
             if progress_callback:
                 progress_callback(idx, num_chapters, ch_title, False)

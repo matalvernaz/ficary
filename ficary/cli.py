@@ -15,7 +15,7 @@ from .download_queue import DownloadQueues
 from .exporters import DEFAULT_TEMPLATE, EXPORTERS, check_format_deps
 from .merge import merge_stories
 from .erotica import LiteroticaScraper
-from .models import Story, parse_chapter_spec
+from .models import Story, merge_chapter_lists, parse_chapter_spec
 from .scraper import (
     CloudflareBlockError,
     RateLimitError,
@@ -35,6 +35,7 @@ from .updater import (
     read_chapters,
 )
 from .wattpad import WattpadPaidStoryError
+from .webnovel import WebnovelLockedStoryError
 
 logger = logging.getLogger(__name__)
 
@@ -619,29 +620,8 @@ def _build_scraper(url: str, args: argparse.Namespace):
     return scraper_cls(**kwargs)
 
 
-def _merge_chapter_lists(existing, new):
-    """Merge two chapter lists, deduping by chapter number with the
-    freshly-downloaded chapter winning. Returns ``(merged_sorted,
-    duplicate_count)``.
-
-    Without the dedupe, an author re-publishing chapter N (a routine
-    occurrence — fixing typos, re-numbering after edits) produces a
-    merged file with two chapter-N rows. The freshly-downloaded body
-    is the one we keep. Both the disk-read merge path
-    (``_merge_with_existing``) and the in-memory update path in
-    ``_download_one`` route through here so the dedupe is applied
-    identically and tested once.
-    """
-    by_number: dict[int, "object"] = {}
-    for ch in existing:
-        by_number[ch.number] = ch
-    duplicates = 0
-    for ch in new:
-        if ch.number in by_number:
-            duplicates += 1
-        by_number[ch.number] = ch
-    merged = sorted(by_number.values(), key=lambda c: c.number)
-    return merged, duplicates
+# Shared with the GUI update path — see models.merge_chapter_lists.
+_merge_chapter_lists = merge_chapter_lists
 
 
 def _merge_with_existing(
@@ -789,11 +769,44 @@ def _download_one(
             status(
                 "  Fresh-copies mode — re-downloading every chapter."
             )
+
+        # Webnovel locked-chapter stubs merged into an earlier update count
+        # as existing chapters, so a later authenticated run never refetched
+        # them — the placeholder was permanent short of --refetch-all. When
+        # the user is logged in, fetch the stub ordinals alongside the new
+        # tail; the number-dedupe merge below replaces each stub with the
+        # real body. Logged out, retrying would just re-stub (and an
+        # all-locked result raises), so leave the skip-count fast path alone.
+        refetch_spec = None
+        stub_count = 0
+        if (
+            existing_chapters_list is not None
+            and not refetch_all_update
+            and not legacy_format
+            and chapter_spec is None
+            and getattr(scraper, "has_auth", False)
+        ):
+            from . import webnovel as _webnovel
+            if isinstance(scraper, _webnovel.WebnovelScraper):
+                stub_numbers = sorted(
+                    c.number for c in existing_chapters_list
+                    if _webnovel.is_locked_stub(c.html)
+                )
+                if stub_numbers:
+                    stub_count = len(stub_numbers)
+                    refetch_spec = [(n, n) for n in stub_numbers]
+                    refetch_spec.append((existing_chapters + 1, None))
+                    status(
+                        f"  {stub_count} paywalled placeholder chapter(s) "
+                        "in the existing file — retrying them with the "
+                        "logged-in session."
+                    )
+
         story = scraper.download(
             url,
             progress_callback=progress,
-            skip_chapters=initial_skip,
-            chapters=chapter_spec,
+            skip_chapters=0 if refetch_spec is not None else initial_skip,
+            chapters=refetch_spec if refetch_spec is not None else chapter_spec,
         )
 
         new_count = len(story.chapters)
@@ -812,8 +825,9 @@ def _download_one(
         status(f"  Title:    {story.title}")
         status(f"  Author:   {story.author}")
         if update_path and not refetch_all_update:
-            total = existing_chapters + new_count
-            status(f"  Chapters: {total} ({new_count} new)")
+            # Stub refetches overlap the existing count — don't double-count.
+            total = existing_chapters + new_count - stub_count
+            status(f"  Chapters: {total} ({new_count - stub_count} new)")
         else:
             # Fresh-copies re-download and plain downloads both already
             # have the full chapter count in ``new_count`` — no math.
@@ -935,6 +949,9 @@ def _download_one(
     except WattpadPaidStoryError as exc:
         print(f"Paywalled: {exc}", file=sys.stderr)
         return False
+    except WebnovelLockedStoryError as exc:
+        print(f"Paywalled: {exc}", file=sys.stderr)
+        return False
     except CloudflareBlockError as exc:
         print(f"Blocked: {exc}", file=sys.stderr)
         return False
@@ -1036,6 +1053,11 @@ def _build_search_spec(args: argparse.Namespace):
     else:
         site_label = "fanfiction.net"
         filters = {
+            # Without the fandom mapping, FFN fandom-browse mode was
+            # unreachable from the CLI and every --ffn-* fandom-only
+            # filter below was silently dropped.
+            "fandom": args.fandom,
+            "category": getattr(args, "ffn_category", None),
             "rating": args.rating,
             "language": args.language,
             "status": args.status,
@@ -3697,7 +3719,20 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--fandom",
         metavar="NAME",
-        help="AO3-only: filter by fandom name(s)",
+        help=(
+            "AO3: filter by fandom name(s). FFN: browse a fandom's own "
+            "listing (enables the --ffn-* fandom filters; the category "
+            "is auto-detected unless --ffn-category is given)"
+        ),
+    )
+    parser.add_argument(
+        "--ffn-category",
+        metavar="CAT",
+        help=(
+            "FFN fandom-browse category (anime, book, cartoon, comic, "
+            "game, misc, movie, play, tv) — skips auto-detection when "
+            "the fandom name exists in more than one category"
+        ),
     )
     parser.add_argument(
         "--word-count",

@@ -180,12 +180,16 @@ def cleanup_old_exe() -> None:
     try:
         temp = Path(tempfile.gettempdir())
         cutoff = time.time() - 24 * 3600
-        for d in temp.glob("ficary-update-*"):
-            try:
-                if d.is_dir() and d.stat().st_mtime < cutoff:
-                    shutil.rmtree(d, ignore_errors=True)
-            except OSError:
-                continue
+        # Both prefixes: pre-rename clients left ffn-dl-update-* workdirs
+        # (including the ~60 MB one from their failed cross-rename
+        # attempt) that the new glob alone would never reclaim.
+        for pattern in ("ficary-update-*", "ffn-dl-update-*"):
+            for d in temp.glob(pattern):
+                try:
+                    if d.is_dir() and d.stat().st_mtime < cutoff:
+                        shutil.rmtree(d, ignore_errors=True)
+                except OSError:
+                    continue
     except OSError as exc:
         logger.debug("Could not sweep stale update workdirs: %s", exc)
 
@@ -431,17 +435,27 @@ def download_and_replace(update_info, progress_cb=None) -> Path:
         # root regardless of sibling debris. Fall back to the bare
         # extracted root only when the exe sits there directly. If
         # nothing matches, refuse the update rather than half-install.
-        expected_exe = current_exe.name
+        # Accept either exe name across the ffn-dl -> ficary rename: an
+        # install still running as ffn-dl.exe (crossed over via the
+        # release zip's compat shim) must keep updating from zips whose
+        # primary exe is ficary.exe, and vice versa.
+        expected_names = [current_exe.name]
+        for alias in ("ficary.exe", "ffn-dl.exe"):
+            if alias not in expected_names:
+                expected_names.append(alias)
         candidate = None
-        for child in extracted.iterdir():
-            if child.is_dir() and (child / expected_exe).is_file():
-                candidate = child
+        for expected_exe in expected_names:
+            for child in extracted.iterdir():
+                if child.is_dir() and (child / expected_exe).is_file():
+                    candidate = child
+                    break
+            if candidate is None and (extracted / expected_exe).is_file():
+                candidate = extracted
+            if candidate is not None:
                 break
-        if candidate is None and (extracted / expected_exe).is_file():
-            candidate = extracted
         if candidate is None:
             raise RuntimeError(
-                f"Downloaded portable zip does not contain {expected_exe} "
+                f"Downloaded portable zip does not contain {expected_names[0]} "
                 "at the expected location. Update aborted; install unchanged."
             )
         src_for_repack = candidate

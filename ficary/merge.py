@@ -68,7 +68,9 @@ def merge_stories(series_name: str, series_url: str, stories: list) -> Story:
 
     total_words = 0
     for s in stories:
-        w = s.metadata.get("words", "").replace(",", "").strip()
+        # FicHub-sourced metadata can carry ints here; every other source
+        # uses strings.
+        w = str(s.metadata.get("words", "") or "").replace(",", "").strip()
         if w.isdigit():
             total_words += int(w)
 

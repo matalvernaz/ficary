@@ -405,7 +405,7 @@ class MainFrame(wx.Frame):
         # by default because its copy can lag the latest chapters.
         self.fichub_ctrl = wx.CheckBox(
             root,
-            label="&Fast fanfiction.net download via FicHub (may lag latest chapters)",
+            label="Fast fanfiction.net download via Fic&Hub (may lag latest chapters)",
         )
         self.fichub_ctrl.SetName(
             "Fast fanfiction.net download via FicHub shared cache — "
@@ -431,7 +431,7 @@ class MainFrame(wx.Frame):
         # so a user who always wants merged series sets it once.
         self.merge_series_ctrl = wx.CheckBox(
             root,
-            label="Combine a &series into one book (instead of one file per part)",
+            label="Com&bine a series into one book (instead of one file per part)",
         )
         self.merge_series_ctrl.SetName(
             "Combine a series into one book instead of one file per part"
@@ -474,7 +474,7 @@ class MainFrame(wx.Frame):
         # same as the LLM API key / Pushover / Discord secrets already are.
         wn_sizer = wx.BoxSizer(wx.HORIZONTAL)
         wn_sizer.Add(
-            wx.StaticText(root, label="&Webnovel.com cookie:"),
+            wx.StaticText(root, label="Webno&vel.com cookie:"),
             0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 4,
         )
         self.webnovel_cookie_ctrl = wx.TextCtrl(
@@ -1961,21 +1961,32 @@ class MainFrame(wx.Frame):
         # could pop overlapping dialogs. Now matches the
         # voice-dialog-driven semantics described in the close-
         # confirmation branch.
+        # Cookies snapshotted on the main thread alongside output_dir, so
+        # previewing a restricted AO3/webnovel work uses the same session
+        # the download would.
+        params = self._snapshot_download_params()
         self._set_busy(True, kind="preview")
         threading.Thread(
             target=self._run_preview_voices_with_busy,
-            args=(url, output_dir), daemon=True,
+            args=(url, output_dir, params), daemon=True,
         ).start()
 
-    def _run_preview_voices_with_busy(self, url, output_dir: str):
+    def _run_preview_voices_with_busy(self, url, output_dir: str, params=None):
         try:
-            self._run_preview_voices(url, output_dir)
+            self._run_preview_voices(url, output_dir, params)
         finally:
             self._set_busy(False)
 
-    def _run_preview_voices(self, url, output_dir: str):
+    def _run_preview_voices(self, url, output_dir: str, params=None):
         try:
-            scraper = self._scraper_for(url)
+            if params is not None:
+                scraper = self._scraper_for(
+                    url,
+                    webnovel_cookie=params.webnovel_cookie,
+                    ao3_cookie=params.ao3_cookie,
+                )
+            else:
+                scraper = self._scraper_for(url)
             scraper.parse_story_id(url)
 
             def progress(current, total, title, cached):
@@ -2147,12 +2158,19 @@ class MainFrame(wx.Frame):
                     work_urls = part_urls
                     name = series_name or series_url
             else:
-                if AO3Scraper.is_series_url(series_url):
+                # Match the non-merge series path: the params-built scraper
+                # carries the session cookies, so a restricted AO3 series
+                # lists (and downloads) with the user's login instead of
+                # failing anonymously.
+                scraper = self._scraper_for(
+                    series_url,
+                    webnovel_cookie=params.webnovel_cookie,
+                    ao3_cookie=params.ao3_cookie,
+                )
+                if AO3Scraper.is_series_url(series_url) and not isinstance(scraper, AO3Scraper):
                     scraper = AO3Scraper()
-                elif LiteroticaScraper.is_series_url(series_url):
+                elif LiteroticaScraper.is_series_url(series_url) and not isinstance(scraper, LiteroticaScraper):
                     scraper = LiteroticaScraper()
-                else:
-                    scraper = self._scraper_for(series_url)
 
                 self._log(f"Fetching series: {series_url}")
                 name, work_urls = scraper.scrape_series_works(series_url)
@@ -2173,7 +2191,11 @@ class MainFrame(wx.Frame):
             for i, work_url in enumerate(work_urls, 1):
                 self._log(f"\n[{i}/{len(work_urls)}] {work_url}")
                 try:
-                    work_scraper = self._scraper_for(work_url)
+                    work_scraper = self._scraper_for(
+                        work_url,
+                        webnovel_cookie=params.webnovel_cookie,
+                        ao3_cookie=params.ao3_cookie,
+                    )
                     stories.append(
                         work_scraper.download(work_url, progress_callback=progress)
                     )
@@ -2694,8 +2716,21 @@ class MainFrame(wx.Frame):
             )
 
             if not is_update and AO3Scraper.is_bookmarks_url(url):
+                # The cookie-carrying scraper built above IS an AO3Scraper
+                # for a bookmarks URL — a fresh anonymous instance here
+                # silently listed only the public subset of the user's
+                # bookmarks, defeating the cookie's headline use case.
                 self._run_picker_download(
-                    url, AO3Scraper(), kind="bookmarks", params=params,
+                    url, scraper, kind="bookmarks", params=params,
+                )
+                return
+
+            if not is_update and AO3Scraper.is_reading_list_url(url):
+                # Must run before the author check — is_author_url matches
+                # any /users/<name> URL, which used to silently list the
+                # user's AUTHORED works for a marked-for-later URL.
+                self._run_picker_download(
+                    url, scraper, kind="readings", params=params,
                 )
                 return
 
@@ -2771,9 +2806,27 @@ class MainFrame(wx.Frame):
                         f"Found {new_count} new chapter(s). Merging "
                         f"with {len(merged)} existing."
                     )
-                    story.chapters = sorted(
-                        merged + list(story.chapters), key=lambda c: c.number,
+                    from .models import merge_chapter_lists
+                    story.chapters, dupes = merge_chapter_lists(
+                        merged, list(story.chapters),
                     )
+                    if dupes:
+                        self._log(
+                            f"  ({dupes} chapter(s) replaced by "
+                            "re-downloaded versions)"
+                        )
+                    from . import webnovel as _wn
+                    stubs = sum(
+                        1 for c in story.chapters if _wn.is_locked_stub(c.html)
+                    )
+                    if stubs:
+                        self._log(
+                            f"  Note: {stubs} paywalled placeholder "
+                            "chapter(s) remain. After unlocking them, "
+                            "update from the command line with "
+                            "--webnovel-cookie (or use Force Full "
+                            "Refresh) to fetch the real text."
+                        )
                 else:
                     self._log(
                         f"Found {new_count} new chapters. Re-exporting..."
@@ -2853,12 +2906,18 @@ class MainFrame(wx.Frame):
         """
         from .scraper import FFNScraper
 
-        label = "bookmarks" if kind == "bookmarks" else "author page"
+        label = {
+            "bookmarks": "bookmarks",
+            "readings": "reading list",
+        }.get(kind, "author page")
         self._log(f"Fetching {label}: {url}")
         try:
             if kind == "bookmarks":
                 owner, works = scraper.scrape_bookmark_works(url)
                 title = f"Bookmarks: {owner}"
+            elif kind == "readings":
+                owner, works = scraper.scrape_reading_list_works(url)
+                title = f"Reading list: {owner}"
             elif isinstance(scraper, FFNScraper):
                 owner, works = scraper.scrape_author_works(
                     url, include_favorites=True,
@@ -2966,7 +3025,15 @@ class MainFrame(wx.Frame):
             failed = []
             for i, story_url in enumerate(urls, 1):
                 self._log(f"\n[{i}/{len(urls)}] {story_url}")
-                scraper = self._scraper_for(story_url)
+                # The click-time snapshot governs the whole batch: without
+                # it, restricted AO3 works in a picker batch downloaded
+                # anonymously (AO3LockedError despite a saved cookie) and
+                # the FicHub fast-path was silently ignored.
+                scraper = self._scraper_for(
+                    story_url, use_fichub=params.use_fichub,
+                    webnovel_cookie=params.webnovel_cookie,
+                    ao3_cookie=params.ao3_cookie,
+                )
 
                 def progress(current, total, t, cached):
                     tag = " (cached)" if cached else ""

@@ -310,6 +310,7 @@ class TestScraperFastPathGuard:
 
         def fake_complete(self, story, story_url, chapters, progress_callback):
             complete_calls.append(story_url)
+            return True
 
         monkeypatch.setattr(fichub, "fetch_story", fake_fetch)
         monkeypatch.setattr(FFNScraper, "_fetch", fake_fetch_page)
@@ -365,11 +366,17 @@ class TestCompleteFromFfn:
         monkeypatch.setattr(scraper, "_fetch", fake_fetch)
         return scraper
 
-    def _fichub_story(self, up_to):
+    def _fichub_story(self, up_to, titles=None):
+        # Blank titles by default: the freshness guard fingerprints
+        # non-empty titles against FFN's chapter list, and these synthetic
+        # chapters aren't from the fixture's real fic.
         return Story(
             id=1, title="Potter Club", author="Razamataz22", summary="",
             url="https://www.fanfiction.net/s/1",
-            chapters=[Chapter(n, f"C{n}", "x") for n in range(1, up_to + 1)],
+            chapters=[
+                Chapter(n, (titles or {}).get(n, ""), "x")
+                for n in range(1, up_to + 1)
+            ],
         )
 
     def test_fetches_only_newer_tail(self, monkeypatch, ffn_story_html):
@@ -429,3 +436,62 @@ class TestCompleteFromFfn:
         )
         # FicHub's chapters survive a failed freshness probe; no crash.
         assert [c.number for c in story.chapters] == [1, 2]
+
+
+class TestFastPathFingerprint:
+    """The top-up seam only works when FFN strictly appended since
+    FicHub's snapshot; a shrunken count or shifted titles must discard
+    the fast copy (return False) so the caller direct-scrapes."""
+
+    def _scraper(self, monkeypatch, ch1_html):
+        scraper = FFNScraper(use_fichub=True, use_cache=False)
+        monkeypatch.setattr(scraper, "_delay", lambda *a, **k: None)
+        monkeypatch.setattr(scraper, "_fetch",
+                            lambda url, session=None: ch1_html)
+        return scraper
+
+    def _story(self, up_to, titles=None):
+        return Story(
+            id=1, title="Potter Club", author="Razamataz22", summary="",
+            url="https://www.fanfiction.net/s/1",
+            chapters=[
+                Chapter(n, (titles or {}).get(n, ""), "x")
+                for n in range(1, up_to + 1)
+            ],
+        )
+
+    def test_count_regression_discards_fast_copy(self, monkeypatch, ffn_story_html):
+        scraper = self._scraper(monkeypatch, ffn_story_html)
+        story = self._story(70)  # FicHub has MORE than FFN's 66
+        ok = scraper._complete_from_ffn(
+            story, "https://www.fanfiction.net/s/1", None, None
+        )
+        assert ok is False
+
+    def test_shifted_title_discards_fast_copy(self, monkeypatch, ffn_story_html):
+        scraper = self._scraper(monkeypatch, ffn_story_html)
+        story = self._story(64, titles={5: "A Title FFN Never Had"})
+        ok = scraper._complete_from_ffn(
+            story, "https://www.fanfiction.net/s/1", None, None
+        )
+        assert ok is False
+
+    def test_matching_titles_pass_the_fingerprint(self, monkeypatch, ffn_story_html):
+        from ficary.scraper import _normalize_chapter_title
+        scraper = self._scraper(monkeypatch, ffn_story_html)
+        # Learn the fixture's real chapter-5 title via the probe itself.
+        from bs4 import BeautifulSoup
+        meta = scraper._parse_metadata(BeautifulSoup(ffn_story_html, "lxml"))
+        real_t5 = meta["chapter_titles"]["5"]
+        story = self._story(66, titles={5: f"5. {real_t5}"})
+        ok = scraper._complete_from_ffn(
+            story, "https://www.fanfiction.net/s/1", None, None
+        )
+        assert ok is True  # ordinal-prefix formatting drift is normalized
+
+    def test_normalize_chapter_title(self):
+        from ficary.scraper import _normalize_chapter_title as norm
+        assert norm("3. The Title") == norm("The Title")
+        assert norm("Chapter 3: The Title") == norm("the  title")
+        assert norm("A &amp; B") == norm("A & B")
+        assert norm("") == ""

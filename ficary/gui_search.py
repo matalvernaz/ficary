@@ -110,8 +110,8 @@ def _ffn_search_spec():
         # no dynamic per-fandom dropdown is needed.
         "text_filters": [
             ("C&haracters (up to 4, comma-sep):", "characters"),
-            ("&World/verse:", "world"),
-            ("Exclude c&haracters (up to 2):", "exclude_characters"),
+            ("World/&verse:", "world"),
+            ("E&xclude characters (up to 2):", "exclude_characters"),
             ("Exclude wor&ld:", "exclude_world"),
         ],
         "checkboxes": [

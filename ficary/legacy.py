@@ -73,7 +73,16 @@ def migrate_dir(old: Path, new: Path) -> None:
             return
         new.parent.mkdir(parents=True, exist_ok=True)
         import shutil
-        shutil.move(str(old), str(new))
+        # Cross-filesystem, shutil.move is copytree-then-rmtree; a crash
+        # mid-copy would leave a partial ``new`` that the exists() check
+        # above then treats as done forever, stranding the real data in
+        # ``old``. Stage the copy and rename into place — the rename is
+        # same-directory, so it can't be torn.
+        staging = new.parent / (new.name + ".migrating")
+        if staging.exists():
+            shutil.rmtree(staging, ignore_errors=True)
+        shutil.move(str(old), str(staging))
+        os.rename(staging, new)
         logger.info("Migrated pre-rename data %s -> %s", old, new)
     except OSError as exc:
         logger.warning("Data-dir migration %s -> %s failed: %s", old, new, exc)

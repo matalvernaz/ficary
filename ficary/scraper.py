@@ -1077,7 +1077,13 @@ class BaseScraper:
                 )
             return None
 
-    def _save_chapter_cache(self, story_id, chapter: Chapter) -> None:
+    def _save_chapter_cache(self, story_id, chapter: Chapter, *,
+                            cache_key: Optional[str] = None) -> None:
+        """``cache_key`` overrides the default ordinal file stem. Sites
+        whose chapter lists can mutate mid-list (Wattpad drafts, Webnovel
+        catalog edits) key on the site's stable per-chapter id instead —
+        an ordinal key silently serves the WRONG chapter after an
+        insertion/deletion shifts every later position."""
         if not self.use_cache:
             return
         from .atomic import atomic_write_text
@@ -1087,7 +1093,8 @@ class BaseScraper:
         # the cache by extension. Old caches with the ``.html`` name
         # are still picked up by ``_load_chapter_cache`` until a fresh
         # download replaces them.
-        path = self._story_cache_dir(story_id) / f"ch_{chapter.number:04d}.json"
+        stem = cache_key or f"ch_{chapter.number:04d}"
+        path = self._story_cache_dir(story_id) / f"{stem}.json"
         # Chapters are the expensive thing to refetch (rate-limits,
         # Cloudflare challenges on FFN, etc.). A partial write here
         # costs a full chapter re-download on the next run.
@@ -1096,19 +1103,28 @@ class BaseScraper:
             json.dumps({"title": chapter.title, "html": chapter.html}),
         )
 
-    def _load_chapter_cache(self, story_id, chap_num: int) -> Optional[Chapter]:
+    def _load_chapter_cache(self, story_id, chap_num: int, *,
+                            cache_key: Optional[str] = None) -> Optional[Chapter]:
         if not self.use_cache:
             return None
         cache_dir = self._story_cache_dir(story_id)
-        # Prefer the new .json name; fall back to the legacy .html so
-        # users don't lose their existing cache on the version where the
-        # extension changed.
-        path = cache_dir / f"ch_{chap_num:04d}.json"
-        if not path.exists():
-            legacy = cache_dir / f"ch_{chap_num:04d}.html"
-            if not legacy.exists():
+        if cache_key is not None:
+            # Id-keyed caches never had a legacy .html variant; a missing
+            # file (including old ordinal-keyed leftovers) is simply a
+            # miss — refetch is cheap relative to serving wrong content.
+            path = cache_dir / f"{cache_key}.json"
+            if not path.exists():
                 return None
-            path = legacy
+        else:
+            # Prefer the new .json name; fall back to the legacy .html so
+            # users don't lose their existing cache on the version where
+            # the extension changed.
+            path = cache_dir / f"ch_{chap_num:04d}.json"
+            if not path.exists():
+                legacy = cache_dir / f"ch_{chap_num:04d}.html"
+                if not legacy.exists():
+                    return None
+                path = legacy
         # ``data`` may be a non-dict if a cache file got truncated to a
         # bare JSON literal (``null``, ``""``, ``[]``); guard with an
         # ``isinstance`` check so the subsequent ``data["title"]`` doesn't
@@ -1401,6 +1417,24 @@ _FFN_CHAP_SELECT_RE = re.compile(
     re.IGNORECASE | re.DOTALL,
 )
 _FFN_OPTION_RE = re.compile(r"<option\b", re.IGNORECASE)
+
+
+_CHAPTER_TITLE_ORDINAL_RE = re.compile(
+    r"^\s*(?:chapter\s+)?\d+\s*[.\-:)]\s*", re.IGNORECASE)
+
+
+def _normalize_chapter_title(title: str) -> str:
+    """Comparison form for chapter titles from different sources: FFN's
+    dropdown renders "3. The Title" while FicHub's EPUB headings carry
+    just "The Title" (entity-escaped, sometimes odd whitespace). Strips
+    the leading ordinal, unescapes, NFC-normalizes, casefolds, and
+    collapses whitespace so only a real title change reads as a
+    mismatch."""
+    import html as _html
+    import unicodedata
+    text = _CHAPTER_TITLE_ORDINAL_RE.sub("", _html.unescape(title or ""))
+    text = unicodedata.normalize("NFC", text)
+    return " ".join(text.casefold().split())
 
 
 def _ffn_chapter_count_from_select(html: str) -> Optional[int]:
@@ -1930,7 +1964,7 @@ class FFNScraper(BaseScraper):
         meta = self._parse_metadata(soup)
         return meta["num_chapters"]
 
-    def _complete_from_ffn(self, story, story_url, chapters, progress_callback):
+    def _complete_from_ffn(self, story, story_url, chapters, progress_callback) -> bool:
         """Top up a FicHub-sourced story with chapters newer than its cache.
 
         FicHub's cached copy can lag the source by a few chapters. This
@@ -1939,7 +1973,14 @@ class FFNScraper(BaseScraper):
         has beyond what FicHub provided (honouring a ``chapters`` spec
         when given) via the normal rate-limited path.
 
-        Best-effort and in-place: if FFN is unreachable, blocked, or
+        Returns True when the FicHub copy is usable (topped up in place
+        as needed); False when FFN's chapter list no longer lines up
+        with FicHub's snapshot (deletion or mid-list insertion) — the
+        caller must discard the fast copy and scrape directly, because
+        positional identity is broken and a tail top-up would build a
+        silently wrong book.
+
+        Best-effort otherwise: if FFN is unreachable, blocked, or
         returns unparseable markup, the FicHub chapters are kept as-is
         and the gap is logged — the fast path still succeeds when FFN is
         down or actively hostile, which is the whole point of preferring
@@ -1957,17 +1998,48 @@ class FFNScraper(BaseScraper):
                 "Couldn't verify FicHub freshness against FFN (%s); keeping "
                 "FicHub's %d chapter(s).", exc, len(story.chapters),
             )
-            return
+            return True
 
         ffn_count = meta["num_chapters"]
         chapter_titles = meta["chapter_titles"]
+
+        # The top-up only works when FFN strictly APPENDED since FicHub's
+        # snapshot. A deletion (FicHub has more than FFN) or a mid-list
+        # insertion (counts look append-like but every title shifted)
+        # means positional identity is broken — fetching just the tail
+        # would export duplicated content under two numbers and never
+        # fetch the inserted chapter. FFN's chapter-title map is already
+        # in hand from the metadata fetch, so fingerprint every ordinal
+        # FicHub gave us; any mismatch discards the fast copy in favour
+        # of a direct scrape (false positives just cost speed, never
+        # correctness).
+        if len(have) > ffn_count or (have and max(have) > ffn_count):
+            logger.info(
+                "FicHub has %d chapter(s) but FFN shows %d — chapter list "
+                "shrank; discarding the FicHub copy and scraping directly.",
+                len(have), ffn_count,
+            )
+            return False
+        for chapter in story.chapters:
+            ffn_title = chapter_titles.get(str(chapter.number), "")
+            if not ffn_title or not chapter.title:
+                continue
+            if _normalize_chapter_title(ffn_title) != _normalize_chapter_title(chapter.title):
+                logger.info(
+                    "FicHub chapter %d title %r doesn't match FFN's %r — "
+                    "chapter list shifted; discarding the FicHub copy and "
+                    "scraping directly.",
+                    chapter.number, chapter.title, ffn_title,
+                )
+                return False
+
         missing = [
             number for number in range(1, ffn_count + 1)
             if number not in have and chapter_in_spec(number, chapters)
         ]
         if not missing:
             logger.info("FicHub copy is current with FFN (%d chapters).", ffn_count)
-            return
+            return True
 
         logger.info(
             "FicHub had %d chapter(s); FFN shows %d — fetching %d newer "
@@ -2003,6 +2075,7 @@ class FFNScraper(BaseScraper):
             status = (meta.get("extra") or {}).get("status")
             if status:
                 story.metadata["status"] = status
+        return True
 
     def download(self, url_or_id, progress_callback=None, skip_chapters=0, chapters=None):
         """Download a story. If skip_chapters > 0, only fetch metadata
@@ -2030,14 +2103,18 @@ class FFNScraper(BaseScraper):
                 progress_callback=progress_callback,
             )
             if fast is not None:
-                self._complete_from_ffn(
+                if self._complete_from_ffn(
                     fast, story_url, chapters, progress_callback,
+                ):
+                    return fast
+                # Count regression or shifted titles: FicHub's snapshot
+                # no longer lines up with FFN's chapter list — a tail
+                # top-up would produce a silently wrong book.
+            else:
+                logger.info(
+                    "FicHub had no usable copy of FFN %s; scraping directly.",
+                    story_id,
                 )
-                return fast
-            logger.info(
-                "FicHub had no usable copy of FFN %s; scraping directly.",
-                story_id,
-            )
 
         ch1_url = f"{story_url}/1"
         logger.info("Fetching FFN story %s metadata...", story_id)

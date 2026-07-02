@@ -852,6 +852,14 @@ def _build_ffn_fandom_url(
             params["srt"] = int(s)
         elif s == "best match":
             pass  # default
+        else:
+            # Keyword mode raises on unknown values via _resolve_filter;
+            # silently dropping here made the same typo behave
+            # differently between the two modes.
+            raise ValueError(
+                f"Unknown sort {sort_raw!r} for FFN fandom browse; "
+                f"options: {', '.join(FFN_FANDOM_SORT)}"
+            )
     time_val = _resolve_filter(filters.get("time"), FFN_TIME, "time")
     if time_val is not None:
         params["t"] = time_val
@@ -877,6 +885,11 @@ def _build_ffn_fandom_url(
             params["len"] = _FFN_WORDS_TO_LEN[key]
         elif key.isdigit():
             params["len"] = int(key)
+        else:
+            raise ValueError(
+                f"Unknown min_words {mw!r} for FFN fandom browse; "
+                f"options: {', '.join(_FFN_WORDS_TO_LEN)}"
+            )
     status_raw = filters.get("status")
     if status_raw:
         sr = str(status_raw).strip().lower()
@@ -886,6 +899,11 @@ def _build_ffn_fandom_url(
             params["s"] = 2
         elif sr.isdigit():
             params["s"] = int(sr)
+        else:
+            raise ValueError(
+                f"Unknown status {status_raw!r} for FFN fandom browse; "
+                "options: in-progress, complete"
+            )
     lang = _resolve_filter(filters.get("language"), FFN_LANGUAGE, "language")
     if lang is not None:
         params["lan"] = lang
@@ -948,6 +966,7 @@ def _search_ffn_fandom(
     url = _build_ffn_fandom_url(category, slug, filters, page, options=options)
     html = _fetch_search_page(url)
     results = _parse_results(html)
+    raw_count = len(results)
     if query:
         q_lower = query.lower()
         kept = []
@@ -967,7 +986,10 @@ def _search_ffn_fandom(
     for r in results:
         if not r.get("fandom"):
             r["fandom"] = display
-    return results
+    # A page whose rows all failed the keyword post-filter is NOT
+    # upstream-exhausted — later pages may still match. A plain [] would
+    # read as exhausted and stop pagination/Load More early.
+    return SearchPage(results, exhausted=raw_count == 0)
 
 
 def search_ffn(query, *, page=1, **filters):
@@ -1014,6 +1036,7 @@ def search_ffn(query, *, page=1, **filters):
         # or returns a 200 with an empty parse (i.e. the URL existed).
         # 404s mean wrong category and we keep walking.
         first_empty: list[dict] | None = None
+        deferred_error: Exception | None = None
         for guess in _FFN_AUTO_DETECT_ORDER:
             try:
                 results = _search_ffn_fandom(query, guess, slug, filters, page)
@@ -1023,10 +1046,20 @@ def search_ffn(query, *, page=1, **filters):
                 if "404" in str(exc):
                     continue
                 raise
+            except ValueError as exc:
+                # ``_resolve_named`` raises for a character/world name
+                # unknown to THIS category's fandom — e.g. the slug
+                # exists as both a TV show and a game, and the filter
+                # names someone only in the game's cast. Keep walking;
+                # surface the error only if no category works out.
+                deferred_error = exc
+                continue
             if results:
                 return results
             if first_empty is None:
                 first_empty = results
+        if first_empty is None and deferred_error is not None:
+            raise deferred_error
         return first_empty or []
     # Keyword-search mode: the character/world/time/pairing/exclusion
     # filters live only on FFN's fandom pages, so warn rather than

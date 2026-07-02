@@ -675,6 +675,30 @@ class AO3Scraper(CookieAuthMixin, BaseScraper):
             )
         )
 
+    @staticmethod
+    def is_reading_list_url(url):
+        return bool(
+            re.search(
+                r"(?:archiveofourown\.org|ao3\.org)/users/[\w.-]+/readings",
+                str(url),
+            )
+        )
+
+    def scrape_reading_list_works(self, url):
+        """Return (owner_name, [work_dict]) from an AO3 reading-history /
+        marked-for-later page. Login-only on AO3 (needs --ao3-cookie).
+        The pasted URL is walked as-is so ``?show=to-read`` (the
+        marked-for-later view) keeps filtering — before this existed, a
+        readings URL fell through to ``is_author_url`` and silently
+        listed the user's AUTHORED works instead."""
+        match = re.search(r"(?:archiveofourown\.org|ao3\.org)/users/([\w.-]+)", url)
+        if not match:
+            raise ValueError(f"Not an AO3 readings URL: {url}")
+        user = match.group(1)
+        return self._scrape_ao3_work_list(
+            url, fallback_name=user, section="readings",
+        )
+
     def download(self, url_or_id, progress_callback=None, skip_chapters=0, chapters=None):
         """Download an AO3 work. Skip_chapters is honoured after the
         single-page fetch so update mode and caching still work.

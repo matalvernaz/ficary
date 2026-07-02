@@ -23,6 +23,31 @@ class Story:
     metadata: dict = field(default_factory=dict)
 
 
+def merge_chapter_lists(existing, new):
+    """Merge two chapter lists, deduping by chapter number with the
+    freshly-downloaded chapter winning. Returns ``(merged_sorted,
+    duplicate_count)``.
+
+    Without the dedupe, an author re-publishing chapter N (a routine
+    occurrence — fixing typos, re-numbering after edits) produces a
+    merged file with two chapter-N rows. The freshly-downloaded body is
+    the one we keep. Lives here (not in cli) so the CLI update path and
+    the GUI update path route through the same helper — the GUI used to
+    have its own dedupe-free merge, which was exactly the bug class the
+    CLI was hardened against in round 9.
+    """
+    by_number: dict[int, Chapter] = {}
+    for ch in existing:
+        by_number[ch.number] = ch
+    duplicates = 0
+    for ch in new:
+        if ch.number in by_number:
+            duplicates += 1
+        by_number[ch.number] = ch
+    merged = sorted(by_number.values(), key=lambda c: c.number)
+    return merged, duplicates
+
+
 # Structural labels that name their own place in the book. When the
 # author's chapter title *is* one of these (optionally with a
 # subtitle, e.g. "Prologue: Before the Fall"), we render it verbatim —

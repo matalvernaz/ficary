@@ -297,17 +297,25 @@ def _story_from_epub(
                 pass
 
     chapters: list[Chapter] = []
-    for item in book.get_items_of_type(ITEM_DOCUMENT):
-        match = _CHAP_NAME_RE.search(item.get_name() or "")
-        if not match:
-            continue
-        number = int(match.group(1))
-        if chapters_spec is not None and not chapter_in_spec(
-            number, chapters_spec
-        ):
-            continue
-        title, body_html = _split_chapter(item.get_content())
-        chapters.append(Chapter(number=number, title=title, html=body_html))
+    try:
+        for item in book.get_items_of_type(ITEM_DOCUMENT):
+            match = _CHAP_NAME_RE.search(item.get_name() or "")
+            if not match:
+                continue
+            number = int(match.group(1))
+            if chapters_spec is not None and not chapter_in_spec(
+                number, chapters_spec
+            ):
+                continue
+            title, body_html = _split_chapter(item.get_content())
+            chapters.append(Chapter(number=number, title=title, html=body_html))
+    except Exception:
+        # Same contract as the read_epub guard above: pathological
+        # chapter content (bs4 ParserRejectedMarkup, malformed manifest
+        # items) must degrade to a direct scrape, never crash the
+        # download.
+        logger.exception("FicHub EPUB chapter extraction failed for %s", ffn_url)
+        return None
 
     if not chapters:
         logger.info("FicHub EPUB had no chapter documents for %s", ffn_url)

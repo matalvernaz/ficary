@@ -73,6 +73,20 @@ _LOCKED_NOTICE = (
     "</em></p>"
 )
 
+_WS_RE = re.compile(r"\s+")
+
+
+def is_locked_stub(html: str) -> bool:
+    """True when a chapter body IS the locked-placeholder stub (whole-body
+    comparison, not substring — a real chapter that merely quotes the
+    notice text must not be mistaken for a stub). Update flows use this to
+    refetch stub ordinals once the user has unlocked them; without it the
+    stub merges into the export, counts as an existing chapter, and is
+    never fetched again."""
+    if "webnovel-locked-notice" not in html:
+        return False
+    return _WS_RE.sub(" ", html).strip() == _WS_RE.sub(" ", _LOCKED_NOTICE).strip()
+
 # webnovel injects an anti-piracy boilerplate into some chapter bodies:
 # a "Find authorized novels in Webnovel … for visiting." sentence and/or a
 # ``<pirate>…</pirate>`` wrapper. Strip both — the Royal Road scraper does
@@ -354,8 +368,15 @@ class WebnovelScraper(CookieAuthMixin, BaseScraper):
                 continue
             title = entry["title"] or f"Chapter {idx}"
 
-            cached = self._load_chapter_cache(book_id, idx)
+            # Keyed on the stable chapter id, not the catalog ordinal: a
+            # chapter inserted/removed mid-catalog shifts every later
+            # position, and an ordinal-keyed cache then silently serves
+            # the wrong body (the known Wattpad bug class). Old
+            # ordinal-keyed entries miss and refetch.
+            cached = self._load_chapter_cache(
+                book_id, idx, cache_key=f"wnch_{entry['id']}")
             if cached is not None:
+                cached = Chapter(number=idx, title=title, html=cached.html)
                 story.chapters.append(cached)
                 if progress_callback:
                     progress_callback(idx, num_chapters, cached.title, True)
@@ -376,7 +397,8 @@ class WebnovelScraper(CookieAuthMixin, BaseScraper):
             # Never cache a stub: a later authenticated run (after the user
             # unlocks the chapter) should fetch the real body.
             if not is_locked:
-                self._save_chapter_cache(book_id, chapter)
+                self._save_chapter_cache(
+                    book_id, chapter, cache_key=f"wnch_{entry['id']}")
             story.chapters.append(chapter)
             if progress_callback:
                 progress_callback(idx, num_chapters, title, False)
