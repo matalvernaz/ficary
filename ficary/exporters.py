@@ -1733,6 +1733,100 @@ def strip_an_via_llm(
     return str(soup)
 
 
+# Obsolete/presentational elements → EPUB3-safe replacements. EPUB3's
+# content model rejects the pre-HTML5 tags scraped fanfic is full of;
+# epubcheck flags each as RSC-005. We convert (never delete the text
+# node inside) so author formatting survives as a styleable class.
+_XHTML_TAG_MAP = {
+    "center": ("div", "center"),
+    "font": ("span", None),
+    "strike": ("span", "strike"),
+    "s": ("span", "strike"),
+    "big": ("span", "big"),
+    "tt": ("span", "mono"),
+    "u": ("span", "underline"),
+}
+
+# Presentational attributes epubcheck rejects on any element. ``align``
+# is special-cased into a class; the rest are dropped outright.
+_XHTML_ATTR_DROP = frozenset({
+    "size", "noshade", "width", "height", "border", "bgcolor",
+    "valign", "color", "face", "cellpadding", "cellspacing", "nowrap",
+})
+
+# CSS backing the converted classes — appended to the stylesheet so the
+# visual result matches the original presentational markup.
+_XHTML_SANITIZE_CSS = (
+    b".strike{text-decoration:line-through}"
+    b".underline{text-decoration:underline}"
+    b".mono{font-family:monospace}"
+    b".big{font-size:larger}"
+)
+
+
+def _xhtml_sanitize(html: str) -> str:
+    """Rewrite scraped chapter HTML into EPUB3-clean XHTML.
+
+    Converts obsolete presentational elements to styled spans/divs,
+    strips presentational attributes epubcheck rejects, and replaces
+    remote ``<img>`` with a text placeholder (EPUB can't reference an
+    off-package resource — RSC-006). Text nodes are never removed, so
+    author content survives; only markup epubcheck would reject is
+    changed. Applied only on the EPUB path — html/txt exports keep the
+    original markup verbatim.
+    """
+    from bs4 import BeautifulSoup
+
+    soup = BeautifulSoup(html, "html.parser")
+
+    for tag in soup.find_all(list(_XHTML_TAG_MAP)):
+        new_name, css_class = _XHTML_TAG_MAP[tag.name]
+        # align=center|right on the old element carries into a class.
+        align = (tag.get("align") or "").strip().lower()
+        tag.name = new_name
+        tag.attrs = {}
+        classes = [c for c in (css_class,) if c]
+        if align in ("center", "right", "left", "justify"):
+            classes.append(align)
+        if classes:
+            tag["class"] = classes
+
+    for tag in soup.find_all(True):
+        if tag.name in ("img",):
+            continue
+        align = (tag.get("align") or "").strip().lower()
+        for attr in list(tag.attrs):
+            if attr in _XHTML_ATTR_DROP or attr == "align":
+                del tag[attr]
+        if align in ("center", "right", "left", "justify"):
+            existing = tag.get("class") or []
+            if align not in existing:
+                tag["class"] = existing + [align]
+
+    for img in soup.find_all("img"):
+        src = (img.get("src") or "").strip()
+        # Remote/absolute images can't be packaged; leave a readable
+        # marker rather than a dangling reference.
+        alt = (img.get("alt") or "").strip()
+        label = alt or (src.rsplit("/", 1)[-1] if src else "image")
+        placeholder = soup.new_tag("p")
+        placeholder["class"] = ["scenebreak"]
+        placeholder.string = f"[image: {label}]"
+        img.replace_with(placeholder)
+
+    out = str(soup)
+    if not out.strip() and html.strip():
+        # Sanitisation must never silently empty a non-empty chapter
+        # (ebooklib turns unparseable content into b"" downstream, which
+        # is exactly the failure this guard exists to catch).
+        logger.warning(
+            "XHTML sanitize produced empty output for a non-empty chapter; "
+            "keeping the original markup.",
+        )
+        return html
+    return out
+
+
 def export_epub(
     story: Story,
     output_dir: str = ".",
@@ -1756,8 +1850,13 @@ def export_epub(
     book.set_identifier(f"{site_prefix}-{story.id}")
     book.set_title(story.title)
     book.add_author(story.author)
-    book.add_metadata("DC", "description", story.summary)
-    book.add_metadata("DC", "source", story.url)
+    # Only emit description/source when non-empty: an empty
+    # ``<dc:description/>`` (blank summary) or a literal "None" source
+    # (story.url is None) are both epubcheck complaints.
+    if story.summary:
+        book.add_metadata("DC", "description", story.summary)
+    if story.url:
+        book.add_metadata("DC", "source", story.url)
     book.add_metadata("DC", "publisher", publisher)
 
     # ``dict.get(key, default)`` returns the *stored* value when the key
@@ -1768,7 +1867,8 @@ def export_epub(
     # / weird value should leave the EPUB intact rather than crashing
     # the export halfway through.
     lang = meta.get("language") or "English"
-    book.set_language(_LANG_CODES.get(str(lang).strip().lower(), "en"))
+    lang_code = _LANG_CODES.get(str(lang).strip().lower(), "en")
+    book.set_language(lang_code)
 
     published = meta.get("date_published")
     if published is not None:
@@ -1821,7 +1921,9 @@ def export_epub(
                 "image/jpeg": "jpg",
                 "image/png": "png",
                 "image/gif": "gif",
-                "image/webp": "webp",
+                # image/webp is EPUB-core only from 3.3; older epubcheck
+                # versions reject it, so drop it rather than embed an
+                # unsupported cover type.
             }
             ext = cover_exts.get(bare_type)
             if ext:
@@ -1851,16 +1953,19 @@ def export_epub(
             b".scenebreak{text-align:center;margin:1.5em 0;letter-spacing:.5em}"
             # Centred bits authors style with text-align or align=center
             b".center,[align=center]{text-align:center}"
+            b".right{text-align:right}"
+            b".left{text-align:left}"
+            b".justify{text-align:justify}"
             # Preserve author emphasis
             b"em,i{font-style:italic}"
             b"strong,b{font-weight:bold}"
-        ),
+        ) + _XHTML_SANITIZE_CSS,
     )
     book.add_item(css)
 
     # Title page with metadata
     title_page = epub.EpubHtml(
-        title="Title Page", file_name="title.xhtml", lang="en"
+        title="Title Page", file_name="title.xhtml", lang=lang_code
     )
     rows = []
     for label, value in _meta_fields(story):
@@ -1889,7 +1994,7 @@ def export_epub(
         ec = epub.EpubHtml(
             title=ch_heading,
             file_name=f"chapter_{ch.number}.xhtml",
-            lang="en",
+            lang=lang_code,
         )
         heading = escape(ch_heading)
         chapter_html, llm_disabled, consecutive_timeouts = (
@@ -1905,6 +2010,10 @@ def export_epub(
         )
         if llm_disabled:
             llm_config = None
+        # Sanitise AFTER the strip-notes / LLM pass so those regexes see
+        # the raw markup they were tuned against; only the EPUB path
+        # gets the EPUB3 content-model cleanup.
+        chapter_html = _xhtml_sanitize(chapter_html)
         ec.content = f"<h2>{heading}</h2>\n{chapter_html}".encode("utf-8")
         ec.add_item(css)
         book.add_item(ec)
