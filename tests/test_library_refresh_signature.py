@@ -5,10 +5,11 @@
 opaque AttributeError at GUI-update time — the user sees "Update
 failed" with no diagnostic.
 
-This test inspects the Namespace produced by ``default_refresh_args``
-and asserts the set of attributes it carries covers every attribute
-``_download_one`` actually reads off ``args``. Catching the regression
-in CI is cheaper than reproducing the GUI failure.
+This test inspects the :class:`ficary.jobs.DownloadJob` produced by
+``default_refresh_args`` and asserts its field set covers every
+attribute ``_download_one`` actually reads off ``args``. Since the
+round-10 refactor the schema lives in one dataclass instead of a
+hand-maintained fake Namespace; this canary now polices that schema.
 
 Best-effort: extracts attribute names by static AST scan of
 ``_download_one``'s body looking for ``args.<name>`` accesses. False
@@ -27,10 +28,8 @@ from ficary.library.refresh import default_refresh_args
 
 def _attrs_read_from(func_obj) -> set[str]:
     """Return every ``args.<name>`` attribute access inside ``func_obj``."""
-    source = inspect.getsource(func_obj)
-    # The first line's indent has to be normalized so ast.parse accepts
-    # the (typically) 4-space-indented body.
-    source = inspect.cleandoc(source)
+    import textwrap
+    source = textwrap.dedent(inspect.getsource(func_obj))
     tree = ast.parse(source)
     accessed: set[str] = set()
     for node in ast.walk(tree):
@@ -56,9 +55,22 @@ def test_default_refresh_args_covers_download_one_reads() -> None:
 
     missing = reads - provided
     assert not missing, (
-        "default_refresh_args is missing attribute(s) that "
-        "cli._download_one reads off args: "
-        f"{sorted(missing)}. Either add them to default_refresh_args "
-        "with sensible defaults, or refactor _download_one to take a "
-        "schema dataclass (see audit notes for the v2.5.0 plan)."
+        "DownloadJob is missing field(s) that cli._download_one reads "
+        f"off args: {sorted(missing)}. Add them to ficary.jobs."
+        "DownloadJob with the argparse default."
+    )
+
+
+def test_download_job_covers_build_scraper_reads() -> None:
+    """Same guarantee for ``_build_scraper`` — it reads the scraper-
+    construction fields (cookies, fichub, cf_solve, delays) and used to
+    rely on getattr defaults that silently masked missing fields."""
+    reads = _attrs_read_from(cli_module._build_scraper)
+    from ficary.jobs import DownloadJob
+    provided = set(DownloadJob().__dataclass_fields__)
+    missing = reads - provided
+    assert not missing, (
+        "DownloadJob is missing field(s) that cli._build_scraper reads "
+        f"off args: {sorted(missing)}. Add them to ficary.jobs."
+        "DownloadJob with the argparse default."
     )

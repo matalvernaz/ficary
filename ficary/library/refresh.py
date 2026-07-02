@@ -11,7 +11,6 @@ walk.
 from __future__ import annotations
 
 import time
-from argparse import Namespace
 from datetime import datetime
 from pathlib import Path
 from typing import Callable
@@ -352,41 +351,20 @@ def default_refresh_args(
     force_recheck: bool = False,
     refetch_all: bool = False,
     skip_stale_complete_days: int = 0,
-) -> Namespace:
-    """Namespace with sensible defaults for callers that need to drive
-    ``cli._build_scraper`` / ``cli._download_one`` without having gone
-    through argparse. Used by the GUI's Check for Updates button.
+):
+    """A :class:`ficary.jobs.DownloadJob` seeded from prefs, for callers
+    that drive ``cli._build_scraper`` / ``cli._download_one`` without
+    having gone through argparse (the GUI's Check for Updates button).
 
-    Anything ``_download_one`` reads off ``args`` has to be present on
-    this Namespace — missing attributes raise ``AttributeError`` at
-    download time, which the GUI would then surface as an opaque
-    "Update failed" message. Read user-configurable fields (filename
-    template, strip-notes / hr-as-stars flags) from :class:`Prefs` so
-    the GUI-driven update path honours the same settings as the
-    CLI, with the CLI's argparse defaults as a secondary fallback.
+    This used to fabricate a 24-field fake ``argparse.Namespace`` and
+    guess the attribute set cli's internals read; the DownloadJob
+    schema declares that set once, with the argparse defaults, and the
+    signature-canary test polices the dataclass instead of this
+    function's source. Keyword names kept for existing callers.
     """
-    # Imported locally so this helper is safe to call from environments
-    # where wxPython isn't installed (``Prefs`` gracefully no-ops when
-    # wx is unavailable). Same rationale as the lazy import in cli.py.
-    from ..exporters import DEFAULT_TEMPLATE
-    from ..prefs import (
-        KEY_HR_AS_STARS,
-        KEY_LLM_STRIP_NOTES,
-        KEY_NAME_TEMPLATE,
-        KEY_STRIP_NOTES,
-        Prefs,
-    )
+    from ..jobs import DownloadJob
 
-    prefs = Prefs()
-    return Namespace(
-        # Scraper tuning
-        max_retries=5,
-        no_cache=False,
-        delay_min=None,
-        delay_max=None,
-        chunk_size=None,
-        use_wayback=False,
-        # Run options
+    return DownloadJob.from_prefs(
         dry_run=dry_run,
         skip_complete=skip_complete,
         probe_workers=workers,
@@ -394,22 +372,4 @@ def default_refresh_args(
         force_recheck=force_recheck,
         refetch_all=refetch_all,
         skip_stale_complete=skip_stale_complete_days,
-        # Export path knobs. ``name`` is the filename template; without
-        # it, ``_download_one``'s export branch raises AttributeError.
-        format=None,
-        output=None,
-        chapters=None,
-        name=prefs.get(KEY_NAME_TEMPLATE) or DEFAULT_TEMPLATE,
-        hr_as_stars=prefs.get_bool(KEY_HR_AS_STARS),
-        strip_notes=prefs.get_bool(KEY_STRIP_NOTES),
-        llm_strip_notes=prefs.get_bool(KEY_LLM_STRIP_NOTES),
-        # Library updates never re-generate audiobooks, but the audio
-        # branch still reads these — set plausible defaults so a
-        # future code path that does hit them doesn't crash.
-        speech_rate="0",
-        attribution="builtin",
-        attribution_model_size="",
-        # Misc download-time flags accessed by _download_one.
-        send_to_kindle=None,
-        clean_cache=False,
     )
