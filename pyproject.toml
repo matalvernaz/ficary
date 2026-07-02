@@ -31,7 +31,7 @@ gui = ["wxPython>=4.2"]
 clipboard = ["pyperclip>=1.8"]
 cf-solve = ["playwright>=1.40"]
 playback = ["PyOpenAL>=0.7"]
-dev = ["pytest>=7.0"]
+dev = ["pytest>=7.0", "hypothesis>=6.100"]
 all = ["ebooklib>=0.18", "edge-tts>=7.0", "wxPython>=4.2", "pyperclip>=1.8", "PyOpenAL>=0.7"]
 
 [project.scripts]

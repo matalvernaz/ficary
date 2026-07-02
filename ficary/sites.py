@@ -463,7 +463,15 @@ def canonical_url(url: str) -> str:
     if not url:
         return ""
     raw = _ensure_scheme(url.strip())
-    parts = urlsplit(raw)
+    try:
+        parts = urlsplit(raw)
+    except ValueError:
+        # urlsplit raises on malformed authorities (e.g. an unterminated
+        # IPv6 literal, "http://[abc"). The docstring promises callers
+        # always get something stable — a clipboard-watch or index rebuild
+        # feeding garbage must not crash. Same guard shape as
+        # detect_scraper above.
+        return raw.lower()
     netloc = parts.netloc.lower()
     path = parts.path
 

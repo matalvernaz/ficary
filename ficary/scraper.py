@@ -1066,7 +1066,11 @@ class BaseScraper:
                 # that ``meta.get(...)``.
                 raise TypeError(f"expected JSON object, got {type(data).__name__}")
             return data
-        except (ValueError, UnicodeDecodeError, OSError, TypeError) as exc:
+        except (ValueError, UnicodeDecodeError, OSError, TypeError,
+                RecursionError) as exc:
+            # RecursionError: json.loads on deeply-nested garbage
+            # ("[" * 100000) blows the stack — a corrupt cache file must
+            # still degrade to a refetch, never crash the download.
             logger.warning("Corrupt meta cache %s (%s); will refetch", path, exc)
             try:
                 path.unlink(missing_ok=True)
@@ -1136,7 +1140,10 @@ class BaseScraper:
             if not isinstance(data, dict):
                 raise TypeError(f"expected JSON object, got {type(data).__name__}")
             return Chapter(number=chap_num, title=data["title"], html=data["html"])
-        except (ValueError, UnicodeDecodeError, OSError, KeyError, TypeError) as exc:
+        except (ValueError, UnicodeDecodeError, OSError, KeyError, TypeError,
+                RecursionError) as exc:
+            # RecursionError: see _load_meta_cache — deeply-nested JSON
+            # garbage must refetch, not crash.
             logger.warning("Corrupt chapter cache %s (%s); will refetch", path, exc)
             # ``missing_ok=True`` only suppresses FileNotFoundError; a
             # permission error on the unlink would otherwise escape
