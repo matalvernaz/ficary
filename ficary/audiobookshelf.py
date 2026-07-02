@@ -121,13 +121,26 @@ def _default_get(url: str, headers: dict) -> dict:
 
 
 def _default_post(url: str, headers: dict, fields: dict, path: Path) -> None:
+    # curl_cffi has no requests-style ``files=`` — multipart bodies go
+    # through CurlMime (verified live against Audiobookshelf 2.x: the
+    # server accepts any part name for the file; "0" matches its web
+    # uploader).
+    from curl_cffi import CurlMime
     from curl_cffi import requests as curl_requests
-    with open(path, "rb") as handle:
-        files = {"file": (path.name, handle, "audio/mp4")}
+    mime = CurlMime()
+    mime.addpart(
+        name="0",
+        filename=path.name,
+        content_type="audio/mp4",
+        local_path=str(path),
+    )
+    try:
         resp = curl_requests.post(
-            url, headers=headers, data=fields, files=files,
+            url, headers=headers, data=fields, multipart=mime,
             impersonate="chrome", timeout=UPLOAD_TIMEOUT_S,
         )
+    finally:
+        mime.close()
     if resp.status_code not in (200, 201):
         raise RuntimeError(
             f"Audiobookshelf upload -> HTTP {resp.status_code}: "
