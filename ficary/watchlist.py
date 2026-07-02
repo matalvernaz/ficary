@@ -190,6 +190,10 @@ class Watch:
     label: str = ""
     channels: list[str] = field(default_factory=list)
     enabled: bool = True
+    # When True, a detected update also runs the download pipeline (the
+    # notification then carries the saved file's path). Off by default —
+    # notify-only is the long-standing behaviour.
+    auto_download: bool = False
     query: str = ""
     filters: dict = field(default_factory=dict)
     last_seen: Any = None
@@ -471,6 +475,8 @@ class PollResult:
     chapter_delta: Optional[int] = None
     error: str = ""
     notification: Optional[Notification] = None
+    downloaded_paths: list[str] = field(default_factory=list)
+    download_error: str = ""
 
 
 # Notifier signature: (channels, notification, prefs) -> (delivered, failures).
@@ -491,6 +497,7 @@ def run_once(
     watch_ids: Optional[set[str]] = None,
     scraper_factory: ScraperFactory = default_scraper_factory,
     notifier: Notifier = dispatch_notification,
+    downloader: Optional[Callable[["Watch", "PollResult"], list]] = None,
     now: Callable[[], float] = time.time,
 ) -> list[PollResult]:
     """Poll every enabled watch once. Returns per-watch results.
@@ -555,6 +562,45 @@ def run_once(
 
             watch.last_checked_at = _now_iso()
             watch.last_error = result.error
+
+            # Auto-download runs BEFORE dispatch so the notification can
+            # carry the saved paths. Gated on new_items, not the
+            # cooldown — a suppressed notification must not suppress the
+            # download. Injectable like ``notifier``/``scraper_factory``;
+            # the CLI/GUI pass cli.make_watch_downloader(prefs). A failed
+            # download surfaces on the watch and in the message but never
+            # blocks the remaining watches (same isolation contract as
+            # everything else in this loop). Note the download runs
+            # inside _RUN_ONCE_LOCK: a long download delays a concurrent
+            # Run Now — accepted v1 tradeoff, documented in the GUI help.
+            if (
+                downloader is not None
+                and watch.auto_download
+                and result.ok
+                and result.new_items
+            ):
+                try:
+                    saved = downloader(watch, result) or []
+                except Exception as exc:  # noqa: BLE001 — runner stability
+                    logger.exception(
+                        "Auto-download failed for %s", watch.display_label(),
+                    )
+                    result.download_error = (
+                        f"{exc.__class__.__name__}: {exc}"
+                    )
+                    watch.last_error = (
+                        f"auto-download failed: {result.download_error}"
+                    )
+                    if result.notification is not None:
+                        result.notification.message += (
+                            f"\nAuto-download failed: {result.download_error}"
+                        )
+                else:
+                    result.downloaded_paths = [str(p) for p in saved]
+                    if result.downloaded_paths and result.notification is not None:
+                        result.notification.message += "".join(
+                            f"\nSaved to: {p}" for p in result.downloaded_paths
+                        )
 
             if result.ok and result.notification is not None:
                 if _in_cooldown(watch, now()):

@@ -692,6 +692,7 @@ def _download_one(
     update_path: Path | None = None,
     existing_chapters: int = 0,
     status_callback: Callable[[str], None] | None = None,
+    on_export: Callable[[Path], None] | None = None,
 ) -> bool:
     """Download and export a single story. Returns True on success, False on error.
 
@@ -702,6 +703,11 @@ def _download_one(
     so the per-chapter lines show up in the update log window (without
     this, the GUI goes silent for the duration of the download and
     feels like a hang).
+
+    ``on_export`` (if given) is called with the exported file's
+    :class:`Path` right after a successful export — the watchlist
+    auto-downloader uses it to collect saved paths for the
+    notification, without parsing them back out of status lines.
     """
     scraper = _build_scraper(url, args)
     status = status_callback if status_callback is not None else print
@@ -919,6 +925,8 @@ def _download_one(
                 path.replace(update_path)
                 path = update_path
         status(f"\nSaved to: {path}")
+        if on_export is not None:
+            on_export(path)
 
         if getattr(args, "send_to_kindle", None):
             try:
@@ -4191,6 +4199,16 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Display label for the watch being added (optional).",
     )
     watch_group.add_argument(
+        "--watchlist-auto-download",
+        action="store_true",
+        help=(
+            "On the watch being added: when an update is detected, also "
+            "download and export it (into the library if the story is "
+            "already tracked, else the default output dir) and include "
+            "the saved path in the alert. Off by default (notify-only)."
+        ),
+    )
+    watch_group.add_argument(
         "--watchlist-channel",
         action="append",
         metavar="CHANNEL",
@@ -4499,9 +4517,10 @@ def _handle_watchlist_list() -> int:
         error = f"  ERR: {w.last_error}" if w.last_error else ""
         target = w.target or (f"search: {w.query!r}" if w.type == "search" else "")
         label = w.label or target
+        autodl = "  auto-dl" if getattr(w, "auto_download", False) else ""
         print(
             f"  {short_id}  [{enabled}]  {w.type:7s}  {w.site or '-':10s}  "
-            f"{label}"
+            f"{label}{autodl}"
         )
         print(
             f"             channels={channels}  last_checked={last}{error}"
@@ -4542,6 +4561,7 @@ def _handle_watchlist_add(args: argparse.Namespace) -> int:
         target=url,
         label=(args.watchlist_label or "").strip(),
         channels=channels,
+        auto_download=bool(getattr(args, "watchlist_auto_download", False)),
     )
     store.add(watch)
     print(
@@ -4584,6 +4604,7 @@ def _handle_watchlist_add_search(args: argparse.Namespace) -> int:
         label=(args.watchlist_label or "").strip(),
         channels=channels,
         query=query,
+        auto_download=bool(getattr(args, "watchlist_auto_download", False)),
     )
     store.add(watch)
     print(
@@ -4608,6 +4629,65 @@ def _handle_watchlist_remove(watch_id: str) -> int:
     return _EXIT_USAGE_ERROR
 
 
+def make_watch_downloader(prefs):
+    """Downloader injected into ``watchlist.run_once`` for watches with
+    ``auto_download``: runs the normal download/export pipeline for each
+    new item and returns the saved paths (the poll loop appends them to
+    the notification). Built on :class:`ficary.jobs.DownloadJob` seeded
+    from prefs, so GUI-driven watches honour the same template and
+    strip-notes settings as everything else.
+
+    A story already in the library merges in place at its existing path
+    and format; anything else is a fresh download into the default
+    output/library location. ``check_format_deps`` runs once per poll
+    (house convention: fail in seconds, not after a 40-chapter fetch).
+    """
+    import copy
+
+    from .exporters import check_format_deps
+    from .jobs import DownloadJob
+    from .library.index import LibraryIndex
+    from .prefs import KEY_FORMAT
+    from .watchlist import WATCH_TYPE_STORY
+
+    base_job = DownloadJob.from_prefs()
+    base_job.format = prefs.get(KEY_FORMAT) or "epub"
+    check_format_deps(base_job.format)
+
+    def downloader(watch, result) -> list:
+        idx = LibraryIndex.load()
+        saved: list[Path] = []
+
+        def run(url: str) -> None:
+            job = copy.deepcopy(base_job)
+            update_path = None
+            output_dir = Path(job.output or ".")
+            for root in idx.library_roots():
+                entry = idx.lookup_by_url(Path(root), url)
+                if entry and entry.get("relpath"):
+                    update_path = Path(root) / entry["relpath"]
+                    output_dir = update_path.parent
+                    job.format = _FMT_MAP.get(
+                        update_path.suffix.lower(), job.format,
+                    )
+                    break
+            _download_one(
+                url, job, output_dir,
+                update_path=update_path,
+                on_export=saved.append,
+            )
+
+        if watch.type == WATCH_TYPE_STORY:
+            run(watch.target)
+        else:
+            # Author/search watches: new_items are the fresh work URLs.
+            for url in result.new_items:
+                run(url)
+        return saved
+
+    return downloader
+
+
 def _handle_watchlist_run() -> int:
     """Poll every enabled watch once; print a per-watch summary."""
     from .prefs import Prefs
@@ -4619,7 +4699,16 @@ def _handle_watchlist_run() -> int:
         return _EXIT_OK
 
     prefs = Prefs()
-    results = run_once(store, prefs)
+    downloader = None
+    if any(w.auto_download for w in store.all()):
+        try:
+            downloader = make_watch_downloader(prefs)
+        except ImportError as exc:
+            print(
+                f"Auto-download disabled this run — missing dependency: "
+                f"{exc}", file=sys.stderr,
+            )
+    results = run_once(store, prefs, downloader=downloader)
 
     any_error = False
     new_total = 0

@@ -341,6 +341,7 @@ class WatchlistFrame(wx.Frame):
             url = dlg.url_value()
             label = dlg.label_value()
             channels = dlg.channel_values()
+            auto_download = dlg.auto_download_value()
             watch_type = classify_target(url)
             if watch_type is None or watch_type not in VALID_WATCH_TYPES:
                 wx.MessageBox(
@@ -366,6 +367,7 @@ class WatchlistFrame(wx.Frame):
                 target=url,
                 label=label,
                 channels=channels,
+                auto_download=auto_download,
             ))
         finally:
             dlg.Destroy()
@@ -381,6 +383,7 @@ class WatchlistFrame(wx.Frame):
             query = dlg.query_value()
             label = dlg.label_value()
             channels = dlg.channel_values()
+            auto_download = dlg.auto_download_value()
             if site not in SEARCH_SUPPORTED_SITES:
                 wx.MessageBox(
                     f"Search watches aren't supported on {site!r}.",
@@ -400,6 +403,7 @@ class WatchlistFrame(wx.Frame):
                 label=label,
                 channels=channels,
                 query=query,
+                auto_download=auto_download,
             ))
         finally:
             dlg.Destroy()
@@ -695,6 +699,12 @@ class AddURLWatchDialog(wx.Dialog):
         label_row.Add(self.label_ctrl, 1)
         sizer.Add(label_row, 0, wx.EXPAND | wx.ALL, pad)
 
+        self.auto_download_ctrl = wx.CheckBox(
+            panel, label="Auto-&download new items and attach the saved path")
+        self.auto_download_ctrl.SetName(
+            "Automatically download new items for this watch")
+        sizer.Add(self.auto_download_ctrl, 0, wx.ALL, pad)
+
         sizer.Add(
             wx.StaticText(panel, label="&Channels:"),
             0, wx.LEFT | wx.RIGHT | wx.TOP, pad,
@@ -722,6 +732,9 @@ class AddURLWatchDialog(wx.Dialog):
 
     def channel_values(self):
         return self.channel_group.picked()
+
+    def auto_download_value(self):
+        return self.auto_download_ctrl.GetValue()
 
 
 class AddSearchWatchDialog(wx.Dialog):
@@ -785,6 +798,12 @@ class AddSearchWatchDialog(wx.Dialog):
         label_row.Add(self.label_ctrl, 1)
         sizer.Add(label_row, 0, wx.EXPAND | wx.ALL, pad)
 
+        self.auto_download_ctrl = wx.CheckBox(
+            panel, label="Auto-&download new items and attach the saved path")
+        self.auto_download_ctrl.SetName(
+            "Automatically download new items for this watch")
+        sizer.Add(self.auto_download_ctrl, 0, wx.ALL, pad)
+
         sizer.Add(
             wx.StaticText(panel, label="&Channels:"),
             0, wx.LEFT | wx.RIGHT | wx.TOP, pad,
@@ -818,3 +837,6 @@ class AddSearchWatchDialog(wx.Dialog):
 
     def channel_values(self):
         return self.channel_group.picked()
+
+    def auto_download_value(self):
+        return self.auto_download_ctrl.GetValue()

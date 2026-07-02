@@ -157,7 +157,18 @@ class WatchlistPoller:
         logger.info(
             "Watchlist poll: checking %d watch(es)...", len(watches),
         )
-        results = run_once(store, self._prefs)
+        downloader = None
+        if any(getattr(w, "auto_download", False) for w in watches):
+            # Lazy import: only pull in the (heavy) cli download stack
+            # when a watch actually opts into auto-download.
+            try:
+                from .cli import make_watch_downloader
+                downloader = make_watch_downloader(self._prefs)
+            except Exception:
+                logger.exception(
+                    "Auto-download setup failed; polling notify-only.",
+                )
+        results = run_once(store, self._prefs, downloader=downloader)
         total_new = sum(len(r.new_items) for r in results if r.ok)
         errors = sum(1 for r in results if not r.ok)
 

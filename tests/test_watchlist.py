@@ -540,3 +540,114 @@ def test_run_once_reloads_store_inside_lock(tmp_path):
     reloaded.reload()
     assert len(reloaded.all()) == 1
     assert reloaded.all()[0].target == "https://example/works/42"
+
+
+# ---------------------------------------------------------------------------
+# Auto-download (round-10 F2)
+# ---------------------------------------------------------------------------
+
+
+class _DownloaderSpy:
+    """Records auto-download invocations; returns canned saved paths or
+    raises to exercise the failure-isolation path."""
+
+    def __init__(self, saved=None, raises=None):
+        self.calls = []
+        self._saved = saved or []
+        self._raises = raises
+
+    def __call__(self, watch, result):
+        self.calls.append((watch.id, list(result.new_items)))
+        if self._raises is not None:
+            raise self._raises
+        return list(self._saved)
+
+
+def test_auto_download_off_by_default_no_call(tmp_path):
+    store = WatchlistStore(tmp_path / "w.json")
+    store.add(Watch(
+        type=WATCH_TYPE_STORY, site="ao3",
+        target="https://example/works/1", channels=["pushover"],
+        last_seen=5,  # a real update is available
+    ))
+    dl = _DownloaderSpy(saved=["/lib/story.epub"])
+    run_once(
+        store, _FakePrefs(),
+        scraper_factory=_factory(_FakeScraper(chapter_count=7)),
+        notifier=_NotifierSpy(), downloader=dl,
+    )
+    assert dl.calls == []  # watch didn't opt in
+
+
+def test_auto_download_baseline_poll_no_call(tmp_path):
+    store = WatchlistStore(tmp_path / "w.json")
+    store.add(Watch(
+        type=WATCH_TYPE_STORY, site="ao3",
+        target="https://example/works/1", channels=["pushover"],
+        auto_download=True,  # opted in, but first poll has no new_items
+    ))
+    dl = _DownloaderSpy(saved=["/lib/story.epub"])
+    run_once(
+        store, _FakePrefs(),
+        scraper_factory=_factory(_FakeScraper(chapter_count=5)),
+        notifier=_NotifierSpy(), downloader=dl,
+    )
+    assert dl.calls == []
+
+
+def test_auto_download_fires_and_appends_path(tmp_path):
+    store = WatchlistStore(tmp_path / "w.json")
+    store.add(Watch(
+        type=WATCH_TYPE_STORY, site="ao3",
+        target="https://example/works/1", channels=["pushover"],
+        last_seen=5, auto_download=True,
+    ))
+    spy = _NotifierSpy()
+    dl = _DownloaderSpy(saved=["/lib/HP/story.epub"])
+    [result] = run_once(
+        store, _FakePrefs(),
+        scraper_factory=_factory(_FakeScraper(chapter_count=7)),
+        notifier=spy, downloader=dl,
+    )
+    assert len(dl.calls) == 1
+    assert result.downloaded_paths == ["/lib/HP/story.epub"]
+    _, notification, _ = spy.calls[0]
+    assert "Saved to: /lib/HP/story.epub" in notification.message
+
+
+def test_auto_download_failure_isolated(tmp_path):
+    store = WatchlistStore(tmp_path / "w.json")
+    store.add(Watch(
+        id="a" * 32, type=WATCH_TYPE_STORY, site="ao3",
+        target="https://example/works/1", channels=["pushover"],
+        last_seen=5, auto_download=True,
+    ))
+    store.add(Watch(
+        id="b" * 32, type=WATCH_TYPE_STORY, site="ao3",
+        target="https://example/works/2", channels=["pushover"],
+        last_seen=3, auto_download=True,
+    ))
+    spy = _NotifierSpy()
+    dl = _DownloaderSpy(raises=RuntimeError("disk full"))
+    results = run_once(
+        store, _FakePrefs(),
+        scraper_factory=_factory(_FakeScraper(chapter_count=9)),
+        notifier=spy, downloader=dl,
+    )
+    # Both watches still polled + notified despite the download raising.
+    assert len(dl.calls) == 2
+    assert len(spy.calls) == 2
+    for result in results:
+        assert "disk full" in result.download_error
+    reloaded = WatchlistStore(tmp_path / "w.json")
+    reloaded.reload()
+    assert all("auto-download failed" in w.last_error for w in reloaded.all())
+
+
+def test_auto_download_field_round_trips(tmp_path):
+    store = WatchlistStore(tmp_path / "w.json")
+    store.add(Watch(type=WATCH_TYPE_STORY, target="https://x/1",
+                    auto_download=True))
+    reloaded = WatchlistStore(tmp_path / "w.json")
+    reloaded.reload()
+    assert reloaded.all()[0].auto_download is True
