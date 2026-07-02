@@ -106,6 +106,7 @@ class PreferencesDialog(wx.Dialog):
         self.notebook.AddPage(self._build_general_tab(), "&General")
         self.notebook.AddPage(self._build_downloads_tab(), "&Downloads")
         self.notebook.AddPage(self._build_audiobook_tab(), "&Audiobook")
+        self.notebook.AddPage(self._build_audiobookshelf_tab(), "Audio&bookshelf")
         self.notebook.AddPage(self._build_notifications_tab(), "&Notifications")
         self.notebook.AddPage(self._build_watchlist_tab(), "&Watchlist")
         self.notebook.AddPage(self._build_logging_tab(), "&Logging")
@@ -309,6 +310,107 @@ class PreferencesDialog(wx.Dialog):
         panel.SetSizer(sizer)
         return panel
 
+    def _build_audiobookshelf_tab(self):
+        panel = wx.Panel(self.notebook)
+        sizer = wx.BoxSizer(wx.VERTICAL)
+
+        self._add_help_text(
+            sizer, panel,
+            "Upload finished audiobooks (M4B) to an Audiobookshelf "
+            "server. The token is a plain API key from your ABS user "
+            "page — stored as-is, like the other credentials here. "
+            "Fill in the server and token, then Fetch libraries to pick "
+            "a target.",
+        )
+
+        self.abs_url_ctrl = wx.TextCtrl(panel)
+        self.abs_url_ctrl.SetName("Audiobookshelf server URL")
+        sizer.Add(
+            self._make_labeled_row(
+                panel, "Server &URL:", self.abs_url_ctrl,
+            ),
+            0, wx.EXPAND | wx.ALL, 6,
+        )
+
+        self.abs_token_ctrl = wx.TextCtrl(panel, style=wx.TE_PASSWORD)
+        self.abs_token_ctrl.SetName("Audiobookshelf API token")
+        sizer.Add(
+            self._make_labeled_row(
+                panel, "API &token:", self.abs_token_ctrl,
+            ),
+            0, wx.EXPAND | wx.ALL, 6,
+        )
+
+        self.abs_fetch_btn = wx.Button(panel, label="&Fetch libraries")
+        self.abs_fetch_btn.SetName("Fetch Audiobookshelf libraries")
+        self.abs_fetch_btn.Bind(wx.EVT_BUTTON, self._on_abs_fetch_libraries)
+        sizer.Add(self.abs_fetch_btn, 0, wx.ALL, 6)
+
+        self._abs_library_ids: list[str] = []
+        self.abs_library_ctrl = wx.Choice(panel, choices=[])
+        self.abs_library_ctrl.SetName("Audiobookshelf library")
+        self.abs_library_ctrl.Bind(wx.EVT_CHOICE, self._on_abs_library_pick)
+        sizer.Add(
+            self._make_labeled_row(
+                panel, "&Library:", self.abs_library_ctrl,
+            ),
+            0, wx.EXPAND | wx.ALL, 6,
+        )
+
+        self._abs_folder_ids: list[str] = []
+        self.abs_folder_ctrl = wx.Choice(panel, choices=[])
+        self.abs_folder_ctrl.SetName("Audiobookshelf folder")
+        sizer.Add(
+            self._make_labeled_row(
+                panel, "F&older:", self.abs_folder_ctrl,
+            ),
+            0, wx.EXPAND | wx.ALL, 6,
+        )
+        # Cache of the last fetch so a library pick can repopulate folders
+        # without another network call.
+        self._abs_libraries: list[dict] = []
+        self.abs_status = wx.StaticText(panel, label="")
+        self.abs_status.SetName("Audiobookshelf status")
+        sizer.Add(self.abs_status, 0, wx.EXPAND | wx.ALL, 6)
+
+        panel.SetSizer(sizer)
+        return panel
+
+    def _on_abs_fetch_libraries(self, event):
+        from .audiobookshelf import ABSConfigError, list_libraries
+        # Persist url/token first so list_libraries reads the fresh values.
+        self.prefs.set(_p.KEY_ABS_URL, self.abs_url_ctrl.GetValue().strip())
+        self.prefs.set(_p.KEY_ABS_TOKEN, self.abs_token_ctrl.GetValue().strip())
+        try:
+            libraries = list_libraries(self.prefs)
+        except ABSConfigError as exc:
+            self.abs_status.SetLabel(str(exc))
+            return
+        except Exception as exc:
+            self.abs_status.SetLabel(f"Couldn't reach the server: {exc}")
+            return
+        self._abs_libraries = libraries
+        self._abs_library_ids = [lib["id"] for lib in libraries]
+        self.abs_library_ctrl.Set([lib["name"] for lib in libraries] or ["(none)"])
+        if libraries:
+            self.abs_library_ctrl.SetSelection(0)
+            self._on_abs_library_pick(None)
+        self.abs_status.SetLabel(
+            f"Found {len(libraries)} library(ies)."
+        )
+
+    def _on_abs_library_pick(self, event):
+        idx = self.abs_library_ctrl.GetSelection()
+        if not (0 <= idx < len(self._abs_libraries)):
+            return
+        folders = self._abs_libraries[idx].get("folders", [])
+        self._abs_folder_ids = [f["id"] for f in folders]
+        self.abs_folder_ctrl.Set(
+            [f["fullPath"] or f["id"] for f in folders] or ["(default)"]
+        )
+        if folders:
+            self.abs_folder_ctrl.SetSelection(0)
+
     def _build_notifications_tab(self):
         panel = wx.Panel(self.notebook)
         sizer = wx.BoxSizer(wx.VERTICAL)
@@ -485,6 +587,20 @@ class PreferencesDialog(wx.Dialog):
             self.prefs.get(_p.KEY_ATTRIBUTION_MODEL_SIZE) or ""
         )
 
+        # Audiobookshelf
+        self.abs_url_ctrl.SetValue(self.prefs.get(_p.KEY_ABS_URL) or "")
+        self.abs_token_ctrl.SetValue(self.prefs.get(_p.KEY_ABS_TOKEN) or "")
+        saved_lib = self.prefs.get(_p.KEY_ABS_LIBRARY_ID) or ""
+        saved_folder = self.prefs.get(_p.KEY_ABS_FOLDER_ID) or ""
+        if saved_lib:
+            self._abs_library_ids = [saved_lib]
+            self.abs_library_ctrl.Set([f"(saved: {saved_lib})"])
+            self.abs_library_ctrl.SetSelection(0)
+        if saved_folder:
+            self._abs_folder_ids = [saved_folder]
+            self.abs_folder_ctrl.Set([f"(saved: {saved_folder})"])
+            self.abs_folder_ctrl.SetSelection(0)
+
         # Notifications
         self.pushover_token_ctrl.SetValue(
             self.prefs.get(_p.KEY_PUSHOVER_TOKEN) or ""
@@ -580,6 +696,16 @@ class PreferencesDialog(wx.Dialog):
             _p.KEY_ATTRIBUTION_MODEL_SIZE,
             self.attribution_size_ctrl.GetValue().strip(),
         )
+
+        # Audiobookshelf
+        self.prefs.set(_p.KEY_ABS_URL, self.abs_url_ctrl.GetValue().strip())
+        self.prefs.set(_p.KEY_ABS_TOKEN, self.abs_token_ctrl.GetValue().strip())
+        lib_idx = self.abs_library_ctrl.GetSelection()
+        if 0 <= lib_idx < len(self._abs_library_ids):
+            self.prefs.set(_p.KEY_ABS_LIBRARY_ID, self._abs_library_ids[lib_idx])
+        fold_idx = self.abs_folder_ctrl.GetSelection()
+        if 0 <= fold_idx < len(self._abs_folder_ids):
+            self.prefs.set(_p.KEY_ABS_FOLDER_ID, self._abs_folder_ids[fold_idx])
 
         # Notifications
         self.prefs.set(

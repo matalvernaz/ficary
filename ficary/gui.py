@@ -55,6 +55,7 @@ class _DownloadParams:
     merge_series: bool = False
     webnovel_cookie: str = ""
     ao3_cookie: str = ""
+    send_to_abs: bool = False
 
 
 logger = logging.getLogger(__name__)
@@ -601,7 +602,22 @@ class MainFrame(wx.Frame):
         )
         self.tts_providers_btn.SetName("Manage TTS providers")
         self.tts_providers_btn.Bind(wx.EVT_BUTTON, self._on_tts_providers)
-        audio_sizer.Add(self.tts_providers_btn, 0)
+        audio_sizer.Add(self.tts_providers_btn, 0, wx.RIGHT, 4)
+
+        # Upload the finished M4B to Audiobookshelf (server + token
+        # configured in Preferences → Audiobookshelf). Persisted so the
+        # choice sticks across sessions.
+        from .prefs import KEY_ABS_AUTO_SEND
+        self.abs_send_ctrl = wx.CheckBox(
+            self.audio_panel, label="Send to &Audiobookshelf")
+        self.abs_send_ctrl.SetName("Upload finished audiobook to Audiobookshelf")
+        self.abs_send_ctrl.SetValue(self.prefs.get_bool(KEY_ABS_AUTO_SEND))
+        self.abs_send_ctrl.Bind(
+            wx.EVT_CHECKBOX,
+            lambda e: self.prefs.set_bool(
+                KEY_ABS_AUTO_SEND, self.abs_send_ctrl.GetValue()),
+        )
+        audio_sizer.Add(self.abs_send_ctrl, 0, wx.ALIGN_CENTER_VERTICAL)
 
         # Track the currently-displayed size keys so we can map the
         # Choice's selection index back to a backend-specific size name.
@@ -2415,6 +2431,9 @@ class MainFrame(wx.Frame):
             merge_series=self.merge_series_ctrl.GetValue(),
             webnovel_cookie=self.webnovel_cookie_ctrl.GetValue().strip(),
             ao3_cookie=self.ao3_cookie_ctrl.GetValue().strip(),
+            send_to_abs=(
+                self.abs_send_ctrl.GetValue() if fmt == "audio" else False
+            ),
         )
 
     def _resolve_output_dir(self, story, params: _DownloadParams) -> str:
@@ -2699,7 +2718,7 @@ class MainFrame(wx.Frame):
             self._render_cancel = cancel
             wx.CallAfter(self.cancel_render_btn.Enable)
             try:
-                return generate_audiobook(
+                m4b = generate_audiobook(
                     story, output_dir,
                     progress_callback=audio_progress,
                     speech_rate=rate,
@@ -2714,6 +2733,9 @@ class MainFrame(wx.Frame):
             finally:
                 self._render_cancel = None
                 wx.CallAfter(self.cancel_render_btn.Disable)
+            if params.send_to_abs and m4b is not None:
+                self._upload_to_abs(m4b, story)
+            return m4b
 
         from .exporters import EXPORTERS
         exporter = EXPORTERS[params.fmt]
@@ -2729,6 +2751,22 @@ class MainFrame(wx.Frame):
             llm_config=an_llm_config,
             progress=self._log,
         )
+
+    def _upload_to_abs(self, m4b_path, story):
+        """Push a finished M4B to Audiobookshelf. Worker-thread safe (no
+        wx); logs success/failure and never raises — a bad upload must
+        not fail the render that produced the file."""
+        try:
+            from .audiobookshelf import ABSConfigError, upload_file
+            upload_file(
+                m4b_path, title=story.title, author=story.author,
+                prefs=self.prefs,
+            )
+            self._log("Uploaded to Audiobookshelf.")
+        except ABSConfigError as exc:
+            self._log(f"Audiobookshelf not configured: {exc}")
+        except Exception as exc:
+            self._log(f"Audiobookshelf upload failed: {exc}")
 
     def _run_download(
         self, url, skip_chapters=0, is_update=False,

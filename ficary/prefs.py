@@ -157,6 +157,16 @@ KEY_NOTIFY_EMAIL = "notify_email"
 KEY_WATCH_AUTOPOLL = "watch_autopoll"
 KEY_WATCH_POLL_INTERVAL_S = "watch_poll_interval_s"
 
+# Audiobookshelf upload target for finished M4Bs (parallel to
+# --send-to-kindle). The token is a plain API key from the ABS user
+# page, stored as-is — same posture as the Pushover/SMTP/cookie
+# secrets above.
+KEY_ABS_URL = "abs_url"
+KEY_ABS_TOKEN = "abs_token"
+KEY_ABS_LIBRARY_ID = "abs_library_id"
+KEY_ABS_FOLDER_ID = "abs_folder_id"
+KEY_ABS_AUTO_SEND = "abs_auto_send"
+
 # In-app reader. Font size + theme apply to the chapter text control;
 # tts_mode is "screenreader" (let the user's screen reader read the text) or
 # "appvoice" (the app speaks via edge/piper — Phase 2). autoadvance moves to
@@ -205,6 +215,11 @@ DEFAULTS = {
     KEY_READER_THEME: "light",
     KEY_READER_TTS_MODE: "screenreader",
     KEY_READER_AUTOADVANCE: True,
+    KEY_ABS_URL: "",
+    KEY_ABS_TOKEN: "",
+    KEY_ABS_LIBRARY_ID: "",
+    KEY_ABS_FOLDER_ID: "",
+    KEY_ABS_AUTO_SEND: False,
 }
 
 

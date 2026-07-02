@@ -940,6 +940,27 @@ def _download_one(
                 logger.debug("Kindle email failed", exc_info=True)
                 print(f"Email failed: {exc}", file=sys.stderr)
 
+        if getattr(args, "send_to_abs", False) and path.suffix.lower() == ".m4b":
+            # Same non-fatal contract as the kindle block — a failed
+            # upload never fails the download.
+            try:
+                from .audiobookshelf import ABSConfigError, upload_file
+                from .prefs import Prefs
+
+                upload_file(
+                    path, title=story.title, author=story.author,
+                    prefs=Prefs(),
+                    library_id=getattr(args, "abs_library", None),
+                    folder_id=getattr(args, "abs_folder", None),
+                )
+                status("Uploaded to Audiobookshelf.")
+            except ABSConfigError as exc:
+                print(f"Could not upload to Audiobookshelf: {exc}",
+                      file=sys.stderr)
+            except (OSError, RuntimeError) as exc:
+                logger.debug("Audiobookshelf upload failed", exc_info=True)
+                print(f"Audiobookshelf upload failed: {exc}", file=sys.stderr)
+
         if args.clean_cache:
             scraper.clean_cache(story_id)
 
@@ -3855,6 +3876,35 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--send-to-abs",
+        action="store_true",
+        help=(
+            "After a successful audiobook (-f audio) render, upload the "
+            "M4B to an Audiobookshelf server. Configure ABS_URL / "
+            "ABS_TOKEN (and ABS_LIBRARY_ID / ABS_FOLDER_ID) in the "
+            "environment or GUI preferences. Run --abs-list-libraries "
+            "to find the library and folder ids."
+        ),
+    )
+    parser.add_argument(
+        "--abs-library",
+        metavar="ID",
+        help="Audiobookshelf library id to upload into (overrides ABS_LIBRARY_ID).",
+    )
+    parser.add_argument(
+        "--abs-folder",
+        metavar="ID",
+        help="Audiobookshelf folder id within the library (overrides ABS_FOLDER_ID).",
+    )
+    parser.add_argument(
+        "--abs-list-libraries",
+        action="store_true",
+        help=(
+            "List the Audiobookshelf server's libraries and their folder "
+            "ids, then exit. Uses ABS_URL / ABS_TOKEN."
+        ),
+    )
+    parser.add_argument(
         "--clean-cache",
         action="store_true",
         help="Remove cached chapters after successful export",
@@ -4688,6 +4738,35 @@ def make_watch_downloader(prefs):
     return downloader
 
 
+def _handle_abs_list_libraries() -> int:
+    """Print the Audiobookshelf server's libraries + folder ids."""
+    from .audiobookshelf import ABSConfigError, list_libraries
+    from .prefs import Prefs
+
+    try:
+        libraries = list_libraries(Prefs())
+    except ABSConfigError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return _EXIT_USAGE_ERROR
+    except (OSError, RuntimeError) as exc:
+        print(f"Could not reach Audiobookshelf: {exc}", file=sys.stderr)
+        return 1
+    if not libraries:
+        print("No libraries returned by the server.")
+        return _EXIT_OK
+    print("Audiobookshelf libraries:\n")
+    for lib in libraries:
+        kind = f" ({lib['mediaType']})" if lib.get("mediaType") else ""
+        print(f"  {lib['name']}{kind}")
+        print(f"    library id: {lib['id']}")
+        for folder in lib["folders"]:
+            print(f"    folder id:  {folder['id']}  {folder['fullPath']}")
+        print()
+    print("Use --abs-library ID (and optionally --abs-folder ID), or set "
+          "ABS_LIBRARY_ID / ABS_FOLDER_ID.")
+    return _EXIT_OK
+
+
 def _handle_watchlist_run() -> int:
     """Poll every enabled watch once; print a per-watch summary."""
     from .prefs import Prefs
@@ -4801,6 +4880,9 @@ def main(argv: list[str] | None = None) -> None:
 
         ok = _piper.install_piper_binary(log_callback=lambda m: print(m))
         sys.exit(0 if ok else 1)
+
+    if getattr(args, "abs_list_libraries", False):
+        sys.exit(_handle_abs_list_libraries())
 
     # --- Watchlist modes: all self-contained (no positional URLs) ---
     # Checked before search / library / URL dispatch so none of those
@@ -5011,6 +5093,19 @@ def main(argv: list[str] | None = None) -> None:
     except ImportError as exc:
         print(f"Missing dependency: {exc}", file=sys.stderr)
         sys.exit(1)
+
+    # --send-to-abs only makes sense for audiobook output, and a
+    # misconfigured server should fail now — not after hours of TTS.
+    if getattr(args, "send_to_abs", False):
+        if args.format != "audio":
+            parser.error("--send-to-abs requires -f audio (it uploads the M4B).")
+        try:
+            from .audiobookshelf import _config
+            from .prefs import Prefs
+            _config(Prefs())
+        except Exception as exc:
+            print(f"Audiobookshelf not configured: {exc}", file=sys.stderr)
+            sys.exit(1)
 
     # Library auto-sort: if --output wasn't given and a library path is
     # configured, route fresh downloads into the library and let
