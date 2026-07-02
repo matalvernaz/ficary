@@ -1,5 +1,59 @@
 # Changelog
 
+## 2.7.0 — 2026-07-02
+
+The feature half of audit round 10, plus two workflow requests.
+
+**New features**
+
+* **Author pages on the erotica sites.** Paste an AFF member profile, a
+  StoriesOnline `/a/<name>` page, or a SexStories `/profile<N>/` page into
+  the download box (or Add from URL list, or an author watch) and every
+  story listed gets picked up — same flow FFN/AO3 authors already had.
+  BDSM Library is the one omission: its author pages render empty
+  server-side, so there's nothing to scrape until the site fixes them.
+* **Watchlist auto-download.** A watch can now download what it detects:
+  tick "Auto-download updates" when adding (or `--watchlist-auto-download`)
+  and new chapters/works are fetched and exported automatically — tracked
+  stories update in place in your library; the alert includes the saved
+  path. Notify-only remains the default.
+* **Send to Audiobookshelf.** A finished audiobook render can upload
+  straight into your Audiobookshelf server (configure URL/token/library in
+  Preferences → Audiobookshelf; `--send-to-abs` / `--abs-list-libraries` on
+  the CLI). Verified against a live ABS 2.x instance.
+* **Doctor safety rails.** `--heal` now applies only the safe fixes;
+  everything that deletes data (missing/stale index entries, unrepairable
+  watches, orphan caches) is opt-in (`--heal-drop-missing`,
+  `--heal-prune-stale`, `--heal-drop-watches`, `--heal-all`), snapshots
+  first (the watchlist gets backups for the first time), and records a
+  heal manifest. New `--doctor-restore-last` undoes the most recent
+  destructive heal in one command; cache prunes quarantine into
+  `.trash/` for 14 days instead of deleting.
+
+**Hotkeys and tidying (requested)**
+
+* **Ctrl+U** checks your library for story updates from anywhere (opens
+  the Library window and starts the run); **Ctrl+Shift+U** checks for a
+  new ficary release. The single-file update moved to **Ctrl+Shift+F**
+  (fresh-copy variant **Ctrl+Shift+R**).
+* The Webnovel/AO3 cookie fields and the FicHub / Combine-series
+  checkboxes moved off the main window into Preferences → Downloads —
+  set-once options that were costing every download a tab stop.
+
+**Hardening**
+
+* Duplicate downloads of the same story now share one download
+  (single-flight), and two jobs can no longer interleave writes to the
+  same output file.
+* Generated EPUBs pass epubcheck clean: scraped presentation markup
+  (`align=`, `<center>`, `<font>`, …) is converted to styled equivalents
+  at EPUB assembly; HTML/TXT exports are untouched.
+* A property-based fuzz suite (hypothesis, dev-only) now guards the
+  chapter-spec parser, URL handling, cache loaders, and TTS chunking. It
+  immediately caught two real crashers, both fixed: a malformed URL
+  (`http://[abc`) crashing URL canonicalisation, and deeply-nested JSON
+  garbage in a cache file blowing the stack instead of refetching.
+
 ## 2.6.1 — 2026-07-01
 
 Audit round 10 — the whole v2.5–2.6 surface (reader, audio engine,
