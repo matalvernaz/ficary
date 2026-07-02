@@ -21,22 +21,45 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
 
+def _quarantine(path: Path, why: Exception) -> None:
+    """Move a corrupt hand-editable sidecar aside instead of leaving it
+    in place: the generator seeds these files when the load comes back
+    empty, so a single trailing-comma typo plus one LLM-enabled render
+    would otherwise REWRITE the user's whole map (the docstring promise
+    is "edits survive re-renders"). Quarantined content is recoverable
+    with a one-character fix."""
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    target = path.with_name(f"{path.name}.corrupt-{stamp}")
+    try:
+        path.replace(target)
+        logger.warning(
+            "%s is unreadable (%s); moved to %s — fix and rename back to "
+            "keep your edits", path.name, why, target.name,
+        )
+    except OSError:
+        logger.warning("%s is unreadable (%s); ignoring", path.name, why)
+
+
 def load_accents(path: Path) -> dict[str, str]:
-    """Read a ``.ficary-accents-*.json`` file. Returns ``{}`` on missing,
-    unreadable, or wrong-shape files — accent filtering is a positive
-    override, so a corrupt file should fall through to "no filter"
-    rather than blocking the render."""
+    """Read a ``.ficary-accents-*.json`` file. Returns ``{}`` on missing
+    or wrong-shape files — accent filtering is a positive override, so a
+    bad file falls through to "no filter" rather than blocking the
+    render. Unparseable files are quarantined (see :func:`_quarantine`).
+    ``ValueError`` covers both ``json.JSONDecodeError`` and
+    ``UnicodeDecodeError`` — these files are advertised as hand-editable
+    and Windows editors love saving them as UTF-16."""
     if not path.exists():
         return {}
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
-        logger.warning("Accent map unreadable (%s); ignoring", exc)
+    except (OSError, ValueError) as exc:
+        _quarantine(path, exc)
         return {}
     if not isinstance(raw, dict):
         return {}
@@ -48,6 +71,7 @@ def load_accents(path: Path) -> dict[str, str]:
 
 
 def save_accents(path: Path, accents: dict[str, str]) -> None:
+    from .atomic import atomic_write_text
     path.parent.mkdir(parents=True, exist_ok=True)
     skeleton = {
         "_comment": (
@@ -59,27 +83,36 @@ def save_accents(path: Path, accents: dict[str, str]) -> None:
         ),
     }
     skeleton.update(accents)
-    path.write_text(json.dumps(skeleton, indent=2) + "\n", encoding="utf-8")
+    atomic_write_text(path, json.dumps(skeleton, indent=2) + "\n")
 
 
 def load_profiles(path: Path) -> dict[str, dict]:
+    """Read a ``.ficary-profile-*.json`` file. Field values are coerced
+    to strings on load — a hand-edited ``"gender": 1`` used to surface
+    hours later as ``int.lower()`` crashing the voice-pool builder."""
     if not path.exists():
         return {}
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
-        logger.warning("Character profile map unreadable (%s); ignoring", exc)
+    except (OSError, ValueError) as exc:
+        _quarantine(path, exc)
         return {}
     if not isinstance(raw, dict):
         return {}
     out = {}
     for k, v in raw.items():
-        if isinstance(k, str) and isinstance(v, dict):
-            out[k] = v
+        if not (isinstance(k, str) and isinstance(v, dict)):
+            continue
+        out[k] = {
+            field: value.strip()
+            for field, value in v.items()
+            if isinstance(field, str) and isinstance(value, str) and value.strip()
+        }
     return out
 
 
 def save_profiles(path: Path, profiles: dict[str, dict]) -> None:
+    from .atomic import atomic_write_text
     path.parent.mkdir(parents=True, exist_ok=True)
     skeleton = {
         "_comment": (
@@ -92,7 +125,7 @@ def save_profiles(path: Path, profiles: dict[str, dict]) -> None:
         ),
     }
     skeleton.update(profiles)
-    path.write_text(json.dumps(skeleton, indent=2) + "\n", encoding="utf-8")
+    atomic_write_text(path, json.dumps(skeleton, indent=2) + "\n")
 
 
 def filter_user_entries(d: dict) -> dict:

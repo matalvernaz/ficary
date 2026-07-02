@@ -41,6 +41,12 @@ class WatchlistPoller:
         # the whole store from disk.
         self._on_result = on_result
         self._stop = threading.Event()
+        # Guards the start-vs-worker-exit handshake: a reconfigure that
+        # flips autopoll off then on while a poll is in flight must
+        # either cancel the pending stop or spawn a fresh thread —
+        # without the lock it could do neither, leaving autopoll
+        # silently dead until app restart.
+        self._lock = threading.Lock()
         self._thread = None
         self._interval = self._read_interval()
 
@@ -65,16 +71,25 @@ class WatchlistPoller:
         return self._thread is not None and self._thread.is_alive()
 
     def start(self):
-        if self.is_running():
-            return
-        self._stop.clear()
-        self._interval = self._read_interval()
-        self._thread = threading.Thread(
-            target=self._run,
-            name="ficary-watchlist-poller",
-            daemon=True,
-        )
-        self._thread.start()
+        with self._lock:
+            if self.is_running():
+                if self._stop.is_set():
+                    # The running worker has a stop request it hasn't
+                    # observed yet (poll in flight). Cancel it — the one
+                    # thread keeps polling with the freshly-read interval.
+                    self._stop.clear()
+                    logger.info("Watchlist autopoll stop cancelled; "
+                                "poller continues.")
+                self._interval = self._read_interval()
+                return
+            self._stop.clear()
+            self._interval = self._read_interval()
+            self._thread = threading.Thread(
+                target=self._run,
+                name="ficary-watchlist-poller",
+                daemon=True,
+            )
+            self._thread.start()
         logger.info(
             "Watchlist autopoll started (%d second interval).",
             self._interval,
@@ -116,7 +131,13 @@ class WatchlistPoller:
             # Event.wait returns True iff stop was set within the
             # timeout window — that's our clean shutdown path.
             if self._stop.wait(timeout=self._interval):
-                return
+                with self._lock:
+                    if not self._stop.is_set():
+                        # start() cancelled the stop before we acted on
+                        # it (rapid off->on reconfigure) — keep polling.
+                        continue
+                    self._thread = None
+                    return
             try:
                 self._do_poll()
             except Exception:

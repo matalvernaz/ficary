@@ -137,6 +137,19 @@ past the top dozen — anyone who wants the full list can iterate the
 index directly."""
 
 
+def _to_int(value, default: int = 0) -> int:
+    """Tolerant int for index fields — the report's contract is "never
+    raises", and a hand-edited or schema-drifted count ("12.0", "?")
+    used to abort the whole report via bare int()."""
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        try:
+            return int(float(value))
+        except (TypeError, ValueError):
+            return default
+
+
 def compute_stats(root: Path, index: LibraryIndex) -> LibraryStats:
     """Build a :class:`LibraryStats` for one library root.
 
@@ -153,7 +166,7 @@ def compute_stats(root: Path, index: LibraryIndex) -> LibraryStats:
 
     for _url, entry in index.stories_in(root):
         stats.total_stories += 1
-        stats.total_chapters += int(entry.get("chapter_count") or 0)
+        stats.total_chapters += _to_int(entry.get("chapter_count"))
 
         # Count duplicates — multiple copies of the same story in
         # different folders. These aren't untrackable; they're
@@ -187,8 +200,7 @@ def compute_stats(root: Path, index: LibraryIndex) -> LibraryStats:
                 stats.never_probed += 1
 
         remote = entry.get("remote_chapter_count")
-        local = entry.get("chapter_count") or 0
-        if remote is not None and int(remote) > int(local):
+        if remote is not None and _to_int(remote) > _to_int(entry.get("chapter_count")):
             stats.pending_updates += 1
 
         # Track the extrema of last_checked for "when was this library

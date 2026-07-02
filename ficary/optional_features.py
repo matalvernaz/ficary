@@ -132,18 +132,89 @@ def available() -> list[str]:
 
 
 def is_installed(feature: str) -> bool:
-    """Cheap, import-free check based on :func:`importlib.util.find_spec`.
+    """Cheap, import-free check based on :func:`importlib.util.find_spec`,
+    plus post-install completion for features that have one.
 
     Returns False for unknown features so the UI can treat "missing
     entry" the same as "not installed" without a separate branch.
+
+    The post-install check matters for cf-solve: the pip package lands
+    first and the ~400 MB Playwright browser downloads after — a network
+    drop in between used to report "Installed" while ``--cf-solve``
+    failed at runtime with "Executable doesn't exist".
     """
     info = FEATURES.get(feature)
     if not info:
         return False
     try:
-        return importlib.util.find_spec(info["import_name"]) is not None
+        if importlib.util.find_spec(info["import_name"]) is None:
+            return False
     except (ImportError, ValueError):
         return False
+    return _post_install_complete(feature, info)
+
+
+def _marker_path(feature: str):
+    from pathlib import Path
+
+    from . import portable
+    return Path(portable.portable_root()) / "feature-markers" / f"{feature}.post-install-ok"
+
+
+def _post_install_complete(feature: str, info: dict) -> bool:
+    """True when the feature's post-install step verifiably finished.
+
+    Grandfathering: installs that completed before the marker existed
+    have no marker file, so cf-solve also probes for the browser binary
+    itself — a working install must not flip to "Not installed" on
+    upgrade."""
+    if not info.get("post_install"):
+        return True
+    try:
+        if _marker_path(feature).exists():
+            return True
+    except OSError:
+        pass
+    if feature == "cf-solve":
+        return _playwright_browser_present()
+    return True
+
+
+def _playwright_browser_present() -> bool:
+    import os
+    from pathlib import Path
+    env_dir = os.environ.get("PLAYWRIGHT_BROWSERS_PATH")
+    if env_dir:
+        # A pinned path is authoritative — playwright itself only looks
+        # there, so a browser sitting in an OS-default location wouldn't
+        # be usable anyway.
+        candidates = [Path(env_dir)]
+    elif sys.platform == "win32":
+        localappdata = os.environ.get("LOCALAPPDATA")
+        candidates = [Path(localappdata) / "ms-playwright"] if localappdata else []
+    else:
+        candidates = [
+            Path.home() / ".cache" / "ms-playwright",
+            Path.home() / "Library" / "Caches" / "ms-playwright",
+        ]
+    for directory in candidates:
+        try:
+            if directory.is_dir() and any(directory.glob("chromium*")):
+                return True
+        except OSError:
+            continue
+    return False
+
+
+def _write_marker(feature: str) -> None:
+    import time
+    try:
+        path = _marker_path(feature)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(time.strftime("%Y-%m-%dT%H:%M:%S\n"), encoding="utf-8")
+    except OSError:
+        logger.debug("Couldn't write post-install marker for %s", feature,
+                     exc_info=True)
 
 
 def install_unsupported_reason(feature: str) -> str | None:
@@ -238,9 +309,12 @@ def install(feature: str, log_callback: Logger | None = None) -> bool:
             if log_callback:
                 log_callback(
                     "Post-install step failed; the Python package "
-                    "installed but may not be fully usable yet."
+                    "installed but may not be fully usable yet. "
+                    "The feature will show as not installed — use "
+                    "Reinstall to retry the download."
                 )
             return False
+        _write_marker(feature)
 
     return True
 

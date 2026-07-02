@@ -67,7 +67,29 @@ def promote_untrackable(
 
     lib["untrackable"] = [e for e in untrackable if e is not entry]
 
-    lib.setdefault("stories", {})[url] = {
+    stories = lib.setdefault("stories", {})
+    tracked = stories.get(url)
+    if tracked is not None:
+        # The natural case: the untrackable file is a duplicate copy of a
+        # story we already track. Overwriting the tracked entry here wiped
+        # its fandoms/rating/probe history and silently dropped its old
+        # relpath out of tracking — the index has duplicate_relpaths for
+        # exactly this.
+        dupes = tracked.setdefault("duplicate_relpaths", [])
+        if relpath != tracked.get("relpath") and relpath not in dupes:
+            dupes.append(relpath)
+        if save:
+            idx.save()
+        return PromotionResult(
+            ok=True,
+            message=(
+                f"Already tracked at {tracked.get('relpath')!r}; recorded "
+                "this file as a duplicate copy."
+            ),
+            adapter=adapter,
+        )
+
+    stories[url] = {
         "relpath": relpath,
         "title": entry.get("title"),
         "author": entry.get("author"),

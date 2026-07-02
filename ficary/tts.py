@@ -2079,7 +2079,10 @@ def _load_pronunciation_map(path):
                         continue
                     out[str_k] = str_v
                 return out
-    except (json.JSONDecodeError, OSError) as exc:
+    except (ValueError, OSError) as exc:
+        # ValueError covers JSONDecodeError AND UnicodeDecodeError — the
+        # map is hand-editable and a UTF-16 save from Notepad used to
+        # crash the render here instead of degrading.
         logger.warning("Pronunciation map at %s unreadable: %s", path, exc)
     return {}
 
