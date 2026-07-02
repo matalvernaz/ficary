@@ -1001,7 +1001,7 @@ class MainFrame(wx.Frame):
         callers that need to wait on completion (library update-all)
         can await it.
         """
-        from .sites import detect_scraper
+        from .sites import canonical_url, detect_scraper
 
         scraper_cls = detect_scraper(url)
         site_name = getattr(scraper_cls, "site_name", "unknown")
@@ -1018,7 +1018,11 @@ class MainFrame(wx.Frame):
                     f"(behind {active + pending} job"
                     f"{'s' if (active + pending) != 1 else ''})"
                 )
-        return DownloadQueues.enqueue(site_name, job_fn)
+        # Single-flight: a double-click, or a manual download of a story
+        # a bulk update already queued, joins the in-flight job instead
+        # of downloading it twice.
+        dedupe_key = canonical_url(url) or url
+        return DownloadQueues.enqueue(site_name, job_fn, dedupe_key=dedupe_key)
 
     def _is_batch_url(self, url) -> bool:
         """True if ``url`` fans out to a picker or multi-work flow.

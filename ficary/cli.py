@@ -1677,12 +1677,19 @@ def _run_update_queue(
                     entry["url"], exc_info=True,
                 )
 
+    from .sites import canonical_url
+
     futures = []
     for entry in downloadable:
         site_cls = _detect_site(entry["url"])
         site_name = getattr(site_cls, "site_name", "unknown")
+        # Single-flight on the canonical URL: if the same story is
+        # already queued (e.g. a manual GUI download of a story this
+        # bulk update also picked up), join that job instead of
+        # double-fetching it.
         fut = DownloadQueues.enqueue(
             site_name, lambda e=entry: run_entry(e),
+            dedupe_key=canonical_url(entry["url"]) or entry["url"],
         )
         futures.append(fut)
 

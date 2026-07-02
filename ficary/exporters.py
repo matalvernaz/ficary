@@ -10,6 +10,7 @@ from typing import Callable
 
 from bs4 import BeautifulSoup, NavigableString, Tag
 
+from . import single_flight
 from .atomic import atomic_path, atomic_write_text
 from .models import Story, format_chapter_heading
 
@@ -465,7 +466,8 @@ def export_txt(
         if llm_disabled:
             llm_config = None
         buf.write(html_to_text(html))
-    atomic_write_text(path, buf.getvalue())
+    with single_flight.path_lock(path):
+        atomic_write_text(path, buf.getvalue())
     return path
 
 
@@ -570,7 +572,8 @@ def export_html(
         buf.write("\n</div><hr>\n")
 
     buf.write("</body>\n</html>\n")
-    atomic_write_text(path, buf.getvalue())
+    with single_flight.path_lock(path):
+        atomic_write_text(path, buf.getvalue())
     return path
 
 
@@ -1919,7 +1922,7 @@ def export_epub(
     # the context manager commit the rename on a clean exit. A crash or
     # exception from inside ``write_epub`` leaves the existing file (if
     # any) untouched instead of corrupting it.
-    with atomic_path(path) as tmp:
+    with single_flight.path_lock(path), atomic_path(path) as tmp:
         epub.write_epub(str(tmp), book)
     return path
 

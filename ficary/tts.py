@@ -2645,6 +2645,18 @@ def build_m4b(chapter_files, story, output_path, cover_path=None, intro_file=Non
     # friendly install message.
     _check_ffmpeg()
 
+    # Serialise writers to this output path: two renders targeting the
+    # same .m4b (e.g. the same story queued twice from different entry
+    # points) would otherwise have ffmpeg write over each other.
+    from . import single_flight
+    with single_flight.path_lock(output_path):
+        return _build_m4b_locked(
+            chapter_files, story, output_path, cover_path, intro_file,
+        )
+
+
+def _build_m4b_locked(chapter_files, story, output_path, cover_path, intro_file):
+
     # Normalise to (path, title) tuples internally.
     normalised: list[tuple[Path, str]] = []
     for i, item in enumerate(chapter_files):

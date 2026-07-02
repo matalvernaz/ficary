@@ -28,6 +28,8 @@ import threading
 from concurrent.futures import Future
 from typing import Callable
 
+from . import single_flight
+
 
 logger = logging.getLogger(__name__)
 
@@ -99,8 +101,25 @@ class _SiteQueue:
         # lock for an atomic read.
         return self._pending
 
-    def enqueue(self, job_fn: Callable[[], object]) -> Future:
-        fut: Future = Future()
+    def enqueue(self, job_fn: Callable[[], object],
+                dedupe_key: str | None = None) -> Future:
+        # Single-flight join: if this canonical story is already queued
+        # or downloading, hand back the in-flight Future instead of
+        # queueing a duplicate that would re-hit the site's rate limit.
+        if dedupe_key is not None:
+            fut: Future = Future()
+            existing = single_flight.claim(dedupe_key, fut)
+            if existing is not None:
+                logger.info(
+                    "Skipping duplicate download for %s — already "
+                    "queued/running.", dedupe_key,
+                )
+                return existing
+            fut.add_done_callback(
+                lambda f, k=dedupe_key: single_flight.release(k, f)
+            )
+        else:
+            fut = Future()
         with self._lock:
             self._q.put((fut, job_fn))
             self._pending += 1
@@ -230,14 +249,19 @@ class DownloadQueues:
     @classmethod
     def enqueue(
         cls, site_name: str, job_fn: Callable[[], object],
+        dedupe_key: str | None = None,
     ) -> Future:
-        """Queue ``job_fn`` on ``site_name``'s serial worker."""
+        """Queue ``job_fn`` on ``site_name``'s serial worker.
+
+        ``dedupe_key`` (a canonical story URL) makes the enqueue
+        single-flight: a second enqueue for the same key joins the
+        in-flight job's Future instead of running a duplicate."""
         with cls._lock:
             q = cls._queues.get(site_name)
             if q is None:
                 q = _SiteQueue(site_name, cls._notify)
                 cls._queues[site_name] = q
-        return q.enqueue(job_fn)
+        return q.enqueue(job_fn, dedupe_key)
 
     @classmethod
     def snapshot(cls) -> dict[str, tuple[int, int]]:
