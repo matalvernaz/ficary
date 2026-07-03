@@ -1,21 +1,23 @@
 # Ficary
 
-Cross-platform fanfiction and original-fiction downloader. Exports as
-EPUB, HTML, plain text, or a chaptered M4B audiobook.
+Cross-platform fanfiction and original-fiction downloader with a
+built-in accessible reader. Exports as EPUB, HTML, plain text, or a
+chaptered M4B audiobook.
 
 **Fanfic / original-fiction sites**
 FanFiction.net · Archive of Our Own · FicWad · Royal Road ·
-MediaMiner · Wattpad
+MediaMiner · Wattpad · Webnovel
 
 **Erotica sites**
 Literotica · Adult-FanFiction.org (AFF) · StoriesOnline · Nifty ·
 SexStories · MCStories · Lushstories · Fictionmania · TGStorytime ·
-Chyoa (interactive) · Dark Wanderer · GreatFeet
+Chyoa (interactive) · Dark Wanderer · GreatFeet · BDSM Library
 
-Every site supports direct-URL download and appears in the GUI's
-search windows. The erotica sites share a unified "Erotic Story
-Search" that fans out a query across all of them in parallel and
-collapses results per site.
+Every site supports direct-URL download. FFN, AO3, Royal Road, and
+Wattpad have dedicated search windows in the GUI; the erotica sites
+share a unified "Erotic Story Search" that fans out a query across
+all thirteen of them in parallel and collapses results per site.
+(FicWad, MediaMiner, and Webnovel are URL-download only — no search.)
 
 Accessible by design — the desktop GUI uses native widgets on every
 platform (wxPython wraps Win32 on Windows, Cocoa on macOS, GTK3 on
@@ -61,6 +63,7 @@ Extras are split so you only pull what you need:
 | `audio`     | Audiobook synthesis via edge-tts — requires ffmpeg on PATH (Piper TTS is installed on demand from the GUI / `--install-piper`; the LLM attribution backend uses the stdlib and needs no extra) |
 | `gui`       | wxPython desktop GUI          |
 | `clipboard` | Clipboard-watch mode          |
+| `playback`  | In-app reader audio — app-voice TTS + soundscapes (PyOpenAL) |
 | `cf-solve`  | Playwright-backed Cloudflare-challenge fallback (also needs `playwright install chromium`) |
 | `all`       | All of the above *except* `cf-solve` (opt-in due to ~400MB browser binary) |
 
@@ -90,20 +93,25 @@ The main window is a download form. Search windows open from the
   Rising Stars / Best Rated / Complete / Weekly Popular
 - **Wattpad** (Ctrl+4)
 - **Erotic Story Search** (Ctrl+5) — unified fan-out across all
-  twelve erotica sites (Literotica, AFF, StoriesOnline, Nifty,
+  thirteen erotica sites (Literotica, AFF, StoriesOnline, Nifty,
   SexStories, MCStories, Lushstories, Fictionmania, TGStorytime,
-  Chyoa, Dark Wanderer, GreatFeet) with a per-site scope dropdown
-  for when you already know where you want to search
+  Chyoa, Dark Wanderer, GreatFeet, BDSM Library) with a per-site
+  scope dropdown for when you already know where you want to search
 
 The **Library** menu has scan / reorganize / update / abandoned
-management. **Watchlist** lets you follow authors or searches and
-get a Pushover / Discord / email ping when a tracked story
-updates. **Edit → Optional Features...** installs the extras
-(EPUB, audio, clipboard, cf-solve) at runtime on any build — the
-frozen desktop binaries pip-install into a portable `deps/`
-folder so "delete the folder" actually uninstalls. Multi-select
-pickers and result lists mirror their check / selection state
-into the row label so every screen reader speaks it reliably.
+management; **Ctrl+U** checks the whole library for story updates
+from anywhere (**Ctrl+Shift+U** checks for a new ficary release).
+**Reader → Open reader** (Ctrl+R) opens a downloaded story in the
+built-in reader — see [In-app reader](#in-app-reader). **Watchlist**
+lets you follow stories, authors, or searches and get a Pushover /
+Discord / email ping — or an automatic download — when a tracked
+story updates. **Edit → Optional Features...** installs the extras
+(EPUB, audio, clipboard, playback, cf-solve) at runtime on any
+build — the frozen desktop binaries pip-install into a portable
+`deps/` folder so "delete the folder" actually uninstalls.
+Multi-select pickers and result lists mirror their check /
+selection state into the row label so every screen reader speaks
+it reliably.
 
 ### CLI — common tasks
 
@@ -122,9 +130,28 @@ ficary -b urls.txt
 ficary -f html  https://archiveofourown.org/works/1234
 ficary -f audio https://www.royalroad.com/fiction/26727   # needs ffmpeg
 
-# All of an author's stories
+# FFN via FicHub's shared cache — one request for the whole fic
+# instead of ~6s/chapter. First-time downloads only; falls back to
+# a direct scrape on any miss.
+ficary --fichub https://www.fanfiction.net/s/12345
+
+# Logged-in downloads: AO3 restricted works / private bookmarks /
+# marked-for-later, Webnovel chapters your account has unlocked.
+# Both flags take a browser "Cookie:" header string and fall back
+# to $FICARY_AO3_COOKIE / $FICARY_WEBNOVEL_COOKIE.
+ficary --ao3-cookie "$COOKIE" https://archiveofourown.org/works/1234
+ficary --webnovel-cookie "$COOKIE" https://www.webnovel.com/book/...
+
+# All of an author's stories — erotica author pages work too
 ficary -a https://www.fanfiction.net/u/1234/Name
 ficary -a https://archiveofourown.org/users/Name/works
+ficary -a https://storiesonline.net/a/AuthorName
+
+# List-page tools: print every fic URL a list page contains (author
+# profile, AO3 series/tag/search, FFN community, Wattpad reading
+# list) as TSV, or download them all
+ficary --extract https://archiveofourown.org/tags/Time%20Travel/works
+ficary --bulk https://archiveofourown.org/tags/Time%20Travel/works --max-results 50
 
 # AO3 series merged into a single file
 ficary --merge-series https://archiveofourown.org/series/1234
@@ -140,17 +167,63 @@ ficary -s "werewolf"     --site literotica
 # Update an existing export with new chapters
 ficary -u "Path/To/Story.epub"
 
-# Update a whole library folder (unchanged fics cost one HTTP probe)
-ficary -U ~/Fanfic --recursive --skip-complete
+# Update a whole library folder (unchanged fics cost one HTTP
+# probe; completed stories are skipped by default —
+# --no-skip-complete probes them too)
+ficary -U ~/Fanfic --recursive
 
 # Partial downloads
 ficary --chapters 1-5,10,50- https://...      # flexible ranges
 
 # Send an EPUB to Kindle after download
 ficary --send-to-kindle you@kindle.com https://...
+
+# Upload a finished audiobook render to an Audiobookshelf server
+# (configure ABS_URL / ABS_TOKEN in the environment, or
+# Preferences → Audiobookshelf in the GUI)
+ficary --abs-list-libraries            # find library / folder ids
+ficary -f audio --send-to-abs https://...
+
+# Watchlist: follow a story, author, or saved search and get a
+# Pushover / Discord / email ping when it changes. Add
+# --watchlist-auto-download to fetch updates automatically —
+# tracked stories update in place in your library.
+ficary --watchlist-add https://www.fanfiction.net/u/1234/Name
+ficary --watchlist-add-search ao3 "time travel" --watchlist-label "TT watch"
+ficary --watchlist-add https://... --watchlist-auto-download
+ficary --watchlist-run                 # poll once — cron friendly
 ```
 
 `ficary --help` has the full list.
+
+## In-app reader
+
+Ficary can open a downloaded story and read it, not just fetch it —
+**Reader → Open reader** (Ctrl+R). Chapters come straight from the
+scraper's chapter cache when present, or are re-parsed from the
+exported EPUB/HTML file.
+
+- **Screen-reader-native reading.** The chapter opens in an
+  accessible read-only view your own screen reader reads with
+  say-all. Chapter list, next / previous / jump, adjustable font,
+  and light / dark / high-contrast themes.
+- **Reading position and bookmarks** are saved per story and
+  restored when you reopen it.
+- **App-voice reading (optional).** Switch reading mode to App voice
+  and ficary reads aloud with edge/Piper voices, following along
+  with a highlight, auto-advancing into the next chapter at a
+  natural chapter end.
+- **Soundscapes (optional).** Assign an ambient audio bed to a story
+  (build beds in Reader → Soundscape editor). The bed fades in while
+  reading, ducks under the narration, and fades out when you leave;
+  positional placement and reverb included.
+- **Sleep timer.** Stop reading after 5–120 minutes; a shortcut
+  reports the time left.
+
+App-voice and soundscapes need the `playback` extra — bundled in the
+desktop binaries; elsewhere `pip install "ficary[playback]"` or
+**Edit → Optional Features...**. Without it, screen-reader reading
+and audiobook export are unaffected.
 
 ## Library management
 
@@ -196,11 +269,20 @@ ficary --library-search "orphanage scene"
 ficary --find-mirrors ~/Fanfic
 
 # Hygiene: library doctor, watchlist doctor, cache doctor, or all
-# three at once. --heal applies safe fixes; the index is auto-
-# backed-up before destructive operations so --restore-index FILE
-# can roll back a bad heal.
+# three at once. --heal applies only the SAFE fixes; anything that
+# deletes data is a separate opt-in (--heal-drop-missing,
+# --heal-prune-stale, --heal-drop-watches, or --heal-all for
+# everything). Destructive heals snapshot the index/watchlist first
+# and record a manifest; cache prunes quarantine into .trash/ for
+# 14 days instead of deleting.
 ficary --doctor
 ficary --doctor --heal
+ficary --doctor --heal-all
+
+# Undo the most recent destructive heal in one command: restores
+# the snapshots named in the newest heal manifest and moves
+# quarantined cache entries back.
+ficary --doctor-restore-last
 
 # Per-chapter silent-edit detection. Hash-based, so an author's
 # in-place typo fix shows up even though the chapter count didn't
@@ -231,9 +313,11 @@ the proposed moves first.
 ## What it handles automatically
 
 - **Rate limiting**: adaptive (AIMD) inter-chapter delay — starts fast,
-  backs off on 429/503, decays back down on clean responses. FFN has a
-  known 2s floor because of its bulk-captcha. `--delay-min` /
-  `--delay-max` override with a fixed range if you want the old
+  backs off on 429/503, decays back down on clean responses. FFN holds
+  a steady 6s/chapter because its bulk-fetch captcha bans faster
+  crawls; `--fichub` sidesteps that for first-time FFN downloads by
+  re-ingesting FicHub's cached EPUB in a single request. `--delay-min`
+  / `--delay-max` override with a fixed range if you want the old
   behaviour.
 - **Parallel chapter fetches** on Royal Road, FicWad, and MediaMiner
   (default 3 workers, same AIMD feedback halves concurrency on
@@ -295,7 +379,10 @@ it back; use `--revive-abandoned` to undo the mark.
 `-f audio` synthesises each chapter through one or more pluggable
 TTS providers and concatenates into a chaptered M4B with embedded
 cover art. Needs `ffmpeg` and `ffprobe` on PATH for the pip install;
-they're bundled in the Windows / macOS / Linux binaries.
+they're bundled in the Windows / macOS / Linux binaries. A finished
+render can upload straight into an Audiobookshelf server
+(`--send-to-abs` on the CLI, Preferences → Audiobookshelf in the
+GUI).
 
 ### TTS providers
 
@@ -369,13 +456,19 @@ audiobook than the heuristic pipeline alone:
    recommends `gender` + `accent`, which the generator translates
    into a real catalog voice. Caller-supplied `narrator_voice`
    overrides.
-6. **Author's-note backstop**: when `--strip-notes` is also set,
-   paragraphs surviving the regex pre-pass get one more LLM check
-   for disguised outros, beta thanks, and shout-outs.
 
 Every map file is user-editable; edits survive re-renders. Every
 LLM enrichment is purely additive — transport failures fall through
 silently, and existing user-edited JSON is never clobbered.
+
+Separate from attribution, `--llm-strip-notes` (paired with
+`--strip-notes`) sends each paragraph the regex pre-pass kept
+through the configured LLM for a second-pass author's-note
+decision — catching disguised outros, beta thanks, and shout-outs
+that don't trip the keyword gate. It works with any attribution
+backend and every output format (not just audio), costs one LLM
+call per chapter, and caches results per story so re-exports don't
+re-spend.
 
 The per-chapter attribution result is cached at
 `<portable_root>/cache/attribution/v1/<backend>/<size>/<sha>.json`
@@ -391,6 +484,10 @@ audience. Concretely:
   result rows, and watchlist entries mirror their check/selection
   state into the visible label text so MSAA-fragile controls still
   read correctly.
+- **In-app reader**: the reading view is a native read-only text
+  control, so say-all and per-line/word/character navigation work
+  exactly as they do in any standard edit field — no custom widget
+  in the way.
 - **macOS**: wxPython wraps native Cocoa widgets; VoiceOver reads
   the GUI using the same AXUIElement tree it reads in Safari or
   Mail.
