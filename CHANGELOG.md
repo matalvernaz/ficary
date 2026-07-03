@@ -1,5 +1,24 @@
 # Changelog
 
+## 2.7.1 — 2026-07-03
+
+**Bug fixes**
+
+* **FFN author pages typed as `fanfiction.net/~name` work again.** The
+  bare apex host (`fanfiction.net` without `www.`) stopped answering on
+  both HTTP and HTTPS, so a typed or pasted apex URL hung until timeout
+  and the picker never opened. The FFN scraper now rewrites the apex
+  host to `www.fanfiction.net` before fetching, and scheme-less input
+  (`fanfiction.net/...`) is normalised to `https://` everywhere instead
+  of falling back to libcurl's `http://` guess.
+* **Connection errors and timeouts retry again.** The retry loop caught
+  `curl_cffi.requests.errors.ConnectionError`/`.Timeout` — names that
+  module never exported — so any fetch-level network error crashed the
+  download with an `AttributeError` instead of backing off and retrying.
+  The classes are now imported from `curl_cffi.requests.exceptions`, at
+  module scope, so a future rename breaks loudly at startup rather than
+  silently mid-retry. (`curl_cffi` floor raised to 0.11 to match.)
+
 ## 2.7.0 — 2026-07-02
 
 The feature half of audit round 10, plus two workflow requests.

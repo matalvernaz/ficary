@@ -14,11 +14,13 @@ namespaces = false
 
 [project]
 name = "ficary"
-version = "2.7.0"
+version = "2.7.1"
 description = "Cross-platform fanfiction + erotica downloader (FFN, AO3, FicWad, Royal Road, MediaMiner, Wattpad, Webnovel, Literotica, AFF, StoriesOnline, Nifty, SexStories, MCStories, Lushstories, Fictionmania, TGStorytime, Chyoa, Dark Wanderer, GreatFeet, BDSM Library)"
 requires-python = ">=3.9"
 dependencies = [
-    "curl_cffi>=0.7",
+    # 0.11 is the verified floor for curl_cffi.requests.exceptions
+    # (ConnectionError/Timeout), which scraper.py imports at module scope.
+    "curl_cffi>=0.11",
     "beautifulsoup4>=4.12",
     # lxml 6.0.x carries CVE-2026-41066; 6.1.0 ships the fix.
     "lxml>=6.1.0",

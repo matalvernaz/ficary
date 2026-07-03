@@ -29,6 +29,7 @@ from .ficwad import FicWadScraper
 from .mediaminer import MediaMinerScraper
 from .royalroad import RoyalRoadScraper
 from .scraper import BaseScraper, FFNScraper
+from .scraper import ensure_scheme as _ensure_scheme
 from .wattpad import WattpadScraper
 from .webnovel import WebnovelScraper
 
@@ -178,22 +179,6 @@ _STORY_URL_PATTERNS: list[tuple[type[BaseScraper], re.Pattern[str]]] = [
     (scraper_cls, _loosen(pattern))
     for scraper_cls, pattern in _STORY_URL_PATTERNS_STRICT
 ]
-
-_SCHEME_RE = re.compile(r"^[a-z][a-z0-9+.\-]*://", re.I)
-
-
-def _ensure_scheme(url: str) -> str:
-    """Prepend ``https://`` to a bare-host URL (``fanfiction.net/s/1``) so
-    :func:`urlsplit` can populate the hostname. URLs that already carry a
-    scheme, and bare ids / free text with no dotted host, pass through
-    unchanged — preserving the FFN-fallback for bare numeric ids.
-    """
-    s = (url or "").strip()
-    if not s or _SCHEME_RE.match(s):
-        return s
-    head = s.split("/", 1)[0]
-    return f"https://{s}" if "." in head else s
-
 
 # Hostname fragments for sites that don't require the full /s/N etc.
 # path — used when the caller already knows they have a story URL and

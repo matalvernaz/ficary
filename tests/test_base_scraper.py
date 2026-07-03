@@ -10,8 +10,10 @@ happen to exercise them indirectly.
 from pathlib import Path
 
 import pytest
+from curl_cffi.requests.exceptions import ConnectionError as CurlConnectionError
+from curl_cffi.requests.exceptions import Timeout as CurlTimeout
 
-from ficary.scraper import BaseScraper
+from ficary.scraper import BaseScraper, ensure_scheme
 
 
 class _ProbeScraper(BaseScraper):
@@ -427,3 +429,105 @@ class TestV2415CFCookieSeedingOn200:
         #   get/seed/get          (no rotate between seed and next get)
         assert ("rotate",) not in call_log, call_log
         assert ("seed", "seeded") in call_log
+
+
+class _StubResponse:
+    """Bare-minimum 200 response for driving ``_fetch``'s happy path."""
+
+    status_code = 200
+    text = "<html>fetched body</html>"
+    encoding = None
+
+
+class _StubSession:
+    """Session whose ``get`` consumes ``outcomes`` in order.
+
+    An Exception instance is raised; anything else is returned. Every
+    requested URL is recorded so tests can assert on normalisation.
+    """
+
+    def __init__(self, outcomes):
+        self.outcomes = list(outcomes)
+        self.urls = []
+
+    def get(self, url, timeout=None):
+        self.urls.append(url)
+        out = self.outcomes.pop(0)
+        if isinstance(out, Exception):
+            raise out
+        return out
+
+
+class TestEnsureScheme:
+    def test_bare_host_gets_https(self):
+        assert (
+            ensure_scheme("fanfiction.net/~plums")
+            == "https://fanfiction.net/~plums"
+        )
+
+    def test_existing_scheme_unchanged(self):
+        assert (
+            ensure_scheme("http://example.invalid/x")
+            == "http://example.invalid/x"
+        )
+
+    def test_bare_numeric_id_unchanged(self):
+        # Bare FFN story ids must survive untouched — downstream code
+        # treats "no dotted host" as the id-fallback signal.
+        assert ensure_scheme("12345") == "12345"
+
+    def test_empty_string_unchanged(self):
+        assert ensure_scheme("") == ""
+
+
+class TestFetchExceptionHandling:
+    """The retry loop must catch curl_cffi's real exception classes.
+
+    These exist because the ``except`` clauses once referenced
+    ``curl_requests.errors.ConnectionError`` / ``.Timeout`` — names that
+    module never exported. The lookup only runs while an exception is
+    in flight, so every connection error or timeout crashed the fetch
+    with an AttributeError instead of retrying.
+    """
+
+    def test_timeout_is_retried(self, scraper, monkeypatch):
+        monkeypatch.setattr("ficary.scraper.time.sleep", lambda s: None)
+        sess = _StubSession([CurlTimeout("curl 28"), _StubResponse()])
+        assert scraper._fetch(
+            "https://example.invalid/x", session=sess,
+        ) == _StubResponse.text
+        assert len(sess.urls) == 2
+
+    def test_connection_error_is_retried(self, scraper, monkeypatch):
+        monkeypatch.setattr("ficary.scraper.time.sleep", lambda s: None)
+        sess = _StubSession([CurlConnectionError("refused"), _StubResponse()])
+        assert scraper._fetch(
+            "https://example.invalid/x", session=sess,
+        ) == _StubResponse.text
+        assert len(sess.urls) == 2
+
+    def test_scheme_less_url_is_normalised(self, scraper):
+        # GUI-box / CLI input like "fanfiction.net/~plums" must fetch
+        # over https — libcurl's http:// guess hangs on hosts that
+        # don't answer port 80 (FFN's apex domain does exactly that).
+        sess = _StubSession([_StubResponse()])
+        scraper._fetch("example.invalid/page", session=sess)
+        assert sess.urls == ["https://example.invalid/page"]
+
+
+class TestFFNApexRewrite:
+    """FFN's apex host is unreachable — only ``www.`` serves the site."""
+
+    def _ffn(self):
+        from ficary.scraper import FFNScraper
+        return FFNScraper(use_cache=False)
+
+    def test_scheme_less_apex_input_fetches_www_https(self):
+        sess = _StubSession([_StubResponse()])
+        self._ffn()._fetch("fanfiction.net/~plums", session=sess)
+        assert sess.urls == ["https://www.fanfiction.net/~plums"]
+
+    def test_www_url_passes_through(self):
+        sess = _StubSession([_StubResponse()])
+        self._ffn()._fetch("https://www.fanfiction.net/s/1", session=sess)
+        assert sess.urls == ["https://www.fanfiction.net/s/1"]

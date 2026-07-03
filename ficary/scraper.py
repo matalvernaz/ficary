@@ -12,10 +12,35 @@ from typing import Optional, Union
 from bs4 import BeautifulSoup
 from curl_cffi import requests as curl_requests
 
+# Imported as names at module scope so a curl_cffi rename breaks at
+# import time. Referencing them as attribute lookups inside an
+# ``except`` clause instead means the lookup only runs while an
+# exception is in flight — a missing name becomes an AttributeError
+# that masks the network error and skips the retry entirely.
+from curl_cffi.requests.exceptions import (
+    ConnectionError as CurlConnectionError,
+    Timeout as CurlTimeout,
+)
+
 from .logging_utils import record_transient_403
 from .models import Chapter, Story
 
 logger = logging.getLogger(__name__)
+
+_SCHEME_RE = re.compile(r"^[a-z][a-z0-9+.\-]*://", re.I)
+
+
+def ensure_scheme(url: str) -> str:
+    """Prepend ``https://`` to a bare-host URL (``fanfiction.net/s/1``) so
+    :func:`urlsplit` can populate the hostname. URLs that already carry a
+    scheme, and bare ids / free text with no dotted host, pass through
+    unchanged — preserving the FFN-fallback for bare numeric ids.
+    """
+    s = (url or "").strip()
+    if not s or _SCHEME_RE.match(s):
+        return s
+    head = s.split("/", 1)[0]
+    return f"https://{s}" if "." in head else s
 
 BROWSERS = ["chrome", "chrome", "safari", "edge"]
 
@@ -561,6 +586,11 @@ class BaseScraper:
             StoryNotFoundError: upstream returned 404.
             CloudflareBlockError: a Cloudflare challenge page was served.
         """
+        # User-typed URLs (GUI box, CLI arg) can arrive scheme-less.
+        # libcurl guesses ``http://`` for those, and some hosts (FFN's
+        # apex domain among them) never answer port 80 — the fetch
+        # hangs to timeout on every attempt.
+        url = ensure_scheme(url)
         sess = session if session is not None else self._session()
         backoff = INITIAL_BACKOFF_S
         hit_rate_limit = False
@@ -577,7 +607,7 @@ class BaseScraper:
         for attempt in range(self.max_retries):
             try:
                 resp = sess.get(url, timeout=self.timeout)
-            except curl_requests.errors.ConnectionError as exc:
+            except CurlConnectionError as exc:
                 logger.warning(
                     "Connection error (attempt %d/%d): %s",
                     attempt + 1, self.max_retries, exc,
@@ -585,7 +615,7 @@ class BaseScraper:
                 time.sleep(backoff + random.uniform(0, CONNECTION_ERROR_JITTER_S))
                 backoff = min(backoff * 2, MAX_BACKOFF_S)
                 continue
-            except curl_requests.errors.Timeout:
+            except CurlTimeout:
                 logger.warning(
                     "Request timed out (attempt %d/%d)",
                     attempt + 1, self.max_retries,
@@ -1540,10 +1570,29 @@ def _ffn_row_to_work(row, story_id, section):
     }
 
 
+# Apex host preceded by a scheme but not a subdomain dot. The apex
+# resolves to non-Cloudflare addresses that answer on neither port 80
+# nor 443 — only ``www.fanfiction.net`` serves the site.
+_FFN_APEX_RE = re.compile(r"(?<=://)fanfiction\.net", re.I)
+
+
 class FFNScraper(BaseScraper):
     """Scraper for fanfiction.net."""
 
     site_name = "ffn"
+
+    def _fetch(self, url: str, session=None) -> str:
+        """Rewrite apex-host FFN URLs to ``www.`` before fetching.
+
+        Pasted links and typed input often use the bare apex form
+        (``fanfiction.net/~author``); fetching it hangs to timeout on
+        every retry because the apex host is unreachable (see
+        ``_FFN_APEX_RE``). Chapter URLs built internally from
+        ``FFN_BASE`` already carry ``www.`` and pass through unchanged.
+        """
+        url = ensure_scheme(str(url))
+        return super()._fetch(_FFN_APEX_RE.sub("www.fanfiction.net", url),
+                              session=session)
 
     def __init__(self, use_fichub: bool = False, **kwargs):
         # A steady ~6s/chapter is the conservative default for FFN:
