@@ -20,11 +20,12 @@ from pathlib import Path
 from typing import Optional
 
 from . import portable
-from .atomic import atomic_write_text
+from .atomic import atomic_write_bytes, atomic_write_text
 
 logger = logging.getLogger(__name__)
 
 _MANIFEST_DIRNAME = "heal-manifests"
+_SNAPSHOT_DIRNAME = "snapshots"
 _MAX_MANIFESTS = 10
 _NAME_RE = re.compile(r"^heal-(\d{8}-\d{6})-[0-9a-f]{8}\.json$")
 
@@ -54,21 +55,77 @@ def manifest_dir() -> Path:
     return Path(portable.portable_root()) / _MANIFEST_DIRNAME
 
 
+def _persist(manifest: HealManifest) -> None:
+    """Write the manifest's current fields to its own ``path`` atomically."""
+    payload = {k: v for k, v in asdict(manifest).items() if k != "path"}
+    atomic_write_text(Path(manifest.path), json.dumps(payload, indent=2) + "\n")
+
+
 def write_manifest(manifest: HealManifest) -> Path:
-    """Persist ``manifest`` under a fresh stamped name and prune old
-    ones past the depth cap. Returns the manifest path."""
+    """Persist ``manifest`` (assigning a fresh stamped name on first write)
+    and prune old ones past the depth cap. Returns the manifest path.
+
+    Meant to be written BEFORE the destructive heal it records, so a crash
+    mid-heal still leaves a recovery record for ``--doctor-restore-last``;
+    call :func:`update_manifest` afterward to fill in the post-heal
+    counters and the cache-quarantine location."""
     directory = manifest_dir()
     directory.mkdir(parents=True, exist_ok=True)
-    stamp = time.strftime("%Y%m%d-%H%M%S")
-    salt = uuid.uuid4().hex[:8]
-    path = directory / f"heal-{stamp}-{salt}.json"
+    if not manifest.path:
+        stamp = time.strftime("%Y%m%d-%H%M%S")
+        salt = uuid.uuid4().hex[:8]
+        manifest.path = str(directory / f"heal-{stamp}-{salt}.json")
     manifest.created_at = manifest.created_at or time.strftime(
         "%Y-%m-%dT%H:%M:%S")
-    manifest.path = str(path)
-    payload = {k: v for k, v in asdict(manifest).items() if k != "path"}
-    atomic_write_text(path, json.dumps(payload, indent=2) + "\n")
+    _persist(manifest)
     _prune_old(directory)
-    return path
+    return Path(manifest.path)
+
+
+def update_manifest(manifest: HealManifest) -> None:
+    """Re-persist an already-written manifest in place — e.g. to record
+    what the heal actually changed after it ran. No-op if the manifest was
+    never written; logs (doesn't raise) on a write failure so a bookkeeping
+    hiccup can't crash a heal that already succeeded."""
+    if not manifest.path:
+        return
+    try:
+        _persist(manifest)
+    except OSError:
+        logger.warning("Couldn't update heal manifest %s", manifest.path)
+
+
+def snapshot_dir() -> Path:
+    return manifest_dir() / _SNAPSHOT_DIRNAME
+
+
+def capture_snapshot(src, kind: str) -> Optional[Path]:
+    """Copy ``src`` into manifest-owned storage and return the copy's path.
+
+    A snapshot a manifest references must NOT live in the rolling
+    library-index backup pool: that pool prunes to a fixed depth on every
+    backup, so a routine ``--heal`` or ``--restore-index`` can garbage-
+    collect the snapshot a still-current manifest points at, leaving
+    ``--doctor-restore-last`` with nothing to restore. Keeping the copy
+    under ``heal-manifests/snapshots/`` ties its lifecycle to the manifest
+    (see :func:`_unlink_owned_snapshots`). Returns ``None`` when ``src`` is
+    absent or the copy fails — the caller decides whether that aborts the
+    heal (it should, when the heal would otherwise drop unrecoverable data).
+    """
+    src = Path(src)
+    if not src.exists():
+        return None
+    try:
+        directory = snapshot_dir()
+        directory.mkdir(parents=True, exist_ok=True)
+        stamp = time.strftime("%Y%m%d-%H%M%S")
+        salt = uuid.uuid4().hex[:8]
+        dest = directory / f"{stamp}-{salt}-{kind}{src.suffix or '.json'}"
+        atomic_write_bytes(dest, src.read_bytes())
+        return dest
+    except OSError:
+        logger.warning("Couldn't capture %s heal snapshot of %s", kind, src)
+        return None
 
 
 def load_manifest(path: Path) -> Optional[HealManifest]:
@@ -107,19 +164,37 @@ def mark_restored(manifest: HealManifest) -> None:
     """Stamp ``restored_at`` into the on-disk manifest so a second
     ``--doctor-restore-last`` is visibly a re-run, not fresh."""
     manifest.restored_at = time.strftime("%Y-%m-%dT%H:%M:%S")
-    if manifest.path:
-        payload = {k: v for k, v in asdict(manifest).items() if k != "path"}
+    update_manifest(manifest)
+
+
+def _unlink_owned_snapshots(manifest: HealManifest) -> None:
+    """Remove snapshot files this manifest owns (those under
+    :func:`snapshot_dir`). External paths — e.g. a legacy manifest still
+    pointing at a rolling backup-pool file — are left untouched."""
+    try:
+        snap_root = snapshot_dir().resolve()
+    except OSError:
+        return
+    for path_str in (manifest.index_snapshot, manifest.watchlist_snapshot):
+        if not path_str:
+            continue
+        p = Path(path_str)
         try:
-            atomic_write_text(Path(manifest.path),
-                              json.dumps(payload, indent=2) + "\n")
+            if p.parent.resolve() == snap_root and p.exists():
+                p.unlink()
         except OSError:
-            logger.warning("Couldn't stamp restored_at on %s", manifest.path)
+            continue
 
 
 def _prune_old(directory: Path) -> None:
     entries = [p for p in directory.iterdir() if _NAME_RE.match(p.name)]
     entries.sort(key=lambda p: p.name, reverse=True)
     for old in entries[_MAX_MANIFESTS:]:
+        # Delete the manifest's owned snapshots before the manifest itself
+        # so pruning never orphans snapshot files under snapshots/.
+        stale = load_manifest(old)
+        if stale is not None:
+            _unlink_owned_snapshots(stale)
         try:
             old.unlink()
         except OSError:

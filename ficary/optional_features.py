@@ -180,11 +180,31 @@ def _post_install_complete(feature: str, info: dict) -> bool:
     return True
 
 
+def _in_package_browser_dirs():
+    """Where Playwright installs browsers under ``PLAYWRIGHT_BROWSERS_PATH=0``
+    — inside the pip package, not a directory literally named ``0``."""
+    from pathlib import Path
+    try:
+        import importlib.util
+        spec = importlib.util.find_spec("playwright")
+        locs = list(getattr(spec, "submodule_search_locations", None) or [])
+        if not locs:
+            return []
+        return [Path(locs[0]) / "driver" / "package" / ".local-browsers"]
+    except Exception:
+        return []
+
+
 def _playwright_browser_present() -> bool:
     import os
     from pathlib import Path
     env_dir = os.environ.get("PLAYWRIGHT_BROWSERS_PATH")
-    if env_dir:
+    if env_dir == "0":
+        # Playwright sentinel for "install inside the package", NOT a
+        # literal directory named "0" — probing Path("0") would always
+        # miss and report a valid install as absent.
+        candidates = _in_package_browser_dirs()
+    elif env_dir:
         # A pinned path is authoritative — playwright itself only looks
         # there, so a browser sitting in an OS-default location wouldn't
         # be usable anyway.

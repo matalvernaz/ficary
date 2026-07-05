@@ -22,7 +22,7 @@ is "same id + same fandom subdomain = same story".
 import logging
 import re
 from typing import Optional
-from urllib.parse import urlsplit
+from urllib.parse import urljoin, urlsplit
 
 from bs4 import BeautifulSoup
 
@@ -140,9 +140,12 @@ class AFFScraper(BaseScraper):
             if not title:
                 continue
             seen.add(m.group(1))
-            full = href if href.startswith("http") else (
-                f"https://{AFF_DEFAULT_SUBDOMAIN}.adult-fanfiction.org/{href.lstrip('/')}"
-            )
+            # Resolve against the profile URL's own host so a
+            # protocol-relative (//naruto…) or root-relative (/story.php…)
+            # link keeps its real fandom subdomain, instead of being forced
+            # onto the default 'hp' (wrong fandom 404) or mangled into a
+            # double-host garbage URL that fails parse_story_id.
+            full = urljoin(url, href)
             sub = self.parse_subdomain(full)
             works.append({
                 "title": title, "url": full, "author": author,

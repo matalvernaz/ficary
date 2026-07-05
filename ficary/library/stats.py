@@ -83,6 +83,13 @@ class LibraryStats:
             ):
                 lines.append(f"    {status:<14} {count}")
 
+        if self.by_rating:
+            lines.append("  By rating:")
+            for rating, count in sorted(
+                self.by_rating.items(), key=lambda kv: (-kv[1], kv[0]),
+            ):
+                lines.append(f"    {rating:<14} {count}")
+
         if self.by_format:
             lines.append("  By format:")
             for fmt, count in sorted(
@@ -194,9 +201,11 @@ def compute_stats(root: Path, index: LibraryIndex) -> LibraryStats:
                 ).replace(tzinfo=timezone.utc)
                 if (now - when).total_seconds() > stale_cutoff:
                     stats.stale_probe += 1
-            except ValueError:
-                # Malformed timestamp — treat as never probed so the
-                # update pass re-covers it.
+            except (ValueError, TypeError):
+                # Malformed timestamp (bad format, or a non-str value in a
+                # hand-edited/schema-drifted index — strptime raises
+                # TypeError, not ValueError, on a non-str) — treat as never
+                # probed so the report never aborts on one bad field.
                 stats.never_probed += 1
 
         remote = entry.get("remote_chapter_count")
@@ -206,7 +215,10 @@ def compute_stats(root: Path, index: LibraryIndex) -> LibraryStats:
         # Track the extrema of last_checked for "when was this library
         # last touched by a scan" at a glance.
         last_checked = entry.get("last_checked")
-        if last_checked:
+        # isinstance guard: a non-str last_checked (corrupt/hand-edited
+        # index) would raise TypeError on the str comparisons below and
+        # abort the whole report.
+        if isinstance(last_checked, str) and last_checked:
             if stats.newest_checked is None or last_checked > stats.newest_checked:
                 stats.newest_checked = last_checked
             if stats.oldest_checked is None or last_checked < stats.oldest_checked:

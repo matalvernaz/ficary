@@ -40,6 +40,7 @@ logger = logging.getLogger(__name__)
 
 REPO = "matalvernaz/ficary"
 LATEST_URL = f"https://api.github.com/repos/{REPO}/releases/latest"
+RELEASES_URL = f"https://api.github.com/repos/{REPO}/releases"
 
 # Bundled alongside ficary.exe in the portable zip; built in CI from
 # ravibpatel/AutoUpdater.NET. If it's ever missing we refuse to
@@ -104,6 +105,74 @@ def check_for_update():
         "release_url": data.get("html_url"),
         "is_zip": zip_asset is not None,
     }
+
+
+def _default_releases_get():
+    resp = curl_requests.get(
+        RELEASES_URL, params={"per_page": 100},
+        impersonate="chrome", timeout=15,
+    )
+    resp.raise_for_status()
+    return resp.json()
+
+
+def fetch_changelog_since(current_version=None, *, max_versions=25, transport=None):
+    """Aggregate release notes for every published release newer than the
+    running version, newest first, as one human-readable string.
+
+    The ``releases/latest`` endpoint only carries the newest release's
+    body, so a user several versions behind would see notes for just the
+    top release and miss everything they skipped. This walks the full
+    release list and concatenates each intervening release's notes so the
+    update prompt can show "everything since your version".
+
+    Best-effort — returns ``""`` on any network/parse failure or when
+    nothing is newer, so a changelog hiccup never blocks the update
+    prompt. Only meant to be called once an update is actually being
+    offered (after :func:`check_for_update` returns a newer version), so
+    the extra API call happens once per real update, not once per check.
+
+    ``current_version`` defaults to the running build; ``transport`` is an
+    injection seam for tests.
+    """
+    current = _parse_version(current_version or __version__)
+    if current is None:
+        return ""
+    try:
+        releases = (transport or _default_releases_get)()
+    except Exception:
+        logger.debug("Couldn't fetch release list for changelog", exc_info=True)
+        return ""
+
+    entries = []
+    for rel in releases or []:
+        if rel.get("draft") or rel.get("prerelease"):
+            continue
+        ver = _parse_version(rel.get("tag_name", ""))
+        if ver is None or ver <= current:
+            continue
+        entries.append(
+            (ver, rel.get("tag_name", "") or "", (rel.get("body") or "").strip())
+        )
+
+    if not entries:
+        return ""
+    # Newest first. Sort on the parsed version tuple, not the tag string,
+    # so 2.10.0 orders above 2.9.0 (lexical tag sort would invert them).
+    entries.sort(key=lambda e: e[0], reverse=True)
+
+    truncated = 0
+    if len(entries) > max_versions:
+        truncated = len(entries) - max_versions
+        entries = entries[:max_versions]
+
+    blocks = [f"{tag}\n{body}" if body else tag for _ver, tag, body in entries]
+    if truncated:
+        blocks.append(
+            f"(and {truncated} older release{'' if truncated == 1 else 's'} — "
+            "see the release page for the full history.)"
+        )
+    return "\n\n".join(blocks)
 
 
 def is_frozen() -> bool:

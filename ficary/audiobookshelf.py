@@ -38,7 +38,11 @@ def _config(prefs=None) -> dict:
     missing keys."""
     def _read(pref_key, env_key):
         if prefs is not None:
-            value = prefs.get(pref_key)
+            # Strip the prefs branch too, not just env: a GUI-pasted token
+            # or URL with a trailing newline would otherwise ride into the
+            # Authorization header / request URL and fail with a baffling
+            # 401 that "the same token works elsewhere".
+            value = str(prefs.get(pref_key) or "").strip()
             if value:
                 return value
         return os.environ.get(env_key, "").strip()
@@ -93,7 +97,13 @@ def upload_file(path, *, title, author, prefs=None,
     """Upload ``path`` (an M4B) into the configured library. Raises
     :class:`ABSConfigError` when no library id is resolvable, or
     ``RuntimeError`` on a transport/HTTP failure. ``transport`` is an
-    injection seam for tests."""
+    injection seam for tests.
+
+    Note: this POSTs unconditionally — there is no "already present"
+    check, and Audiobookshelf will happily create a second library item
+    for the same book. Re-downloading or updating a story that
+    re-renders its M4B therefore uploads a duplicate; callers that
+    auto-upload on every run should gate on that."""
     cfg = _config(prefs)
     lib_id = library_id or cfg["library_id"]
     if not lib_id:

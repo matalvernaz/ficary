@@ -183,6 +183,7 @@ def _show_update_dialog(
     primary_label: str,
     primary_result: str,
     release_url: str,
+    changelog: str = "",
 ) -> str:
     """Modal four-button update prompt.
 
@@ -204,10 +205,12 @@ def _show_update_dialog(
     asset without an ``html_url``) so we never present a button that
     can't do its job.
     """
+    # RESIZE_BORDER so a user several versions behind can grow the
+    # dialog to read the aggregated changelog comfortably.
     dlg = wx.Dialog(
         parent,
         title="Update Available",
-        style=wx.DEFAULT_DIALOG_STYLE,
+        style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER,
     )
     panel = wx.Panel(dlg)
     sizer = wx.BoxSizer(wx.VERTICAL)
@@ -218,6 +221,24 @@ def _show_update_dialog(
     # it as the dialog message rather than an unlabelled region.
     text.SetName("Update details")
     sizer.Add(text, 0, wx.ALL, 16)
+
+    # Everything the user has missed since their installed version, not
+    # just the newest release's notes. A read-only multiline TextCtrl is
+    # navigable line-by-line under NVDA/VoiceOver, unlike a StaticText.
+    if changelog:
+        notes_label = wx.StaticText(panel, label="Changes since your version:")
+        sizer.Add(notes_label, 0, wx.LEFT | wx.RIGHT | wx.TOP, 16)
+        notes = wx.TextCtrl(
+            panel,
+            value=changelog,
+            style=wx.TE_MULTILINE | wx.TE_READONLY | wx.TE_BESTWRAP,
+            size=(560, 220),
+        )
+        notes.SetName("Changes since your version")
+        # Keep the caret at the top so the newest release is what's shown
+        # first rather than scrolled to the end of the oldest entry.
+        notes.SetInsertionPoint(0)
+        sizer.Add(notes, 1, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 16)
 
     btn_row = wx.BoxSizer(wx.HORIZONTAL)
     primary_btn = wx.Button(panel, label=primary_label)
@@ -1607,6 +1628,11 @@ class MainFrame(wx.Frame):
         if snoozed_until and time.time() < snoozed_until:
             return
 
+        # Fetch the aggregated changelog here on the daemon thread (past
+        # the skip/snooze gates, so it only costs an API call when we're
+        # actually going to prompt) — never on the main thread, where the
+        # network round-trip would freeze the UI for a screen-reader user.
+        info["changelog"] = self_update.fetch_changelog_since()
         wx.CallAfter(self._prompt_update, info)
 
     def _prompt_update(self, info):
@@ -1650,6 +1676,7 @@ class MainFrame(wx.Frame):
             primary_label=primary_label,
             primary_result=primary_result,
             release_url=release_url,
+            changelog=info.get("changelog", ""),
         )
 
         if result == "update":
@@ -3479,6 +3506,9 @@ class MainFrame(wx.Frame):
             from . import prefs as _p
             self.prefs.set(_p.KEY_SKIPPED_VERSION, "")
             self.prefs.set(_p.KEY_UPDATE_SNOOZED_UNTIL, 0)
+            # Fetch on this worker thread, not in _prompt_update — a
+            # network call on the main thread would freeze the GUI.
+            info["changelog"] = self_update.fetch_changelog_since()
             wx.CallAfter(self._prompt_update, info)
 
         threading.Thread(target=worker, daemon=True).start()

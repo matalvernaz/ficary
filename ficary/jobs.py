@@ -20,6 +20,18 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 
+def _coerce_speech_rate(value) -> int:
+    """Prefs store the TTS speech-rate percentage as a string (``"0"``,
+    ``"-15"``); the CLI's argparse yields an ``int`` and the audio
+    pipeline does integer arithmetic on it (``tts._combine_rate``).
+    Coerce here — tolerating a stray ``%`` or a blank — so a
+    prefs-seeded job never feeds a ``str`` into that arithmetic."""
+    try:
+        return int(str(value).strip().rstrip("%") or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
 @dataclass
 class DownloadJob:
     """Everything ``cli._download_one`` / ``cli._build_scraper`` read
@@ -55,7 +67,7 @@ class DownloadJob:
     hr_as_stars: bool = False
     strip_notes: bool = False
     llm_strip_notes: bool = False
-    speech_rate: str = "0"
+    speech_rate: int = 0
     attribution: str = "builtin"
     attribution_model_size: str = ""
     send_to_kindle: Optional[str] = None
@@ -72,10 +84,16 @@ class DownloadJob:
         # isn't installed (Prefs no-ops gracefully without wx).
         from .exporters import DEFAULT_TEMPLATE
         from .prefs import (
+            KEY_AO3_COOKIE,
+            KEY_ATTRIBUTION_BACKEND,
+            KEY_ATTRIBUTION_MODEL_SIZE,
+            KEY_FICHUB,
             KEY_HR_AS_STARS,
             KEY_LLM_STRIP_NOTES,
             KEY_NAME_TEMPLATE,
+            KEY_SPEECH_RATE,
             KEY_STRIP_NOTES,
+            KEY_WEBNOVEL_COOKIE,
             Prefs,
         )
 
@@ -85,6 +103,20 @@ class DownloadJob:
             hr_as_stars=prefs.get_bool(KEY_HR_AS_STARS),
             strip_notes=prefs.get_bool(KEY_STRIP_NOTES),
             llm_strip_notes=prefs.get_bool(KEY_LLM_STRIP_NOTES),
+            # The manual GUI download path already honours these (gui.py);
+            # the update / watchlist-auto-download paths funnel through
+            # here and used to drop them. Dropping the cookie meant a
+            # restricted AO3/Webnovel work silently re-fetched the
+            # login-gate page on every unattended update; dropping
+            # speech_rate/attribution meant audio auto-renders ignored the
+            # user's voice settings. Empty cookie pref -> None so
+            # _build_scraper's FICARY_*_COOKIE env fallback still applies.
+            ao3_cookie=(prefs.get(KEY_AO3_COOKIE) or None),
+            webnovel_cookie=(prefs.get(KEY_WEBNOVEL_COOKIE) or None),
+            fichub=prefs.get_bool(KEY_FICHUB),
+            attribution=(prefs.get(KEY_ATTRIBUTION_BACKEND) or "builtin"),
+            attribution_model_size=(prefs.get(KEY_ATTRIBUTION_MODEL_SIZE) or ""),
+            speech_rate=_coerce_speech_rate(prefs.get(KEY_SPEECH_RATE)),
         )
         for key, value in overrides.items():
             if not hasattr(job, key):

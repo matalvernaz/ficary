@@ -23,6 +23,13 @@ from .watchlist import MIN_POLL_INTERVAL_S, WatchlistStore, run_once
 
 logger = logging.getLogger(__name__)
 
+# The worker sleeps the poll interval in slices no longer than this, so a
+# reconfigure that shortens the interval is observed within one slice
+# instead of after the old (possibly hour-long) interval elapses. Small
+# enough to feel responsive, large enough that the periodic flag-check is
+# negligible for a daemon that otherwise sleeps for minutes.
+_POLL_WAKE_GRANULARITY_S = 60
+
 
 class WatchlistPoller:
     """Single-thread scheduler for background watchlist polls.
@@ -127,17 +134,33 @@ class WatchlistPoller:
     # ── Thread body ─────────────────────────────────────────
 
     def _run(self):
+        # Sleep the interval in bounded slices, re-reading self._interval
+        # each slice, so a reconfigure that shortens the cadence takes
+        # effect within one slice rather than after the old interval runs
+        # out. Stop stays instant: _stop.wait returns True the moment stop
+        # is set, in whichever slice is current.
+        waited = 0.0
         while True:
-            # Event.wait returns True iff stop was set within the
-            # timeout window — that's our clean shutdown path.
-            if self._stop.wait(timeout=self._interval):
+            slice_s = max(0.0, min(self._interval - waited,
+                                   _POLL_WAKE_GRANULARITY_S))
+            # Event.wait returns True iff stop was set within the slice —
+            # that's our clean shutdown path.
+            if self._stop.wait(timeout=slice_s):
                 with self._lock:
                     if not self._stop.is_set():
                         # start() cancelled the stop before we acted on
                         # it (rapid off->on reconfigure) — keep polling.
+                        waited = 0.0
                         continue
                     self._thread = None
                     return
+            waited += slice_s
+            if waited < self._interval:
+                # Interval not elapsed yet (or it was just lengthened) —
+                # keep waiting. A shortened interval falls through to the
+                # poll below because waited already meets it.
+                continue
+            waited = 0.0
             try:
                 self._do_poll()
             except Exception:

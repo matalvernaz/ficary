@@ -191,6 +191,7 @@ def heal_all(
     watchlist: WatchlistStore | None = None,
     auto_backup: bool = True,
     destructive: bool = False,
+    do_watchlist: bool = True,
 ) -> FullHealResult:
     """Apply a cross-surface heal.
 
@@ -198,11 +199,17 @@ def heal_all(
     run: stat-cache refresh and orphan-file indexing. Everything that
     REMOVES data — dropping missing/stale index entries, deleting
     unrepairable watches, pruning orphan caches — requires
-    ``destructive=True`` (the CLI's ``--heal-all``), and callers are
-    expected to snapshot the watchlist and write a heal manifest first
-    (the library index is snapshotted here via ``auto_backup``). The
+    ``destructive=True`` (the CLI's ``--heal-all``). The
     rounds-8/9 audits both found doctor paths destroying data on a
     misdiagnosis; opt-in plus manifest is the systemic fix.
+
+    Snapshot/manifest policy: the CLI captures manifest-owned snapshots
+    and writes the recovery manifest BEFORE calling this, then passes
+    ``auto_backup=False`` (so no redundant rolling-pool backup is made)
+    and ``do_watchlist=False`` when it couldn't snapshot the watchlist
+    (so watches are never dropped without a restore point). ``auto_backup``
+    still defaults True for direct/test callers that rely on the built-in
+    index backup.
     """
     if index is None:
         index = LibraryIndex.load()
@@ -244,7 +251,12 @@ def heal_all(
     ):
         index.save()
 
-    if destructive and watchlist is not None and report.watchlist_report is not None:
+    if (
+        destructive
+        and do_watchlist
+        and watchlist is not None
+        and report.watchlist_report is not None
+    ):
         result.watchlist_heal = heal_watchlist(
             watchlist, report.watchlist_report,
             drop_invalid_type=True,

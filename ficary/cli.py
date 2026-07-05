@@ -2333,42 +2333,81 @@ def _handle_full_doctor(args: argparse.Namespace) -> None:
         )
         sys.exit(2)
 
-    watchlist_snapshot = None
-    if destructive:
-        from .library.backup import snapshot_before
-        from .watchlist import WatchlistStore
-        try:
-            store = WatchlistStore.load_default()
-            watchlist_snapshot = snapshot_before("--doctor --heal-all", store.path)
-        except Exception:
-            logger.debug("Watchlist snapshot failed", exc_info=True)
-
-    result = heal_all(report, destructive=destructive)
-    print("\n" + result.summary())
-    if destructive:
-        from .heal_manifest import HealManifest, write_manifest
-        index_snapshot = (
-            str(result.index_backups[0]) if result.index_backups else None
-        )
-        manifest_path = write_manifest(HealManifest(
-            label="--doctor --heal-all",
-            index_snapshot=index_snapshot,
-            watchlist_snapshot=str(watchlist_snapshot) if watchlist_snapshot else None,
-            cache_quarantine_dir=(
-                str(result.cache_quarantine_dir)
-                if result.cache_quarantine_dir else None
-            ),
-            dropped_watches=int(
-                result.watchlist_heal.removed if result.watchlist_heal else 0
-            ),
-            pruned_cache_entries=int(result.cache_pruned or 0),
-        ))
-        print(f"(Manifest: {manifest_path}; undo with --doctor-restore-last)")
-    else:
+    if not destructive:
+        # Safe heal: reversible fixes only (stat-cache refresh, orphan
+        # indexing). Nothing is removed, so no snapshot/manifest needed.
+        result = heal_all(report, destructive=False)
+        print("\n" + result.summary())
         print(
             "\nSafe fixes applied. Data-removing fixes were NOT "
             "(--heal-all to opt in)."
         )
+        sys.exit(0)
+
+    # Destructive path. Capture manifest-owned snapshots and write the
+    # recovery manifest BEFORE dropping anything: a crash mid-heal then
+    # still leaves a working --doctor-restore-last, and the snapshots live
+    # with the manifest instead of the rolling backup pool that could prune
+    # them out from under it.
+    from .heal_manifest import (
+        HealManifest,
+        capture_snapshot,
+        update_manifest,
+        write_manifest,
+    )
+    from .library.index import default_index_path
+    from .watchlist import WatchlistStore
+
+    index_snapshot = capture_snapshot(default_index_path(), "index")
+
+    watchlist_snapshot = None
+    do_watchlist = True
+    try:
+        store = WatchlistStore.load_default()
+        watchlist_path = Path(store.path)
+    except Exception:
+        logger.debug("Watchlist load failed before heal", exc_info=True)
+        watchlist_path = None
+    if watchlist_path is not None and watchlist_path.exists():
+        watchlist_snapshot = capture_snapshot(watchlist_path, "watchlist")
+        if watchlist_snapshot is None:
+            # Couldn't snapshot — don't drop watches with no way back.
+            do_watchlist = False
+            print(
+                "  Warning: couldn't snapshot the watchlist; skipping the "
+                "watchlist heal so no watches are dropped without a restore "
+                "point.",
+                file=sys.stderr,
+            )
+
+    manifest = HealManifest(
+        label="--doctor --heal-all",
+        index_snapshot=str(index_snapshot) if index_snapshot else None,
+        watchlist_snapshot=str(watchlist_snapshot) if watchlist_snapshot else None,
+    )
+    write_manifest(manifest)
+
+    result = heal_all(
+        report, destructive=True, auto_backup=False, do_watchlist=do_watchlist,
+    )
+    print("\n" + result.summary())
+
+    # Record what actually changed + where the cache went, now that the
+    # heal has run.
+    manifest.cache_quarantine_dir = (
+        str(result.cache_quarantine_dir) if result.cache_quarantine_dir else None
+    )
+    manifest.dropped_index_entries = sum(
+        (hr.removed_missing + hr.removed_stale_untrackable
+         + hr.removed_stale_duplicates)
+        for hr in result.library_heals.values()
+    )
+    manifest.dropped_watches = int(
+        result.watchlist_heal.removed if result.watchlist_heal else 0
+    )
+    manifest.pruned_cache_entries = int(result.cache_pruned or 0)
+    update_manifest(manifest)
+    print(f"(Manifest: {manifest.path}; undo with --doctor-restore-last)")
     sys.exit(0)
 
 
@@ -2434,9 +2473,29 @@ def _handle_watchlist_doctor(args: argparse.Namespace) -> None:
             "--doctor-restore-last undoes it.",
         )
         sys.exit(2)
-    from .heal_manifest import HealManifest, write_manifest
-    from .library.backup import snapshot_before
-    snapshot = snapshot_before("--watchlist-doctor heal", store.path)
+    from .heal_manifest import (
+        HealManifest,
+        capture_snapshot,
+        update_manifest,
+        write_manifest,
+    )
+    # Snapshot into manifest-owned storage and write the manifest BEFORE
+    # dropping watches (mirrors --doctor --heal-all). We're only here
+    # because the report wasn't clean, so the file exists; a None snapshot
+    # means the copy failed — refuse rather than drop with no way back.
+    snapshot = capture_snapshot(store.path, "watchlist")
+    if snapshot is None:
+        print(
+            "Error: couldn't snapshot the watchlist before healing; "
+            "aborting so no watches are dropped without a restore point.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    manifest = HealManifest(
+        label="--watchlist-doctor heal",
+        watchlist_snapshot=str(snapshot),
+    )
+    write_manifest(manifest)
     result = heal_watchlist(
         store,
         report,
@@ -2447,12 +2506,9 @@ def _handle_watchlist_doctor(args: argparse.Namespace) -> None:
         drop_duplicates=True,
     )
     print("\n" + result.summary())
-    manifest_path = write_manifest(HealManifest(
-        label="--watchlist-doctor heal",
-        watchlist_snapshot=str(snapshot) if snapshot else None,
-        dropped_watches=int(result.removed or 0),
-    ))
-    print(f"(Watchlist snapshot: {snapshot}; manifest: {manifest_path}; "
+    manifest.dropped_watches = int(result.removed or 0)
+    update_manifest(manifest)
+    print(f"(Watchlist snapshot: {snapshot}; manifest: {manifest.path}; "
           "undo with --doctor-restore-last)")
     sys.exit(0)
 
@@ -2564,11 +2620,14 @@ def _handle_doctor_restore_last() -> None:
     if manifest.restored_at:
         print(f"  Note: already restored once at {manifest.restored_at}.")
 
+    restored_any = False
+
     if manifest.index_snapshot:
         snap = Path(manifest.index_snapshot)
         if snap.exists():
             restore(snap, default_index_path())
             print(f"  Library index restored from {snap.name}.")
+            restored_any = True
         else:
             print(f"  Index snapshot missing: {snap}", file=sys.stderr)
 
@@ -2579,6 +2638,7 @@ def _handle_doctor_restore_last() -> None:
             store = WatchlistStore.load_default()
             restore(snap, store.path)
             print(f"  Watchlist restored from {snap.name}.")
+            restored_any = True
         else:
             print(f"  Watchlist snapshot missing: {snap}", file=sys.stderr)
 
@@ -2603,6 +2663,8 @@ def _handle_doctor_restore_last() -> None:
                 + (f", {skipped} skipped (already present/locked)"
                    if skipped else "") + "."
             )
+            if moved:
+                restored_any = True
             try:
                 quarantine.rmdir()
             except OSError:
@@ -2611,6 +2673,16 @@ def _handle_doctor_restore_last() -> None:
             print(f"  Quarantine dir missing: {quarantine}", file=sys.stderr)
 
     mark_restored(manifest)
+    if not restored_any:
+        # Every referenced artifact was missing/empty — the undo was a
+        # no-op. Exit non-zero so a script gating on the exit code doesn't
+        # read a failed restore as success.
+        print(
+            "Nothing was restored — the snapshots this manifest references "
+            "are missing.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
     sys.exit(0)
 
 
@@ -4714,6 +4786,7 @@ def make_watch_downloader(prefs):
     def downloader(watch, result) -> list:
         idx = LibraryIndex.load()
         saved: list[Path] = []
+        failures: list[str] = []
 
         def run(url: str) -> None:
             job = copy.deepcopy(base_job)
@@ -4728,11 +4801,17 @@ def make_watch_downloader(prefs):
                         update_path.suffix.lower(), job.format,
                     )
                     break
-            _download_one(
+            ok = _download_one(
                 url, job, output_dir,
                 update_path=update_path,
                 on_export=saved.append,
             )
+            # _download_one returns False (not raises) for blocked /
+            # rate-limited / locked / paywalled / missing-dep failures,
+            # printing the reason. Record it so run_once reports a failure
+            # instead of a silent "N new chapters" success with no paths.
+            if not ok:
+                failures.append(url)
 
         if watch.type == WATCH_TYPE_STORY:
             run(watch.target)
@@ -4740,6 +4819,14 @@ def make_watch_downloader(prefs):
             # Author/search watches: new_items are the fresh work URLs.
             for url in result.new_items:
                 run(url)
+
+        if failures:
+            raise RuntimeError(
+                "download failed for "
+                + ", ".join(failures[:3])
+                + (f" (+{len(failures) - 3} more)" if len(failures) > 3 else "")
+                + " — see the log for the reason"
+            )
         return saved
 
     return downloader

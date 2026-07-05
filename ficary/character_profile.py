@@ -61,7 +61,8 @@ def _resolve_name(raw: object, cl_lower: dict[str, str]) -> str | None:
         return cl_lower[low]
     # Allow first-name match (model returns "Harry" against "Harry Potter").
     for full_low, full in cl_lower.items():
-        if low == full_low.split()[0]:
+        parts = full_low.split()
+        if parts and low == parts[0]:
             return full
     return None
 
@@ -125,6 +126,17 @@ def derive_accents_from_profiles(profiles: dict[str, dict]) -> dict[str, str]:
     return out
 
 
+def _voice_language(voice_id: str) -> str:
+    """Language subtag of a voice id — ``edge:en-US-AriaNeural`` -> ``en``.
+
+    Empty string when unparseable. Used to keep a signal-less narrator
+    accent anchored to the curated fallback's language rather than the
+    first voice in a locale-alphabetical catalog."""
+    tail = (voice_id or "").split(":", 1)[-1]
+    m = re.match(r"([a-z]{2,3})[-_]", tail, re.I)
+    return m.group(1).lower() if m else ""
+
+
 def pick_narrator_voice_for_profile(
     *, profile: dict | None,
     enabled_providers: list[str] | None,
@@ -149,17 +161,34 @@ def pick_narrator_voice_for_profile(
         return fallback
     target_gender = (profile.get("gender") or "neutral").lower()
     target_accent = (profile.get("accent") or "any").lower()
-    target_lang = target_accent.split("-", 1)[0] if "-" in target_accent else target_accent
+
+    def _gender_ok(v) -> bool:
+        return not (
+            target_gender in ("male", "female")
+            and v.gender.lower() != target_gender
+        )
+
+    # No accent signal ("any"/"", or a non-BCP-47 word the cleaner reduced
+    # to "any"): DON'T return catalog[0]. The provider catalog is
+    # locale-alphabetical, so the first gender match lands on e.g.
+    # af-ZA-WillemNeural narrating an English story. Prefer a
+    # gender-matching voice in the curated fallback's own language, and
+    # only then the fallback itself.
+    if target_accent in ("any", ""):
+        fallback_lang = _voice_language(fallback)
+        if fallback_lang:
+            for v in catalog:
+                if _gender_ok(v) and v.language.lower() == fallback_lang:
+                    return v.id
+        return fallback
+
+    # A real accent was requested: exact locale first, then language-only.
+    target_lang = target_accent.split("-", 1)[0]
     for v in catalog:
-        if target_gender in ("male", "female") and v.gender.lower() != target_gender:
-            continue
-        if target_accent in ("any", "") or v.locale.lower() == target_accent:
+        if _gender_ok(v) and v.locale.lower() == target_accent:
             return v.id
-    # Locale fallback to language match.
     for v in catalog:
-        if target_gender in ("male", "female") and v.gender.lower() != target_gender:
-            continue
-        if v.language.lower() == target_lang:
+        if _gender_ok(v) and v.language.lower() == target_lang:
             return v.id
     return fallback
 

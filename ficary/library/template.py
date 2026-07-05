@@ -228,6 +228,15 @@ def render(
             f"Unknown placeholder {exc} in library path template. "
             f"Available: {', '.join('{' + k + '}' for k in fields)}"
         ) from None
+    except (ValueError, IndexError) as exc:
+        # A malformed template — unbalanced brace ("{title") raises
+        # ValueError, a positional field ("{0}") raises IndexError — used
+        # to escape as a cryptic crash on the auto-sort path. Surface the
+        # same actionable guidance as the unknown-placeholder case.
+        raise ValueError(
+            f"Invalid library path template ({exc!r}). Use only these "
+            f"placeholders: {', '.join('{' + k + '}' for k in fields)}"
+        ) from None
 
     # Drop empty, "." and ".." segments. Empty handles a leading "/";
     # "." and ".." stop a poorly-templated or hostile metadata value

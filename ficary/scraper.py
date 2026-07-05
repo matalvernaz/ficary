@@ -1572,8 +1572,11 @@ def _ffn_row_to_work(row, story_id, section):
 
 # Apex host preceded by a scheme but not a subdomain dot. The apex
 # resolves to non-Cloudflare addresses that answer on neither port 80
-# nor 443 — only ``www.fanfiction.net`` serves the site.
-_FFN_APEX_RE = re.compile(r"(?<=://)fanfiction\.net", re.I)
+# nor 443 — only ``www.fanfiction.net`` serves the site. The right-hand
+# lookahead anchors on a host terminator (port/path/query/fragment or
+# end) so we don't rewrite ``fanfiction.network`` or an embedded
+# ``fanfiction.net`` inside a longer label / query string.
+_FFN_APEX_RE = re.compile(r"(?<=://)fanfiction\.net(?=[:/?#]|$)", re.I)
 
 
 class FFNScraper(BaseScraper):

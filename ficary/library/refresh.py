@@ -190,16 +190,29 @@ def build_refresh_queue(
         if skip_abandoned:
             abandoned_at = entry.get("abandoned_at")
             if abandoned_at:
-                # The date prefix (first 10 chars of the ISO string)
-                # is what a reader cares about — surfaces "marked Jan
-                # 2025" rather than a full second-resolution stamp.
-                date_prefix = str(abandoned_at)[:10]
-                progress(
-                    f"  [skip] {display_rel}: marked abandoned "
-                    f"({date_prefix}; --revive-abandoned to undo)"
+                # Same pending-download bypass as skip_complete below: a
+                # story with owed upstream chapters (remote > local) has
+                # demonstrably updated, so it isn't really abandoned —
+                # finish it rather than skip it. Only genuinely-idle
+                # abandoned entries are skipped.
+                pending_remote = entry.get("remote_chapter_count")
+                cached_count = entry.get("chapter_count")
+                has_pending_download = (
+                    isinstance(pending_remote, int)
+                    and isinstance(cached_count, int)
+                    and pending_remote > cached_count
                 )
-                skipped.append(display_rel)
-                continue
+                if not has_pending_download:
+                    # The date prefix (first 10 chars of the ISO string)
+                    # is what a reader cares about — surfaces "marked Jan
+                    # 2025" rather than a full second-resolution stamp.
+                    date_prefix = str(abandoned_at)[:10]
+                    progress(
+                        f"  [skip] {display_rel}: marked abandoned "
+                        f"({date_prefix}; --revive-abandoned to undo)"
+                    )
+                    skipped.append(display_rel)
+                    continue
 
         # Index-driven skip-complete: check before doing any disk
         # work. The pending-resume bypass below still runs first via
@@ -244,12 +257,19 @@ def build_refresh_queue(
             # update cycle.
             local = int(entry.get("chapter_count") or 0)
             if local == 0:
-                progress(
-                    f"  [skip] {display_rel}: chapter count unknown "
-                    "(not an ficary export and index has 0)"
-                )
-                skipped.append(display_rel)
-                continue
+                # Before giving up: a prior probe may have recorded a
+                # remote count (a pending download owed from an interrupted
+                # batch). Don't drop that — fall through to the
+                # resume-without-reprobe branch below (pending > local == 0
+                # queues it). Only skip when there is genuinely nothing owed.
+                pending = entry.get("remote_chapter_count")
+                if not (isinstance(pending, int) and pending > 0):
+                    progress(
+                        f"  [skip] {display_rel}: chapter count unknown "
+                        "(not an ficary export and index has 0)"
+                    )
+                    skipped.append(display_rel)
+                    continue
 
         # Resume-without-reprobe: if a previous run recorded a remote
         # chapter count larger than ``local`` and the file hasn't

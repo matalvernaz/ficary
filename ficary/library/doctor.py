@@ -323,7 +323,16 @@ def heal(
         lib_state["untrackable"] = keep
 
     if refresh_drift and report.drifted_entries:
-        for url, entry in report.drifted_entries:
+        stories = lib_state["stories"]
+        for url, report_entry in report.drifted_entries:
+            # Re-fetch the entry from the index we were passed rather than
+            # writing through the dict captured in the report. In the
+            # integrated doctor path check_all() and heal_all() load
+            # separate LibraryIndex instances, so the report's dict belongs
+            # to a different object than the one heal_all() saves — mutating
+            # it would refresh nothing on disk and every later
+            # --update-library would keep re-parsing the drifted files.
+            entry = stories.get(url, report_entry)
             primary_rel = entry.get("relpath")
             if not primary_rel:
                 continue

@@ -1764,6 +1764,11 @@ _XHTML_SANITIZE_CSS = (
 )
 
 
+_BARE_AMP_RE = re.compile(
+    r"&(?![A-Za-z][A-Za-z0-9]*;|#\d+;|#[Xx][0-9A-Fa-f]+;)"
+)
+
+
 def _xhtml_sanitize(html: str) -> str:
     """Rewrite scraped chapter HTML into EPUB3-clean XHTML.
 
@@ -1776,6 +1781,14 @@ def _xhtml_sanitize(html: str) -> str:
     original markup verbatim.
     """
     from bs4 import BeautifulSoup
+
+    # Escape bare ampersands (anything not already a well-formed named /
+    # decimal / hex entity) BEFORE parsing. html.parser's default
+    # convert_charrefs otherwise buffers a trailing ``&word`` with no
+    # terminator and silently drops it — ``AT&T`` at the end of a text
+    # node became ``ATT`` — which would violate the "text nodes are never
+    # removed" guarantee above. Idempotent: real entities are left intact.
+    html = _BARE_AMP_RE.sub("&amp;", html)
 
     soup = BeautifulSoup(html, "html.parser")
 

@@ -1,5 +1,91 @@
 # Changelog
 
+## 2.8.0 — 2026-07-05
+
+Audit round 11: one workflow request plus a batch of verified fixes.
+
+**New features**
+
+* **The update prompt now shows everything since your version.** When an
+  update is available, the dialog lists the release notes for every
+  version between the one you have and the newest — not just the latest
+  release — in a scrollable, screen-reader-navigable pane. If you skipped
+  a few releases you can see the whole story before deciding. (This only
+  takes effect for updates made *from* this version onward; older clients
+  never fetched the intervening notes.)
+
+**Bug fixes**
+
+* **Unattended updates keep your AO3 / Webnovel login.** The watchlist
+  auto-downloader and the library "Check for Updates" flow rebuilt their
+  download settings from your preferences but dropped the saved AO3 and
+  Webnovel session cookies — so a restricted or adult-only work that
+  downloaded fine by hand would silently re-fetch the login/age-gate page
+  on every automatic update. Those flows now carry the cookies (and your
+  FicHub, attribution, and speech-rate settings) the same way a manual
+  download does.
+* **Audiobook auto-downloads no longer crash on the speech rate.** The
+  saved speech-rate setting reached the audio pipeline as text instead of
+  a number, so a watchlist auto-download in audio format failed with a
+  `TypeError` the moment a line carried an emotion cue. The value is now
+  a proper integer everywhere.
+* **`--doctor-restore-last` can always undo the last heal.** The pre-heal
+  snapshots lived in the rolling index-backup pool, which prunes to a
+  fixed depth — so routine `--heal`/`--restore-index` runs could delete
+  the exact snapshot a still-current manifest pointed at, leaving nothing
+  to restore. Heal snapshots now live with the manifest that owns them,
+  the recovery manifest is written *before* anything is dropped (a crash
+  mid-heal still leaves a usable restore point), and the watchlist heal is
+  skipped if its snapshot couldn't be taken. `--doctor-restore-last` also
+  exits non-zero when every referenced snapshot is missing instead of
+  reporting a silent success.
+* **The full-library doctor's stat-cache refresh sticks.** In the
+  combined `--doctor` pass the "refreshed N stat cache(s)" fix was written
+  to a discarded copy of the index, so every later `--update-library`
+  kept re-parsing the same files. It now updates the index that actually
+  gets saved.
+* **Failed watchlist auto-downloads are reported, not swallowed.** A
+  blocked, rate-limited, or locked auto-download used to show up as a
+  "new chapters" success with nothing saved; it now surfaces the failure
+  on the watch and in the notification.
+* **EPUBs keep ampersands in the text.** A chapter whose text ended in a
+  bare `&` followed by letters (e.g. `AT&T`, `Q&A`) could have the `&`
+  silently dropped during EPUB assembly. Bare ampersands are now escaped
+  before parsing, so the text survives intact.
+* **AFF author pages resolve every fandom subdomain.** Protocol-relative
+  and root-relative story links on an Adult-FanFiction profile were forced
+  onto the default `hp` subdomain (wrong fandom, or a malformed
+  double-host URL). They now resolve against the profile's own host.
+* **Interrupted foreign-format downloads resume.** A non-ficary file
+  (FanFicFare/FicHub/FLAG) with a recorded pending chapter count but a
+  zero local count was skipped as "chapter count unknown" instead of
+  finishing its owed download. The pending count is now honoured.
+* **Abandoned stories with owed chapters finish.** A story marked
+  abandoned that had genuinely-new upstream chapters was skipped; it now
+  gets the same pending-download bypass a `Complete` story does.
+* **A shortened autopoll interval takes effect promptly.** Changing the
+  watchlist poll interval while autopoll was running didn't reach the
+  sleeping worker until the old (possibly hour-long) interval elapsed. The
+  worker now re-reads the interval within a minute.
+
+**Smaller fixes**
+
+* Narrator voice: an unspecified/"any" accent no longer picks the first
+  voice in the alphabetical catalog (which read English in a South
+  African accent); it stays in the default narrator's language.
+* `--library-stats` now prints the "By rating" breakdown it already
+  computed, and no longer aborts on a hand-edited index with a numeric
+  timestamp field.
+* A malformed library-path template (unbalanced brace, positional field)
+  now reports an actionable error instead of a raw crash.
+* Audiobookshelf tokens/URLs entered with trailing whitespace are trimmed.
+* The FFN apex-host rewrite no longer matches look-alike hosts such as
+  `fanfiction.network`.
+* SexStories author pages whose links render as absolute URLs are no
+  longer read as "no stories found".
+* cf-solve availability honours Playwright's in-package browser location
+  (`PLAYWRIGHT_BROWSERS_PATH=0`).
+
 ## 2.7.1 — 2026-07-03
 
 **Bug fixes**

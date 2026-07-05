@@ -87,10 +87,15 @@ class SexStoriesScraper(BaseScraper):
 
         works: list[dict] = []
         seen: set[str] = set()
-        for a in soup.find_all("a", href=re.compile(r"^/story/\d+")):
+        # Match both root-relative (``/story/123``) and absolute
+        # (``https://www.sexstories.com/story/123/…``) submission links —
+        # the canonical URL is rebuilt from the id + slug via _story_url,
+        # so either href form yields the same result and a member whose
+        # links render absolute isn't silently dropped as "no stories".
+        for a in soup.find_all("a", href=re.compile(r"/story/\d+")):
             if cancel_event is not None and cancel_event.is_set():
                 break
-            sm = re.match(r"^/story/(\d+)(?:/(?P<slug>[^/?#\s]+))?", a.get("href", ""))
+            sm = re.search(r"/story/(\d+)(?:/(?P<slug>[^/?#\s]+))?", a.get("href", ""))
             if not sm or sm.group(1) in seen:
                 continue
             title = a.get_text(" ", strip=True)
