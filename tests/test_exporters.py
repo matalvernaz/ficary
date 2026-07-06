@@ -991,17 +991,23 @@ class TestHtmlStyle:
         assert "<h1>" not in text
         assert '<table class="meta-table">' not in text
 
-    def test_classic_keeps_labelled_source_for_update_scanner(self):
-        # The reference format printed a bare URL, but _parse_paragraph_labels
-        # recovers the story URL off the "Source" label; dropping it would
-        # break update detection for classic-exported files.
-        text = self._export("classic")
+    def test_classic_source_line_is_bare_url_and_still_recoverable(self):
+        # The reference prints the story URL alone on the last line, with
+        # no "Source:" label. Update detection must still find it: the
+        # library's extract_story_url scans the body and prefers the /s/
+        # story link over the /u/ author link.
+        import tempfile
+        from ficary.updater import extract_source_url
+        with tempfile.TemporaryDirectory() as d:
+            path = export_html(self._story(), d, html_style="classic")
+            text = path.read_text()
+            recovered = extract_source_url(path)
         assert (
-            '<p>Source: <a href="https://www.fanfiction.net/s/5002293/1">'
+            '<p><a href="https://www.fanfiction.net/s/5002293/1">'
+            "https://www.fanfiction.net/s/5002293/1</a></p>"
         ) in text
-        from ficary.updater import _parse_paragraph_labels
-        kv = _parse_paragraph_labels(text)
-        assert kv.get("source") == "https://www.fanfiction.net/s/5002293/1"
+        assert "<p>Source:" not in text
+        assert recovered.startswith("https://www.fanfiction.net/s/5002293")
 
     def test_classic_chapters_round_trip(self):
         # The whole point of only touching the title page: chapters must

@@ -494,12 +494,10 @@ def _html_meta_block(story: Story, html_style: str) -> str:
     ``modern`` emits an ``<h1>`` over a ``<table class="meta-table">``.
     ``classic`` emits the flat ``<p>Label: value</p>`` list of the
     legacy downloader format: no heading, the author rendered as a
-    link, and the summary left un-italicised. Both layouts iterate the
-    same :func:`_meta_fields`, so any field present in one is present
-    in the other. The ``Source`` row keeps its label in ``classic``
-    (the reference format printed a bare URL, but the label is what
-    ``updater._parse_paragraph_labels`` matches on to recover the story
-    URL for update checks).
+    link, the summary left un-italicised, and the source URL alone on
+    the final line with no label (matching the reference format). Both
+    layouts iterate the same :func:`_meta_fields`, so any field present
+    in one is present in the other.
     """
     fields = _meta_fields(story)
     if html_style == HTML_STYLE_CLASSIC:
@@ -507,8 +505,13 @@ def _html_meta_block(story: Story, html_style: str) -> str:
         for label, value in fields:
             val_esc = escape(value)
             if label == "Source":
-                cell = f'<a href="{escape(value)}">{val_esc}</a>'
-            elif label == "Author" and story.author_url:
+                # Reference format prints the story URL alone, unlabelled.
+                # extract_story_url still recovers it from the body (and
+                # prefers the /s/ story link over the /u/ author link), so
+                # update detection survives the missing label.
+                lines.append(f'<p><a href="{escape(value)}">{val_esc}</a></p>')
+                continue
+            if label == "Author" and story.author_url:
                 cell = f'<a href="{escape(story.author_url)}">{val_esc}</a>'
             else:
                 cell = val_esc
