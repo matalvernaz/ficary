@@ -34,23 +34,6 @@ if not os.environ.get("DISPLAY"):
     )
 
 
-@pytest.fixture(scope="session")
-def wx_app():
-    """A single ``wx.App`` for the whole session.
-
-    wxPython doesn't tolerate constructing a second ``wx.App`` in
-    the same process — the GTK signal table from the first one
-    survives the Destroy() and segfaults the next App's init. Tests
-    that need a frame share this one and rely on per-test
-    Destroy() of the frame itself to keep handler tables clean.
-    """
-    app = wx.App(False)
-    yield app
-    # Don't ``app.Destroy()`` here — pytest-finalize ordering can
-    # call this after a frame fixture's teardown has already torn
-    # the GTK loop down, segfaulting the interpreter shutdown.
-
-
 def test_main_frame_constructs(wx_app):
     """MainFrame's __init__ wires every menu, toolbar, and bind in
     one shot — a regression that breaks any of those raises here."""

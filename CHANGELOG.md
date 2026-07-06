@@ -1,5 +1,25 @@
 # Changelog
 
+## 2.9.0 — 2026-07-06
+
+**New features**
+
+* **Library browser.** A new Browse Library window (Library menu, or Ctrl+B)
+  lists every story your last scan indexed, with a live search box and a
+  screen-reader-navigable list — arrow through it and the details pane below
+  reads out title, author, fandom, format, file path, and source URL. Press
+  Enter (or Open in Reader) to start reading the selected story; the other
+  buttons check it for updates, re-export it to another format, copy its file
+  path, or delete it from disk. The Library window has an Open Story Browser
+  button too.
+* **Separate adult library.** Adult-only downloads (Literotica, AFF, and the
+  other adult sites) can now go to a completely separate folder — a different
+  drive, an unsynced or encrypted location, wherever — instead of an Adult
+  subfolder inside your main library. Set it as "Adult library folder" in the
+  Library window. The browser tracks that folder as its own library and hides
+  adult titles until you tick "Show adult", so the content stays off-screen by
+  default. Scan Library scans both locations in one pass.
+
 ## 2.8.1 — 2026-07-06
 
 **Bug fixes**

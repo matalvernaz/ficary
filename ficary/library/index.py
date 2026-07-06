@@ -479,6 +479,18 @@ class LibraryIndex:
         for url, entry in self._library(root, create=False)["stories"].items():
             yield url, entry
 
+    def remove(self, root: Path, url: str) -> bool:
+        """Drop a single story from ``root``'s index. Returns ``True`` if it
+        was present. The key is canonicalised to match storage (see
+        ``record`` / ``lookup_by_url``); callers may pass either the stored
+        key or a raw source URL. Caller is responsible for ``save()``."""
+        stories = self._library(root, create=False)["stories"]
+        for candidate in (url, canonical_url(url) or url):
+            if candidate in stories:
+                del stories[candidate]
+                return True
+        return False
+
     def untrackable_in(self, root: Path) -> list[dict]:
         return list(self._library(root, create=False)["untrackable"])
 

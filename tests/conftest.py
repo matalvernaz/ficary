@@ -12,6 +12,31 @@ def _load(name: str) -> str:
 
 
 @pytest.fixture(scope="session")
+def wx_app():
+    """A single ``wx.App`` shared by every GUI test in the session.
+
+    wxPython doesn't tolerate constructing a second ``wx.App`` in the same
+    process — the GTK signal table from the first survives Destroy() and
+    segfaults the next App's init — so the app lives here, in conftest, and
+    every GUI test file (smoke, browser, ...) shares this one rather than
+    each making its own. Tests rely on per-test ``frame.Destroy()`` to keep
+    handler tables clean.
+
+    ``wx`` is imported lazily inside the fixture so a wx-less / display-less
+    environment (plain CI) still collects and runs the non-GUI suite; the
+    GUI test modules skip themselves at import time in that case, so this
+    fixture is only ever instantiated when wx and a display are present.
+    """
+    import wx
+
+    app = wx.App(False)
+    yield app
+    # Don't ``app.Destroy()`` here — pytest-finalize ordering can call this
+    # after a frame fixture's teardown already tore the GTK loop down,
+    # segfaulting interpreter shutdown.
+
+
+@pytest.fixture(scope="session")
 def ao3_work_full_html():
     return _load("ao3_work_full.html")
 

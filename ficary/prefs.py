@@ -122,6 +122,13 @@ KEY_LIBRARY_ORIGINAL_FOLDER = "library_original_folder"
 # the original-fiction folder: a visible separate subtree keeps
 # adult content out of the general fandom listing.
 KEY_LIBRARY_ADULT_FOLDER = "library_adult_folder"
+# Optional SEPARATE root path for adult-only / erotica downloads. When
+# set, adult-adapter stories are written here — a wholly different
+# location (e.g. an unsynced or encrypted folder) — instead of the
+# <library>/<adult_folder> subtree. Blank (default) keeps the subfolder
+# behaviour. The library index tracks it as its own root, so the browser
+# lists and hides it independently of the main library.
+KEY_LIBRARY_ADULT_PATH = "library_adult_path"
 # Auto-mark WIP stories (status != Complete) as abandoned when
 # their file mtime is older than this many days. Non-positive
 # disables the auto-mark entirely. Marked stories are skipped by

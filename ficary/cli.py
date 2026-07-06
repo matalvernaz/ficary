@@ -454,6 +454,7 @@ def _apply_library_autosort(args: argparse.Namespace) -> None:
     )
     from .prefs import (
         KEY_LIBRARY_ADULT_FOLDER,
+        KEY_LIBRARY_ADULT_PATH,
         KEY_LIBRARY_MISC_FOLDER,
         KEY_LIBRARY_ORIGINAL_FOLDER,
         KEY_LIBRARY_PATH,
@@ -480,6 +481,9 @@ def _apply_library_autosort(args: argparse.Namespace) -> None:
     args._library_adult = (
         prefs.get(KEY_LIBRARY_ADULT_FOLDER) or DEFAULT_ADULT_FOLDER
     )
+    args._library_adult_path = (
+        prefs.get(KEY_LIBRARY_ADULT_PATH, "") or ""
+    ).strip()
 
 
 def _library_subdir_for(
@@ -558,6 +562,30 @@ def _library_subdir_for(
         misc_folder=args._library_misc,
     )
     return full.parent
+
+
+def _adult_root_override(story: Story, args: argparse.Namespace) -> Path | None:
+    """Return the separate adult-library root for ``story``, or ``None``.
+
+    When the user has configured a distinct adult-library path
+    (``_library_adult_path``), adult-adapter downloads go there — a wholly
+    separate location, not a subfolder of the main library — and the story
+    lands flat in that root. Returns ``None`` for non-adult stories, when no
+    adult path is set, or when library auto-sort isn't active, so the caller
+    falls back to normal ``_library_subdir_for`` routing (which still honours
+    the in-library ``<library>/<adult_folder>`` bucket).
+    """
+    if not getattr(args, "_library_autosort", False):
+        return None
+    adult_root = (getattr(args, "_library_adult_path", "") or "").strip()
+    if not adult_root:
+        return None
+    from .library.identifier import adapter_for_url
+    from .library.template import ADULT_FICTION_ADAPTERS
+
+    if adapter_for_url(story.url or "") in ADULT_FICTION_ADAPTERS:
+        return Path(adult_root).expanduser()
+    return None
 
 
 def _build_scraper(url: str, args: argparse.Namespace):
@@ -872,10 +900,15 @@ def _download_one(
         # Updates stay where they were (update_path already points to
         # the existing file's parent).
         if update_path is None:
-            subdir = _library_subdir_for(story, args)
-            if subdir is not None:
-                output_dir = output_dir / subdir
+            adult_root = _adult_root_override(story, args)
+            if adult_root is not None:
+                output_dir = adult_root
                 output_dir.mkdir(parents=True, exist_ok=True)
+            else:
+                subdir = _library_subdir_for(story, args)
+                if subdir is not None:
+                    output_dir = output_dir / subdir
+                    output_dir.mkdir(parents=True, exist_ok=True)
 
         if args.format == "audio":
             from .tts import generate_audiobook

@@ -325,6 +325,7 @@ class MainFrame(wx.Frame):
         self._search_frames = {}
         self._watchlist_frame = None
         self._library_frame = None
+        self._browser_frame = None
         self._reader_frame = None
         # Per-session record of fandom-subfolder create decisions:
         # fandom-folder name → True (create) / False (don't create).
@@ -2028,6 +2029,16 @@ class MainFrame(wx.Frame):
         path = dlg.GetPath()
         dlg.Destroy()
 
+        self._begin_update_for_path(path, refetch_all=refetch_all)
+
+    def _begin_update_for_path(self, path, *, refetch_all: bool = False):
+        """Kick off a single-file update for a known path.
+
+        Shared by File → Update (which picks the path via a dialog) and
+        the library browser's Check-for-Updates action, so both route
+        through the same source-URL detection, format pinning, merge-in-
+        place, and per-site queueing.
+        """
         from .updater import extract_source_url, count_chapters
 
         try:
@@ -2432,8 +2443,20 @@ class MainFrame(wx.Frame):
                 self.prefs.get(_p.KEY_LIBRARY_ORIGINAL_FOLDER)
                 or "Original Works"
             ),
+            _library_adult_path=(
+                self.prefs.get(_p.KEY_LIBRARY_ADULT_PATH, "") or ""
+            ).strip(),
             format=params.fmt,
         )
+
+        # A separate adult-library root supersedes the in-library Adult
+        # subfolder for any inside-library save target: adult-adapter
+        # downloads live in the wholly separate location the user chose.
+        adult_root = cli._adult_root_override(story, args_like)
+        if adult_root is not None:
+            adult_root.mkdir(parents=True, exist_ok=True)
+            return str(adult_root)
+
         subdir = cli._library_subdir_for(story, args_like)
 
         # Adult/original adapters with an inside-library save-to get
@@ -3195,6 +3218,10 @@ class MainFrame(wx.Frame):
             wx.ID_ANY, "&Library...\tCtrl+L",
         )
         self.Bind(wx.EVT_MENU, self._on_library_menu, library_item)
+        browse_item = library_menu.Append(
+            wx.ID_ANY, "&Browse Library...\tCtrl+B",
+        )
+        self.Bind(wx.EVT_MENU, self._open_library_browser, browse_item)
         check_updates_item = library_menu.Append(
             wx.ID_ANY, "Check for Story &Updates\tCtrl+U",
         )
@@ -3440,6 +3467,30 @@ class MainFrame(wx.Frame):
 
     def _notify_reader_frame_closed(self):
         self._reader_frame = None
+
+    def _open_library_browser(self, event=None):
+        """Open the library browser (non-modal, single instance).
+
+        Lists every story the last scan indexed and lets the user read,
+        update, re-export, locate, or delete one. Lazy import keeps the
+        browser off gui.py's startup path for users who never open it.
+        """
+        if self._browser_frame is not None:
+            try:
+                self._browser_frame.Raise()
+                self._browser_frame.SetFocus()
+                return
+            except RuntimeError:
+                # Destroyed without hitting our closed-notify — reset.
+                self._browser_frame = None
+        from .library.browser import LibraryBrowserFrame
+
+        frame = LibraryBrowserFrame(self, self.prefs)
+        self._browser_frame = frame
+        frame.Show()
+
+    def _notify_browser_frame_closed(self):
+        self._browser_frame = None
 
     def _on_soundscape_editor(self, event):
         """Open the soundscape editor (manage ambient audio definitions)."""

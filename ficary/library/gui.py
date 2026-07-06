@@ -105,6 +105,29 @@ class LibraryFrame(wx.Frame):
         path_row.Add(browse_btn, 0, wx.ALIGN_CENTER_VERTICAL)
         sizer.Add(path_row, 0, wx.EXPAND | wx.ALL, 8)
 
+        # ── Adult library path (optional separate root) ──
+        adult_row = wx.BoxSizer(wx.HORIZONTAL)
+        adult_row.Add(
+            wx.StaticText(panel, label="A&dult library folder (optional):"),
+            0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 6,
+        )
+        self.adult_path_ctrl = wx.TextCtrl(panel)
+        self.adult_path_ctrl.SetName("Adult library folder")
+        self.adult_path_ctrl.SetToolTip(
+            "Optional separate location for adult-only downloads "
+            "(Literotica, AFF, etc.). When set, those stories are saved "
+            "here instead of an Adult subfolder inside your main library, "
+            "and the browser lists and hides them independently. Leave "
+            "blank to keep them under <library>/Adult."
+        )
+        adult_row.Add(
+            self.adult_path_ctrl, 1, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 6,
+        )
+        adult_browse_btn = wx.Button(panel, label="Bro&wse...")
+        adult_browse_btn.Bind(wx.EVT_BUTTON, self._on_browse_adult)
+        adult_row.Add(adult_browse_btn, 0, wx.ALIGN_CENTER_VERTICAL)
+        sizer.Add(adult_row, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 8)
+
         # ── Template ────────────────────────────────────
         tmpl_row = wx.BoxSizer(wx.HORIZONTAL)
         tmpl_row.Add(
@@ -243,6 +266,10 @@ class LibraryFrame(wx.Frame):
         self.review_btn.Bind(wx.EVT_BUTTON, self._on_review)
         btn_row.Add(self.review_btn, 0, wx.RIGHT, 6)
 
+        self.browse_stories_btn = wx.Button(panel, label="&Open Story Browser...")
+        self.browse_stories_btn.Bind(wx.EVT_BUTTON, self._on_open_browser)
+        btn_row.Add(self.browse_stories_btn, 0, wx.RIGHT, 6)
+
         # Cancel button sits next to Check for Updates so the stop
         # action is adjacent to the start action. Disabled unless a
         # run is in flight.
@@ -264,6 +291,9 @@ class LibraryFrame(wx.Frame):
 
     def _load_prefs(self) -> None:
         self.path_ctrl.SetValue(self._prefs.get(_prefs.KEY_LIBRARY_PATH, "") or "")
+        self.adult_path_ctrl.SetValue(
+            self._prefs.get(_prefs.KEY_LIBRARY_ADULT_PATH, "") or ""
+        )
         self.template_ctrl.SetValue(
             self._prefs.get(_prefs.KEY_LIBRARY_PATH_TEMPLATE) or DEFAULT_TEMPLATE
         )
@@ -278,6 +308,9 @@ class LibraryFrame(wx.Frame):
 
     def _save_prefs(self) -> None:
         self._prefs.set(_prefs.KEY_LIBRARY_PATH, self.path_ctrl.GetValue())
+        self._prefs.set(
+            _prefs.KEY_LIBRARY_ADULT_PATH, self.adult_path_ctrl.GetValue()
+        )
         self._prefs.set(
             _prefs.KEY_LIBRARY_PATH_TEMPLATE, self.template_ctrl.GetValue()
         )
@@ -324,6 +357,22 @@ class LibraryFrame(wx.Frame):
         if dlg.ShowModal() == wx.ID_OK:
             self.path_ctrl.SetValue(dlg.GetPath())
         dlg.Destroy()
+
+    def _on_browse_adult(self, event: wx.Event) -> None:
+        current = self.adult_path_ctrl.GetValue() or str(Path.home())
+        dlg = wx.DirDialog(
+            self, "Choose separate adult-library folder", defaultPath=current,
+        )
+        if dlg.ShowModal() == wx.ID_OK:
+            self.adult_path_ctrl.SetValue(dlg.GetPath())
+        dlg.Destroy()
+
+    def _on_open_browser(self, event: wx.Event) -> None:
+        """Open the library browser via the main window (single instance)."""
+        self._save_prefs()
+        opener = getattr(self.GetParent(), "_open_library_browser", None)
+        if callable(opener):
+            opener()
 
     def _append_status(self, line: str) -> None:
         self.status_ctrl.AppendText(line + "\n")
@@ -381,24 +430,41 @@ class LibraryFrame(wx.Frame):
         if root is None:
             return
         self._save_prefs()
-        self._append_status(f"Scanning {root}...")
+        # Scan the separate adult-library root too when configured, so a
+        # single Scan keeps the whole index (main + adult) fresh and the
+        # browser sees both. A blank or not-yet-created adult folder is
+        # skipped with a note rather than treated as an error.
+        roots = [root]
+        adult_raw = (self.adult_path_ctrl.GetValue() or "").strip()
+        if adult_raw:
+            adult_root = Path(adult_raw).expanduser()
+            if adult_root.is_dir() and adult_root.resolve() != root.resolve():
+                roots.append(adult_root)
+            elif not adult_root.is_dir():
+                self._append_status(
+                    f"(Adult library folder {adult_root} is not a directory "
+                    "yet — skipping.)"
+                )
+        for r in roots:
+            self._append_status(f"Scanning {r}...")
         self._set_busy(True)
 
         def worker():
+            results = []
             try:
-                result = scan(root, recursive=True)
+                for r in roots:
+                    results.append((r, scan(r, recursive=True)))
             except Exception as exc:
                 wx.CallAfter(self._scan_failed, exc)
                 return
-            wx.CallAfter(self._scan_finished, result)
+            wx.CallAfter(self._scan_finished, results)
 
         threading.Thread(target=worker, daemon=True).start()
 
-    def _scan_finished(self, result) -> None:
-        if not self._alive:
-            return
+    def _report_scan_result(self, result, root: Path | None = None) -> None:
+        prefix = f"{root}: " if root is not None else ""
         self._append_status(
-            f"Scanned {result.total_files} file(s): "
+            f"{prefix}Scanned {result.total_files} file(s): "
             f"{result.identified_via_url} tracked by URL, "
             f"{result.ambiguous} indexed-only, "
             f"{result.errors} error(s)."
@@ -410,6 +476,16 @@ class LibraryFrame(wx.Frame):
                 self._append_status(
                     f"  ... and {len(result.error_files) - 5} more"
                 )
+
+    def _scan_finished(self, results) -> None:
+        if not self._alive:
+            return
+        # ``results`` is a list of ``(root, ScanResult)``. Label per-root
+        # only when more than one was scanned, so the common single-root
+        # case reads exactly as before.
+        multi = len(results) > 1
+        for root, result in results:
+            self._report_scan_result(result, root=root if multi else None)
         self._set_busy(False)
 
     def _scan_failed(self, exc: Exception) -> None:
