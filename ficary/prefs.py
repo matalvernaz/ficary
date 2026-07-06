@@ -54,6 +54,11 @@ KEY_UPDATE_SNOOZED_UNTIL = "update_snoozed_until"
 UPDATE_SNOOZE_S = 3 * 24 * 60 * 60
 KEY_HR_AS_STARS = "hr_as_stars"
 KEY_STRIP_NOTES = "strip_notes"
+# HTML title-page layout: "modern" (styled heading + metadata table)
+# or "classic" (flat legacy-downloader paragraph list). Mirrors
+# exporters.HTML_STYLE_MODERN / HTML_STYLE_CLASSIC; kept as a literal so
+# this lightweight module needn't import the heavy exporters package.
+KEY_HTML_STYLE = "html_style"
 # Pair with KEY_STRIP_NOTES: when on, ``strip_an_via_llm`` runs after
 # the regex pass to catch author's notes that the heuristic missed.
 # Off by default; the LLM round-trip costs latency (and tokens on
@@ -195,6 +200,7 @@ DEFAULTS = {
     KEY_CHECK_UPDATES: True,
     KEY_HR_AS_STARS: False,
     KEY_STRIP_NOTES: False,
+    KEY_HTML_STYLE: "modern",  # exporters.HTML_STYLE_MODERN
     KEY_LLM_STRIP_NOTES: False,
     KEY_FICHUB: False,
     KEY_MERGE_SERIES: False,

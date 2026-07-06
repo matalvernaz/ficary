@@ -37,6 +37,15 @@ logger = logging.getLogger(__name__)
 
 
 _FORMAT_CHOICES = ["epub", "html", "txt", "audio"]
+
+# HTML title-page layouts for the "Default HTML layout" choice. Values
+# mirror exporters.HTML_STYLES; the parallel labels are what the
+# wx.Choice displays (index maps back to the value on save).
+_HTML_STYLE_VALUES = ["modern", "classic"]
+_HTML_STYLE_LABELS = [
+    "Modern — heading and metadata table",
+    "Classic — plain legacy-downloader layout",
+]
 _LOG_LEVELS = ["DEBUG", "INFO", "WARNING", "ERROR"]
 
 # (seconds, display label) pairs for the watchlist poll-interval
@@ -217,6 +226,20 @@ class PreferencesDialog(wx.Dialog):
         self.format_ctrl.SetName("Default format")
         sizer.Add(
             self._make_labeled_row(panel, "Default &format:", self.format_ctrl),
+            0, wx.EXPAND | wx.ALL, 6,
+        )
+
+        self.html_style_ctrl = wx.Choice(panel, choices=_HTML_STYLE_LABELS)
+        self.html_style_ctrl.SetName("Default HTML layout")
+        sizer.Add(
+            self._make_labeled_row(
+                panel, "Default &HTML layout:", self.html_style_ctrl,
+                help_text=(
+                    "Applies to HTML output only. 'Classic' reproduces the "
+                    "plain title page and bare page title of legacy fanfic "
+                    "downloaders; chapter text is identical either way."
+                ),
+            ),
             0, wx.EXPAND | wx.ALL, 6,
         )
 
@@ -623,6 +646,11 @@ class PreferencesDialog(wx.Dialog):
             self.format_ctrl.SetSelection(_FORMAT_CHOICES.index(fmt))
         else:
             self.format_ctrl.SetSelection(0)
+        html_style = (self.prefs.get(_p.KEY_HTML_STYLE) or "modern").lower()
+        if html_style in _HTML_STYLE_VALUES:
+            self.html_style_ctrl.SetSelection(_HTML_STYLE_VALUES.index(html_style))
+        else:
+            self.html_style_ctrl.SetSelection(0)
         self.hr_stars_ctrl.SetValue(self.prefs.get_bool(_p.KEY_HR_AS_STARS))
         self.strip_notes_ctrl.SetValue(self.prefs.get_bool(_p.KEY_STRIP_NOTES))
         self.fichub_ctrl.SetValue(self.prefs.get_bool(_p.KEY_FICHUB))
@@ -741,6 +769,9 @@ class PreferencesDialog(wx.Dialog):
         fmt_idx = self.format_ctrl.GetSelection()
         if fmt_idx >= 0:
             self.prefs.set(_p.KEY_FORMAT, _FORMAT_CHOICES[fmt_idx])
+        html_style_idx = self.html_style_ctrl.GetSelection()
+        if html_style_idx >= 0:
+            self.prefs.set(_p.KEY_HTML_STYLE, _HTML_STYLE_VALUES[html_style_idx])
         self.prefs.set_bool(_p.KEY_HR_AS_STARS, self.hr_stars_ctrl.GetValue())
         self.prefs.set_bool(
             _p.KEY_STRIP_NOTES, self.strip_notes_ctrl.GetValue(),

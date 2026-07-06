@@ -66,6 +66,7 @@ class DownloadJob:
     name: Optional[str] = None  # filename template
     hr_as_stars: bool = False
     strip_notes: bool = False
+    html_style: str = "modern"  # exporters.HTML_STYLE_MODERN; HTML export only
     llm_strip_notes: bool = False
     speech_rate: int = 0
     attribution: str = "builtin"
@@ -89,6 +90,7 @@ class DownloadJob:
             KEY_ATTRIBUTION_MODEL_SIZE,
             KEY_FICHUB,
             KEY_HR_AS_STARS,
+            KEY_HTML_STYLE,
             KEY_LLM_STRIP_NOTES,
             KEY_NAME_TEMPLATE,
             KEY_SPEECH_RATE,
@@ -102,6 +104,7 @@ class DownloadJob:
             name=prefs.get(KEY_NAME_TEMPLATE) or DEFAULT_TEMPLATE,
             hr_as_stars=prefs.get_bool(KEY_HR_AS_STARS),
             strip_notes=prefs.get_bool(KEY_STRIP_NOTES),
+            html_style=(prefs.get(KEY_HTML_STYLE) or "modern"),
             llm_strip_notes=prefs.get_bool(KEY_LLM_STRIP_NOTES),
             # The manual GUI download path already honours these (gui.py);
             # the update / watchlist-auto-download paths funnel through

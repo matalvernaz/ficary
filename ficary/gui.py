@@ -56,6 +56,10 @@ class _DownloadParams:
     webnovel_cookie: str = ""
     ao3_cookie: str = ""
     send_to_abs: bool = False
+    # HTML title-page layout (exporters.HTML_STYLE_*). Set from the
+    # "Default HTML layout" preference — there's no per-download control
+    # in the main form, keeping that tab-stop chain short.
+    html_style: str = "modern"
 
 
 logger = logging.getLogger(__name__)
@@ -2368,6 +2372,7 @@ class MainFrame(wx.Frame):
             merge_series=self.prefs.get_bool(_p.KEY_MERGE_SERIES),
             webnovel_cookie=(self.prefs.get(_p.KEY_WEBNOVEL_COOKIE) or "").strip(),
             ao3_cookie=(self.prefs.get(_p.KEY_AO3_COOKIE) or "").strip(),
+            html_style=(self.prefs.get(_p.KEY_HTML_STYLE) or "modern"),
             send_to_abs=(
                 self.abs_send_ctrl.GetValue() if fmt == "audio" else False
             ),
@@ -2697,6 +2702,7 @@ class MainFrame(wx.Frame):
         return exporter(
             story, output_dir, template=params.filename_template,
             hr_as_stars=params.hr_as_stars, strip_notes=params.strip_notes,
+            html_style=params.html_style,
             llm_config=an_llm_config,
             progress=self._log,
         )

@@ -12,7 +12,13 @@ from typing import Callable
 from . import legacy as _legacy
 from .ao3 import AO3LockedError
 from .download_queue import DownloadQueues
-from .exporters import DEFAULT_TEMPLATE, EXPORTERS, check_format_deps
+from .exporters import (
+    DEFAULT_HTML_STYLE,
+    DEFAULT_TEMPLATE,
+    EXPORTERS,
+    HTML_STYLES,
+    check_format_deps,
+)
 from .merge import merge_stories
 from .erotica import LiteroticaScraper
 from .models import Story, merge_chapter_lists, parse_chapter_spec
@@ -330,6 +336,7 @@ def _handle_merge_series(
                 merged, str(output_dir), template=args.name,
                 hr_as_stars=args.hr_as_stars,
                 strip_notes=args.strip_notes,
+                html_style=args.html_style,
                 llm_config=_llm_strip_notes_config(args),
                 progress=print,
             )
@@ -427,6 +434,7 @@ def _handle_merge_parts(
             merged, str(output_dir), template=args.name,
             hr_as_stars=args.hr_as_stars,
             strip_notes=args.strip_notes,
+            html_style=args.html_style,
             llm_config=_llm_strip_notes_config(args),
             progress=print,
         )
@@ -936,6 +944,9 @@ def _download_one(
                 template=args.name,
                 hr_as_stars=args.hr_as_stars,
                 strip_notes=args.strip_notes,
+                # getattr: this shared path is also reached from tests
+                # with hand-built namespaces that predate this option.
+                html_style=getattr(args, "html_style", DEFAULT_HTML_STYLE),
                 llm_config=_llm_strip_notes_config(args),
                 progress=status,
             )
@@ -3951,6 +3962,18 @@ def _build_parser() -> argparse.ArgumentParser:
             "dividers like '---', '* * *', 'oOo' — is replaced with a "
             "1.5-second silence clip instead of being read aloud as "
             "'asterisk asterisk asterisk'."
+        ),
+    )
+    parser.add_argument(
+        "--html-style",
+        choices=HTML_STYLES,
+        default=DEFAULT_HTML_STYLE,
+        help=(
+            "HTML title-page layout (HTML output only). 'modern' (default) "
+            "renders a heading over a metadata table; 'classic' reproduces "
+            "the flat 'Label: value' paragraph layout and bare page title "
+            "of legacy browser fanfic downloaders. Chapter text is identical "
+            "either way."
         ),
     )
     parser.add_argument(

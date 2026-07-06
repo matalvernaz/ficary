@@ -939,3 +939,76 @@ class TestV2414EpubMetadataResilience:
         assert count == 1, f"expected exactly one dcterms:modified, got {count}"
         # And we never emit the invalid ``<dc:modified>``.
         assert "<dc:modified>" not in opf
+
+
+class TestHtmlStyle:
+    """The ``classic`` HTML layout reproduces the flat title page of
+    legacy fanfic downloaders while keeping chapter markup identical to
+    ``modern`` so both round-trip through the library scanner."""
+
+    def _story(self):
+        s = Story(
+            id=5002293, title="A Protector's Pride", author="NeoRyu777",
+            summary="What if Ichigo faced it head-on?",
+            url="https://www.fanfiction.net/s/5002293/1",
+        )
+        s.author_url = "https://www.fanfiction.net/u/943302/NeoRyu777"
+        s.metadata.update(
+            {"category": "Bleach", "status": "Completed", "words": "573,294"}
+        )
+        s.chapters.append(Chapter(number=1, title="Discovery", html="<p>Hi.</p>"))
+        s.chapters.append(Chapter(number=2, title="Reflections", html="<p>Two.</p>"))
+        return s
+
+    def _export(self, style):
+        with tempfile.TemporaryDirectory() as d:
+            return export_html(self._story(), d, html_style=style).read_text()
+
+    def test_classic_page_title_is_bare(self):
+        text = self._export("classic")
+        assert "<title>A Protector&#x27;s Pride</title>" in text
+
+    def test_modern_page_title_names_author(self):
+        text = self._export("modern")
+        assert " by NeoRyu777</title>" in text
+
+    def test_default_style_is_modern(self):
+        # Omitting html_style must not change long-standing behaviour.
+        with tempfile.TemporaryDirectory() as d:
+            default = export_html(self._story(), d).read_text()
+        assert " by NeoRyu777</title>" in default
+        assert '<table class="meta-table">' in default
+
+    def test_classic_uses_paragraph_metadata(self):
+        text = self._export("classic")
+        assert "<p>Title: A Protector&#x27;s Pride</p>" in text
+        assert (
+            '<p>Author: <a href="https://www.fanfiction.net/u/943302/NeoRyu777">'
+            "NeoRyu777</a></p>"
+        ) in text
+        # No <h1> and no metadata table ELEMENT (the CSS class name still
+        # lives in the shared <style> block, so match the opening tag).
+        assert "<h1>" not in text
+        assert '<table class="meta-table">' not in text
+
+    def test_classic_keeps_labelled_source_for_update_scanner(self):
+        # The reference format printed a bare URL, but _parse_paragraph_labels
+        # recovers the story URL off the "Source" label; dropping it would
+        # break update detection for classic-exported files.
+        text = self._export("classic")
+        assert (
+            '<p>Source: <a href="https://www.fanfiction.net/s/5002293/1">'
+        ) in text
+        from ficary.updater import _parse_paragraph_labels
+        kv = _parse_paragraph_labels(text)
+        assert kv.get("source") == "https://www.fanfiction.net/s/5002293/1"
+
+    def test_classic_chapters_round_trip(self):
+        # The whole point of only touching the title page: chapters must
+        # still parse back for the library updater.
+        from ficary.updater import _read_html_chapters
+        with tempfile.TemporaryDirectory() as d:
+            path = export_html(self._story(), d, html_style="classic")
+            chapters = _read_html_chapters(path)
+        assert [c.number for c in chapters] == [1, 2]
+        assert chapters[0].title == "Discovery"

@@ -18,6 +18,21 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_TEMPLATE = "{title} - {author}"
 
+# Selectable HTML title-page layouts (``--html-style`` / the "Default
+# HTML layout" preference). ``modern`` is the styled default: an
+# ``<h1>`` over a ``<table class="meta-table">`` and a page title of
+# "<title> by <author>". ``classic`` reproduces the flat ``<p>Label:
+# value</p>`` title page emitted by legacy browser fanfic downloaders,
+# with a bare ``<title>`` of just the story name. Only the title page
+# and the ``<title>`` differ between layouts — chapter markup is
+# byte-for-byte identical, so a classic export still round-trips
+# through ``updater._read_html_chapters`` (chapters) and
+# ``_parse_paragraph_labels`` (metadata).
+HTML_STYLE_MODERN = "modern"
+HTML_STYLE_CLASSIC = "classic"
+HTML_STYLES = (HTML_STYLE_MODERN, HTML_STYLE_CLASSIC)
+DEFAULT_HTML_STYLE = HTML_STYLE_MODERN
+
 
 def _emit(progress: Callable[[str], None] | None, line: str) -> None:
     """Send a status line both to the GUI / CLI ``progress`` callback
@@ -437,6 +452,7 @@ def export_txt(
     strip_notes: bool = False,
     llm_config: dict | None = None,
     progress: Callable[[str], None] | None = None,
+    html_style: str = DEFAULT_HTML_STYLE,  # accepted for signature parity; HTML-only
 ) -> Path:
     filename = format_filename(story, template) + ".txt"
     path = Path(output_dir) / filename
@@ -471,26 +487,36 @@ def export_txt(
     return path
 
 
-def export_html(
-    story: Story,
-    output_dir: str = ".",
-    template: str = DEFAULT_TEMPLATE,
-    hr_as_stars: bool = False,
-    strip_notes: bool = False,
-    llm_config: dict | None = None,
-    progress: Callable[[str], None] | None = None,
-) -> Path:
-    filename = format_filename(story, template) + ".html"
-    path = Path(output_dir) / filename
+def _html_meta_block(story: Story, html_style: str) -> str:
+    """Render the HTML title page (heading + story metadata) in the
+    requested layout.
 
-    site_name, _publisher = _site_info(story.url)
+    ``modern`` emits an ``<h1>`` over a ``<table class="meta-table">``.
+    ``classic`` emits the flat ``<p>Label: value</p>`` list of the
+    legacy downloader format: no heading, the author rendered as a
+    link, and the summary left un-italicised. Both layouts iterate the
+    same :func:`_meta_fields`, so any field present in one is present
+    in the other. The ``Source`` row keeps its label in ``classic``
+    (the reference format printed a bare URL, but the label is what
+    ``updater._parse_paragraph_labels`` matches on to recover the story
+    URL for update checks).
+    """
+    fields = _meta_fields(story)
+    if html_style == HTML_STYLE_CLASSIC:
+        lines = []
+        for label, value in fields:
+            val_esc = escape(value)
+            if label == "Source":
+                cell = f'<a href="{escape(value)}">{val_esc}</a>'
+            elif label == "Author" and story.author_url:
+                cell = f'<a href="{escape(story.author_url)}">{val_esc}</a>'
+            else:
+                cell = val_esc
+            lines.append(f"<p>{label}: {cell}</p>")
+        return "".join(f"{line}\n" for line in lines)
 
-    title_esc = escape(story.title)
-    author_esc = escape(story.author)
-
-    # Build the metadata table rows — Author and Source are links
-    meta_rows = []
-    for label, value in _meta_fields(story):
+    rows = []
+    for label, value in fields:
         val_esc = escape(value)
         if label == "Author" and story.author_url:
             cell = f'<a href="{escape(story.author_url)}">{val_esc}</a>'
@@ -500,7 +526,40 @@ def export_html(
             cell = f'<em>{val_esc}</em>'
         else:
             cell = val_esc
-        meta_rows.append(f"<tr><th>{label}</th><td>{cell}</td></tr>")
+        rows.append(f"<tr><th>{label}</th><td>{cell}</td></tr>")
+    heading = escape(story.title)
+    body = "".join(f"{row}\n" for row in rows)
+    return (
+        f"<h1>{heading}</h1>\n"
+        f'<table class="meta-table">\n'
+        f"{body}"
+        f"</table>\n"
+    )
+
+
+def export_html(
+    story: Story,
+    output_dir: str = ".",
+    template: str = DEFAULT_TEMPLATE,
+    hr_as_stars: bool = False,
+    strip_notes: bool = False,
+    llm_config: dict | None = None,
+    progress: Callable[[str], None] | None = None,
+    html_style: str = DEFAULT_HTML_STYLE,
+) -> Path:
+    filename = format_filename(story, template) + ".html"
+    path = Path(output_dir) / filename
+
+    site_name, _publisher = _site_info(story.url)
+
+    title_esc = escape(story.title)
+    author_esc = escape(story.author)
+    # Modern names the tab "<title> by <author>"; classic keeps the
+    # bare story title the legacy downloaders wrote.
+    if html_style == HTML_STYLE_CLASSIC:
+        page_title = title_esc
+    else:
+        page_title = f"{title_esc} by {author_esc}"
 
     # Build the full document in memory first, then atomic-write it.
     # See ``export_txt`` for why this shape matters.
@@ -508,7 +567,7 @@ def export_html(
     buf.write(
         f'<!DOCTYPE html>\n<html lang="en">\n<head>\n'
         f'<meta charset="utf-8">\n'
-        f"<title>{title_esc} by {author_esc}</title>\n"
+        f"<title>{page_title}</title>\n"
         f"<style>\n"
         f"body{{max-width:800px;margin:2em auto;padding:0 1em;"
         f"font-family:Georgia,serif;line-height:1.6}}\n"
@@ -527,12 +586,9 @@ def export_html(
         f".center,[align=center]{{text-align:center}}\n"
         f"a{{color:#36c}}\n"
         f"</style>\n</head>\n<body>\n"
-        f"<h1>{title_esc}</h1>\n"
-        f'<table class="meta-table">\n'
     )
-    for row in meta_rows:
-        buf.write(f"{row}\n")
-    buf.write("</table>\n<hr>\n")
+    buf.write(_html_meta_block(story, html_style))
+    buf.write("<hr>\n")
 
     # Table of Contents — use the chapter's actual ``number`` (not its
     # position) so a partial-range download (e.g. ``--chapters 5-10``)
@@ -1848,6 +1904,7 @@ def export_epub(
     strip_notes: bool = False,
     llm_config: dict | None = None,
     progress: Callable[[str], None] | None = None,
+    html_style: str = DEFAULT_HTML_STYLE,  # accepted for signature parity; HTML-only
 ) -> Path:
     try:
         from ebooklib import epub
