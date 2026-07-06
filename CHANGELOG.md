@@ -52,10 +52,18 @@ Audit round 11: one workflow request plus a batch of verified fixes.
   bare `&` followed by letters (e.g. `AT&T`, `Q&A`) could have the `&`
   silently dropped during EPUB assembly. Bare ampersands are now escaped
   before parsing, so the text survives intact.
-* **AFF author pages resolve every fandom subdomain.** Protocol-relative
-  and root-relative story links on an Adult-FanFiction profile were forced
-  onto the default `hp` subdomain (wrong fandom, or a malformed
-  double-host URL). They now resolve against the profile's own host.
+* **AFF & SexStories author pages: the member's real stories, or none.**
+  v2.7.0's Adult-FanFiction and SexStories author-page scraping read the
+  wrong part of the profile — AFF returned the member's *Story
+  Recommendations* and *Current Reading*, SexStories returned their
+  *Favorites* — i.e. other people's stories, listed as the member's own.
+  AFF now pulls the member's actual *Stories Written* from the site's
+  per-fandom endpoint (the profile loads them by script), so you get their
+  real works across every fandom. SexStories exposes no per-author works
+  list anywhere, so its author scraping is now honestly reported as
+  unsupported (like BDSM Library) instead of returning favorites. An
+  unsupported author page now prints a clear message rather than, on the
+  CLI `--author`/`--bulk` paths, crashing.
 * **Interrupted foreign-format downloads resume.** A non-ficary file
   (FanFicFare/FicHub/FLAG) with a recorded pending chapter count but a
   zero local count was skipped as "chapter count unknown" instead of
@@ -67,6 +75,15 @@ Audit round 11: one workflow request plus a batch of verified fixes.
   watchlist poll interval while autopoll was running didn't reach the
   sleeping worker until the old (possibly hour-long) interval elapsed. The
   worker now re-reads the interval within a minute.
+* **Watchlist auto-downloads can't trip a rate-limit ban.** An automatic
+  download now goes through the same per-site queue as manual and library
+  downloads, so it can't hit a site (FFN especially) at the same time as
+  another download and provoke a captcha ban.
+* **A watchlist edit during a poll isn't lost.** Adding or editing a watch
+  in the GUI while a background poll was running could silently drop the
+  change (last-writer-wins on the file). Watchlist writes now
+  reload-and-merge under a lock; a delete during a poll correctly wins
+  over the poll's in-flight cooldown update.
 
 **Smaller fixes**
 
@@ -81,8 +98,6 @@ Audit round 11: one workflow request plus a batch of verified fixes.
 * Audiobookshelf tokens/URLs entered with trailing whitespace are trimmed.
 * The FFN apex-host rewrite no longer matches look-alike hosts such as
   `fanfiction.network`.
-* SexStories author pages whose links render as absolute URLs are no
-  longer read as "no stories found".
 * cf-solve availability honours Playwright's in-package browser location
   (`PLAYWRIGHT_BROWSERS_PATH=0`).
 

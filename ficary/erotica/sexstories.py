@@ -64,60 +64,17 @@ class SexStoriesScraper(BaseScraper):
 
     @staticmethod
     def is_author_url(url):
+        # Deliberately no scrape_author_works to go with this (dropped in
+        # 2.8.0): a SexStories profile renders ONLY "Favorites of <member>"
+        # server-side — other people's stories — and exposes no per-author
+        # works listing anywhere (profile page, a `/stories` suffix, and
+        # the author link from a story all show only favourites; verified
+        # live 2026-07-05). The v2.7.0 scraper therefore returned the
+        # member's favourites as if they were the member's own works. With
+        # no method present, the classifier falls through to "unknown" for
+        # these URLs (same handling as BDSM Library) rather than
+        # mis-attributing strangers' stories.
         return bool(SS_AUTHOR_URL_RE.search(str(url)))
-
-    def scrape_author_works(self, url, max_results=None, cancel_event=None):
-        """Return ``(author_name, [work_dict])`` from a
-        ``/profile<N>/`` page. Submissions are ``/story/<id>/`` anchors;
-        the member name renders as an ``<h3>`` like
-        "ArchiesHard Member since 2017/03/06". Single page."""
-        m = SS_AUTHOR_URL_RE.search(str(url))
-        if not m:
-            raise ValueError(f"Not a SexStories profile URL: {url}")
-        profile_id = m.group("id")
-        html = self._fetch(str(url))
-        soup = BeautifulSoup(html, "lxml")
-
-        author = ""
-        for h3 in soup.find_all("h3"):
-            text = h3.get_text(" ", strip=True)
-            if "Member since" in text:
-                author = text.split("Member since", 1)[0].strip()
-                break
-
-        works: list[dict] = []
-        seen: set[str] = set()
-        # Match both root-relative (``/story/123``) and absolute
-        # (``https://www.sexstories.com/story/123/…``) submission links —
-        # the canonical URL is rebuilt from the id + slug via _story_url,
-        # so either href form yields the same result and a member whose
-        # links render absolute isn't silently dropped as "no stories".
-        for a in soup.find_all("a", href=re.compile(r"/story/\d+")):
-            if cancel_event is not None and cancel_event.is_set():
-                break
-            sm = re.search(r"/story/(\d+)(?:/(?P<slug>[^/?#\s]+))?", a.get("href", ""))
-            if not sm or sm.group(1) in seen:
-                continue
-            title = a.get_text(" ", strip=True)
-            if not title:
-                continue
-            seen.add(sm.group(1))
-            works.append({
-                "title": title,
-                "url": self._story_url(int(sm.group(1)), sm.group("slug") or ""),
-                "author": author or f"profile{profile_id}",
-                "summary": "", "words": "?", "chapters": "?",
-                "rating": "M", "fandom": "", "status": "",
-                "updated": "", "section": "own",
-            })
-            if max_results and len(works) >= max_results:
-                break
-        return author or f"profile{profile_id}", works
-
-    def scrape_author_stories(self, url):
-        """CLI shape: ``(author_name, [story_url, ...])``."""
-        author, works = self.scrape_author_works(url)
-        return author, [w["url"] for w in works]
 
     @staticmethod
     def _story_url(story_id: int, slug: str = "") -> str:

@@ -4490,6 +4490,10 @@ def _expand_author_and_series_urls(
         if _is_author_url(url):
             try:
                 author_name, story_urls = _scrape_author_stories(url, args)
+            except NotImplementedError as exc:
+                print(f"Author-page listings aren't supported for {url}: {exc}",
+                      file=sys.stderr)
+                sys.exit(1)
             except (RateLimitError, CloudflareBlockError, StoryNotFoundError) as exc:
                 print(f"Error fetching author page {url}: {exc}", file=sys.stderr)
                 sys.exit(1)
@@ -4773,10 +4777,12 @@ def make_watch_downloader(prefs):
     """
     import copy
 
+    from .download_queue import DownloadQueues
     from .exporters import check_format_deps
     from .jobs import DownloadJob
     from .library.index import LibraryIndex
     from .prefs import KEY_FORMAT
+    from .sites import canonical_url
     from .watchlist import WATCH_TYPE_STORY
 
     base_job = DownloadJob.from_prefs()
@@ -4801,16 +4807,30 @@ def make_watch_downloader(prefs):
                         update_path.suffix.lower(), job.format,
                     )
                     break
-            ok = _download_one(
-                url, job, output_dir,
-                update_path=update_path,
-                on_export=saved.append,
+            def job_fn():
+                return _download_one(
+                    url, job, output_dir,
+                    update_path=update_path,
+                    on_export=saved.append,
+                )
+
+            # Route through the process-wide per-site queue rather than
+            # downloading inline: that queue is the only cross-job
+            # serialiser for a site's rate limit, so an auto-download must
+            # go through it or it can hit e.g. FFN concurrently with a
+            # manual/library download and trip a captcha ban. The queue is
+            # a global classmethod registry shared by the GUI and CLI, so
+            # this works under both the GUI poller and `--watchlist-run`.
+            # dedupe_key joins an already-queued job for the same story.
+            site_name = getattr(_detect_site(url), "site_name", "unknown")
+            fut = DownloadQueues.enqueue(
+                site_name, job_fn, dedupe_key=canonical_url(url) or url,
             )
-            # _download_one returns False (not raises) for blocked /
-            # rate-limited / locked / paywalled / missing-dep failures,
-            # printing the reason. Record it so run_once reports a failure
-            # instead of a silent "N new chapters" success with no paths.
-            if not ok:
+            # Block until the queued job settles (propagates its return /
+            # exception). _download_one returns False for blocked /
+            # rate-limited / locked / missing-dep failures; record it so
+            # run_once reports a failure instead of a silent success.
+            if not fut.result():
                 failures.append(url)
 
         if watch.type == WATCH_TYPE_STORY:
@@ -5100,6 +5120,10 @@ def main(argv: list[str] | None = None) -> None:
         target_url = args.extract or args.bulk
         try:
             label, works = _bulk_extract(target_url, args)
+        except NotImplementedError as exc:
+            print(f"That page type isn't supported for this site: {exc}",
+                  file=sys.stderr)
+            sys.exit(1)
         except (RateLimitError, CloudflareBlockError, StoryNotFoundError, ValueError) as exc:
             print(f"Error extracting URL list: {exc}", file=sys.stderr)
             sys.exit(1)
@@ -5135,6 +5159,10 @@ def main(argv: list[str] | None = None) -> None:
             parser.error("--author and --batch cannot be used together")
         try:
             author_name, story_urls = _scrape_author_stories(args.author, args)
+        except NotImplementedError as exc:
+            print(f"Author-page listings aren't supported for this site: {exc}",
+                  file=sys.stderr)
+            sys.exit(1)
         except (RateLimitError, CloudflareBlockError, StoryNotFoundError) as exc:
             print(f"Error fetching author page: {exc}", file=sys.stderr)
             sys.exit(1)

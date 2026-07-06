@@ -22,6 +22,33 @@ def _serve(scraper, fixture, monkeypatch):
     return scraper
 
 
+def _serve_aff(monkeypatch):
+    """AFF's own "Stories Written" list is JS-loaded per fandom sub-tab.
+    Dispatch the profile page vs the per-subdomain load-user-stories.php
+    fragments, so the scraper is exercised against its real data path."""
+    import re as _re
+    s = AFFScraper(use_cache=False)
+    frag = {
+        "hp": "aff_userstories_hp.html",
+        "anime": "aff_userstories_anime.html",
+        "original": "aff_userstories_original.html",
+    }
+
+    def fetch(url, **kw):
+        u = str(url)
+        if "load-user-stories.php" in u:
+            m = _re.search(r"subdomain=([a-z0-9-]+)", u)
+            name = frag.get(m.group(1)) if m else None
+            return ((FIXTURES / name).read_text(encoding="utf-8", errors="replace")
+                    if name else "<div class='story-list'></div>")
+        return (FIXTURES / "aff_profile.html").read_text(
+            encoding="utf-8", errors="replace")
+
+    monkeypatch.setattr(s, "_fetch", fetch)
+    monkeypatch.setattr(s, "_delay", lambda *a, **kw: None)
+    return s
+
+
 class TestAFFAuthor:
     URL = "https://members.adult-fanfiction.org/profile.php?id=1296987001"
 
@@ -33,28 +60,32 @@ class TestAFFAuthor:
             "https://hp.adult-fanfiction.org/story.php?no=600100488")
 
     def test_scrape_author_works(self, monkeypatch):
-        s = _serve(AFFScraper(use_cache=False), "aff_profile.html", monkeypatch)
+        s = _serve_aff(monkeypatch)
         author, works = s.scrape_author_works(self.URL)
         assert author == "Wilde_Guess"
-        assert len(works) >= 5
+        # The member's real works, from the AJAX endpoint (hp 4 + anime 1
+        # + original 2) — NOT the profile's Recommendations/Reading.
+        assert len(works) == 7
+        assert {w["fandom"] for w in works} == {"hp", "anime", "original"}
         assert all("story.php?no=" in w["url"] for w in works)
-        # Per-fandom subdomains preserved (stories only resolve there).
-        assert any("hp.adult-fanfiction.org" in w["url"] for w in works)
-        assert any("cartoon.adult-fanfiction.org" in w["url"] for w in works)
         assert all(w["author"] == "Wilde_Guess" for w in works)
+        # A real authored work is present; a recommendation id from the
+        # profile page is not.
+        assert any("600100488" in w["url"] for w in works)   # "Reflections."
+        assert not any("600096908" in w["url"] for w in works)  # a recommendation
         urls = [w["url"] for w in works]
-        assert len(urls) == len(set(urls))  # deduped
+        assert len(urls) == len(set(urls))  # deduped across subdomains
 
     def test_max_results_caps(self, monkeypatch):
-        s = _serve(AFFScraper(use_cache=False), "aff_profile.html", monkeypatch)
+        s = _serve_aff(monkeypatch)
         _, works = s.scrape_author_works(self.URL, max_results=3)
         assert len(works) == 3
 
     def test_cli_shape(self, monkeypatch):
-        s = _serve(AFFScraper(use_cache=False), "aff_profile.html", monkeypatch)
+        s = _serve_aff(monkeypatch)
         author, urls = s.scrape_author_stories(self.URL)
         assert author == "Wilde_Guess"
-        assert urls and all(isinstance(u, str) for u in urls)
+        assert len(urls) == 7 and all(isinstance(u, str) for u in urls)
 
     def test_sites_predicate_and_classifier(self):
         assert sites.is_author_url(self.URL)
@@ -99,25 +130,23 @@ class TestSOLAuthor:
 
 
 class TestSexStoriesAuthor:
+    """Author scraping was dropped in 2.8.0: a SexStories profile only
+    exposes "Favorites of <member>" (other people's stories) — no
+    per-author works listing exists — so the v2.7.0 scraper mislabelled
+    favourites as the member's works. Now unsupported, like BDSM Library."""
+
     URL = "https://sexstories.com/profile1176433/"
 
-    def test_scrape_author_works(self, monkeypatch):
-        s = _serve(SexStoriesScraper(use_cache=False),
-                   "sexstories_profile.html", monkeypatch)
-        author, works = s.scrape_author_works(self.URL)
-        assert author == "ArchiesHard"
-        assert works
-        assert all(w["url"].startswith("https://") and "/story/" in w["url"]
-                   for w in works)
-        ids = [w["url"] for w in works]
-        assert len(ids) == len(set(ids))
-
-    def test_bad_url_raises(self):
+    def test_author_scraping_unsupported(self):
+        # The override was dropped (2.8.0); SexStories now inherits
+        # BaseScraper's NotImplementedError default (like BDSM Library)
+        # instead of returning the member's favourites as their works. The
+        # CLI/GUI author handlers catch NotImplementedError (see cli.py's
+        # author/bulk handlers, gui.py:2945) so this is a clean "not
+        # supported", not a crash.
         s = SexStoriesScraper(use_cache=False)
-        with pytest.raises(ValueError):
-            s.scrape_author_works("https://sexstories.com/story/104006/")
-
-    def test_classifier(self):
-        ref = url_classifier.classify(self.URL)
-        assert ref is not None and ref.kind == "author_works"
-        assert ref.scraper_cls is SexStoriesScraper
+        assert SexStoriesScraper.is_author_url(self.URL)  # still recognised
+        with pytest.raises(NotImplementedError):
+            s.scrape_author_works(self.URL)
+        with pytest.raises(NotImplementedError):
+            s.scrape_author_stories(self.URL)

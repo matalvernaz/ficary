@@ -107,54 +107,86 @@ class AFFScraper(BaseScraper):
         return bool(AFF_AUTHOR_URL_RE.search(str(url)))
 
     def scrape_author_works(self, url, max_results=None, cancel_event=None):
-        """Return ``(author_name, [work_dict])`` from an AFF member
-        profile. Profile pages list every story as an absolute
-        ``https://<fandom>.adult-fanfiction.org/story.php?no=N`` anchor —
-        the subdomain is load-bearing (stories only resolve on their home
-        subdomain), so hrefs are kept verbatim. Single page; AFF profiles
-        don't paginate."""
+        """Return ``(author_name, [work_dict])`` for an AFF member.
+
+        AFF ``profile.php`` renders the member's own "Stories Written" list
+        client-side: the static page only carries their *Story
+        Recommendations* and *Current Reading* (other people's stories), so
+        scraping story links off the profile mis-attributes strangers' work
+        to the member. The real works come from
+        ``load-user-stories.php?subdomain=<fandom>&uid=<id>`` — one call per
+        fandom sub-tab the profile lists — and each fragment gives the
+        member's stories on that subdomain as absolute
+        ``https://<fandom>.adult-fanfiction.org/story.php?no=N`` anchors."""
         if not self.is_author_url(url):
             raise ValueError(f"Not an AFF author/profile URL: {url}")
-        html = self._fetch(url)
-        soup = BeautifulSoup(html, "lxml")
+        id_match = AFF_AUTHOR_URL_RE.search(str(url))
+        uid = id_match.group("id") if id_match else ""
+
+        soup = BeautifulSoup(self._fetch(url), "lxml")
 
         author = ""
         title_tag = soup.find("title")
         if title_tag:
             # "Wilde_Guess's Profile - AFF Fiction Portal"
-            raw = title_tag.get_text(strip=True)
-            m = re.match(r"^(?P<name>.+?)'s Profile\b", raw)
+            m = re.match(r"^(?P<name>.+?)'s Profile\b",
+                         title_tag.get_text(strip=True))
             if m:
                 author = m.group("name").strip()
 
+        # Each fandom sub-tab (``<button data-subdomain="hp" …>``) is one
+        # archive the member has stories on. Order-preserving dedupe.
+        subdomains: list[str] = []
+        for btn in soup.find_all(attrs={"data-subdomain": True}):
+            sub = (btn.get("data-subdomain") or "").strip().lower()
+            if sub and sub not in subdomains:
+                subdomains.append(sub)
+
         works: list[dict] = []
         seen: set[str] = set()
-        for a in soup.find_all("a", href=re.compile(r"story\.php\?no=\d+", re.I)):
-            if cancel_event is not None and cancel_event.is_set():
+        for sub in subdomains:
+            if not uid or (cancel_event is not None and cancel_event.is_set()):
                 break
-            href = a.get("href", "")
-            m = re.search(r"no=(\d+)", href)
-            if not m or m.group(1) in seen:
+            frag_url = urljoin(
+                url, f"load-user-stories.php?subdomain={sub}&uid={uid}")
+            try:
+                fragment = self._fetch(frag_url)
+            except Exception:
+                logger.warning(
+                    "AFF: couldn't load '%s' stories for uid %s", sub, uid)
                 continue
-            title = a.get_text(" ", strip=True)
-            if not title:
-                continue
-            seen.add(m.group(1))
-            # Resolve against the profile URL's own host so a
-            # protocol-relative (//naruto…) or root-relative (/story.php…)
-            # link keeps its real fandom subdomain, instead of being forced
-            # onto the default 'hp' (wrong fandom 404) or mangled into a
-            # double-host garbage URL that fails parse_story_id.
-            full = urljoin(url, href)
-            sub = self.parse_subdomain(full)
-            works.append({
-                "title": title, "url": full, "author": author,
-                "summary": "", "words": "?", "chapters": "?",
-                "rating": "M", "fandom": sub, "status": "",
-                "updated": "", "section": "own",
-            })
-            if max_results and len(works) >= max_results:
-                break
+            # Prefer the per-story cards; fall back to the whole fragment so
+            # a card-class rename still finds the story links.
+            fsoup = BeautifulSoup(fragment, "lxml")
+            cards = fsoup.select("div.story-card") or [fsoup]
+            for card in cards:
+                if cancel_event is not None and cancel_event.is_set():
+                    break
+                a = card.find(
+                    "a", href=re.compile(r"story\.php\?no=\d+", re.I))
+                if a is None:
+                    continue
+                href = a.get("href", "")
+                idm = re.search(r"no=(\d+)", href)
+                if not idm or idm.group(1) in seen:
+                    continue
+                title = a.get_text(" ", strip=True)
+                if not title:
+                    continue
+                seen.add(idm.group(1))
+                works.append({
+                    "title": title,
+                    # Fragment hrefs are absolute with the fandom subdomain
+                    # baked in; urljoin is a no-op safety net for a relative
+                    # one.
+                    "url": urljoin(frag_url, href),
+                    "author": author,
+                    "summary": "", "words": "?", "chapters": "?",
+                    "rating": "M", "fandom": sub, "status": "",
+                    "updated": "", "section": "own",
+                })
+                if max_results and len(works) >= max_results:
+                    return author or "AFF author", works
         return author or "AFF author", works
 
     def scrape_author_stories(self, url):

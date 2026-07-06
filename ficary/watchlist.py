@@ -318,14 +318,15 @@ class WatchlistStore:
         is fsync'd before the rename — a crash between write and
         rename can't leave the on-disk watchlist truncated or empty.
         """
-        payload = {
-            "version": SCHEMA_VERSION,
-            "watches": [_watch_to_dict(w) for w in self._watches],
-        }
-        atomic_write_text(
-            self.path,
-            json.dumps(payload, indent=2, sort_keys=True),
-        )
+        with _STORE_WRITE_LOCK:
+            payload = {
+                "version": SCHEMA_VERSION,
+                "watches": [_watch_to_dict(w) for w in self._watches],
+            }
+            atomic_write_text(
+                self.path,
+                json.dumps(payload, indent=2, sort_keys=True),
+            )
 
     def _quarantine_corrupt_file(self) -> None:
         """Rename the corrupt file aside so the next save starts clean.
@@ -375,28 +376,50 @@ class WatchlistStore:
             return candidates[0]
         return None
 
+    def _reload_if_backed(self) -> None:
+        """Refresh from disk before a mutation so a concurrent writer's
+        changes aren't clobbered by this instance's stale snapshot. No-op
+        for path-less test doubles (nothing on disk to merge)."""
+        if getattr(self, "path", None) is not None:
+            self.reload()
+
     def add(self, watch: Watch) -> None:
-        """Append ``watch`` and persist."""
-        self._watches.append(watch)
-        self.save()
+        """Append ``watch`` and persist.
+
+        Reload-before-mutate under the store write lock: the GUI's store
+        and the background poll's store are separate instances, so without
+        merging against disk a fresh add here could overwrite the
+        cooldown/baseline the poll just saved (and vice versa)."""
+        with _STORE_WRITE_LOCK:
+            self._reload_if_backed()
+            self._watches.append(watch)
+            self.save()
 
     def remove(self, watch_id: str) -> bool:
         """Remove a watch by id or unambiguous prefix. Returns True on hit."""
-        target = self.get(watch_id)
-        if target is None:
-            return False
-        self._watches.remove(target)
-        self.save()
-        return True
+        with _STORE_WRITE_LOCK:
+            self._reload_if_backed()
+            target = self.get(watch_id)
+            if target is None:
+                return False
+            self._watches.remove(target)
+            self.save()
+            return True
 
     def update(self, watch: Watch) -> None:
-        """Replace the stored watch whose id matches ``watch.id``."""
-        for i, existing in enumerate(self._watches):
-            if existing.id == watch.id:
-                self._watches[i] = watch
-                self.save()
-                return
-        raise KeyError(watch.id)
+        """Replace the stored watch whose id matches ``watch.id``.
+
+        Reload-before-mutate (see :meth:`add`). If the watch is no longer
+        present — a concurrent :meth:`remove` won the race — this is a
+        no-op rather than an error: a user's delete beats a poll's cooldown
+        write, and it must not resurrect the deleted entry."""
+        with _STORE_WRITE_LOCK:
+            self._reload_if_backed()
+            for i, existing in enumerate(self._watches):
+                if existing.id == watch.id:
+                    self._watches[i] = watch
+                    self.save()
+                    return
 
 
 # ---------------------------------------------------------------------------
@@ -488,6 +511,14 @@ Notifier = Callable[..., tuple]
 # out-of-cooldown and fire duplicate notifications before either writes
 # the cooldown timestamp back to the store.
 _RUN_ONCE_LOCK = threading.Lock()
+
+# Serialises individual store writes (save + the reload-before-mutate CRUD
+# ops) across every WatchlistStore instance in the process. Distinct from
+# _RUN_ONCE_LOCK, which is held for a whole poll: a GUI edit must not have
+# to wait out a multi-minute poll to save, it just needs its
+# reload-modify-write to be atomic against the poll's per-watch saves.
+# RLock so save() can be called from inside a mutator that already holds it.
+_STORE_WRITE_LOCK = threading.RLock()
 
 
 def run_once(

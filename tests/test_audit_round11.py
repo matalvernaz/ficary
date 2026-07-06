@@ -276,3 +276,92 @@ class TestMisc:
         assert _resolve_name("harry", {"": "", "  ": "  "}) is None
         assert _resolve_name(
             "harry", {"harry potter": "Harry Potter"}) == "Harry Potter"
+
+
+# ── Watchlist store reload-before-mutate merge (M-8) ─────────────────
+
+class TestWatchlistStoreMerge:
+    def _watch(self, target):
+        from ficary.watchlist import WATCH_TYPE_STORY, Watch
+        return Watch(type=WATCH_TYPE_STORY, target=target)
+
+    def test_add_reloads_and_merges(self, tmp_path):
+        # A GUI add and a poll add through separate store instances must
+        # not clobber each other (the lost-update race M-8 fixes).
+        from ficary.watchlist import WatchlistStore
+        p = tmp_path / "wl.json"
+        poll = WatchlistStore(p)
+        gui = WatchlistStore(p)
+        poll.add(self._watch("https://x/a"))       # disk: [A]
+        gui.add(self._watch("https://x/b"))         # gui reloads -> [A, B]
+        poll.add(self._watch("https://x/c"))        # poll's snapshot was [A]
+        disk = WatchlistStore(p)
+        disk.reload()
+        assert {w.target for w in disk.all()} == {
+            "https://x/a", "https://x/b", "https://x/c"}
+
+    def test_update_noops_when_removed_concurrently(self, tmp_path):
+        # A concurrent delete beats a poll's cooldown update; update() must
+        # not resurrect the deleted watch.
+        from ficary.watchlist import WatchlistStore
+        p = tmp_path / "wl.json"
+        s1 = WatchlistStore(p)
+        s2 = WatchlistStore(p)
+        a = self._watch("https://x/a")
+        s1.add(a)
+        s2.reload()                                 # s2 sees [A]
+        assert s1.remove(a.id) is True              # disk: []
+        s2.update(a)                                # A gone on disk -> no-op
+        disk = WatchlistStore(p)
+        disk.reload()
+        assert disk.all() == []
+
+
+# ── Watchlist auto-download routes through the per-site queue (M-7) ──
+
+class TestWatchDownloadQueueRouting:
+    def test_routes_through_download_queues(self, tmp_path, monkeypatch):
+        from concurrent.futures import Future
+
+        from ficary import cli
+        from ficary.library.index import LibraryIndex
+        from ficary.watchlist import WATCH_TYPE_STORY, PollResult, Watch
+
+        monkeypatch.setattr(cli, "check_format_deps", lambda fmt: None)
+        monkeypatch.setattr("ficary.prefs.Prefs", lambda: _FakePrefs({}))
+        LibraryIndex.load(tmp_path / "index.json").save()
+        monkeypatch.setattr("ficary.library.index.default_index_path",
+                            lambda: tmp_path / "index.json")
+
+        ran = {}
+
+        def fake_dl(url, job, output_dir, *, update_path=None,
+                    on_export=None, **kw):
+            ran["url"] = url
+            if on_export:
+                on_export(output_dir / "f.epub")
+            return True
+
+        monkeypatch.setattr(cli, "_download_one", fake_dl)
+
+        captured = {}
+
+        def fake_enqueue(site_name, job_fn, dedupe_key=None):
+            captured["site"] = site_name
+            captured["dedupe_key"] = dedupe_key
+            fut = Future()
+            fut.set_result(job_fn())  # run inline for the test
+            return fut
+
+        monkeypatch.setattr(cli.DownloadQueues, "enqueue",
+                            staticmethod(fake_enqueue))
+
+        dl = cli.make_watch_downloader(_FakePrefs({}))
+        url = "https://www.fanfiction.net/s/123"
+        saved = dl(Watch(type=WATCH_TYPE_STORY, target=url),
+                   PollResult(watch_id="x", ok=True, new_items=[url]))
+
+        assert captured.get("site")        # a per-site queue was used
+        assert captured.get("dedupe_key")  # single-flight key passed
+        assert ran["url"] == url           # the download actually ran
+        assert saved                       # and its path was collected
