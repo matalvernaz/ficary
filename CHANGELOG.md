@@ -1,5 +1,20 @@
 # Changelog
 
+## 2.8.1 — 2026-07-06
+
+**Bug fixes**
+
+* **The Download button works again.** Since 2.7.0, clicking Download or
+  Update in the desktop app did nothing at all — no error, no progress, no
+  output — for every kind of link: single stories, Literotica and AO3
+  series, and author pages. The "Preferences → Downloads" reshuffle in
+  2.7.0 moved the FicHub, combine-series, and cookie settings into
+  preferences, but the code that snapshots your settings at the start of a
+  download reached for the preferences module without importing it. That
+  crashed on the very first step of every download, and the window
+  swallowed the error silently. Restored the import; single downloads,
+  series merges, and author-page grabs all start again.
+
 ## 2.8.0 — 2026-07-05
 
 Audit round 11: one workflow request plus a batch of verified fixes.

@@ -2321,6 +2321,8 @@ class MainFrame(wx.Frame):
         format dropdown mid-batch doesn't retroactively change which
         format old queued items export as.
         """
+        from . import prefs as _p
+
         fmt = self.format_ctrl.GetString(self.format_ctrl.GetSelection())
         strip_notes = self.strip_notes_ctrl.GetValue()
         llm_strip_notes = (

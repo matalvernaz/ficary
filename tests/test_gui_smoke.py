@@ -83,18 +83,40 @@ def test_main_frame_constructs(wx_app):
         frame.Destroy()
 
 
-def test_merge_series_snapshot_roundtrips(wx_app):
-    """The "combine series into one book" checkbox must reach the worker
-    via the params snapshot — that snapshot is the only thing the series
-    dispatch reads. Off by default so pasting a series URL keeps the
-    existing one-file-per-part behavior until the user opts in."""
+def test_merge_series_snapshot_roundtrips(wx_app, monkeypatch):
+    """The "combine series into one book" option lives in Preferences now
+    (the round-10 declutter moved it off the main window), so the snapshot
+    reads KEY_MERGE_SERIES from prefs rather than a checkbox.
+
+    This also guards the snapshot's prefs-read path as a whole:
+    ``_snapshot_download_params`` must ``import prefs as _p`` locally to
+    reach KEY_MERGE_SERIES / KEY_FICHUB / the cookie keys. A missing import
+    there raised NameError on every call, and because ``_on_download``
+    snapshots before it branches, that silently killed *every* GUI download
+    in 2.7.0-2.8.0 — the wx event handler swallows the traceback to stderr,
+    which a windowed build has nowhere to show. Assert the snapshot both
+    succeeds and reflects the pref.
+
+    Monkeypatches ``get_bool`` rather than calling ``set_bool`` so the test
+    doesn't write to the real on-disk prefs file.
+    """
     from ficary.gui import MainFrame
+    from ficary import prefs as _p
 
     frame = MainFrame()
     try:
-        assert frame.merge_series_ctrl.GetValue() is False
+        real_get_bool = frame.prefs.get_bool
+
+        def get_bool_with(merge_value):
+            def _fake(key, default=None):
+                if key == _p.KEY_MERGE_SERIES:
+                    return merge_value
+                return real_get_bool(key, default)
+            return _fake
+
+        monkeypatch.setattr(frame.prefs, "get_bool", get_bool_with(False))
         assert frame._snapshot_download_params().merge_series is False
-        frame.merge_series_ctrl.SetValue(True)
+        monkeypatch.setattr(frame.prefs, "get_bool", get_bool_with(True))
         assert frame._snapshot_download_params().merge_series is True
     finally:
         frame.Destroy()
