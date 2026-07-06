@@ -2,9 +2,9 @@ name: Tests
 
 on:
   push:
-    branches: [master]
+    branches: [master, reader]
   pull_request:
-    branches: [master]
+    branches: [master, reader]
   workflow_dispatch:
 
 jobs:
@@ -15,9 +15,35 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: "3.13"
+
+      - name: Install GTK runtime + xvfb (wxPython + headless GUI tests)
+        # The GUI smoke tests boot a real wx MainFrame, which needs the
+        # GTK3 runtime libs and a virtual display. Without these the whole
+        # test_gui_smoke.py module skips (importorskip wx / no DISPLAY) —
+        # which is how a NameError that killed every GUI download shipped
+        # unnoticed across 2.7.0-2.8.0. Mirrors build-linux.yml's lib set,
+        # plus xvfb for the headless display.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libgtk-3-0 libsdl2-2.0-0 \
+            libegl1 libgl1 libglu1-mesa \
+            libnotify4 libsm6 libxkbcommon0 \
+            at-spi2-core xvfb
+
       - name: Install package with dev deps
+        # wxPython has no universal Linux wheel on PyPI (the GTK3 ABI is
+        # distro-version-specific); the extras repo hosts per-Ubuntu-version
+        # wheels. Same recipe as build-linux.yml.
         run: |
           python -m pip install --upgrade pip
+          UBUNTU_VERSION=$(lsb_release -rs)
+          pip install -f \
+            "https://extras.wxpython.org/wxPython4/extras/linux/gtk3/ubuntu-${UBUNTU_VERSION}" \
+            wxPython || pip install wxPython
           pip install -e ".[dev,epub]"
+
       - name: Run pytest
-        run: python -m pytest tests/ -v
+        # xvfb-run gives the GUI smoke tests a virtual display; the rest of
+        # the suite ignores it.
+        run: xvfb-run -a python -m pytest tests/ -v
