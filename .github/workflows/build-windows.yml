@@ -144,8 +144,21 @@ jobs:
           name: ficary-windows-portable
           path: dist/ficary-portable.zip
 
+      # Fill the GitHub release body from CHANGELOG.md. The in-app
+      # "changes since your version" changelog reads release bodies
+      # (self_update.fetch_changelog_since), so a release created without
+      # a body shows blank in the update dialog. Fails the job if the tag
+      # has no CHANGELOG section rather than shipping empty notes.
+      - name: Extract release notes from CHANGELOG
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: pwsh
+        run: |
+          python tools/extract_changelog.py CHANGELOG.md "${{ github.ref_name }}" release_notes.md
+          Get-Content release_notes.md
+
       - name: Upload to release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v3
         with:
           files: dist/ficary-portable.zip
+          body_path: release_notes.md
