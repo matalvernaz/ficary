@@ -1,5 +1,21 @@
 # Changelog
 
+## Unreleased
+
+**Bug fixes**
+
+* **The update dialog's changelog is no longer blank.** When an update was
+  available, the "changes since your version" box showed nothing. Those notes
+  are pulled from each GitHub release's description, and the descriptions were
+  never being filled in — so there was nothing to show. Releases now carry
+  their changelog notes, and the update prompt shows what actually changed.
+* **The leftover `ffn-dl.exe` is cleaned up after the rename.** When the app
+  was renamed from ffn-dl to Ficary, a compatibility copy named `ffn-dl.exe`
+  was kept beside the real program and re-created on every update. It's no
+  longer part of the download, is removed automatically the next time Ficary
+  starts, and installs still running under the old name are switched over to
+  `ficary.exe` on their next update.
+
 ## 2.9.0 — 2026-07-06
 
 **New features**
