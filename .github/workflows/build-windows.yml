@@ -129,17 +129,6 @@ jobs:
         shell: pwsh
         run: Copy-Item zipextractor_bin/ZipExtractor.exe dist/ficary/
 
-      # Compat shim for the ffn-dl -> ficary rename: every 2.4.x install's
-      # auto-updater downloads this zip and refuses to install unless it
-      # finds an exe named ffn-dl.exe (it matches on its own running exe
-      # name). Ship a second copy under the old name so the existing
-      # installed base can cross the rename; their install keeps running
-      # as ffn-dl.exe and self_update.py accepts either name from then on.
-      # Keep until 2.4.x installs have plausibly all upgraded.
-      - name: Bundle ffn-dl.exe rename shim
-        shell: pwsh
-        run: Copy-Item dist/ficary/ficary.exe dist/ficary/ffn-dl.exe
-
       # Pack the whole dist\ficary\ folder into a zip the user can
       # unpack anywhere. Compress-Archive with a trailing path segment
       # keeps "ficary" as the top-level folder inside the archive.

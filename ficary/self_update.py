@@ -246,6 +246,20 @@ def cleanup_old_exe() -> None:
     except OSError as exc:
         logger.debug("Could not remove stale old exe: %s", exc)
 
+    # Remove the ffn-dl.exe rename shim once we're running as ficary.exe.
+    # Release zips shipped it through the ffn-dl -> ficary rename so
+    # pre-rename auto-updaters could cross over, which meant it reappeared
+    # on every update. Only delete it when we are ficary.exe; an install
+    # still running as ffn-dl.exe must not unlink its own binary.
+    try:
+        current = Path(sys.executable)
+        if current.name.lower() == "ficary.exe":
+            shim = current.with_name("ffn-dl.exe")
+            if shim.exists():
+                shim.unlink()
+    except OSError as exc:
+        logger.debug("Could not remove ffn-dl.exe rename shim: %s", exc)
+
     try:
         temp = Path(tempfile.gettempdir())
         cutoff = time.time() - 24 * 3600
@@ -399,6 +413,7 @@ def _shell_execute(verb: str, file: Path, params: str, cwd: Path) -> None:
 
 def _spawn_extractor(
     extractor: Path, zip_path: Path, install_dir: Path, exe: Path,
+    updated_exe=None,
 ) -> None:
     """Launch the bundled helper to swap files + relaunch ficary.
 
@@ -406,17 +421,28 @@ def _spawn_extractor(
     common case (user unzipped to Downloads, Desktop, home) doesn't
     need elevation and skipping the prompt makes the flow one-click.
 
+    ``updated_exe`` (a bare filename) makes ZipExtractor relaunch a
+    *different* binary than the one it waited on: it still waits on
+    ``--current-exe`` (matched by full path against the live process)
+    but relaunches ``--updated-exe`` resolved against ``--output``.
+    Used to migrate a crossed-over ``ffn-dl.exe`` install onto
+    ``ficary.exe`` — wait on the live ffn-dl.exe, relaunch ficary.exe —
+    without racing the file swap.
+
     Argument quoting goes through ``subprocess.list2cmdline`` because
     hand-rolled ``f'"{path}"'`` breaks at drive roots:
     ``"D:\\"`` parses as an escaped quote under
     ``CommandLineToArgvW``, swallowing the next token. ``list2cmdline``
     doubles trailing backslashes correctly per MS docs.
     """
-    params = subprocess.list2cmdline([
+    argv = [
         "--input", str(zip_path),
         "--output", str(install_dir),
         "--current-exe", str(exe),
-    ])
+    ]
+    if updated_exe:
+        argv += ["--updated-exe", updated_exe]
+    params = subprocess.list2cmdline(argv)
     verb = "open" if _is_writable(install_dir) else "runas"
     # ZipExtractor writes its log (ZipExtractor.log) to AppDomain.
     # CurrentDomain.BaseDirectory — i.e. its own folder. Point it at
@@ -528,6 +554,10 @@ def download_and_replace(update_info, progress_cb=None) -> Path:
                 "at the expected location. Update aborted; install unchanged."
             )
         src_for_repack = candidate
+        # candidate is deleted with ``extracted`` just below, so record
+        # now whether the payload carries ficary.exe — this drives the
+        # crossed-install migration at relaunch time.
+        payload_has_ficary = (candidate / "ficary.exe").is_file()
         _repack_flat(src_for_repack, flat_zip)
         shutil.rmtree(extracted, ignore_errors=True)
 
@@ -553,7 +583,18 @@ def download_and_replace(update_info, progress_cb=None) -> Path:
                 "a possibly tampered helper. The install is unchanged."
             )
 
-        _spawn_extractor(extractor_tmp, flat_zip, install_dir, current_exe)
+        # Migrate a crossed-over install onto ficary.exe. Such an install
+        # crossed the ffn-dl -> ficary rename via the old compat shim and
+        # is still running as ffn-dl.exe. Now that the zip no longer ships
+        # ffn-dl.exe, have the extractor relaunch the ficary.exe it just
+        # wrote (it still waits on the live ffn-dl.exe via --current-exe).
+        # cleanup_old_exe() drops the leftover ffn-dl.exe on the next launch.
+        updated_exe = None
+        if current_exe.name.lower() == "ffn-dl.exe" and payload_has_ficary:
+            updated_exe = "ficary.exe"
+        _spawn_extractor(
+            extractor_tmp, flat_zip, install_dir, current_exe, updated_exe,
+        )
     except Exception:
         shutil.rmtree(workdir, ignore_errors=True)
         raise
