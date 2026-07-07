@@ -1,6 +1,15 @@
 # Changelog
 
-## Unreleased
+## 2.9.1 — 2026-07-07
+
+**New features**
+
+* **Choosable classic HTML layout.** HTML exports can now use a "classic"
+  title page — the flat `Label: value` header and plain page title of the
+  old browser-based downloaders — instead of the modern layout. Pick it per
+  download with `--html-style classic`, or set a default under Preferences.
+  Modern stays the default, and either way the file still re-imports cleanly
+  in the library scanner.
 
 **Bug fixes**
 
