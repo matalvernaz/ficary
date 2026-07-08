@@ -263,3 +263,96 @@ class TestParseTagBrowseResults:
         )
         results = _parse_literotica_results(html)
         assert len(results) == 1
+
+
+class TestParseTagBrowseArticleMarkup:
+    """:func:`_parse_literotica_results` against the 2026-07 build.
+
+    Literotica rotated its front-end again: cards became ``<article>``
+    elements (no ``role`` attribute), title anchors moved inside an
+    ``<h3>`` and flipped ``rel="external"`` to ``rel="_self"``, and
+    author hrefs grew a ``/stories`` suffix. The previous parser keyed
+    on ``rel="external"`` + ``div[role=article]`` and returned zero
+    rows for every live tag page."""
+
+    @staticmethod
+    def _card_html(slug, title, author, summary, category, rating):
+        return f"""
+        <article class="_card_1gpbw_15">
+          <div class="_content_1gpbw_55">
+            <h3 class="_title_1gpbw_51">
+              <a href="https://www.literotica.com/s/{slug}" rel="_self"
+                 class="_title_link_1gpbw_66">{title}</a>
+            </h3>
+            <p class="_description_1gpbw_95">{summary}</p>
+            <div class="_meta_row_1gpbw_599">
+              <span class="_by_1gpbw_117">by</span>
+              <a href="https://www.literotica.com/authors/{author}/works/stories"
+                 class="_author_link_1gpbw_137">{author}</a>
+              <span class="_in_1gpbw_160">in</span>
+              <a href="https://www.literotica.com/c/{category.lower().replace(' ', '-')}"
+                 rel="_self" class="_category_1gpbw_138">{category}</a>
+              <time datetime="2026-07-07">07/07/2026</time>
+            </div>
+          </div>
+          <a href="/femdom/?dialog=log-in" rel="nofollow"
+             title="Bookmark Story"
+             aria-label="Bookmark Story: {title}">
+            <span class="visually-hidden">Bookmark Story</span>
+          </a>
+          <span class="_stat_1gpbw_199" data-value="{rating}" title="Rating">
+            <span class="_stats_text_1gpbw_258">{rating}</span>
+          </span>
+        </article>
+        """
+
+    def test_parses_article_card_markup(self):
+        from ficary.search import _parse_literotica_results
+        html = "<html><body>" + "".join([
+            self._card_html(
+                "her-lesbian-awakening", "Her Lesbian Awakening",
+                "lickablelucy23", "When a girl sits on her face.",
+                "Lesbian Sex", "4.5",
+            ),
+            self._card_html(
+                "sam-and-jenny-ch-38", "Sam and Jenny Ch. 38",
+                "MASEVEN", "TPE FemDom slice of life.", "BDSM", "5",
+            ),
+        ]) + "</body></html>"
+        results = _parse_literotica_results(html)
+        assert len(results) == 2
+        first = results[0]
+        assert first["title"] == "Her Lesbian Awakening"
+        assert first["url"] == (
+            "https://www.literotica.com/s/her-lesbian-awakening"
+        )
+        assert first["author"] == "lickablelucy23"
+        assert first["summary"] == "When a girl sits on her face."
+        assert first["fandom"] == "Lesbian Sex"
+        assert first["rating"] == "4.5"
+
+    def test_heading_anchor_without_rel_still_counts_as_title(self):
+        """``rel`` has flipped value once already (external → _self);
+        if it disappears entirely, a permalink inside a heading must
+        still be recognised as a card title."""
+        from ficary.search import _parse_literotica_results
+        html = """
+        <html><body><article>
+          <h3><a href="https://www.literotica.com/s/no-rel-card">No Rel Card</a></h3>
+        </article></body></html>
+        """
+        results = _parse_literotica_results(html)
+        assert len(results) == 1
+        assert results[0]["title"] == "No Rel Card"
+
+    def test_bare_permalink_outside_heading_still_ignored(self):
+        """Page chrome sharing the permalink shape (related-story
+        links, footers) has neither a title ``rel`` nor a heading
+        ancestor and must not become a result row."""
+        from ficary.search import _parse_literotica_results
+        html = """
+        <html><body>
+          <div><a href="https://www.literotica.com/s/chrome-link">Chrome</a></div>
+        </body></html>
+        """
+        assert _parse_literotica_results(html) == []

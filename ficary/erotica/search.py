@@ -659,16 +659,16 @@ def search_sol(query: str, *, page: int = 1, tags: Optional[list] = None,
     # SOL renders rows like:
     #   <h3 class="sname">N <a href="/n/<id>/<slug>">Title</a>
     #                       by <a href="/a/<author>">Author</a></h3>
-    # The chapter URLs that the downloader consumes are at /s/<id>/...,
-    # but the listing now uses /n/<id>/<slug> (story-page redirect) —
-    # the previous parser only matched /s/ which doesn't appear on
-    # this listing anymore, so every search returned 0 rows.
+    # Title hrefs mix two shapes on the same listing — /s/<id>/<slug>
+    # and /n/<id>/<slug> (story-page redirect). Accept both: matching
+    # only one silently drops the rows using the other (an /n/-only
+    # match returned 3 of 10 rows on a bytag page).
     for h3 in soup.find_all("h3", class_="sname"):
         anchors = h3.find_all("a", href=True)
         if len(anchors) < 1:
             continue
         title_a = anchors[0]
-        m = re.match(r"^/n/(\d+)/([^/?#\s]+)", title_a.get("href", ""))
+        m = re.match(r"^/[ns]/(\d+)/([^/?#\s]+)", title_a.get("href", ""))
         if not m:
             continue
         story_id, slug = m.group(1), m.group(2)
@@ -1296,11 +1296,10 @@ def search_literotica_wrapped(query: str, *, page: int = 1,
     kwargs: dict = {}
     if category:
         kwargs["category"] = category
-    try:
-        results = search_literotica(query, page=page, **kwargs)
-    except Exception as exc:
-        logger.debug("literotica search failed: %s", exc)
-        return []
+    # Fetch/HTTP errors propagate to the fan-out, which records them in
+    # ``site_stats`` — swallowing them here showed "0 results, ok" for
+    # a site that actually failed.
+    results = search_literotica(query, page=page, **kwargs)
     if query and category:
         results = [
             r for r in results
@@ -1358,11 +1357,10 @@ def search_ao3_erotica(query: str, *, page: int = 1,
     kwargs = {"rating": "explicit", "sort": "kudos"}
     if freeform_arg:
         kwargs["freeform"] = freeform_arg
-    try:
-        results = search_ao3(query or "", page=page, **kwargs)
-    except Exception as exc:
-        logger.debug("AO3 erotica search failed: %s", exc)
-        return []
+    # Fetch/HTTP errors (e.g. AO3's anti-bot 403) propagate to the
+    # fan-out, which records them in ``site_stats`` — swallowing them
+    # here showed "0 results, ok" for a site that actually failed.
+    results = search_ao3(query or "", page=page, **kwargs)
     for r in results[:PER_SITE_LIMIT]:
         r["site"] = "ao3"
     return results[:PER_SITE_LIMIT]
@@ -1517,6 +1515,16 @@ def search_bdsmlibrary(query: str, *, page: int = 1,
     html = _fetch(url)
     if not html:
         return []
+    if code_id and "storyid=" not in html and 'name="term"' in html:
+        # search.php ignored the code parameters and served its search
+        # form back instead of a results page — the site removed the
+        # public code-based advanced search (observed 2026-07; story
+        # permalinks still resolve, but listings aren't reachable).
+        # Raise so the fan-out reports a failure instead of "0 results".
+        raise SearchFetchError(
+            "bdsmlibrary: search.php returned the search form instead "
+            "of results — the site's public code search is gone"
+        )
     out: list[dict] = []
     seen = set()
     # Each story row carries ``story.php?storyid=N`` for the title

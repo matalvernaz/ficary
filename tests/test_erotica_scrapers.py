@@ -682,6 +682,66 @@ def test_search_greatfeet_returns_empty_for_non_feet_tag_only():
         erotica_search._fetch = original_fetch
 
 
+def test_search_sol_accepts_both_permalink_shapes():
+    """SOL bytag listings mix ``/s/<id>/<slug>`` and ``/n/<id>/<slug>``
+    title hrefs on the same page. The parser matched only ``/n/`` and
+    silently dropped every ``/s/`` row — a femdom browse returned 3 of
+    10 rows on the live page. Both shapes must parse."""
+    from ficary.erotica.search import search_sol
+
+    fake_html = """
+    <html><body>
+      <h3 class="sname">1 <a href="/s/50310/female-fighting">Female Fighting</a>
+        by <a href="/a/jim-priest">Jim Priest</a></h3>
+      <h3 class="sname">2 <a href="/n/49720/laying-the-dragon">Laying the Dragon</a>
+        by <a href="/a/jim-priest">Jim Priest</a></h3>
+    </body></html>
+    """
+    import ficary.erotica.search as erotica_search
+    original_fetch = erotica_search._fetch
+    try:
+        erotica_search._fetch = lambda url: fake_html
+        results = search_sol("", tags=["femdom"])
+    finally:
+        erotica_search._fetch = original_fetch
+    assert [r["title"] for r in results] == [
+        "Female Fighting", "Laying the Dragon",
+    ]
+    # Both shapes normalise to the /s/ URL the downloader consumes.
+    assert results[0]["url"] == (
+        "https://storiesonline.net/s/50310/female-fighting"
+    )
+    assert results[1]["url"] == (
+        "https://storiesonline.net/s/49720/laying-the-dragon"
+    )
+
+
+def test_search_bdsmlibrary_raises_on_form_bounce():
+    """bdsmlibrary removed its public code-based advanced search
+    (observed 2026-07): search.php ignores the code parameters and
+    serves the search form back. That must surface as a
+    :class:`SearchFetchError` — the fan-out records it as a failed
+    site — not as a silent "0 results, ok"."""
+    import pytest
+    from ficary.erotica.search import SearchFetchError, search_bdsmlibrary
+
+    form_shell = """
+    <html><body>
+      <form method="post" action="/stories/search.php">
+        <input name="term" size="15" />
+      </form>
+    </body></html>
+    """
+    import ficary.erotica.search as erotica_search
+    original_fetch = erotica_search._fetch
+    try:
+        erotica_search._fetch = lambda url: form_shell
+        with pytest.raises(SearchFetchError):
+            search_bdsmlibrary("", tags=["femdom"])
+    finally:
+        erotica_search._fetch = original_fetch
+
+
 # ── Multi-page erotica fan-out driver ────────────────────────────
 
 

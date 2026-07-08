@@ -1,5 +1,25 @@
 # Changelog
 
+## 2.9.2 — 2026-07-08
+
+**Bug fixes**
+
+* **Tag searches find far more stories again.** A femdom tag search was
+  coming back nearly empty because three sites were silently contributing
+  nothing. Literotica redesigned its story listings and the old reader
+  matched nothing on the new pages; Archive of Our Own started blocking the
+  browser disguise the search used (it now falls back to a different one);
+  and StoriesOnline lists stories under two different link styles but only
+  one was being read, so most rows were dropped. All three now return full
+  results — the same femdom search went from 35 stories to 56.
+* **A site that fails during search now says so.** Literotica and Archive
+  of Our Own errors were swallowed and shown as "0 results" as if the
+  search had worked; failures now show up in the per-site summary.
+* **BDSM Library tag search is reported as broken rather than empty.** The
+  site removed its public story search, so tag searches there can't work
+  anymore. Instead of a quiet zero, the per-site summary now marks it as
+  failed. (Stories already in your library still download fine.)
+
 ## 2.9.1 — 2026-07-07
 
 **New features**

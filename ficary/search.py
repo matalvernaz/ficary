@@ -1179,6 +1179,14 @@ AO3_LANGUAGES = {
 }
 
 
+# AO3's anti-bot shield ("Shields are up!" interstitial) 403s some TLS
+# fingerprints while letting others through, and the blocked set moves
+# over time — as of 2026-07 the ``chrome`` profile is blocked while
+# firefox/safari pass. On a 403, retry down this chain and take the
+# first 200.
+_AO3_IMPERSONATE_CHAIN = ("chrome", "firefox133", "safari17_0")
+
+
 def _build_ao3_search_url(query, filters, page=1):
     params = {}
     if query:
@@ -1380,8 +1388,16 @@ def search_ao3(query, *, page=1, **filters):
     `page` (keyword-only) selects a specific results page.
     """
     url = _build_ao3_search_url(query, filters, page=page)
-    session = curl_requests.Session(impersonate="chrome")
-    resp = session.get(url, timeout=30)
+    resp = None
+    for browser in _AO3_IMPERSONATE_CHAIN:
+        session = curl_requests.Session(impersonate=browser)
+        resp = session.get(url, timeout=30)
+        if resp.status_code == 200:
+            break
+        if resp.status_code != 403:
+            # Not the fingerprint shield (rate limit, outage, 5xx) —
+            # another fingerprint won't change the answer.
+            break
     if resp.status_code != 200:
         raise RuntimeError(
             f"AO3 search failed (HTTP {resp.status_code}). "
@@ -1842,6 +1858,34 @@ _LIT_AUTHOR_HREF_RE = re.compile(
     r"/authors/[^/]+/works", re.I
 )
 
+# ``rel`` values Literotica has shipped on story-card title anchors:
+# ``external`` (role="article" build) and ``_self`` (article-tag build).
+_LIT_TITLE_REL_VALUES = {"external", "_self"}
+
+
+def _lit_anchor_is_title(a) -> bool:
+    """True when a story-permalink anchor is a card's title link rather
+    than page chrome sharing the same href shape. Title anchors carry
+    one of the ``rel`` values Literotica has used across builds, or sit
+    inside a heading element (``<h1>``–``<h6>`` or the older
+    ``<p role="heading">``)."""
+    rel = a.get("rel") or []
+    if isinstance(rel, str):
+        rel = rel.split()
+    if _LIT_TITLE_REL_VALUES.intersection(rel):
+        return True
+    parent = getattr(a, "parent", None)
+    for _ in range(4):
+        if parent is None:
+            break
+        name = getattr(parent, "name", None)
+        if name in ("h1", "h2", "h3", "h4", "h5", "h6"):
+            return True
+        if name == "p" and parent.get("role") == "heading":
+            return True
+        parent = getattr(parent, "parent", None)
+    return False
+
 _LIT_CATEGORY_HREF_RE = re.compile(
     r"literotica\.com/c/[a-z0-9-]+", re.I
 )
@@ -1850,32 +1894,37 @@ _LIT_CATEGORY_HREF_RE = re.compile(
 def _parse_literotica_results(html):
     """Parse story cards from a Literotica tag-browse page.
 
-    Literotica migrated to a Next.js front-end whose class names rotate
-    per build (``_works_item_kpkm_4`` → ``_works_item_<rand>_4`` etc.),
-    so the previous schema.org selectors
-    (``property="itemListElement"``, ``property="ratingValue"``) match
-    zero cards on the live site. Switch to attribute-based selectors
-    that don't depend on rotating class names:
+    Literotica's front-end rotates its markup per build — class names
+    are randomized (``_works_item_kpkm_4`` → ``_works_item_<rand>_4``)
+    and structural attributes have churned twice now: the schema.org
+    build (``property="itemListElement"``), then ``<div role="article">``
+    cards with ``rel="external"`` title links, then ``<article>`` cards
+    with ``rel="_self"`` title links inside an ``<h3>``. Selectors here
+    therefore avoid both class names and any single ``rel`` value:
 
-    * Title links carry ``rel="external"`` and a stable
-      ``literotica.com/s/<slug>`` href. That's the durable anchor we
-      use to enumerate cards.
+    * Title anchors are enumerated by href shape alone — a stable
+      ``literotica.com/s/<slug>`` permalink (:data:`_LIT_STORY_HREF_RE`).
+      An anchor counts as a title when it carries one of the observed
+      ``rel`` values *or* sits inside a heading (``<h1>``–``<h6>`` /
+      ``<p role="heading">``) — page chrome that shares the href shape
+      does neither.
     * Author links land on ``/authors/<name>/works``.
     * Category links land on ``literotica.com/c/<slug>``.
     * Ratings are wrapped in a ``<span data-value="X.YZ" title="Rating">``.
 
-    Each title anchor's enclosing ``<div role="article">`` carries the
-    full card metadata; we walk up at most eight levels to find it
-    before falling back to the bare title/url pair.
+    The enclosing card — ``<article>`` or ``<div role="article">``
+    depending on build — carries the full metadata; we walk up at most
+    eight levels to find it before falling back to the bare title/url
+    pair.
     """
     soup = BeautifulSoup(html, "lxml")
     results = []
     seen_urls = set()
-    for a in soup.find_all("a", attrs={"rel": "external"}):
+    for a in soup.find_all("a", href=_LIT_STORY_HREF_RE):
         href = a.get("href", "")
-        if not _LIT_STORY_HREF_RE.match(href):
-            continue
         if href in seen_urls:
+            continue
+        if not _lit_anchor_is_title(a):
             continue
         seen_urls.add(href)
         title = a.get_text(" ", strip=True)
@@ -1890,14 +1939,14 @@ def _parse_literotica_results(html):
             card = getattr(card, "parent", None)
             if card is None:
                 break
-            if (
-                getattr(card, "name", None) == "div"
-                and card.get("role") == "article"
+            name = getattr(card, "name", None)
+            if name == "article" or (
+                name == "div" and card.get("role") == "article"
             ):
                 break
         else:
             card = None
-        if card is None or card.name != "div":
+        if card is None or card.name not in ("div", "article"):
             results.append({
                 "title": title, "author": "", "url": href, "summary": "",
                 "words": "?", "chapters": "?", "rating": "?", "fandom": "",
