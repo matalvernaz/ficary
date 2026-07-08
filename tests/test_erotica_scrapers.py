@@ -716,6 +716,75 @@ def test_search_sol_accepts_both_permalink_shapes():
     )
 
 
+def test_adapters_return_natural_page_size():
+    """Adapters must pass through everything a site page carries.
+    The old ``PER_SITE_LIMIT = 8`` truncated each already-fetched page
+    (Literotica serves ~94 rows/page) and Load More advanced by *site
+    page*, so the truncated rows were permanently skipped — a femdom
+    search surfaced ~8 Literotica rows out of thousands."""
+    import ficary.erotica.search as erotica_search
+    from ficary.erotica.search import search_literotica_wrapped
+
+    rows = [
+        {"title": f"Story {i}", "author": "A", "url": f"u{i}",
+         "summary": "", "fandom": ""}
+        for i in range(30)
+    ]
+    original = erotica_search.search_literotica
+    try:
+        erotica_search.search_literotica = lambda q, page=1, **kw: list(rows)
+        results = search_literotica_wrapped("", tags=["femdom"])
+    finally:
+        erotica_search.search_literotica = original
+    assert len(results) == 30
+
+
+def test_single_listing_adapters_window_by_page(monkeypatch):
+    """Single-listing sites (MCStories et al.) map fan-out page N onto
+    row window N of their one listing: every row is reachable via Load
+    More, and the first off-the-end page returns ``[]`` — the fan-out's
+    exhaustion signal. The old behaviour re-served page 1's rows for
+    every page and never exhausted."""
+    import ficary.erotica.search as erotica_search
+    from ficary.erotica.search import search_mcstories
+
+    listing = "".join(
+        f'<tr><td><a href="../Story{i}/">Story {i}</a></td><td>fd</td></tr>'
+        for i in range(3)
+    )
+    fake_html = f"<html><body><table>{listing}</table></body></html>"
+    monkeypatch.setattr(erotica_search, "PER_SITE_PAGE_MAX", 2)
+    monkeypatch.setattr(erotica_search, "_fetch", lambda url: fake_html)
+
+    page1 = search_mcstories("", tags=["femdom"])
+    page2 = search_mcstories("", tags=["femdom"], page=2)
+    page3 = search_mcstories("", tags=["femdom"], page=3)
+    assert [r["title"] for r in page1] == ["Story 0", "Story 1"]
+    assert [r["title"] for r in page2] == ["Story 2"]
+    assert page3 == []
+
+
+def test_search_erotica_exhausts_only_on_empty_page(monkeypatch):
+    """A partial page no longer marks a site exhausted (natural page
+    sizes vary per site, so there is no meaningful "full batch"
+    threshold) — only an empty page does."""
+    import ficary.erotica.search as erotica_search
+    from ficary.erotica.search import search_erotica
+
+    row = {"title": "T", "author": "", "url": "u", "summary": ""}
+    monkeypatch.setitem(
+        erotica_search._SITE_FNS, "literotica",
+        lambda q, **kw: [dict(row)] * 3,
+    )
+    monkeypatch.setitem(
+        erotica_search._SITE_FNS, "ao3", lambda q, **kw: [],
+    )
+    results = search_erotica("", sites=["literotica", "ao3"])
+    assert results.site_stats["literotica"]["exhausted"] is False
+    assert results.site_stats["ao3"]["exhausted"] is True
+    assert "ao3" in results.exhausted_sites
+
+
 def test_search_bdsmlibrary_raises_on_form_bounce():
     """bdsmlibrary removed its public code-based advanced search
     (observed 2026-07): search.php ignores the code parameters and

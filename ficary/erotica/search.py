@@ -44,10 +44,25 @@ from ..search import search_literotica
 
 logger = logging.getLogger(__name__)
 
-PER_SITE_LIMIT = 8
-"""Cap the per-site result batch that fan-out pulls per page. Eight
-rows × twelve sites gives a first page of ~96 results, which is
-plenty for one view and keeps each site's scrape cheap."""
+PER_SITE_PAGE_MAX = 200
+"""Runaway guard on rows parsed from one site page — not a batch size.
+Adapters return each page's natural row count (Literotica ~94, AO3 20,
+SOL 10...); this bound only trips on a parser bug or a site serving a
+pathological listing. The previous design capped every site at 8 rows
+per page and discarded the rest of the already-fetched page; because
+Load More advances by *site page*, the discarded rows were skipped
+permanently — broad tag searches surfaced a fraction of what the
+sites actually held."""
+
+
+def _single_listing_window(page: int) -> tuple[int, int]:
+    """Row window for adapters whose site has one un-paginated listing.
+    Maps fan-out page N onto rows ``[(N-1)*PER_SITE_PAGE_MAX,
+    N*PER_SITE_PAGE_MAX)`` of that listing so every row is reachable
+    via Load More and an off-the-end page returns ``[]`` — the
+    fan-out's exhaustion signal."""
+    p = max(1, int(page))
+    return (p - 1) * PER_SITE_PAGE_MAX, p * PER_SITE_PAGE_MAX
 
 REQUEST_TIMEOUT_S = 25
 
@@ -615,7 +630,7 @@ def search_aff(query: str, *, page: int = 1, fandom: str = "",
             "rating": "M", "fandom": fandom, "status": "",
             "site": "aff",
         })
-        if len(out) >= PER_SITE_LIMIT:
+        if len(out) >= PER_SITE_PAGE_MAX:
             break
     return out
 
@@ -692,7 +707,7 @@ def search_sol(query: str, *, page: int = 1, tags: Optional[list] = None,
             "rating": "M", "fandom": "", "status": "",
             "site": "storiesonline",
         })
-        if len(out) >= PER_SITE_LIMIT:
+        if len(out) >= PER_SITE_PAGE_MAX:
             break
     return out
 
@@ -709,7 +724,8 @@ def search_mcstories(query: str, *, page: int = 1,
     drops MCS from a fan-out for unsupported tags, but defending the
     adapter keeps direct callers honest too.
     """
-    del page  # MCStories pages fit in one listing
+    # MCStories serves one un-paginated listing; window it per page.
+    window_start, window_end = _single_listing_window(page)
     first_tag = next((t for t in (tags or []) if t), "") or ""
     code = _MCS_TAG_CODES.get(first_tag.lower())
     if code:
@@ -750,9 +766,9 @@ def search_mcstories(query: str, *, page: int = 1,
             "rating": "M", "fandom": "", "status": "",
             "site": "mcstories",
         })
-        if len(out) >= PER_SITE_LIMIT:
+        if len(out) >= window_end:
             break
-    return out
+    return out[window_start:]
 
 
 _MCS_TAG_CODES = {
@@ -843,7 +859,7 @@ def search_lushstories(query: str, *, page: int = 1,
             "rating": "M", "fandom": found_cat, "status": "",
             "site": "lushstories",
         })
-        if len(out) >= PER_SITE_LIMIT:
+        if len(out) >= PER_SITE_PAGE_MAX:
             break
     return out
 
@@ -865,16 +881,19 @@ def search_sexstories(query: str, *, page: int = 1,
         query_terms.extend(tags[:3])  # top 3 tags — beyond that hits
         # SexStories' relevance noise floor.
     combined = " ".join(t for t in query_terms if t).strip()
+    # The POST search serves one un-paginated result set (page
+    # navigation isn't exposed in the form) — window it per fan-out
+    # page. The tag-less homepage browse paginates natively, so its
+    # window stays at page 1's shape.
+    window_start, window_end = _single_listing_window(page)
     if combined:
-        # POST to /search/ with the form's actual field names. Page
-        # navigation on the result set isn't exposed in the form, so
-        # we serve only the first page server-side and rely on the
-        # fan-out's PER_SITE_LIMIT cap.
+        # POST to /search/ with the form's actual field names.
         html = _post(
             "https://www.sexstories.com/search/",
             data={"search": combined, "type": "story"},
         )
     else:
+        window_start, window_end = _single_listing_window(1)
         url = "https://www.sexstories.com/"
         if page > 1:
             url += f"?pd_page={page}"
@@ -908,9 +927,9 @@ def search_sexstories(query: str, *, page: int = 1,
             "rating": "M", "fandom": "", "status": "",
             "site": "sexstories",
         })
-        if len(out) >= PER_SITE_LIMIT:
+        if len(out) >= window_end:
             break
-    return out
+    return out[window_start:]
 
 
 _NIFTY_TAG_CATEGORIES = {
@@ -928,7 +947,8 @@ def search_nifty(query: str, *, page: int = 1,
     our unified tag vocabulary (see :data:`_NIFTY_TAG_CATEGORIES`);
     other tags return ``[]`` so a tag-only ``bdsm`` search doesn't
     silently default to the ``/gay/`` directory."""
-    del page
+    # One un-paginated directory listing; window it per page.
+    window_start, window_end = _single_listing_window(page)
     cat = (category or "").strip().strip("/").lower()
     if not cat and tags:
         cat = _NIFTY_TAG_CATEGORIES.get(tags[0].lower(), "")
@@ -955,9 +975,9 @@ def search_nifty(query: str, *, page: int = 1,
             "rating": "M", "fandom": cat, "status": "",
             "site": "nifty",
         })
-        if len(out) >= PER_SITE_LIMIT:
+        if len(out) >= window_end:
             break
-    return out
+    return out[window_start:]
 
 
 def search_fictionmania(query: str, *, page: int = 1,
@@ -965,7 +985,8 @@ def search_fictionmania(query: str, *, page: int = 1,
     """Fictionmania search URL. The WebDNA template requires proper
     form params; we approximate with the ``searchdisplay`` endpoint
     and parse any story links that come back."""
-    del page
+    # One un-paginated result listing; window it per page.
+    window_start, window_end = _single_listing_window(page)
     if not query:
         url = "https://fictionmania.tv/recent.html"
     else:
@@ -1014,9 +1035,9 @@ def search_fictionmania(query: str, *, page: int = 1,
             "rating": "M", "fandom": "", "status": "",
             "site": "fictionmania",
         })
-        if len(out) >= PER_SITE_LIMIT:
+        if len(out) >= window_end:
             break
-    return out
+    return out[window_start:]
 
 
 def search_tgstorytime(query: str, *, page: int = 1,
@@ -1071,7 +1092,7 @@ def search_tgstorytime(query: str, *, page: int = 1,
             "rating": "M", "fandom": "", "status": "",
             "site": "tgstorytime",
         })
-        if len(out) >= PER_SITE_LIMIT:
+        if len(out) >= PER_SITE_PAGE_MAX:
             break
     return out
 
@@ -1129,7 +1150,7 @@ def search_chyoa(query: str, *, page: int = 1,
             "rating": "M", "fandom": "", "status": "",
             "site": "chyoa",
         })
-        if len(out) >= PER_SITE_LIMIT:
+        if len(out) >= PER_SITE_PAGE_MAX:
             break
     return out
 
@@ -1147,6 +1168,8 @@ def search_darkwanderer(query: str, *, page: int = 1,
     erased the entire query for any non-ASCII input — same bug the
     Fictionmania path was fixed for in 2.3.3.
     """
+    # One un-paginated listing; window it per page.
+    window_start, window_end = _single_listing_window(page)
     if query:
         flat = (
             unicodedata.normalize("NFKD", query)
@@ -1193,9 +1216,9 @@ def search_darkwanderer(query: str, *, page: int = 1,
             "rating": "M", "fandom": "cuckold", "status": "",
             "site": "darkwanderer",
         })
-        if len(out) >= PER_SITE_LIMIT:
+        if len(out) >= window_end:
             break
-    return out
+    return out[window_start:]
 
 
 def search_greatfeet(query: str, *, page: int = 1,
@@ -1216,8 +1239,10 @@ def search_greatfeet(query: str, *, page: int = 1,
     the text — the "new!" / "hot!" marker images carry alt attributes
     like ``"Foot Fetish Offering"`` that would otherwise pollute the
     title."""
-    del page  # tickles.htm is a single page — archive pages handle
-    # older stories via a separate ``/archive<N>.htm`` route.
+    # tickles.htm is a single un-paginated page (archive pages handle
+    # older stories via a separate ``/archive<N>.htm`` route); window
+    # it per fan-out page.
+    window_start, window_end = _single_listing_window(page)
     if (
         tags and not query
         and not any(t.strip().lower() == "feet" for t in tags)
@@ -1260,9 +1285,9 @@ def search_greatfeet(query: str, *, page: int = 1,
             "rating": "M", "fandom": "feet", "status": "",
             "site": "greatfeet",
         })
-        if len(out) >= PER_SITE_LIMIT:
+        if len(out) >= window_end:
             break
-    return out
+    return out[window_start:]
 
 
 def search_literotica_wrapped(query: str, *, page: int = 1,
@@ -1309,9 +1334,9 @@ def search_literotica_wrapped(query: str, *, page: int = 1,
                 r.get("summary", ""), r.get("fandom", ""),
             )
         ]
-    for r in results[:PER_SITE_LIMIT]:
+    for r in results[:PER_SITE_PAGE_MAX]:
         r["site"] = "literotica"
-    return results[:PER_SITE_LIMIT]
+    return results[:PER_SITE_PAGE_MAX]
 
 
 def search_ao3_erotica(query: str, *, page: int = 1,
@@ -1361,9 +1386,9 @@ def search_ao3_erotica(query: str, *, page: int = 1,
     # fan-out, which records them in ``site_stats`` — swallowing them
     # here showed "0 results, ok" for a site that actually failed.
     results = search_ao3(query or "", page=page, **kwargs)
-    for r in results[:PER_SITE_LIMIT]:
+    for r in results[:PER_SITE_PAGE_MAX]:
         r["site"] = "ao3"
-    return results[:PER_SITE_LIMIT]
+    return results[:PER_SITE_PAGE_MAX]
 
 
 def search_wattpad_erotica(query: str, *, page: int = 1,
@@ -1382,10 +1407,11 @@ def search_wattpad_erotica(query: str, *, page: int = 1,
     return ``[]`` rather than landing on Wattpad's stub 404 page.
 
     Wattpad's tag pages embed up to ~20 ``ListItem`` JSON-LD entries
-    per page; the adapter parses those and caps at
-    :data:`PER_SITE_LIMIT`. No pagination — multi-page browses would
-    require a different (auth-gated) Wattpad endpoint.
+    and don't paginate — multi-page browses would require a different
+    (auth-gated) Wattpad endpoint — so the single listing is windowed
+    per fan-out page like the other one-listing sites.
     """
+    window_start, window_end = _single_listing_window(page)
     vocab_tags = [t.strip().lower() for t in (tags or []) if t and t.strip()]
     slug = None
     if vocab_tags:
@@ -1446,9 +1472,9 @@ def search_wattpad_erotica(query: str, *, page: int = 1,
             "rating": "M", "fandom": "", "status": "",
             "site": "wattpad",
         })
-        if len(out) >= PER_SITE_LIMIT:
+        if len(out) >= window_end:
             break
-    return out
+    return out[window_start:]
 
 
 def search_bdsmlibrary(query: str, *, page: int = 1,
@@ -1476,7 +1502,7 @@ def search_bdsmlibrary(query: str, *, page: int = 1,
 
     Story permalinks are ``/stories/story.php?storyid=N``.
     Position-based pagination steps by 10 rows per page; this
-    adapter caps at :data:`PER_SITE_LIMIT` of those rows.
+    adapter caps at :data:`PER_SITE_PAGE_MAX` of those rows.
     """
     base = "http://www.bdsmlibrary.com"
     per_page = 10
@@ -1550,7 +1576,7 @@ def search_bdsmlibrary(query: str, *, page: int = 1,
             "rating": "M", "fandom": "", "status": "",
             "site": "bdsmlibrary",
         })
-        if len(out) >= PER_SITE_LIMIT:
+        if len(out) >= PER_SITE_PAGE_MAX:
             break
     return out
 
@@ -1909,8 +1935,11 @@ def search_erotica(
         query: Free-text search string. Passed to each site's search
             function; most sites treat it as a case-insensitive title
             filter because they lack a real full-text API.
-        page: Result page. Only sites that paginate (Literotica, SOL)
-            respect this; the rest ignore it.
+        page: Result page. Paginating sites (Literotica, SOL, AO3,
+            Lush...) fetch their native page N; single-listing sites
+            (MCStories, Nifty, Wattpad...) window their one listing
+            by :data:`PER_SITE_PAGE_MAX` rows and return ``[]`` past
+            its end.
         sites: Restrict the fan-out to this list of site slugs. When
             ``None`` or ``["all"]``, every site in :data:`_SITE_FNS`
             is queried.
@@ -2018,11 +2047,13 @@ def search_erotica(
             try:
                 site_results = fut.result() or []
                 site_stats[site_slug]["count"] = len(site_results)
-                # Anything short of a full batch means we've hit the
-                # tail of whatever ordering this site uses — mark it
-                # exhausted so Load More doesn't re-poll for a page
-                # that'll just return the same rows again.
-                if len(site_results) < PER_SITE_LIMIT:
+                # An empty page means we've walked past this site's
+                # tail (single-listing adapters return [] for any
+                # window beyond their one page) — mark it exhausted so
+                # Load More stops polling it. A partial page stays
+                # eligible; its next poll returns [] and flips it,
+                # costing one wasted fetch at each site's tail.
+                if not site_results:
                     site_stats[site_slug]["exhausted"] = True
                     merged.exhausted_sites.add(site_slug)
             except Exception as exc:

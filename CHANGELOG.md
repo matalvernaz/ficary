@@ -1,5 +1,22 @@
 # Changelog
 
+## 2.9.3 — 2026-07-08
+
+**Bug fixes**
+
+* **Tag searches now return everything the sites have, not a sliver.**
+  Search was quietly keeping only 8 stories per site from each page it
+  fetched and throwing the rest away — and because Load More moved every
+  site to its next page, the discarded stories were skipped for good, not
+  shown later. A femdom search that previously topped out at 56 results now
+  returns over 400 on the first view, with Load More continuing from there
+  (MCStories alone had 600+ femdom stories that were unreachable before).
+* **Load More now works properly on sites with a single listing.** Sites
+  like MCStories, Nifty, and Wattpad publish one long list rather than
+  pages. Load More used to re-fetch the same list and show nothing new;
+  it now steps through that list in order and correctly reports when a
+  site has nothing left.
+
 ## 2.9.2 — 2026-07-08
 
 **Bug fixes**
