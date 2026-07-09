@@ -1,5 +1,25 @@
 # Changelog
 
+## 2.9.4 — 2026-07-09
+
+**Bug fixes**
+
+* **FanFiction.net downloads via the FicHub fast path are no longer one
+  giant wall of text.** FicHub hands each chapter back with its
+  paragraphs wrapped in a container element, unlike a direct scrape, and
+  the difference broke everything that reads the chapter
+  paragraph-by-paragraph: every chapter collapsed into a single run-on
+  line, and author's-note stripping silently did nothing because it
+  couldn't see the paragraph structure to work on. FicHub chapters are
+  now flattened on the way in, so paragraphs, scene breaks, and note
+  stripping all behave exactly as they do for a direct download (this
+  also unblocks the LLM author's-note backstop on FicHub-sourced fics).
+* **Chapters no longer open or close on a stray scene break.** When note
+  stripping removed an author's note at the very top or bottom of a
+  chapter, the `* * *` divider that had separated it from the story was
+  left stranded there. Those orphaned edge dividers are now cleaned up;
+  interior scene breaks are untouched.
+
 ## 2.9.3 — 2026-07-08
 
 **Bug fixes**
