@@ -136,6 +136,23 @@ class TestStoryFromEpub:
         assert "Chapter 1 Title" not in html
         assert "Body of chapter 1 here." in html
 
+    def test_flattens_div_wrappers(self, tmp_path):
+        # FicHub nests the body in <div> wrappers; a direct FFN scrape
+        # returns bare top-level <p>/<hr>. If the wrappers survive, the
+        # txt exporter collapses the whole chapter into one run-on line
+        # and strip_note_paragraphs finds no top-level divider to act on.
+        from bs4 import BeautifulSoup, Tag
+
+        epub_bytes = _make_fichub_epub(tmp_path, chapters=(1,))
+        story = fichub._story_from_epub(
+            epub_bytes, ffn_url="x", meta=SAMPLE_META,
+        )
+        html = story.chapters[0].html
+        assert "<div" not in html
+        soup = BeautifulSoup(html, "html.parser")
+        top_level = [c.name for c in soup.children if isinstance(c, Tag)]
+        assert "p" in top_level and "div" not in top_level
+
     def test_respects_chapter_spec(self, tmp_path):
         epub_bytes = _make_fichub_epub(tmp_path, chapters=(1, 2, 3, 4))
         story = fichub._story_from_epub(

@@ -220,11 +220,13 @@ def _split_chapter(content: bytes) -> tuple[str, str]:
     """Split a FicHub chapter document into ``(title, body_html)``.
 
     FicHub lays each ``chap_<N>.xhtml`` out as ``<h1>/<h2>`` title
-    followed by the chapter body. ficary's exporters render their own
-    chapter heading via :func:`models.format_chapter_heading`, and a
-    directly scraped FFN chapter's ``.html`` is the bare body
-    (``#storytext`` inner HTML, no heading) — so strip FicHub's heading
-    and return the remaining body to keep the contract identical.
+    followed by the chapter body, and wraps the body's paragraphs in
+    one or more ``<div>`` containers. A directly scraped FFN chapter's
+    ``.html`` is the bare body — ``#storytext`` inner HTML, no heading,
+    with ``<p>``/``<hr>`` as top-level nodes. To keep the contract
+    identical we strip FicHub's heading *and* flatten the ``<div>``
+    wrappers, so the ``<p>``/``<hr>`` land at the top level the way
+    every downstream consumer expects.
     """
     # The documents are XHTML; the html parser handles them fine and
     # avoids a hard lxml-xml dependency. Silence bs4's cosmetic
@@ -238,6 +240,18 @@ def _split_chapter(content: bytes) -> tuple[str, str]:
     title = heading.get_text(strip=True) if heading else ""
     if heading is not None:
         heading.decompose()
+
+    # Flatten FicHub's <div> wrappers so <p>/<hr> become top-level nodes.
+    # Consumers that index the body's *direct* children — the txt
+    # exporter's paragraph splitter (html_to_text) and the divider
+    # passes in exporters.strip_note_paragraphs — otherwise see a single
+    # wrapper: the whole chapter collapses into one run-on blob and the
+    # structural note-strip passes find no dividers and silently no-op.
+    # find_all() materialises the list before we mutate, so unwrapping
+    # nested wrappers in document order is safe.
+    for wrapper in body.find_all("div"):
+        wrapper.unwrap()
+
     return title, body.decode_contents().strip()
 
 
