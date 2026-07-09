@@ -78,6 +78,38 @@ class TestStripNotes:
             assert out.count("<p>") == html.count("<p>"), f"should keep: {html}"
 
 
+class TestOrphanEdgeDividers:
+    """A divider left at a chapter's first or last position after a note
+    was stripped separates nothing and must be dropped; a divider still
+    sitting between two blocks of content must survive."""
+
+    def _trim(self, html):
+        from ficary.exporters import _drop_orphan_edge_dividers
+        return _drop_orphan_edge_dividers(html)
+
+    def test_drops_leading_divider(self):
+        assert self._trim("<hr/><p>Story.</p>") == "<p>Story.</p>"
+
+    def test_drops_trailing_divider(self):
+        assert "<hr" not in self._trim("<p>Story.</p><hr/>")
+
+    def test_drops_leading_text_divider(self):
+        assert "* * *" not in self._trim("<p>* * *</p><p>Story.</p>")
+
+    def test_skips_empty_paragraph_before_divider(self):
+        # A stray empty <p> between the edge and the orphan divider must
+        # not shield the divider from the trim.
+        assert self._trim("<p></p><hr/><p>Story.</p>") == "<p>Story.</p>"
+
+    def test_keeps_interior_divider(self):
+        html = "<p>Scene one.</p><hr/><p>Scene two.</p>"
+        assert self._trim(html).count("<hr") == 1
+
+    def test_leaves_plain_chapter_untouched(self):
+        html = "<p>Just a chapter.</p><p>No dividers.</p>"
+        assert self._trim(html) == html
+
+
 class TestStructuralNoteStripping:
     """Divider-bracketed author-note detection.
 

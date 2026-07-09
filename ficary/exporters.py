@@ -304,6 +304,10 @@ def _prepare_chapter_html(
                 chapter_number=chapter_number,
                 progress=progress,
             )
+        # Both passes can leave a divider stranded at a chapter edge
+        # (an <hr> whose author's note was just removed). Clean it up
+        # after all note-stripping has run.
+        html = _drop_orphan_edge_dividers(html)
     if hr_as_stars:
         html = _apply_hr_as_stars(html)
     return html
@@ -1418,6 +1422,65 @@ def strip_note_paragraphs(html: str) -> str:
                     _drop(it)
                 break
 
+    return str(soup)
+
+
+def _node_is_divider(node) -> bool:
+    """True if ``node`` is a scene-break divider: an ``<hr>`` or a tag
+    whose visible text is purely divider punctuation (``* * *``)."""
+    if not isinstance(node, Tag):
+        return False
+    if node.name == "hr":
+        return True
+    text = node.get_text(" ", strip=True)
+    return bool(text) and _is_divider_text(text)
+
+
+def _drop_orphan_edge_dividers(html: str) -> str:
+    """Drop scene-break dividers stranded at a chapter's first or last
+    position.
+
+    Note-stripping can leave a divider with nothing on one side of it —
+    the ``<hr>`` that separated a top-of-chapter author's note from the
+    story survives after the note paragraphs are removed, so the chapter
+    opens on a lone ``* * *``. A divider bordering the edge separates
+    nothing; drop it, along with any empty paragraphs sitting between it
+    and the edge. Interior dividers, which still sit between two blocks
+    of content, are left untouched.
+    """
+    soup = BeautifulSoup(html, "html.parser")
+
+    def _is_empty_chrome(node) -> bool:
+        # A tag carrying neither text nor an embedded image/line-break is
+        # layout chrome (a stray <p></p>) and skippable at the edge.
+        return (
+            isinstance(node, Tag)
+            and node.name != "hr"
+            and not node.get_text(strip=True)
+            and node.find(["img", "br"]) is None
+        )
+
+    def _trim_edge(from_end: bool) -> None:
+        # Re-scan after each removal so the tree stays authoritative;
+        # a NavigableString can't be decomposed, but it also can't be a
+        # divider or empty chrome, so a text node at the edge stops the
+        # trim (it's real content).
+        while True:
+            content = [
+                n for n in soup.children
+                if isinstance(n, Tag)
+                or (isinstance(n, NavigableString) and n.strip())
+            ]
+            if not content:
+                return
+            edge = content[-1] if from_end else content[0]
+            if _is_empty_chrome(edge) or _node_is_divider(edge):
+                edge.decompose()
+                continue
+            return
+
+    _trim_edge(from_end=False)
+    _trim_edge(from_end=True)
     return str(soup)
 
 
