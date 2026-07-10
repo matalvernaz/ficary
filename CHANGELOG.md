@@ -1,5 +1,22 @@
 # Changelog
 
+## 2.10.1 — 2026-07-10
+
+**Improvements**
+
+* **Mousepad downloads now label the author's asides and drop their
+  comment replies.** A post's leading header line (bold or ``#``
+  style) becomes the chapter title, so interludes and author's notes
+  are audible in the table of contents — "Chapter 30. Author's
+  Confession" — instead of anonymous "Chapter 30". A post is skipped
+  outright only when two signals agree it's a reply to a commenter:
+  it opens by quoting someone other than the author *and* has under
+  60 words of its own. Skipped posts are logged and listed in the
+  story's metadata, so nothing disappears silently.
+* **Quoted text in Mousepad posts renders as a proper quotation.**
+  Tapatalk hands quotes back as raw ``[quote]`` BBCode; exports now
+  show an attributed blockquote instead of the bracket tags.
+
 ## 2.10.0 — 2026-07-10
 
 **New features**
