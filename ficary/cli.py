@@ -1123,6 +1123,23 @@ def _build_search_spec(args: argparse.Namespace):
             "completed": getattr(args, "wp_completed", None),
         }
         search_fn = search_wattpad
+    elif args.site == "erotica":
+        from .erotica.search import search_erotica
+
+        scope = getattr(args, "erotica_site", None)
+        site_label = (
+            f"erotica fan-out ({scope})" if scope
+            else "erotica fan-out (all sites)"
+        )
+        filters = {
+            "tags": getattr(args, "tags", None),
+            "sites": [scope] if scope else None,
+            "category": getattr(args, "lit_category", None),
+            "fandom": args.fandom,
+            "min_words": args.min_words,
+            "sort": args.sort,
+        }
+        search_fn = search_erotica
     else:
         site_label = "fanfiction.net"
         filters = {
@@ -1156,12 +1173,17 @@ def _build_search_spec(args: argparse.Namespace):
 def _collapse_results(raw_results: list, site: str) -> list:
     """Apply per-site series collapsing. Sites without a series concept
     (FFN, Royal Road, Wattpad) return the raw list unchanged."""
-    from .search import collapse_ao3_series, collapse_literotica_series
+    from .search import (
+        collapse_ao3_series, collapse_erotica_series,
+        collapse_literotica_series,
+    )
 
     if site == "ao3":
         return collapse_ao3_series(raw_results)
     if site == "literotica":
         return collapse_literotica_series(raw_results)
+    if site == "erotica":
+        return collapse_erotica_series(raw_results)
     return list(raw_results)
 
 
@@ -1174,11 +1196,17 @@ def _print_search_results(results: list, start_idx: int = 1) -> None:
             print(f"      by {r.get('author', '')} | {r.get('fandom', '')}")
         else:
             status_tag = " [Complete]" if r.get("status") == "Complete" else ""
-            print(f"  {i:>2}. {r['title']}")
+            # Fan-out rows carry their origin site; forum-backed rows
+            # also carry a last-activity date (what --sort date uses).
+            site_tag = f" [{r['site']}]" if r.get("site") else ""
+            updated_tag = (
+                f" | updated {r['updated'][:10]}" if r.get("updated") else ""
+            )
+            print(f"  {i:>2}. {r['title']}{site_tag}")
             print(
                 f"      by {r['author']} | {r['fandom']} | "
                 f"{r['words']} words | {r['chapters']} ch | "
-                f"Rated {r['rating']}{status_tag}"
+                f"Rated {r['rating']}{status_tag}{updated_tag}"
             )
         summary = r.get("summary") or ""
         if summary:
@@ -1254,9 +1282,14 @@ def _download_picked_result(picked: dict, args: argparse.Namespace) -> bool:
 
 def _handle_search(args: argparse.Namespace) -> None:
     """Interactive search mode: search the chosen site, display results, download on pick."""
-    from .search import fetch_until_limit
+    from .search import fetch_erotica_until_limit, fetch_until_limit
 
     site_label, search_fn, filters = _build_search_spec(args)
+    # The erotica fan-out needs its own driver: it understands the
+    # "page filtered to nothing but the listing continues" signal
+    # (SparsePage) that the generic driver would read as end-of-results.
+    if args.site == "erotica":
+        fetch_until_limit = fetch_erotica_until_limit
 
     query_desc = args.search if args.search else "(no query — list browse)"
     print(f"Searching {site_label} for: {query_desc}")
@@ -4052,12 +4085,14 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--site",
-        choices=["ffn", "ao3", "royalroad", "literotica", "wattpad"],
+        choices=["ffn", "ao3", "royalroad", "literotica", "wattpad", "erotica"],
         default="ffn",
         help=(
             "Which site to search (default: ffn). Literotica's public "
             "search is JS-only, so --site literotica browses "
-            "tags.literotica.com/<tag> instead."
+            "tags.literotica.com/<tag> instead. --site erotica fans out "
+            "across every erotica archive at once (scope with "
+            "--erotica-site, browse kinks with --tags)."
         ),
     )
     # Search filters (only apply when --search is used). Values accepted
@@ -4120,7 +4155,26 @@ def _build_parser() -> argparse.ArgumentParser:
         metavar="S",
         help=(
             f"Sort order. FFN: updated, published, reviews, favorites, "
-            f"follows. AO3: {', '.join(list(AO3_SORT)[:4])}, ..."
+            f"follows. AO3: {', '.join(list(AO3_SORT)[:4])}, ... "
+            "Erotica fan-out: date (newest first; sites without listing "
+            "dates sort after the dated block)."
+        ),
+    )
+    parser.add_argument(
+        "--tags",
+        metavar="T[,T...]",
+        help=(
+            "Erotica fan-out only: comma-separated kink tags "
+            "(e.g. femdom,feet). Works without --search — the tags are "
+            "the browse target, exactly like the GUI tag picker."
+        ),
+    )
+    parser.add_argument(
+        "--erotica-site",
+        metavar="SLUG",
+        help=(
+            "Erotica fan-out only: restrict to one site slug "
+            "(literotica, mousepad, mcstories, ...). Default: all sites."
         ),
     )
     parser.add_argument(
@@ -4469,8 +4523,15 @@ def _is_search_mode(args: argparse.Namespace) -> bool:
             "rr_max_pages", "rr_min_rating",
         )
     )
+    # Erotica tag browse: the tags ARE the search target, same as the
+    # GUI's tag-only flow.
+    erotica_tag_browse = (
+        getattr(args, "site", "") == "erotica"
+        and getattr(args, "tags", None)
+    )
     return bool(
-        args.search or rr_filter_only or getattr(args, "lit_category", None)
+        args.search or rr_filter_only or erotica_tag_browse
+        or getattr(args, "lit_category", None)
     )
 
 

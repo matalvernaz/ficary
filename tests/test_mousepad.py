@@ -433,6 +433,33 @@ def test_search_erotica_date_sort_and_sparse_page(monkeypatch):
     ]
 
 
+def test_cli_erotica_search_spec_maps_flags():
+    from ficary.cli import _build_parser, _build_search_spec
+
+    args = _build_parser().parse_args([
+        "--search", "", "--site", "erotica", "--tags", "feet,femdom",
+        "--erotica-site", "mousepad", "--sort", "date",
+    ])
+    label, fn, filters = _build_search_spec(args)
+    assert "mousepad" in label
+    assert filters["tags"] == "feet,femdom"
+    assert filters["sites"] == ["mousepad"]
+    assert filters["sort"] == "date"
+    assert fn is search_erotica
+
+
+def test_cli_erotica_tag_browse_counts_as_search_mode():
+    from ficary.cli import _build_parser, _is_search_mode
+
+    with_tags = _build_parser().parse_args(
+        ["--site", "erotica", "--tags", "feet"],
+    )
+    assert _is_search_mode(with_tags)
+    # Tags on a non-erotica site must NOT flip into search mode.
+    ffn = _build_parser().parse_args(["--site", "ffn", "--tags", "feet"])
+    assert not _is_search_mode(ffn)
+
+
 def test_mousepad_registered_everywhere():
     assert "mousepad" in es.EROTICA_SITE_SLUGS
     assert "mousepad" in es._SITE_FNS
