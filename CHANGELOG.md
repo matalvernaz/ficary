@@ -1,5 +1,43 @@
 # Changelog
 
+## 2.12.0 — 2026-07-10
+
+**New features**
+
+* **Four new erotica sites.** All verified live end-to-end (search →
+  download → chapters):
+  - *ReadOnlyMind* — the strongest tag fit for femdom, feet, and
+    cunnilingus in one place. Results carry real word counts and
+    last-updated dates (so the "Newest first" sort works natively),
+    and serials download with their real part titles.
+  - *Giantess World* — ~49k-story giantess archive, feet-heavy;
+    newest-first browse with full pagination.
+  - *Chastity Mansion* — the Member Fiction forum (~800 threads) of
+    the chastity/denial/FLR board.
+  - *TicklingForum (TMF)* — the main Tickling Stories forum.
+  The three forum-backed sites share one XenForo engine with Dark
+  Wanderer: a story is a thread, chapters are the thread starter's
+  posts, other members' replies are dropped, quoted text is stripped.
+* **Every site can now be browsed bare — pick a site, pick a sort,
+  hit search.** No query, tag, or category needed: each site's
+  natural listing is the default (Literotica's new-stories page,
+  MCStories' What's New, Lush's recent index, AO3's top explicit
+  works, Wattpad's adult tag, forum story sections, and so on).
+  Works in the GUI (site dropdown alone) and the CLI
+  (`--site erotica --erotica-site readonlymind --sort date`). The
+  only exceptions are AFF, which genuinely has no site-wide listing
+  (fill in the fandom), and BDSM Library while its backend is down.
+
+**Bug fixes**
+
+* **MCStories free-text search actually searches now.** A query
+  without a tag used to fetch the A-Z index hub — 26 letter links,
+  zero stories — and return nothing; it now searches the What's New
+  listing.
+* Story-identity URLs for the new sites normalise properly (chapter
+  and page variants collapse to one story), so library dedupe and
+  mirror detection treat them like every other site.
+
 ## 2.11.0 — 2026-07-10
 
 **New features**
