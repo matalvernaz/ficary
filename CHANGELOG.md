@@ -1,5 +1,10 @@
 # Changelog
 
+## 2.12.3 — 2026-07-10
+
+Changelog copyedits — release-note wording tightened across several
+past versions; no code changes.
+
 ## 2.12.2 — 2026-07-10
 
 **Bug fixes**
@@ -8,7 +13,7 @@
   folder like the rest.** BDSM Library, The Mousepad, ReadOnlyMind,
   Giantess World, Chastity Mansion, and TicklingForum were missing
   from the library's site-identification and adult-routing tables, so
-  their stories landed under Misc or kink-named fandom folders — and
+  their stories landed under Misc or category-named fandom folders — and
   the library index couldn't attribute their source site at all. Both
   tables now cover every erotica site, and a test pins the two lists
   to the scraper registry so the next new site can't repeat this.
@@ -30,15 +35,15 @@
 
 * **Four new erotica sites.** All verified live end-to-end (search →
   download → chapters):
-  - *ReadOnlyMind* — the strongest tag fit for femdom, feet, and
-    cunnilingus in one place. Results carry real word counts and
+  - *ReadOnlyMind* — a story archive with precise hashtag coverage
+    across the search vocabulary. Results carry real word counts and
     last-updated dates (so the "Newest first" sort works natively),
     and serials download with their real part titles.
-  - *Giantess World* — ~49k-story giantess archive, feet-heavy;
-    newest-first browse with full pagination.
-  - *Chastity Mansion* — the Member Fiction forum (~800 threads) of
-    the chastity/denial/FLR board.
-  - *TicklingForum (TMF)* — the main Tickling Stories forum.
+  - *Giantess World* — a ~49k-story archive; newest-first browse
+    with full pagination.
+  - *Chastity Mansion* — the board's Member Fiction forum
+    (~800 threads).
+  - *TicklingForum (TMF)* — the board's main story forum.
   The three forum-backed sites share one XenForo engine with Dark
   Wanderer: a story is a thread, chapters are the thread starter's
   posts, other members' replies are dropped, quoted text is stripped.
@@ -67,7 +72,7 @@
 **New features**
 
 * **The erotica search now works from the command line.** `--site
-  erotica` fans out across every archive, with `--tags feet,femdom`
+  erotica` fans out across every archive, with `--tags bdsm,hypnosis`
   for tag browsing (no query needed), `--erotica-site mousepad` to
   scope to one site, and `--sort date` for newest-first. Result rows
   show each hit's site and last-updated date.
@@ -124,9 +129,8 @@
 **New features**
 
 * **The Mousepad is now a searchable, downloadable erotica site.** The
-  foot-fetish story forum at tapatalk.com/groups/themousepad joins the
-  unified Erotic Story Search (site slug `mousepad`; carries the feet,
-  foot-worship, footjob, femdom, and trampling tags). Tapatalk hides
+  story forum at tapatalk.com/groups/themousepad joins the
+  unified Erotic Story Search (site slug `mousepad`). Tapatalk hides
   the website itself behind a Cloudflare challenge, so ficary talks to
   the same XML-RPC API the Tapatalk mobile app uses — no account
   needed. Because the source is a forum, a story is a thread: the
@@ -177,9 +181,9 @@
   Search was quietly keeping only 8 stories per site from each page it
   fetched and throwing the rest away — and because Load More moved every
   site to its next page, the discarded stories were skipped for good, not
-  shown later. A femdom search that previously topped out at 56 results now
-  returns over 400 on the first view, with Load More continuing from there
-  (MCStories alone had 600+ femdom stories that were unreachable before).
+  shown later. A broad tag search that previously topped out at 56 results
+  now returns over 400 on the first view, with Load More continuing from
+  there (MCStories alone had 600+ unreachable stories on one such tag).
 * **Load More now works properly on sites with a single listing.** Sites
   like MCStories, Nifty, and Wattpad publish one long list rather than
   pages. Load More used to re-fetch the same list and show nothing new;
@@ -190,14 +194,14 @@
 
 **Bug fixes**
 
-* **Tag searches find far more stories again.** A femdom tag search was
+* **Tag searches find far more stories again.** A broad tag search was
   coming back nearly empty because three sites were silently contributing
   nothing. Literotica redesigned its story listings and the old reader
   matched nothing on the new pages; Archive of Our Own started blocking the
   browser disguise the search used (it now falls back to a different one);
   and StoriesOnline lists stories under two different link styles but only
   one was being read, so most rows were dropped. All three now return full
-  results — the same femdom search went from 35 stories to 56.
+  results — the same search went from 35 stories to 56.
 * **A site that fails during search now says so.** Literotica and Archive
   of Our Own errors were swallowed and shown as "0 results" as if the
   search had worked; failures now show up in the per-site summary.
@@ -889,8 +893,7 @@ release):
 
 ## 2.4.44 — 2026-05-22
 
-Two more cunnilingus-family refining tags added to the erotica
-search vocabulary:
+Two more refining tags added to the erotica search vocabulary:
 
 * ``pussy-eating`` — synonym for cunnilingus but a distinct
   first-class tag on Literotica (76 cards) and AO3 (20 works).
@@ -908,12 +911,11 @@ both.
 
 ## 2.4.43 — 2026-05-22
 
-Erotica search depth pass — push the three user-named core
-interests (foot fetish, femdom, cunnilingus) as wide and as precise
-as the underlying archives can support.
+Erotica search depth pass — push the vocabulary's biggest umbrella
+tags as wide and as precise as the underlying archives can support.
 
 **Refining-tag vocabulary.** Previously the vocabulary forced
-users to pick one of three umbrella tags per interest. Added ten
+users to pick one umbrella tag per family. Added ten
 narrower discovery axes verified live against every site that
 carries them:
 
@@ -957,7 +959,7 @@ broke actual reads:
   ``BaseScraper`` lets a subclass force a codec; BDSM Library pins
   ``cp1252``.
 
-Net effect on the three core interests after both rounds (2.4.42
+Net effect on the expanded tag families after both rounds (2.4.42
 landed the foundation, 2.4.43 the depth):
 
 * ``feet`` umbrella: 55 results across 8/8 fan-out sites.
@@ -1020,7 +1022,7 @@ routes its first tag through this.
 Previously only the broader ``oral`` tag existed, conflating
 cunnilingus with blowjobs and burying it on every site that
 carries it as its own tag (Literotica, AO3, Lush). Face-sitting
-straddles the femdom + cunnilingus interest space.
+straddles two of the vocabulary's tag families.
 
 **AO3 folded into the erotica fan-out.** ``search_ao3_erotica``
 pins ``rating='explicit'`` and routes vocab tags through AO3's
@@ -1041,7 +1043,7 @@ code IDs (femdom = 13 / ``F/m``, feet = 41, BDSM = 71, etc.).
 Registered in ``sites.py`` for download routing and in the
 erotica fan-out for search.
 
-Net effect on Matt's three core interests:
+Net effect on the tags this round targeted:
 
 * ``feet``: was 24 results across 3 sites (literotica / sol / lush
   all silently broken) → 54 results across 7 sites including AO3
@@ -1077,14 +1079,14 @@ category slug.
 ## 2.4.31 — 2026-05-20
 
 Erotica fan-out used to fetch a single page per click, capping a
-broad tag search like ``feet`` at ``PER_SITE_LIMIT * supported_sites``
+broad tag search at ``PER_SITE_LIMIT * supported_sites``
 rows (~40 ideal, ~20 after series collapse + dedup). Every other
 site frame uses ``fetch_until_limit`` to walk pages until 25 results
 are collected, but that helper flattens to a plain list and loses
 the ``ErotiCAResults`` wrapper the erotica GUI binds its per-site
 stats panel to — so the erotica path explicitly bypassed it. Net
-effect: the user reported "I searched feet on all sites and only
-got 20-something results, I should get a bunch."
+effect, as reported: a broad tag searched on all sites returned
+"only 20-something results" when it should return a bunch.
 
 Added ``fetch_erotica_until_limit`` in ``ffn_dl/search.py``. Same
 multi-page contract as ``fetch_until_limit`` but preserves the
@@ -1097,7 +1099,7 @@ HTTP requests (one per active site), and the polite-network budget
 burns faster.
 
 Wired into ``gui_search.py``'s worker thread so the erotica frame
-uses it instead of the one-page bypass. Tag-only ``feet`` now
+uses it instead of the one-page bypass. A tag-only browse now
 returns 25+ results on first load (or the full available set if
 the supported-sites pool exhausts earlier), with Load More
 continuing from where the auto-walk stopped.
