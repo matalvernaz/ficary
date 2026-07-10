@@ -1,5 +1,24 @@
 # Changelog
 
+## 2.12.5 — 2026-07-10
+
+**Bug fixes**
+
+* **Mousepad downloads no longer export the comments instead of the
+  story on mangled threads.** Some old threads lost their original
+  first post to a moderator split, leaving a *reader's reply* as the
+  thread's first post and registered starter — so the author filter
+  kept the commenter's posts and dropped the whole story (a reported
+  thread exported 13 thank-you comments, 347 words, instead of the
+  real 54 chapters and 151k words). The story's author is now
+  identified as whoever wrote the bulk of the thread's words, with
+  conservative thresholds so a chatty commenter can never hijack a
+  normal thread. Re-download an affected story to repair it.
+* Plain-text "Chapter 12" / "Part 3" opener lines now become chapter
+  titles too (previously only bold or ``#``-style headers were
+  lifted), keeping the author's own numbering audible in the table
+  of contents.
+
 ## 2.12.4 — 2026-07-10
 
 **Bug fixes**
