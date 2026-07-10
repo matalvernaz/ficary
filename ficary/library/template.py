@@ -59,7 +59,9 @@ ORIGINAL_FICTION_ADAPTERS = frozenset({"royalroad"})
 ADULT_FICTION_ADAPTERS = frozenset({
     "aff", "storiesonline", "nifty", "sexstories", "mcstories",
     "lushstories", "fictionmania", "tgstorytime", "chyoa",
-    "darkwanderer", "greatfeet", "literotica",
+    "darkwanderer", "greatfeet", "literotica", "bdsmlibrary",
+    "mousepad", "readonlymind", "giantessworld", "chastitymansion",
+    "ticklingforum",
 })
 
 

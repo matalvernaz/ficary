@@ -59,6 +59,14 @@ _URL_MARKERS = [
     ("chyoa.com", "chyoa"),
     ("darkwanderer.net", "darkwanderer"),
     ("greatfeet.com", "greatfeet"),
+    ("bdsmlibrary.com", "bdsmlibrary"),
+    # Group-specific fragment: tapatalk.com hosts thousands of boards,
+    # only The Mousepad is a supported site.
+    ("tapatalk.com/groups/themousepad", "mousepad"),
+    ("readonlymind.com", "readonlymind"),
+    ("giantessworld.net", "giantessworld"),
+    ("chastitymansion.com", "chastitymansion"),
+    ("ticklingforum.com", "ticklingforum"),
 ]
 
 # Folder names that look like categorisation aids rather than fandoms.

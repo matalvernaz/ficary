@@ -1566,3 +1566,49 @@ class TestNewSites2026_07:
         rows = es.search_ao3_erotica("")
         assert rows and rows[0]["site"] == "ao3"
         assert calls["kwargs"]["rating"] == "explicit"
+
+
+def test_every_erotica_site_routes_to_the_adult_library_bucket():
+    """Library categorisation: every erotica site's story URL must
+    resolve through ``adapter_for_url`` to a name enumerated in
+    ``ADULT_FICTION_ADAPTERS``. When either table misses a site, its
+    downloads skip the Adult folder and land under Misc/fandom
+    buckets — the 2026-07 bug where six sites (bdsmlibrary, mousepad,
+    readonlymind, giantessworld, chastitymansion, ticklingforum) were
+    absent from both tables."""
+    from ficary.library.identifier import adapter_for_url
+    from ficary.library.template import ADULT_FICTION_ADAPTERS
+
+    sample_urls = {
+        "aff": "https://hp.adult-fanfiction.org/story.php?no=600100488",
+        "storiesonline": "https://storiesonline.net/s/40467/slug",
+        "nifty": "https://www.nifty.org/nifty/gay/college/the-brotherhood/",
+        "sexstories": "https://www.sexstories.com/story/114893/slug",
+        "mcstories": "https://mcstories.com/AToZeb/",
+        "lushstories":
+            "https://www.lushstories.com/stories/cuckold/a-modern-relationship",
+        "fictionmania":
+            "https://fictionmania.tv/stories/readhtmlstory.html?storyID=1",
+        "literotica": "https://www.literotica.com/s/my-story",
+        "tgstorytime": "https://www.tgstorytime.com/viewstory.php?sid=9219",
+        "chyoa": "https://chyoa.com/story/Insurance-Salesman-s.14",
+        "darkwanderer": "https://darkwanderer.net/threads/foo.12345/",
+        "greatfeet": "https://www.greatfeet.com/stories/ts1735.htm",
+        "bdsmlibrary":
+            "http://www.bdsmlibrary.com/stories/story.php?storyid=10994",
+        "mousepad":
+            "https://www.tapatalk.com/groups/themousepad/viewtopic.php?t=1",
+        "readonlymind": "https://readonlymind.com/@A/Story/",
+        "giantessworld": "https://giantessworld.net/viewstory.php?sid=1",
+        "chastitymansion":
+            "https://chastitymansion.com/forums/index.php?threads/a.63479/",
+        "ticklingforum": "https://www.ticklingforum.com/threads/a.42755/",
+    }
+    # Parity with the scraper registry: one sample per erotica scraper.
+    assert len(sample_urls) == len(EROTICA_SCRAPERS)
+    for expected_name, url in sample_urls.items():
+        name = adapter_for_url(url)
+        assert name == expected_name, f"{url} identified as {name!r}"
+        assert name in ADULT_FICTION_ADAPTERS, (
+            f"{expected_name} missing from ADULT_FICTION_ADAPTERS"
+        )
