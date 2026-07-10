@@ -623,8 +623,13 @@ def canonical_url(url: str) -> str:
 
     # Unknown host: at least normalise scheme to https, drop ``www.``
     # (if present), drop query/fragment, and strip a trailing slash so
-    # minor URL variants still dedupe.
-    fallback_host = netloc
+    # minor URL variants still dedupe. Also strip edge whitespace from
+    # the parts — dropping the query can expose a trailing space
+    # (``"0 ?"`` → path ``"0 "``), and the next call's input .strip()
+    # would remove it, making the function non-idempotent on garbage.
+    fallback_host = netloc.strip()
     if fallback_host.startswith("www."):
         fallback_host = fallback_host[len("www."):]
-    return urlunsplit(("https", fallback_host, path.rstrip("/"), "", ""))
+    return urlunsplit(
+        ("https", fallback_host, path.rstrip("/").strip(), "", ""),
+    )
