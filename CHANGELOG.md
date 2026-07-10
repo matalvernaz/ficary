@@ -1,5 +1,16 @@
 # Changelog
 
+## 2.12.1 — 2026-07-10
+
+**Bug fixes**
+
+* **URL canonicalisation is idempotent on garbage input.** Feeding a
+  non-URL string like ``0 ?`` through the normaliser twice produced
+  two different keys (a trailing space survived the first pass),
+  which could make the clipboard watcher or a library index rebuild
+  treat one entry as two. Found by the property-based fuzz suite;
+  no real story URLs were affected.
+
 ## 2.12.0 — 2026-07-10
 
 **New features**
