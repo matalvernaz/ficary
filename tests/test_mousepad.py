@@ -288,6 +288,92 @@ def test_download_all_comments_no_author_posts_raises(monkeypatch):
         s.download("42")
 
 
+# ── header lift / quote rendering / comment-reply gate ──────────
+
+
+def test_lift_title_bold_and_hash_headers():
+    t, body = mp._lift_title("<b>Author's Confession</b><br /><br />First …")
+    assert t == "Author's Confession"
+    assert body == "First …"
+    t2, body2 = mp._lift_title("# Something About Her<br /><br />Charles …")
+    assert t2 == "Something About Her"
+    assert body2 == "Charles …"
+
+
+def test_lift_title_leaves_non_headers_alone():
+    long_bold = "<b>" + "x" * 120 + "</b><br />rest"
+    assert mp._lift_title(long_bold) == ("", long_bold)
+    mid = "She said <b>no</b><br />and left."
+    assert mp._lift_title(mid) == ("", mid)
+    stars = "**<br />Early in the morning …"
+    assert mp._lift_title(stars) == ("", stars)
+
+
+def test_render_quotes_to_blockquote_with_attribution():
+    html = (
+        '[quote uid=10796411 name="PretentiousOne" post=1312855]'
+        "great story[/quote]<br />Thank you!"
+    )
+    out = mp._render_quotes(html)
+    assert "[quote" not in out and "[/quote]" not in out
+    assert "<blockquote><p><em>PretentiousOne wrote:</em></p>great story</blockquote>" in out
+    nested = '[quote name="A"]outer [quote name="B"]inner[/quote] tail[/quote]'
+    out2 = mp._render_quotes(nested)
+    assert out2.count("<blockquote>") == 2
+    assert "[quote" not in out2
+
+
+def test_comment_reply_gate_needs_both_signals():
+    a_id, a_name = "10796142", "Cassandra Main"
+    reply = (
+        '[quote uid=10796411 name="PretentiousOne" post=1312855]'
+        "great story[/quote]Thank you for such feedback"
+    )
+    assert mp._is_comment_reply(reply, a_id, a_name) is True
+    long_reply = reply + " " + "word " * 80
+    assert mp._is_comment_reply(long_reply, a_id, a_name) is False
+    self_quote = (
+        f'[quote uid={a_id} name="{a_name}" post=1]her foot pressed[/quote]'
+        "short continuation"
+    )
+    assert mp._is_comment_reply(self_quote, a_id, a_name) is False
+    self_quote_by_name = (
+        f'[quote uid=0 name="{a_name}"]her foot pressed[/quote]short'
+    )
+    assert mp._is_comment_reply(self_quote_by_name, a_id, a_name) is False
+    no_quote = "Thanks everyone, next part on Friday!"
+    assert mp._is_comment_reply(no_quote, a_id, a_name) is False
+
+
+LABELED_THREAD = [
+    post("1", "10", "AuthorPerson",
+         "# The Opener<br /><br />" + "Long opening prose. " * 20),
+    post("2", "99", "SomeReader", "Amazing, write more!"),
+    post("3", "10", "AuthorPerson",
+         '[quote uid=99 name="SomeReader" post=2]Amazing, write more!'
+         "[/quote]<br />Thank you so much, glad you liked it!"),
+    post("4", "10", "AuthorPerson",
+         "<b>Taking a break</b><br /><br />" + "Interlude prose. " * 20),
+]
+
+
+def test_download_lifts_titles_and_skips_comment_replies(monkeypatch):
+    monkeypatch.setattr(mp, "mobiquo_call", FakeThreadServer(LABELED_THREAD))
+    s = MousepadScraper(use_cache=False, delay_floor=0.0, delay_start=0.0)
+    story = s.download("77")
+    assert [(c.number, c.title) for c in story.chapters] == [
+        (1, "The Opener"), (2, "Taking a break"),
+    ]
+    assert "# The Opener" not in story.chapters[0].html
+    assert story.summary.startswith("Long opening prose.")
+    skipped = story.metadata["skipped_posts"]
+    assert [e["post_id"] for e in skipped] == ["3"]
+    assert "Thank you so much" in skipped[0]["preview"]
+    joined = " ".join(c.html for c in story.chapters)
+    assert "glad you liked it" not in joined
+    assert s.get_chapter_count("77") == 2
+
+
 # ── date sort ────────────────────────────────────────────────────
 
 
