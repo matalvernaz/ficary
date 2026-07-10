@@ -491,3 +491,58 @@ def test_single_site_scope_with_unclaimed_tag_browses_bare(monkeypatch):
     # A tag the site DOES claim still passes through.
     search_erotica("", sites=["mousepad"], tags=["feet"])
     assert calls["tags"] == ["feet"]
+
+
+MANGLED_THREAD = [
+    # Mirrors live t=157450: the original first post was lost to a
+    # mod split, so the API's post #1 is a READER comment and the
+    # topic_author points at that reader — the story lives in a
+    # different account's posts.
+    post("1", "93", "rubbermac", "Wow, great start, many thanks!"),
+    post("2", "104", "Corvinus",
+         "Chapter 2 <br /><br />" + "Actual story prose here. " * 30),
+    post("3", "104", "Corvinus",
+         "Chapter 3 <br /><br />" + "More story prose follows. " * 30),
+    post("4", "93", "rubbermac", "Fantastic story Corvinus, thanks!"),
+]
+
+
+def test_download_survives_thread_whose_starter_is_a_commenter(monkeypatch):
+    server = FakeThreadServer(
+        MANGLED_THREAD, author_id="93", author="rubbermac",
+        title="Lost and found days",
+    )
+    monkeypatch.setattr(mp, "mobiquo_call", server)
+    s = MousepadScraper(use_cache=False, delay_floor=0.0, delay_start=0.0)
+    story = s.download("157450")
+    assert story.author == "Corvinus"
+    assert [c.title for c in story.chapters] == ["Chapter 2", "Chapter 3"]
+    joined = " ".join(c.html for c in story.chapters)
+    assert "Actual story prose" in joined
+    assert "great start" not in joined
+    assert "Fantastic story" not in joined
+    assert s.get_chapter_count("157450") == 2
+
+
+def test_short_commenter_never_hijacks_a_real_author(monkeypatch):
+    normal = [
+        post("1", "10", "AuthorPerson", "Story opener. " * 40),
+        post("2", "99", "Chatty", "long comment words " * 30),
+        post("3", "10", "AuthorPerson", "Second chapter. " * 40),
+    ]
+    monkeypatch.setattr(mp, "mobiquo_call", FakeThreadServer(normal))
+    s = MousepadScraper(use_cache=False, delay_floor=0.0, delay_start=0.0)
+    story = s.download("5")
+    assert story.author == "AuthorPerson"
+    assert len(story.chapters) == 2
+
+
+def test_lift_title_plain_chapter_line():
+    t, body = mp._lift_title("Chapter 12 <br /><br />She woke early …")
+    assert t == "Chapter 12"
+    assert body.startswith("She woke early")
+    t2, _ = mp._lift_title("Part 3 - The Beach<br />prose")
+    assert t2 == "Part 3 - The Beach"
+    # A sentence merely starting with "Chapter" mid-flow isn't a title.
+    prose = "Chapter after chapter she read on with no br until much later " * 3
+    assert mp._lift_title(prose) == ("", prose)

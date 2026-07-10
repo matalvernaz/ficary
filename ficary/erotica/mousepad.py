@@ -29,9 +29,10 @@ commenter, nothing else. Dropped posts are logged and recorded in
 
 import logging
 import re
+import warnings
 from typing import Optional
 
-from bs4 import BeautifulSoup
+from bs4 import BeautifulSoup, MarkupResemblesLocatorWarning
 
 from ..models import Chapter, Story, chapter_in_spec
 from ..scraper import BaseScraper
@@ -92,6 +93,15 @@ LEAD_TITLE_BOLD_RE = re.compile(
 )
 LEAD_TITLE_HASH_RE = re.compile(
     r"^\s*#{1,6}\s*(?P<t>[^<\n]{1,%d}?)\s*(?:<br\s*/?>\s*)+" % TITLE_MAX_CHARS,
+)
+# Plain-text "Chapter 12" / "Part 3 - The Beach" opener lines (no bold,
+# no hashes) — common on older threads. Lifting them keeps the author's
+# own numbering visible when it doesn't match the post sequence (e.g. a
+# thread whose Chapter 1 post was lost to a split).
+LEAD_TITLE_CHAPTER_RE = re.compile(
+    r"^\s*(?P<t>(?:Chapter|Part)\s+\d+[^<\n]{0,%d}?)\s*(?:<br\s*/?>\s*)+"
+    % TITLE_MAX_CHARS,
+    re.I,
 )
 
 
@@ -157,7 +167,9 @@ def _lift_title(html: str) -> tuple[str, str]:
     line is removed from the body so it doesn't render twice. Returns
     ``("", html)`` untouched when no header is found.
     """
-    for pattern in (LEAD_TITLE_BOLD_RE, LEAD_TITLE_HASH_RE):
+    for pattern in (
+        LEAD_TITLE_BOLD_RE, LEAD_TITLE_HASH_RE, LEAD_TITLE_CHAPTER_RE,
+    ):
         m = pattern.match(html)
         if m:
             # Odd spacing like ``# ## Title`` leaves hash residue in
@@ -221,15 +233,70 @@ class MousepadScraper(BaseScraper):
             posts.extend(batch)
         return first, posts
 
-    @staticmethod
-    def _author_posts(thread: dict, posts: list[dict]) -> list[dict]:
-        """Cut the thread down to the story: posts by the topic author.
+    # Another poster only overrides the topic author as "the story's
+    # author" when they've written at least this many quote-stripped
+    # words AND at least double the topic author's — conservative
+    # enough that a chatty superfan can't hijack a real author's
+    # thread, decisive enough for mangled threads.
+    AUTHOR_OVERRIDE_MIN_WORDS = 100
+    AUTHOR_OVERRIDE_FACTOR = 2
+
+    @classmethod
+    def _story_author_id(cls, thread: dict, posts: list[dict]) -> str:
+        """Identify who is actually telling the story.
+
+        Normally that's the topic author. But old threads that lost
+        their original first post to a moderator split/merge can list
+        a *commenter* as topic author — t=157450 is real: the API's
+        post #1 is a reader's "great start!" reply and the story
+        starts at post #2 under a different account, so filtering on
+        the topic author exported 13 comments and none of the story.
+        Whoever wrote the bulk of the thread's quote-stripped words is
+        the storyteller; the override thresholds keep normal threads
+        on the topic author.
+        """
+        totals: dict[str, int] = {}
+        with warnings.catch_warnings():
+            # A post whose quote-stripped remainder is a bare URL makes
+            # bs4 emit MarkupResemblesLocatorWarning; it's parsing data,
+            # not being pointed at a page — the warning is spurious.
+            warnings.simplefilter("ignore", MarkupResemblesLocatorWarning)
+            for p in posts:
+                aid = decode_value(p.get("post_author_id"))
+                text = BeautifulSoup(
+                    _strip_quotes(decode_value(p.get("post_content"))),
+                    "lxml",
+                ).get_text(" ", strip=True)
+                totals[aid] = totals.get(aid, 0) + len(text.split())
+        topic_author = decode_value(thread.get("topic_author_id"))
+        if not totals:
+            return topic_author
+        dominant = max(totals, key=totals.get)
+        if dominant != topic_author:
+            topic_words = totals.get(topic_author, 0)
+            if (
+                totals[dominant] >= cls.AUTHOR_OVERRIDE_MIN_WORDS
+                and totals[dominant]
+                >= cls.AUTHOR_OVERRIDE_FACTOR * max(topic_words, 1)
+            ):
+                logger.info(
+                    "Mousepad: treating %s (%d words) as the story author "
+                    "over topic author %s (%d words)",
+                    dominant, totals[dominant], topic_author, topic_words,
+                )
+                return dominant
+        return topic_author
+
+    @classmethod
+    def _author_posts(cls, thread: dict, posts: list[dict]) -> list[dict]:
+        """Cut the thread down to the story: posts by the story's
+        author (see :meth:`_story_author_id`).
 
         Everything else in the thread is reader comments. Matching on
         the stable ``post_author_id`` (not the display name) survives
         username changes.
         """
-        author_id = decode_value(thread.get("topic_author_id"))
+        author_id = cls._story_author_id(thread, posts)
         return [
             p for p in posts
             if decode_value(p.get("post_author_id")) == author_id
@@ -253,8 +320,19 @@ class MousepadScraper(BaseScraper):
         Returns ``(chapters, skipped)`` where each skipped entry keeps
         enough of the post to identify it after the fact.
         """
-        author_id = decode_value(thread.get("topic_author_id"))
-        author_name = decode_value(thread.get("topic_author_name"))
+        # The self-quote check keys on the STORY author (who may not be
+        # the topic author on mangled threads) — take identity from the
+        # already-filtered posts.
+        author_id = (
+            decode_value(story_posts[0].get("post_author_id"))
+            if story_posts
+            else decode_value(thread.get("topic_author_id"))
+        )
+        author_name = (
+            decode_value(story_posts[0].get("post_author_name"))
+            if story_posts
+            else decode_value(thread.get("topic_author_name"))
+        )
         chapters: list[tuple[str, str]] = []
         skipped: list[dict] = []
         for p in story_posts:
@@ -305,7 +383,11 @@ class MousepadScraper(BaseScraper):
             )
 
         title = decode_value(thread.get("topic_title")) or f"Topic {topic_id}"
-        author = decode_value(thread.get("topic_author_name")) or "Unknown"
+        author = (
+            decode_value(story_posts[0].get("post_author_name"))
+            or decode_value(thread.get("topic_author_name"))
+            or "Unknown"
+        )
         num_chapters = len(prepared)
 
         meta = {
