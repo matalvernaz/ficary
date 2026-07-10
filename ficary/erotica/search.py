@@ -34,7 +34,6 @@ from __future__ import annotations
 import concurrent.futures
 import logging
 import re
-import unicodedata
 from typing import Callable, Optional
 
 from bs4 import BeautifulSoup
@@ -1003,9 +1002,15 @@ def search_nifty(query: str, *, page: int = 1,
         return []
     soup = BeautifulSoup(html, "lxml")
     out: list[dict] = []
-    for a in soup.find_all("a", href=re.compile(r"^[a-z0-9_-]+/$", re.I)):
+    # Nifty switched its directory listings from relative hrefs
+    # (``college/``) to absolute (``/nifty/gay/college/``) in mid-2026;
+    # accept both shapes and key on the final path segment.
+    href_re = re.compile(
+        rf"^(?:/nifty/{re.escape(cat)}/)?[a-z0-9_-]+/$", re.I,
+    )
+    for a in soup.find_all("a", href=href_re):
         href = a.get("href", "")
-        slug = href.rstrip("/")
+        slug = href.strip("/").rsplit("/", 1)[-1]
         title = a.get_text(" ", strip=True) or slug.replace("-", " ").title()
         if not _matches_query(query, title, slug):
             continue
@@ -1021,60 +1026,77 @@ def search_nifty(query: str, *, page: int = 1,
     return out[window_start:]
 
 
+_FM_RSS_TITLE_RE = re.compile(
+    # "Jul10 - <image marker> A Perfect Housewife [Pollymeric]" —
+    # strip the date prefix, any non-title marker glyphs, and the
+    # trailing [Author] (the <author> element carries it cleanly).
+    r"^(?:[A-Z][a-z]{2}\d{1,2}\s*-\s*)?(?P<t>.*?)(?:\s*\[[^\]]*\])?$",
+)
+
+
 def search_fictionmania(query: str, *, page: int = 1,
                         **_: object) -> list[dict]:
-    """Fictionmania search URL. The WebDNA template requires proper
-    form params; we approximate with the ``searchdisplay`` endpoint
-    and parse any story links that come back."""
+    """Fictionmania's 2026 rework retired every server-side listing we
+    used: ``recent.html`` and the ``searchdisplay`` WebDNA endpoint
+    both return one-byte HTTP-200 stubs, and ``enter.html`` only
+    renders five stories. The RSS feed (``fm.xml``) is the real
+    "newest stories" surface — 25 items with title, author, synopsis,
+    a ``readhtmlstory.html`` reader link (large-int ids work
+    unchanged), and a pubDate that feeds the date sort. Queries filter
+    it client-side."""
     # One un-paginated result listing; window it per page.
     window_start, window_end = _single_listing_window(page)
-    if not query:
-        url = "https://fictionmania.tv/recent.html"
-    else:
-        # Fictionmania's WebDNA endpoint is fussy about the
-        # ``searchword`` payload — ASCII letters, digits, and spaces
-        # only — so anything outside that gets stripped. Earlier code
-        # used a regex that also wiped non-ASCII letters, turning a
-        # query like "café" into "caf" before it reached the network.
-        # Normalise to NFKD first so accented letters degrade to
-        # their ASCII base instead of disappearing, then strip the
-        # rest. Spaces become ``+`` per WebDNA's form-encoded
-        # convention; ``urllib.parse.quote_plus`` would emit ``%20``
-        # which the endpoint actually rejects.
-        flat = (
-            unicodedata.normalize("NFKD", query)
-            .encode("ascii", "ignore")
-            .decode("ascii")
-        )
-        searchword = re.sub(r"[^A-Za-z0-9 ]", "", flat).replace(" ", "+")
-        url = (
-            "https://fictionmania.tv/searchdisplay/display.html"
-            f"?searchword={searchword}"
-            "&Submit=Display+Matching+Stories"
-        )
-    html = _fetch(url)
-    if not html:
+    xml = _fetch("https://fictionmania.tv/fm.xml")
+    if not xml:
         return []
     out: list[dict] = []
     seen = set()
-    for m in re.finditer(
-        r'href="/stories/readhtmlstory\.html\?storyID=(\d+)"[^>]*>([^<]+)<',
-        html, re.I,
-    ):
-        story_id, title = m.group(1), m.group(2).strip()
+    for item in re.finditer(r"<item>(.*?)</item>", xml, re.S):
+        block = item.group(1)
+
+        def _field(tag: str) -> str:
+            m = re.search(rf"<{tag}>([^<]*)</{tag}>", block)
+            return (m.group(1) if m else "").strip()
+
+        link = _field("link")
+        id_m = re.search(r"storyID=(\d+)", link)
+        if not id_m:
+            continue
+        story_id = id_m.group(1)
+        raw_title = _field("title")
+        title_m = _FM_RSS_TITLE_RE.match(raw_title)
+        title = (title_m.group("t") if title_m else raw_title).strip()
+        # ISO-8859-1 marker glyphs (the "story with images" flag)
+        # survive decoding as junk — drop non-ASCII leaders.
+        title = re.sub(r"^[^\w\"']+", "", title) or raw_title
+        author = _field("author")
+        summary = _field("description")
+        updated = ""
+        pub = _field("pubDate")
+        if pub:
+            try:
+                from email.utils import parsedate_to_datetime
+                updated = parsedate_to_datetime(pub).strftime(
+                    "%Y-%m-%dT%H:%M:%S",
+                )
+            except (TypeError, ValueError):
+                pass
+        if not _matches_query(query, title, author, summary):
+            continue
         if story_id in seen:
             continue
         seen.add(story_id)
         out.append({
             "title": title or f"Fictionmania {story_id}",
-            "author": "",
+            "author": author,
             "url": (
                 f"https://fictionmania.tv/stories/readhtmlstory.html"
                 f"?storyID={story_id}"
             ),
-            "summary": "", "words": "?", "chapters": "?",
+            "summary": summary, "words": "?", "chapters": "?",
             "rating": "M", "fandom": "", "status": "",
             "site": "fictionmania",
+            "updated": updated,
         })
         if len(out) >= window_end:
             break
@@ -1138,6 +1160,15 @@ def search_tgstorytime(query: str, *, page: int = 1,
     return out
 
 
+_CHYOA_TAG_CATEGORIES: dict[str, str] = {
+    # Unified vocab tag → chyoa /category/<slug>. Only tags with a
+    # native category page; everything else browses trending.
+    "mind-control": "mind-control",
+    "hypnosis": "mind-control",
+    "bdsm": "bdsm",
+}
+
+
 def search_chyoa(query: str, *, page: int = 1,
                  tags: Optional[list] = None, **_: object) -> list[dict]:
     """Chyoa's ``/search/<q>`` endpoint returns chapter-level hits for
@@ -1148,6 +1179,7 @@ def search_chyoa(query: str, *, page: int = 1,
     and chapter .14 can be different works), so the dedup key is the
     ``(kind, numeric)`` pair — keying on the number alone would drop
     the second hit incorrectly."""
+    listing_window = None
     if query:
         # Chyoa runs on Symfony — its router expects pagination as a
         # path segment, not a query parameter. The previous ``?page=N``
@@ -1157,10 +1189,24 @@ def search_chyoa(query: str, *, page: int = 1,
         # collapsing to ``+``, which Chyoa encodes literally as ``%2B``.
         from urllib.parse import quote
         url = f"https://chyoa.com/search/{quote(query, safe='')}"
+        if page > 1:
+            url += f"/page/{page}"
     else:
-        url = "https://chyoa.com/browse/popular"
-    if page > 1:
-        url += f"/page/{page}"
+        # ``/browse/popular`` 404s since the mid-2026 relaunch. Tag
+        # browses hit the native ``/category/<slug>`` pages where our
+        # vocabulary maps to one; everything else lands on the
+        # trending listing. Neither paginates, so both get the
+        # single-listing window treatment.
+        listing_window = _single_listing_window(page)
+        cat = ""
+        for t in tags or []:
+            cat = _CHYOA_TAG_CATEGORIES.get(t.strip().lower(), "")
+            if cat:
+                break
+        if cat:
+            url = f"https://chyoa.com/category/{cat}"
+        else:
+            url = "https://chyoa.com/trending-sex-stories"
     html = _fetch(url)
     if not html:
         return []
@@ -1193,46 +1239,48 @@ def search_chyoa(query: str, *, page: int = 1,
         })
         if len(out) >= PER_SITE_PAGE_MAX:
             break
+    if listing_window is not None:
+        start, end = listing_window
+        return out[start:end]
     return out
+
+
+_DW_STORY_FORUM = "authors-den.5"
+"""Dark Wanderer's member-story forum node. The old code browsed the
+whole ``/forums/`` index — which serves community/meta threads
+("Personals", "Off Topic") as if they were stories — and its query
+path used ``/search/search?keywords=``, which XenForo now answers
+with the empty search form for guests. Both paths walk Author's Den
+instead and filter client-side."""
+
+_DW_META_SLUG_PREFIXES = (
+    # Pinned/housekeeping threads that live among the stories.
+    "faq-for-authors", "note-for-authors", "anyone-looking-for",
+    "looking-for-authors", "story-waiting-for-moderation",
+    "stories-in-need-of",
+)
 
 
 def search_darkwanderer(query: str, *, page: int = 1,
                         **_: object) -> list[dict]:
-    """Dark Wanderer XenForo: forum "New Posts" listing gives recent
-    story threads; we filter client-side by query.
+    """Dark Wanderer XenForo: walk the Author's Den thread listing
+    (natively paginated, ~20 threads/page) and filter client-side.
+    Titles derive from the thread slug — good enough for scanning,
+    and the download path re-reads the real title anyway.
 
-    Query encoding mirrors :func:`search_fictionmania` — XenForo's
-    keyword field tolerates only ASCII letters/digits/spaces/dashes,
-    so we NFKD-fold first to degrade accented letters to their ASCII
-    base ("café" → "cafe") instead of stripping them outright. The
-    earlier ``re.sub(r'[^A-Za-z0-9]+', '+', query)`` shape silently
-    erased the entire query for any non-ASCII input — same bug the
-    Fictionmania path was fixed for in 2.3.3.
+    Returns a :class:`SparsePage` when the query filtered out a page
+    that still had threads, so the fan-out keeps paging.
     """
-    # One un-paginated listing; window it per page.
-    window_start, window_end = _single_listing_window(page)
-    if query:
-        flat = (
-            unicodedata.normalize("NFKD", query)
-            .encode("ascii", "ignore")
-            .decode("ascii")
-        )
-        keywords = re.sub(r"[^A-Za-z0-9]+", "+", flat).strip("+") or "+"
-        url = (
-            "https://darkwanderer.net/search/search?keywords="
-            f"{keywords}&o=relevance"
-        )
-    else:
-        url = "https://darkwanderer.net/forums/"
+    suffix = f"page-{page}" if page > 1 else ""
+    url = f"https://darkwanderer.net/forums/{_DW_STORY_FORUM}/{suffix}"
     html = _fetch(url)
     if not html:
         return []
     out: list[dict] = []
     seen = set()
+    fetched_any = False
     # XenForo emits both bare thread links (``/threads/<slug>.<tid>/``)
-    # and per-post permalinks (``/threads/<slug>.<tid>/post-<id>``);
-    # search-results pages use the per-post form. Capture both and
-    # dedupe by tid so each thread appears once.
+    # and per-post permalinks; dedupe by tid so each thread counts once.
     for m in re.finditer(
         r'href="/threads/([a-z0-9-]+)\.(\d+)(?:/(?:post-\d+)?)?"',
         html,
@@ -1241,12 +1289,10 @@ def search_darkwanderer(query: str, *, page: int = 1,
         slug, tid = m.group(1), m.group(2)
         if tid in seen:
             continue
-        # Look for the link's text near this match (XenForo's anchor
-        # tags wrap inline elements, so .get_text via BS4 would be
-        # cleaner — but on search-results pages the text lives a few
-        # tags deep). Use a quick regex to grab the bold title from
-        # the result-row title element if present.
         seen.add(tid)
+        if slug.startswith(_DW_META_SLUG_PREFIXES):
+            continue
+        fetched_any = True
         title = slug.replace("-", " ").title()
         if not _matches_query(query, title, slug):
             continue
@@ -1257,9 +1303,11 @@ def search_darkwanderer(query: str, *, page: int = 1,
             "rating": "M", "fandom": "cuckold", "status": "",
             "site": "darkwanderer",
         })
-        if len(out) >= window_end:
+        if len(out) >= PER_SITE_PAGE_MAX:
             break
-    return out[window_start:]
+    if not out and fetched_any:
+        return SparsePage()
+    return out
 
 
 def search_greatfeet(query: str, *, page: int = 1,

@@ -1257,3 +1257,92 @@ def test_mcstories_tag_codes_no_longer_misroute():
     assert _MCS_TAG_CODES["femdom"] == "fd"
     assert _MCS_TAG_CODES["humiliation"] == "hm"
     assert _MCS_TAG_CODES["mind-control"] == "mc"
+
+
+class TestSiteDrift2026_07Fixes:
+    """Adapters repaired in the 2026-07 audit: fictionmania (RSS),
+    chyoa (category/trending), darkwanderer (Author's Den walk),
+    nifty (absolute hrefs)."""
+
+    FM_RSS = (
+        "<rss><channel>"
+        "<item><title>Jul10 - ¿ A Perfect Housewife [Pollymeric]</title>"
+        "<description>Blurb here</description>"
+        "<link>https://www.fictionmania.tv/stories/readhtmlstory.html"
+        "?storyID=178360881719039899</link>"
+        "<author>Pollymeric</author>"
+        "<pubDate>Fri, 10 Jul 2026 00:05:18 -0500</pubDate></item>"
+        "<item><title>Jul09 - Second Tale [Rinny]</title>"
+        "<description>Other blurb</description>"
+        "<link>https://www.fictionmania.tv/stories/readhtmlstory.html"
+        "?storyID=22</link>"
+        "<author>Rinny</author>"
+        "<pubDate>Thu, 09 Jul 2026 08:00:00 -0500</pubDate></item>"
+        "</channel></rss>"
+    )
+
+    def test_fictionmania_parses_rss_listing(self, monkeypatch):
+        from ficary.erotica import search as es
+
+        monkeypatch.setattr(es, "_fetch", lambda url: self.FM_RSS)
+        rows = es.search_fictionmania("")
+        assert [r["title"] for r in rows] == [
+            "A Perfect Housewife", "Second Tale",
+        ]
+        assert rows[0]["author"] == "Pollymeric"
+        assert rows[0]["summary"] == "Blurb here"
+        assert rows[0]["updated"].startswith("2026-07-10")
+        assert rows[0]["url"].endswith("storyID=178360881719039899")
+        filtered = es.search_fictionmania("housewife")
+        assert [r["title"] for r in filtered] == ["A Perfect Housewife"]
+
+    def test_chyoa_tag_maps_to_category_else_trending(self, monkeypatch):
+        from ficary.erotica import search as es
+
+        seen_urls = []
+
+        def fake_fetch(url):
+            seen_urls.append(url)
+            return '<a href="https://chyoa.com/story/tale.14">Tale</a>'
+
+        monkeypatch.setattr(es, "_fetch", fake_fetch)
+        es.search_chyoa("", tags=["hypnosis"])
+        es.search_chyoa("", tags=["feet"])
+        assert seen_urls[0] == "https://chyoa.com/category/mind-control"
+        assert seen_urls[1] == "https://chyoa.com/trending-sex-stories"
+
+    def test_darkwanderer_walks_authors_den_and_skips_meta(self, monkeypatch):
+        from ficary.erotica import search as es
+
+        seen_urls = []
+        listing = (
+            '<a href="/threads/faq-for-authors-guide.17305/">x</a>'
+            '<a href="/threads/whiteboi-addiction.25942/">x</a>'
+            '<a href="/threads/whiteboi-addiction.25942/post-9">x</a>'
+        )
+
+        def fake_fetch(url):
+            seen_urls.append(url)
+            return listing
+
+        monkeypatch.setattr(es, "_fetch", fake_fetch)
+        rows = es.search_darkwanderer("", page=2)
+        assert seen_urls == [
+            "https://darkwanderer.net/forums/authors-den.5/page-2",
+        ]
+        assert [r["title"] for r in rows] == ["Whiteboi Addiction"]
+        sparse = es.search_darkwanderer("zzz-nope")
+        assert sparse == [] and getattr(sparse, "more_available", False)
+
+    def test_nifty_accepts_absolute_directory_hrefs(self, monkeypatch):
+        from ficary.erotica import search as es
+
+        listing = (
+            '<a href="/nifty/gay/college/">College</a>'
+            '<a href="relationships/">Relationships</a>'
+            '<a href="/nifty/terms.html">Terms</a>'
+        )
+        monkeypatch.setattr(es, "_fetch", lambda url: listing)
+        rows = es.search_nifty("", tags=["gay"])
+        assert [r["title"] for r in rows] == ["College", "Relationships"]
+        assert rows[0]["url"] == "https://www.nifty.org/nifty/gay/college/"

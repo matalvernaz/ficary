@@ -256,6 +256,18 @@ class BDSMLibraryScraper(BaseScraper):
         num_chapters = meta["num_chapters"]
         chapter_titles = meta["chapter_titles"]
         chapter_ids = meta["extra"].get("chapter_ids", {})
+        if not chapter_ids:
+            # As of 2026-07-10 story.php renders an empty template for
+            # EVERY storyid (blank <title>, hrefs with no ids) — the
+            # site's story database is down even though the homepage
+            # works. Fail loudly rather than exporting a 0-chapter
+            # story; this also covers a genuinely id-less page, which
+            # was silently producing empty exports before.
+            raise ValueError(
+                f"BDSM Library story {story_id}: the story page came "
+                "back with no chapter links. The site's story backend "
+                "has been serving blank records; try again later."
+            )
         self._save_meta_cache(story_id, meta)
 
         story = Story(

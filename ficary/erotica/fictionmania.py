@@ -69,8 +69,17 @@ class FictionmaniaScraper(BaseScraper):
         title_tag = soup.find("title")
         if title_tag:
             raw = title_tag.get_text(" ", strip=True)
-            # Fictionmania titles end with " - Fictionmania"; strip it.
-            title = re.sub(r"\s*-\s*Fictionmania\s*$", "", raw).strip()
+            # Old pages: "<story> - Fictionmania". The 2026 readers
+            # emit "FictionMania SWI: <story>" — or the literal
+            # placeholder "Fictionmania text story", which is no
+            # title at all and must fall through to the h1/h2 parse.
+            raw = re.sub(r"\s*-\s*Fictionmania\s*$", "", raw).strip()
+            raw = re.sub(r"^FictionMania\s+SWI:\s*", "", raw, flags=re.I)
+            if raw.strip().lower() not in (
+                "fictionmania text story", "fictionmania html story",
+                "fictionmania",
+            ):
+                title = raw.strip()
         if not title:
             h1 = soup.find(["h1", "h2"])
             if h1:
@@ -86,6 +95,17 @@ class FictionmaniaScraper(BaseScraper):
                 author = a.get_text(strip=True) or author
                 author_url = href if href.startswith("http") else FM_BASE + "/" + href.lstrip("/")
                 break
+        if author == "Unknown Author":
+            # 2026 reader pages drop the author link and render a bare
+            # ``<b>By <name></b>`` byline instead.
+            byline = soup.find(
+                "b", string=re.compile(r"^\s*By\s+\S.{0,60}$", re.I),
+            )
+            if byline:
+                author = re.sub(
+                    r"^\s*By\s+", "", byline.get_text(strip=True),
+                    flags=re.I,
+                ).strip() or author
 
         summary = ""
         # Fictionmania often puts the description in italics just
@@ -134,7 +154,12 @@ class FictionmaniaScraper(BaseScraper):
         html = self._fetch(self._html_url(story_id))
         # Heuristic: a "real" story page has lots of prose; an empty
         # WebDNA template is under 2 KB. Only fall back when empty.
-        if len(html) > 2048 and "<body" in html.lower():
+        # The 2026 template omits the opening <body> tag (only
+        # </body> remains), so accept either form — requiring "<body"
+        # sent every download through the text fallback and its
+        # placeholder "Fictionmania text story" title.
+        lowered = html.lower()
+        if len(html) > 2048 and ("<body" in lowered or "</body>" in lowered):
             return html, False
         logger.info(
             "Fictionmania HTML page empty for %s; falling back to text.",

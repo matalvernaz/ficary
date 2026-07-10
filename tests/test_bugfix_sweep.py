@@ -207,20 +207,32 @@ def test_search_wattpad_filtered_empty_is_not_exhausted(monkeypatch):
 # ── erotica.search_fictionmania unicode handling ───────────────────
 
 
-def test_fictionmania_query_preserves_unicode_via_nfkd(monkeypatch):
-    """The earlier regex stripped accents entirely, turning "café"
-    into "caf" and "résumé" into "rsum". The fix folds via NFKD so
-    accented letters degrade to their ASCII base before the strip."""
+def test_fictionmania_unicode_query_filters_client_side(monkeypatch):
+    """Fictionmania's server-side search died in the 2026 rework, so
+    the query never reaches a URL anymore — the adapter fetches the
+    RSS listing and filters client-side. A unicode query must apply
+    as a plain case-insensitive match, not crash or be folded away."""
     captured = {}
+    rss = (
+        "<rss><channel><item>"
+        "<title>Jul10 - Café Résumé Girl [A]</title>"
+        "<description>x</description>"
+        "<link>https://www.fictionmania.tv/stories/readhtmlstory.html"
+        "?storyID=7</link>"
+        "<author>A</author>"
+        "<pubDate>Fri, 10 Jul 2026 00:05:18 -0500</pubDate>"
+        "</item></channel></rss>"
+    )
 
     def fake_fetch(url, *args, **kwargs):
         captured["url"] = url
-        return ""
+        return rss
 
     monkeypatch.setattr(erotica_search, "_fetch", fake_fetch)
-    erotica_search.search_fictionmania("café résumé")
-    assert "cafe" in captured["url"].lower()
-    assert "resume" in captured["url"].lower()
+    rows = erotica_search.search_fictionmania("café résumé")
+    assert captured["url"] == "https://fictionmania.tv/fm.xml"
+    assert [r["title"] for r in rows] == ["Café Résumé Girl"]
+    assert erotica_search.search_fictionmania("zz-no-match") == []
 
 
 # ── piper archive-member validation ────────────────────────────────
@@ -340,26 +352,30 @@ def test_reorganizer_skips_relpath_traversal(tmp_path, caplog):
 # ── 2.4.8 multi-AI review fixes ───────────────────────────────────
 
 
-def test_search_darkwanderer_query_preserves_unicode_via_nfkd(monkeypatch):
-    """DarkWanderer's keyword field accepts only ASCII. NFKD-fold an
-    accented query so "café" becomes "cafe" rather than getting
-    silently stripped to "caf+". Mirrors the long-standing fix in
-    search_fictionmania."""
+def test_search_darkwanderer_unicode_query_filters_client_side(monkeypatch):
+    """Dark Wanderer's guest keyword search was disabled server-side
+    (2026-07), so the query never reaches a URL anymore — the adapter
+    walks the Author's Den listing and filters client-side. A unicode
+    query must neither crash nor leak into the listing URL."""
     captured: dict = {}
+    listing = '<a href="/threads/cafe-nights.42/">x</a>'
 
     def fake_fetch(url):
         captured["url"] = url
-        return ""  # empty body → empty result list
+        return listing
 
     monkeypatch.setattr(erotica_search, "_fetch", fake_fetch)
-    erotica_search.search_darkwanderer("café déjà vu")
-    url = captured["url"]
-    assert "cafe" in url
-    assert "deja" in url
-    # Original characters with diacritics gone; query not collapsed
-    # to an empty/single "+".
-    assert "caf+" not in url.replace("cafe", "")
-    assert "keywords=cafe" in url or "keywords=cafe+deja+vu" in url
+    rows = erotica_search.search_darkwanderer("café déjà vu")
+    assert captured["url"] == (
+        "https://darkwanderer.net/forums/authors-den.5/"
+    )
+    # Accented query vs ASCII slug: no server folding happens now, so
+    # this is a plain no-match — but it must be a SparsePage (the
+    # listing still has rows), not a hard exhaustion.
+    assert rows == []
+    assert getattr(rows, "more_available", False)
+    assert [r["title"] for r in erotica_search.search_darkwanderer("cafe")] \
+        == ["Cafe Nights"]
 
 
 def test_parse_an_response_treats_string_false_as_negative():
