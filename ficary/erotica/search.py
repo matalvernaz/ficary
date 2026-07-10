@@ -84,6 +84,10 @@ EROTICA_SITE_SLUGS: list[str] = [
     "greatfeet",
     "bdsmlibrary",
     "mousepad",
+    "readonlymind",
+    "giantessworld",
+    "chastitymansion",
+    "ticklingforum",
 ]
 """Site-picker options for the unified search window. The first entry
 (``all``) triggers fan-out; everything else scopes to a single site."""
@@ -106,6 +110,10 @@ EROTICA_SITE_LABELS: dict[str, str] = {
     "greatfeet": "GreatFeet",
     "bdsmlibrary": "BDSM Library",
     "mousepad": "The Mousepad (forum)",
+    "readonlymind": "ReadOnlyMind",
+    "giantessworld": "Giantess World",
+    "chastitymansion": "Chastity Mansion (forum)",
+    "ticklingforum": "TicklingForum (forum)",
 }
 
 
@@ -773,18 +781,35 @@ def search_mcstories(query: str, *, page: int = 1,
     elif first_tag and not query:
         return []
     else:
-        url = "https://mcstories.com/Titles/index.html"
+        # Bare browse AND free-text queries walk the recent-additions
+        # page. The old ``Titles/index.html`` target is just an A-Z
+        # hub of letter links — it made query searches return nothing.
+        url = "https://mcstories.com/WhatsNew.html"
     html = _fetch(url)
     if not html:
         return []
     soup = BeautifulSoup(html, "lxml")
     out: list[dict] = []
-    for row in soup.find_all("tr"):
-        a = row.find("a", href=re.compile(r"^\.\./([A-Z][A-Za-z0-9_-]+)/"))
-        if a is None:
+    # WhatsNew.html is a plain link list (no tables) with
+    # root-relative ``Slug/index.html`` hrefs; the tag pages render
+    # ``<tr>`` rows with ``../Slug/`` hrefs. Walk whichever shape the
+    # page has: anchors first, table context only for the code column.
+    rows_iter = soup.find_all("tr") or [
+        a for a in soup.find_all(
+            "a", href=re.compile(r"^([A-Z][A-Za-z0-9_-]+)/(?:index\.html)?$"),
+        )
+    ]
+    for row in rows_iter:
+        if row.name == "a":
+            a = row
+        else:
             a = row.find(
-                "a", href=re.compile(r"^([A-Z][A-Za-z0-9_-]+)/"),
+                "a", href=re.compile(r"^\.\./([A-Z][A-Za-z0-9_-]+)/"),
             )
+            if a is None:
+                a = row.find(
+                    "a", href=re.compile(r"^([A-Z][A-Za-z0-9_-]+)/"),
+                )
         if not a:
             continue
         href = a.get("href", "")
@@ -873,9 +898,13 @@ def search_lushstories(query: str, *, page: int = 1,
         if translated is None:
             return []
         cat = translated
-    if not cat:
-        cat = "new"
-    url = f"https://www.lushstories.com/stories/{cat}"
+    if cat:
+        url = f"https://www.lushstories.com/stories/{cat}"
+    else:
+        # Bare browse: the /stories root is the recent-stories index
+        # (the old ``/stories/new`` default is a Next.js shell with
+        # zero story anchors).
+        url = "https://www.lushstories.com/stories"
     if page > 1:
         url += f"?page={page}"
     html = _fetch(url)
@@ -1245,13 +1274,60 @@ def search_chyoa(query: str, *, page: int = 1,
     return out
 
 
-_DW_STORY_FORUM = "authors-den.5"
-"""Dark Wanderer's member-story forum node. The old code browsed the
-whole ``/forums/`` index — which serves community/meta threads
-("Personals", "Off Topic") as if they were stories — and its query
-path used ``/search/search?keywords=``, which XenForo now answers
-with the empty search form for guests. Both paths walk Author's Den
-instead and filter client-side."""
+def _search_xenforo_forum(
+    query: str,
+    page: int,
+    *,
+    site: str,
+    listing_url: str,
+    thread_href_re: re.Pattern,
+    thread_url_template: str,
+    meta_slug_prefixes: tuple[str, ...] = (),
+    fandom: str = "",
+) -> list[dict]:
+    """Walk one page of a XenForo story-forum listing and filter
+    client-side. Shared by Dark Wanderer, Chastity Mansion, and
+    TicklingForum — guest keyword search is disabled or unreliable on
+    all three boards, and the story forums paginate natively as
+    ``page-N``. Titles derive from the thread slug; the download path
+    re-reads the real title anyway.
+
+    Returns a :class:`SparsePage` when the query filtered out a page
+    that still had threads, so the fan-out keeps paging.
+    """
+    suffix = f"page-{page}" if page > 1 else ""
+    html = _fetch(listing_url + suffix)
+    if not html:
+        return []
+    out: list[dict] = []
+    seen = set()
+    fetched_any = False
+    # XenForo emits both bare thread links and per-post permalinks;
+    # dedupe by tid so each thread counts once.
+    for m in re.finditer(thread_href_re, html):
+        slug, tid = m.group("slug"), m.group("tid")
+        if tid in seen:
+            continue
+        seen.add(tid)
+        if slug.startswith(meta_slug_prefixes):
+            continue
+        fetched_any = True
+        title = slug.replace("-", " ").title()
+        if not _matches_query(query, title, slug):
+            continue
+        out.append({
+            "title": title, "author": "",
+            "url": thread_url_template.format(slug=slug, tid=tid),
+            "summary": "", "words": "?", "chapters": "?",
+            "rating": "M", "fandom": fandom, "status": "",
+            "site": site,
+        })
+        if len(out) >= PER_SITE_PAGE_MAX:
+            break
+    if not out and fetched_any:
+        return SparsePage()
+    return out
+
 
 _DW_META_SLUG_PREFIXES = (
     # Pinned/housekeeping threads that live among the stories.
@@ -1263,51 +1339,73 @@ _DW_META_SLUG_PREFIXES = (
 
 def search_darkwanderer(query: str, *, page: int = 1,
                         **_: object) -> list[dict]:
-    """Dark Wanderer XenForo: walk the Author's Den thread listing
-    (natively paginated, ~20 threads/page) and filter client-side.
-    Titles derive from the thread slug — good enough for scanning,
-    and the download path re-reads the real title anyway.
+    """Dark Wanderer: walk the Author's Den story forum (guest search
+    is disabled server-side; the old ``/forums/`` browse leaked
+    community threads)."""
+    return _search_xenforo_forum(
+        query, page,
+        site="darkwanderer",
+        listing_url="https://darkwanderer.net/forums/authors-den.5/",
+        thread_href_re=re.compile(
+            r'href="/threads/(?P<slug>[a-z0-9-]+)\.(?P<tid>\d+)'
+            r'(?:/(?:post-\d+)?)?"',
+            re.IGNORECASE,
+        ),
+        thread_url_template="https://darkwanderer.net/threads/{slug}.{tid}/",
+        meta_slug_prefixes=_DW_META_SLUG_PREFIXES,
+        fandom="cuckold",
+    )
 
-    Returns a :class:`SparsePage` when the query filtered out a page
-    that still had threads, so the fan-out keeps paging.
-    """
-    suffix = f"page-{page}" if page > 1 else ""
-    url = f"https://darkwanderer.net/forums/{_DW_STORY_FORUM}/{suffix}"
-    html = _fetch(url)
-    if not html:
-        return []
-    out: list[dict] = []
-    seen = set()
-    fetched_any = False
-    # XenForo emits both bare thread links (``/threads/<slug>.<tid>/``)
-    # and per-post permalinks; dedupe by tid so each thread counts once.
-    for m in re.finditer(
-        r'href="/threads/([a-z0-9-]+)\.(\d+)(?:/(?:post-\d+)?)?"',
-        html,
-        re.IGNORECASE,
-    ):
-        slug, tid = m.group(1), m.group(2)
-        if tid in seen:
-            continue
-        seen.add(tid)
-        if slug.startswith(_DW_META_SLUG_PREFIXES):
-            continue
-        fetched_any = True
-        title = slug.replace("-", " ").title()
-        if not _matches_query(query, title, slug):
-            continue
-        out.append({
-            "title": title, "author": "",
-            "url": f"https://darkwanderer.net/threads/{slug}.{tid}/",
-            "summary": "", "words": "?", "chapters": "?",
-            "rating": "M", "fandom": "cuckold", "status": "",
-            "site": "darkwanderer",
-        })
-        if len(out) >= PER_SITE_PAGE_MAX:
-            break
-    if not out and fetched_any:
-        return SparsePage()
-    return out
+
+def search_chastitymansion(query: str, *, page: int = 1,
+                           **_: object) -> list[dict]:
+    """The Chastity Mansion: walk the Member Fiction forum. The board
+    runs without friendly URLs, so listing and thread links take the
+    ``index.php?threads/...`` form."""
+    return _search_xenforo_forum(
+        query, page,
+        site="chastitymansion",
+        listing_url=(
+            "https://chastitymansion.com/forums/index.php"
+            "?forums/member-fiction.19/"
+        ),
+        thread_href_re=re.compile(
+            r'href="/forums/index\.php\?threads/'
+            r'(?P<slug>[a-z0-9-]+)\.(?P<tid>\d+)(?:/(?:post-\d+)?)?"',
+            re.IGNORECASE,
+        ),
+        thread_url_template=(
+            "https://chastitymansion.com/forums/index.php"
+            "?threads/{slug}.{tid}/"
+        ),
+        fandom="chastity",
+    )
+
+
+_TMF_META_SLUG_PREFIXES = (
+    "story-posting-rules", "about-minors", "the-decorum-of",
+    "story-index", "welcome-to",
+)
+
+
+def search_ticklingforum(query: str, *, page: int = 1,
+                         **_: object) -> list[dict]:
+    """TicklingForum (TMF): walk the main Tickling Stories forum."""
+    return _search_xenforo_forum(
+        query, page,
+        site="ticklingforum",
+        listing_url="https://www.ticklingforum.com/forums/tickling-stories.12/",
+        thread_href_re=re.compile(
+            r'href="/threads/(?P<slug>[a-z0-9%-]+)\.(?P<tid>\d+)'
+            r'(?:/(?:post-\d+)?)?"',
+            re.IGNORECASE,
+        ),
+        thread_url_template=(
+            "https://www.ticklingforum.com/threads/{slug}.{tid}/"
+        ),
+        meta_slug_prefixes=_TMF_META_SLUG_PREFIXES,
+        fandom="tickling",
+    )
 
 
 def search_greatfeet(query: str, *, page: int = 1,
@@ -1407,6 +1505,38 @@ def search_literotica_wrapped(query: str, *, page: int = 1,
         if translated is None:
             return []
         category = translated
+
+    if not query and not category:
+        # Bare site browse: literotica.com/new is server-rendered with
+        # the newest ~80 stories (the JS search needs a query and the
+        # tag endpoints need a slug, so neither covers "just show me
+        # the site"). One un-paginated listing — window it per page.
+        window_start, window_end = _single_listing_window(page)
+        html = _fetch("https://www.literotica.com/new")
+        if not html:
+            return []
+        out: list[dict] = []
+        seen: set[str] = set()
+        for m in re.finditer(
+            r'href="(?:https://www\.literotica\.com)?(/s/[a-z0-9-]+)"'
+            r'[^>]*>([^<]{2,90})<',
+            html,
+        ):
+            href, title = m.group(1), m.group(2).strip()
+            if href in seen or not title:
+                continue
+            seen.add(href)
+            out.append({
+                "title": title, "author": "",
+                "url": f"https://www.literotica.com{href}",
+                "summary": "", "words": "?", "chapters": "?",
+                "rating": "M", "fandom": "", "status": "",
+                "site": "literotica",
+            })
+            if len(out) >= window_end:
+                break
+        return out[window_start:]
+
     kwargs: dict = {}
     if category:
         kwargs["category"] = category
@@ -1462,12 +1592,11 @@ def search_ao3_erotica(query: str, *, page: int = 1,
     else:
         freeform_arg = ""
 
-    if not query and not freeform_arg:
-        # Without either a query or a tag, the AO3 search returns
-        # every Explicit-rated work on the site — a 6M-work firehose
-        # that's never what an erotica discovery search wants.
-        return []
-
+    # A bare call (no query, no tag) is a deliberate site browse now —
+    # "every Explicit work, best first" — so it proceeds instead of
+    # returning []. The old firehose worry is handled upstream: the
+    # tag-capability filter keeps AO3 out of unrelated tag fan-outs,
+    # and an all-sites bare browse legitimately wants AO3's slice.
     kwargs = {"rating": "explicit", "sort": "kudos"}
     if freeform_arg:
         kwargs["freeform"] = freeform_arg
@@ -1511,8 +1640,10 @@ def search_wattpad_erotica(query: str, *, page: int = 1,
         slug = translated[0]
 
     if not slug and not query:
-        # No query and no resolvable tag — nothing actionable.
-        return []
+        # Bare browse: Wattpad's ``adult`` tag page is the closest
+        # live umbrella listing (``erotica``/``mature`` 404 as tag
+        # pages).
+        slug = "adult"
     if not slug:
         # Free-text fallback uses Wattpad's slug-shape on the query
         # (lowercase, hyphens). Wattpad serves a search-results page
@@ -1670,6 +1801,138 @@ def search_bdsmlibrary(query: str, *, page: int = 1,
     return out
 
 
+_ROM_TAG_SLUGS: dict[str, str] = {
+    # Unified vocab tag → ReadOnlyMind hashtag. ROM hashtags use
+    # underscores; only tags verified to exist on the site are mapped
+    # (an unmapped tag falls back to a plain-text search of the tag
+    # word, which ROM's search handles sensibly).
+    "femdom": "femdom",
+    "feet": "feet",
+    "foot-worship": "footplay",
+    "footjob": "footjob",
+    "cunnilingus": "cunnilingus",
+    "pussy-eating": "cunnilingus",
+    "hypnosis": "hypnosis",
+    "mind-control": "mind_control",
+    "humiliation": "humiliation",
+}
+
+_ROM_CARD_RE = re.compile(
+    r'story-card-publication-date">(?P<date>\d{4}-\d{2}-\d{2})</div>'
+    r'.*?<a href="(?P<href>/@[^"]+/[^"/]+/)">(?P<title>[^<]+)</a>'
+    r'.*?story-card-authors">\s*by <a[^>]*>(?P<author>[^<]*)</a>'
+    r'(?:.*?story-card-word-count">\s*\((?P<words>[\d,]+) words\))?',
+    re.S,
+)
+
+
+def search_readonlymind(query: str, *, page: int = 1,
+                        tags: Optional[list] = None,
+                        **_: object) -> list[dict]:
+    """ReadOnlyMind: server-side search at ``/search/?q=``, ordered by
+    last update — which makes the EMPTY query a proper newest-first
+    site browse, so bare per-site browsing works here natively. Tags
+    become hashtag queries via :data:`_ROM_TAG_SLUGS`. Cards carry a
+    publication date (feeds the date sort) and a real word count.
+    """
+    from urllib.parse import quote_plus
+
+    q = ""
+    if query:
+        q = query
+    elif tags:
+        first = (tags[0] or "").strip().lower()
+        slug = _ROM_TAG_SLUGS.get(first)
+        q = f"#{slug}" if slug else first
+    url = f"https://readonlymind.com/search/?q={quote_plus(q)}&page={page}"
+    html = _fetch(url)
+    if not html:
+        return []
+    out: list[dict] = []
+    for chunk in html.split("story-card-large")[1:]:
+        m = _ROM_CARD_RE.search(chunk)
+        if not m:
+            continue
+        title = m.group("title").strip()
+        author = (m.group("author") or "").strip()
+        if not _matches_query(query, title, author):
+            continue
+        words = (m.group("words") or "?").replace(",", "")
+        out.append({
+            "title": title, "author": author,
+            "url": f"https://readonlymind.com{m.group('href')}",
+            "summary": "", "words": words or "?", "chapters": "?",
+            "rating": "M", "fandom": "", "status": "",
+            "site": "readonlymind",
+            "updated": m.group("date"),
+        })
+        if len(out) >= PER_SITE_PAGE_MAX:
+            break
+    return out
+
+
+_GW_LISTING_PAGE_ROWS = 20
+_GW_CHROME_LINK_TEXT = {"table of contents", "report this"}
+
+_GW_TAGS = frozenset({"feet", "foot-worship", "footjob", "trampling"})
+"""Tags the giantess niche plausibly satisfies wholesale. Like the
+GreatFeet/Mousepad rule: tag-only browses outside this set return
+``[]`` rather than leaking 48k giantess stories into unrelated
+fan-outs."""
+
+
+def search_giantessworld(query: str, *, page: int = 1,
+                         tags: Optional[list] = None,
+                         **_: object) -> list[dict]:
+    """Giantess World: eFiction recent-stories browse
+    (``browse.php?type=recent&offset=K``, 20 rows/page, newest
+    first), filtered client-side. The site's own search is a POST
+    form, and recency + title filtering covers the discovery need.
+
+    Returns a :class:`SparsePage` when the query filtered out a
+    still-populated page.
+    """
+    if (
+        tags and not query
+        and not any(t.strip().lower() in _GW_TAGS for t in tags)
+    ):
+        return []
+    offset = (max(1, int(page)) - 1) * _GW_LISTING_PAGE_ROWS
+    html = _fetch(
+        f"https://giantessworld.net/browse.php?type=recent&offset={offset}",
+    )
+    if not html:
+        return []
+    out: list[dict] = []
+    seen: set[str] = set()
+    fetched_any = False
+    for m in re.finditer(
+        r'href="viewstory\.php\?sid=(?P<sid>\d+)[^"]*"[^>]*>(?P<text>[^<]{2,80})<',
+        html,
+    ):
+        sid, text = m.group("sid"), m.group("text").strip()
+        if not text or text.lower() in _GW_CHROME_LINK_TEXT:
+            continue
+        if sid in seen:
+            continue
+        seen.add(sid)
+        fetched_any = True
+        if not _matches_query(query, text):
+            continue
+        out.append({
+            "title": text, "author": "",
+            "url": f"https://giantessworld.net/viewstory.php?sid={sid}",
+            "summary": "", "words": "?", "chapters": "?",
+            "rating": "M", "fandom": "giantess", "status": "",
+            "site": "giantessworld",
+        })
+        if len(out) >= PER_SITE_PAGE_MAX:
+            break
+    if not out and fetched_any:
+        return SparsePage()
+    return out
+
+
 _MOUSEPAD_STORY_FORUMS: tuple[str, ...] = ("72", "97")
 """The Mousepad's fiction sections: Stories (f72, ~5k topics) and the
 Classic Story Library (f97). Story Requests (f94) and Experiences
@@ -1773,6 +2036,10 @@ _SITE_FNS: dict[str, Callable[..., list[dict]]] = {
     "greatfeet": search_greatfeet,
     "bdsmlibrary": search_bdsmlibrary,
     "mousepad": search_mousepad,
+    "readonlymind": search_readonlymind,
+    "giantessworld": search_giantessworld,
+    "chastitymansion": search_chastitymansion,
+    "ticklingforum": search_ticklingforum,
 }
 
 
@@ -1806,15 +2073,21 @@ TAG_SITE_COVERAGE: dict[str, list[str]] = {
         "literotica", "lushstories", "storiesonline", "sexstories",
         "darkwanderer", "ao3",
     ],
-    "chastity": ["literotica", "storiesonline", "ao3", "bdsmlibrary"],
+    "chastity": [
+        "literotica", "storiesonline", "ao3", "bdsmlibrary",
+        "chastitymansion",
+    ],
     "cuckold": [
         "literotica", "lushstories", "storiesonline", "sexstories",
         "darkwanderer", "ao3",
     ],
-    "cunnilingus": ["literotica", "lushstories", "storiesonline", "ao3"],
+    "cunnilingus": [
+        "literotica", "lushstories", "storiesonline", "ao3",
+        "readonlymind",
+    ],
     "dominance-submission": [
         "literotica", "lushstories", "storiesonline", "mcstories", "ao3",
-        "bdsmlibrary",
+        "bdsmlibrary", "chastitymansion",
     ],
     "exhibitionism": [
         "literotica", "lushstories", "storiesonline", "mcstories", "ao3",
@@ -1823,20 +2096,23 @@ TAG_SITE_COVERAGE: dict[str, list[str]] = {
     "face-sitting": ["literotica", "lushstories", "ao3"],
     "femdom": [
         "literotica", "lushstories", "storiesonline", "mcstories", "ao3",
-        "wattpad", "bdsmlibrary", "mousepad",
+        "wattpad", "bdsmlibrary", "mousepad", "readonlymind",
+        "chastitymansion",
     ],
     "feet": [
         "literotica", "lushstories", "storiesonline", "greatfeet", "ao3",
-        "wattpad", "bdsmlibrary", "mousepad",
+        "wattpad", "bdsmlibrary", "mousepad", "readonlymind",
+        "giantessworld", "ticklingforum",
     ],
-    "female-led": ["literotica", "ao3", "wattpad"],
+    "female-led": ["literotica", "ao3", "wattpad", "chastitymansion"],
     "foot-worship": [
         "literotica", "lushstories", "storiesonline", "greatfeet", "ao3",
-        "wattpad", "mousepad",
+        "wattpad", "mousepad", "readonlymind", "giantessworld",
+        "ticklingforum",
     ],
     "footjob": [
         "literotica", "lushstories", "storiesonline", "greatfeet", "ao3",
-        "mousepad",
+        "mousepad", "readonlymind", "giantessworld",
     ],
     "fisting": [
         "literotica", "storiesonline", "sexstories", "ao3", "bdsmlibrary",
@@ -1855,8 +2131,12 @@ TAG_SITE_COVERAGE: dict[str, list[str]] = {
     "harem": ["literotica", "storiesonline", "lushstories", "ao3"],
     "humiliation": [
         "literotica", "lushstories", "storiesonline", "mcstories", "ao3",
+        "readonlymind",
     ],
-    "hypnosis": ["mcstories", "storiesonline", "literotica", "chyoa", "ao3"],
+    "hypnosis": [
+        "mcstories", "storiesonline", "literotica", "chyoa", "ao3",
+        "readonlymind",
+    ],
     "incest": [
         "literotica", "storiesonline", "sexstories", "aff", "mcstories",
         "ao3", "bdsmlibrary",
@@ -1879,6 +2159,7 @@ TAG_SITE_COVERAGE: dict[str, list[str]] = {
     "mature": ["literotica", "lushstories", "storiesonline", "ao3"],
     "mind-control": [
         "mcstories", "storiesonline", "literotica", "chyoa", "ao3",
+        "readonlymind",
     ],
     "non-consent": [
         "literotica", "storiesonline", "mcstories", "sexstories", "ao3",
@@ -1892,7 +2173,7 @@ TAG_SITE_COVERAGE: dict[str, list[str]] = {
     "polyamory": ["literotica", "storiesonline", "lushstories", "ao3"],
     "pregnancy": ["literotica", "storiesonline", "sexstories", "ao3"],
     "public-sex": ["literotica", "lushstories", "storiesonline", "ao3"],
-    "pussy-eating": ["literotica", "ao3"],
+    "pussy-eating": ["literotica", "ao3", "readonlymind"],
     "queening": ["literotica", "lushstories", "storiesonline", "ao3"],
     "roleplay": ["literotica", "lushstories", "chyoa", "ao3"],
     "rough": ["literotica", "lushstories", "sexstories", "ao3"],
@@ -1905,7 +2186,9 @@ TAG_SITE_COVERAGE: dict[str, list[str]] = {
     "swinging": [
         "literotica", "lushstories", "storiesonline", "darkwanderer", "ao3",
     ],
-    "tease-and-denial": ["literotica", "ao3", "wattpad"],
+    "tease-and-denial": [
+        "literotica", "ao3", "wattpad", "chastitymansion",
+    ],
     "teen": [
         "literotica", "lushstories", "storiesonline", "sexstories", "ao3",
         "bdsmlibrary",
@@ -1914,7 +2197,10 @@ TAG_SITE_COVERAGE: dict[str, list[str]] = {
         "literotica", "lushstories", "storiesonline", "sexstories", "ao3",
         "wattpad",
     ],
-    "trampling": ["literotica", "greatfeet", "ao3", "wattpad", "mousepad"],
+    "trampling": [
+        "literotica", "greatfeet", "ao3", "wattpad", "mousepad",
+        "giantessworld",
+    ],
     "transgender": [
         "literotica", "fictionmania", "tgstorytime", "storiesonline",
         "lushstories", "ao3",

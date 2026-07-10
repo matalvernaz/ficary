@@ -13,18 +13,22 @@ from .ao3 import AO3Scraper
 from .erotica import (
     AFFScraper,
     BDSMLibraryScraper,
+    ChastityMansionScraper,
     ChyoaScraper,
     DarkWandererScraper,
     FictionmaniaScraper,
+    GiantessWorldScraper,
     GreatFeetScraper,
     LiteroticaScraper,
     LushStoriesScraper,
     MCStoriesScraper,
     MousepadScraper,
     NiftyScraper,
+    ReadOnlyMindScraper,
     SexStoriesScraper,
     StoriesOnlineScraper,
     TGStorytimeScraper,
+    TicklingForumScraper,
 )
 from .ficwad import FicWadScraper
 from .mediaminer import MediaMinerScraper
@@ -155,6 +159,38 @@ _STORY_URL_PATTERNS_STRICT: list[tuple[type[BaseScraper], re.Pattern[str]]] = [
         ),
     ),
     (
+        ReadOnlyMindScraper,
+        re.compile(
+            r"https?://(?:www\.)?readonlymind\.com/@[A-Za-z0-9_.-]+/"
+            r"[A-Za-z0-9_.-]+",
+            re.I,
+        ),
+    ),
+    (
+        GiantessWorldScraper,
+        re.compile(
+            r"https?://(?:www\.)?giantessworld\.net/viewstory\.php\?"
+            r"[^#\s]*sid=\d+",
+            re.I,
+        ),
+    ),
+    (
+        ChastityMansionScraper,
+        re.compile(
+            r"https?://(?:www\.)?chastitymansion\.com/forums/"
+            r"(?:index\.php\?)?threads/[^/.]+\.\d+",
+            re.I,
+        ),
+    ),
+    (
+        TicklingForumScraper,
+        re.compile(
+            r"https?://(?:www\.)?ticklingforum\.com/"
+            r"(?:index\.php\?)?threads/[^/.]+\.\d+",
+            re.I,
+        ),
+    ),
+    (
         WebnovelScraper,
         re.compile(
             r"https?://(?:www\.|m\.)?webnovel\.com/book/(?:[^/?#]*_)?\d+",
@@ -217,6 +253,10 @@ _HOSTNAME_TO_SCRAPER: list[tuple[str, type[BaseScraper]]] = [
     # Only The Mousepad group is supported; parse_story_id rejects
     # other tapatalk.com/groups/* URLs with a clear error.
     ("tapatalk.com", MousepadScraper),
+    ("readonlymind.com", ReadOnlyMindScraper),
+    ("giantessworld.net", GiantessWorldScraper),
+    ("chastitymansion.com", ChastityMansionScraper),
+    ("ticklingforum.com", TicklingForumScraper),
 ]
 
 # Scrapers whose is_author_url / is_series_url static methods should be
@@ -243,6 +283,10 @@ ALL_SCRAPERS: list[type[BaseScraper]] = [
     GreatFeetScraper,
     BDSMLibraryScraper,
     MousepadScraper,
+    ReadOnlyMindScraper,
+    GiantessWorldScraper,
+    ChastityMansionScraper,
+    TicklingForumScraper,
 ]
 
 # Erotica-specific scraper classes, exported for the unified Erotic
@@ -264,6 +308,10 @@ EROTICA_SCRAPERS: tuple[type[BaseScraper], ...] = (
     GreatFeetScraper,
     BDSMLibraryScraper,
     MousepadScraper,
+    ReadOnlyMindScraper,
+    GiantessWorldScraper,
+    ChastityMansionScraper,
+    TicklingForumScraper,
 )
 
 
@@ -433,6 +481,17 @@ _CANONICAL_RULES: list[tuple[str, str, re.Pattern[str], str]] = [
         "/threads/{}/",
     ),
     (
+        "ticklingforum.com", "www.ticklingforum.com",
+        re.compile(r"^/threads/([^/.]+\.\d+)"),
+        "/threads/{}/",
+    ),
+    (
+        # Chapter URLs (…/2/) collapse to the story overview.
+        "readonlymind.com", "readonlymind.com",
+        re.compile(r"^/(@[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)"),
+        "/{}/",
+    ),
+    (
         "greatfeet.com", "www.greatfeet.com",
         re.compile(r"^/stories/ts(\d+)\.htm$"), "/stories/ts{}.htm",
     ),
@@ -445,6 +504,10 @@ _AFF_NO_RE = re.compile(r"(?:^|[?&])no=(\d+)")
 _FM_STORY_RE = re.compile(r"(?:^|[?&])storyID=(\d+)", re.I)
 _BDSMLIB_STORYID_RE = re.compile(r"(?:^|[?&])storyid=(\d+)", re.I)
 _TGS_SID_RE = re.compile(r"(?:^|[?&])sid=(\d+)", re.I)
+_GW_SID_RE = re.compile(r"(?:^|[?&])sid=(\d+)", re.I)
+# Chastity Mansion runs XenForo without friendly URLs: the thread ref
+# IS the query string (``index.php?threads/<slug>.<tid>/page-N``).
+_CM_THREADS_RE = re.compile(r"^threads/([^/.]+\.\d+)", re.I)
 
 
 def canonical_url(url: str) -> str:
@@ -506,6 +569,33 @@ def canonical_url(url: str) -> str:
                 "https", "www.tgstorytime.com",
                 "/viewstory.php",
                 f"sid={m.group(1)}", "",
+            ))
+
+    # Giantess World ids live in ``?sid=<N>`` on viewstory.php; drop
+    # chapter/textsize churn so every chapter variant dedupes to the
+    # story index.
+    if "giantessworld.net" in netloc:
+        m = _GW_SID_RE.search(parts.query or "")
+        if m:
+            return urlunsplit((
+                "https", "giantessworld.net",
+                "/viewstory.php", f"sid={m.group(1)}", "",
+            ))
+
+    # Chastity Mansion's thread reference lives in the query string
+    # (no friendly URLs); strip page-N and pin the index.php form.
+    if "chastitymansion.com" in netloc:
+        m = _CM_THREADS_RE.match(parts.query or "")
+        if m:
+            return urlunsplit((
+                "https", "chastitymansion.com",
+                "/forums/index.php", f"threads/{m.group(1)}/", "",
+            ))
+        m2 = re.match(r"^/forums/threads/([^/.]+\.\d+)", path)
+        if m2:
+            return urlunsplit((
+                "https", "chastitymansion.com",
+                "/forums/index.php", f"threads/{m2.group(1)}/", "",
             ))
 
     # BDSM Library ids live in ``?storyid=<N>`` on story.php and

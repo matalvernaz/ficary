@@ -11,18 +11,22 @@ import pytest
 from ficary.erotica import (
     AFFScraper,
     BDSMLibraryScraper,
+    ChastityMansionScraper,
     ChyoaScraper,
     DarkWandererScraper,
     FictionmaniaScraper,
+    GiantessWorldScraper,
     GreatFeetScraper,
     LiteroticaScraper,
     LushStoriesScraper,
     MCStoriesScraper,
     MousepadScraper,
     NiftyScraper,
+    ReadOnlyMindScraper,
     SexStoriesScraper,
     StoriesOnlineScraper,
     TGStorytimeScraper,
+    TicklingForumScraper,
 )
 from ficary.erotica.search import (
     EROTICA_SITE_SLUGS,
@@ -47,7 +51,8 @@ def test_all_erotica_scrapers_registered():
         SexStoriesScraper, MCStoriesScraper, LushStoriesScraper,
         FictionmaniaScraper, TGStorytimeScraper, ChyoaScraper,
         DarkWandererScraper, GreatFeetScraper, BDSMLibraryScraper,
-        MousepadScraper,
+        MousepadScraper, ReadOnlyMindScraper, GiantessWorldScraper,
+        ChastityMansionScraper, TicklingForumScraper,
     }
     assert set(EROTICA_SCRAPERS) == expected
 
@@ -78,6 +83,14 @@ def test_all_erotica_scrapers_registered():
      BDSMLibraryScraper),
     ("http://www.bdsmlibrary.com/stories/chapter.php?storyid=10994&chapterid=31865",
      BDSMLibraryScraper),
+    ("https://readonlymind.com/@Krungu5/SmallPackageBigPrize/",
+     ReadOnlyMindScraper),
+    ("https://giantessworld.net/viewstory.php?sid=11467",
+     GiantessWorldScraper),
+    ("https://chastitymansion.com/forums/index.php?threads/some-story.63479/",
+     ChastityMansionScraper),
+    ("https://www.ticklingforum.com/threads/some-story.42755/",
+     TicklingForumScraper),
 ])
 def test_detect_scraper_routes_correctly(url, expected_cls):
     assert detect_scraper(url) is expected_cls
@@ -156,6 +169,31 @@ def test_detect_scraper_routes_correctly(url, expected_cls):
     (
         "http://www.bdsmlibrary.com/stories/chapter.php?storyid=10994&chapterid=31865",
         "http://www.bdsmlibrary.com/stories/story.php?storyid=10994",
+    ),
+    # ReadOnlyMind: chapter pages collapse to the story overview.
+    (
+        "https://readonlymind.com/@Krungu5/SmallPackageBigPrize/2/",
+        "https://readonlymind.com/@Krungu5/SmallPackageBigPrize/",
+    ),
+    # Giantess World: keep sid, drop chapter/textsize churn.
+    (
+        "https://giantessworld.net/viewstory.php?sid=11467&chapter=3",
+        "https://giantessworld.net/viewstory.php?sid=11467",
+    ),
+    # Chastity Mansion: thread ref lives in the query string; page-N
+    # and the rewritten /forums/threads/ shape both collapse.
+    (
+        "https://chastitymansion.com/forums/index.php?threads/a-b.63479/page-2",
+        "https://chastitymansion.com/forums/index.php?threads/a-b.63479/",
+    ),
+    (
+        "https://chastitymansion.com/forums/threads/a-b.63479/",
+        "https://chastitymansion.com/forums/index.php?threads/a-b.63479/",
+    ),
+    # TicklingForum: strip page-N like Dark Wanderer.
+    (
+        "https://www.ticklingforum.com/threads/a-tale.42755/page-9",
+        "https://www.ticklingforum.com/threads/a-tale.42755/",
     ),
 ])
 def test_canonical_url(raw, expected):
@@ -1346,3 +1384,185 @@ class TestSiteDrift2026_07Fixes:
         rows = es.search_nifty("", tags=["gay"])
         assert [r["title"] for r in rows] == ["College", "Relationships"]
         assert rows[0]["url"] == "https://www.nifty.org/nifty/gay/college/"
+
+
+class TestNewSites2026_07:
+    """The four sites added in 2026-07 (ReadOnlyMind, Giantess World,
+    Chastity Mansion, TicklingForum) plus the bare-browse contract."""
+
+    def test_rom_parse_story_id_forms(self):
+        ref = "@Krungu5/SmallPackageBigPrize"
+        assert ReadOnlyMindScraper.parse_story_id(
+            f"https://readonlymind.com/{ref}/") == ref
+        assert ReadOnlyMindScraper.parse_story_id(
+            f"https://readonlymind.com/{ref}/2/") == ref
+        assert ReadOnlyMindScraper.parse_story_id(ref) == ref
+        with pytest.raises(ValueError):
+            ReadOnlyMindScraper.parse_story_id("https://example.com/x")
+
+    def test_gw_parse_story_id_forms(self):
+        assert GiantessWorldScraper.parse_story_id(
+            "https://giantessworld.net/viewstory.php?sid=11467") == 11467
+        assert GiantessWorldScraper.parse_story_id(
+            "https://giantessworld.net/viewstory.php?textsize=0&sid=7&chapter=2"
+        ) == 7
+        assert GiantessWorldScraper.parse_story_id("11467") == 11467
+        with pytest.raises(ValueError):
+            GiantessWorldScraper.parse_story_id("https://example.com/x")
+
+    def test_xenforo_parse_story_id_forms(self):
+        assert ChastityMansionScraper.parse_story_id(
+            "https://chastitymansion.com/forums/index.php"
+            "?threads/some-story.63479/") == 63479
+        assert ChastityMansionScraper.parse_story_id(
+            "https://chastitymansion.com/forums/threads/some-story.63479/"
+        ) == 63479
+        assert TicklingForumScraper.parse_story_id(
+            "https://www.ticklingforum.com/threads/a-tale.42755/") == 42755
+        with pytest.raises(ValueError):
+            ChastityMansionScraper.parse_story_id(
+                "https://www.ticklingforum.com/threads/a-tale.42755/")
+
+    def test_xenforo_starter_posts_filter_and_quote_strip(self):
+        from bs4 import BeautifulSoup
+
+        html = """
+        <article class="message" data-author="Author">
+          <div class="bbWrapper">Chapter one.
+            <blockquote>quoted reader text</blockquote></div>
+        </article>
+        <article class="message" data-author="Reader">
+          <div class="bbWrapper">Great story!</div>
+        </article>
+        <article class="message" data-author="Author">
+          <div class="bbWrapper">Chapter two.</div>
+        </article>
+        """
+        soup = BeautifulSoup(html, "lxml")
+        from ficary.erotica.xenforo import XenForoStoryScraper
+
+        starter = XenForoStoryScraper._thread_starter_username(soup)
+        assert starter == "Author"
+        posts = XenForoStoryScraper._starter_posts(
+            soup, starter, is_first_page=True,
+        )
+        assert len(posts) == 2
+        joined = " ".join(posts)
+        assert "Chapter one." in joined and "Chapter two." in joined
+        assert "Great story!" not in joined
+        assert "quoted reader text" not in joined
+
+    def test_rom_search_card_parse(self, monkeypatch):
+        from ficary.erotica import search as es
+
+        card = (
+            '<section class="story-card-large ">'
+            '<div class="story-card-publication-date">2026-06-05</div>'
+            '<div class="story-card-title" >'
+            '<a href="/@Krungu5/SmallPackageBigPrize/">Small Package; Big Prize </a>'
+            "</div>"
+            '<div class="story-card-authors">by <a href="/@Krungu5/">Krungu5</a></div>'
+            '<div class="story-card-word-count">(4,108 words)</div>'
+            "</section>"
+        )
+        captured = {}
+
+        def fake_fetch(url):
+            captured["url"] = url
+            return card
+
+        monkeypatch.setattr(es, "_fetch", fake_fetch)
+        rows = es.search_readonlymind("", tags=["foot-worship"])
+        assert "%23footplay" in captured["url"]
+        assert rows[0]["title"] == "Small Package; Big Prize"
+        assert rows[0]["author"] == "Krungu5"
+        assert rows[0]["updated"] == "2026-06-05"
+        assert rows[0]["words"] == "4108"
+        assert rows[0]["url"].endswith("/@Krungu5/SmallPackageBigPrize/")
+        # Bare browse = empty q parameter.
+        es.search_readonlymind("")
+        assert captured["url"].startswith(
+            "https://readonlymind.com/search/?q=&page=",
+        )
+
+    def test_gw_search_skips_chrome_links(self, monkeypatch):
+        from ficary.erotica import search as es
+
+        listing = (
+            '<a href="viewstory.php?sid=1">Kink Island</a>'
+            '<a href="viewstory.php?sid=1">Table of Contents</a>'
+            '<a href="viewstory.php?sid=1">Report This</a>'
+            '<a href="viewstory.php?sid=2">Second Story</a>'
+        )
+        monkeypatch.setattr(es, "_fetch", lambda url: listing)
+        rows = es.search_giantessworld("")
+        assert [r["title"] for r in rows] == ["Kink Island", "Second Story"]
+        assert es.search_giantessworld("", tags=["bdsm"]) == []
+        sparse = es.search_giantessworld("zz-nope")
+        assert sparse == [] and getattr(sparse, "more_available", False)
+
+    def test_cm_and_tmf_walk_their_story_forums(self, monkeypatch):
+        from ficary.erotica import search as es
+
+        seen = []
+        cm_listing = (
+            '<a href="/forums/index.php?threads/bradley-joness-chastity.50076/">x</a>'
+        )
+        tmf_listing = (
+            '<a href="/threads/story-posting-rules.34534/">x</a>'
+            '<a href="/threads/a-real-story.111/">x</a>'
+        )
+
+        def fake_fetch(url):
+            seen.append(url)
+            return cm_listing if "chastitymansion" in url else tmf_listing
+
+        monkeypatch.setattr(es, "_fetch", fake_fetch)
+        cm = es.search_chastitymansion("", page=2)
+        assert seen[0] == (
+            "https://chastitymansion.com/forums/index.php"
+            "?forums/member-fiction.19/page-2"
+        )
+        assert [r["title"] for r in cm] == ["Bradley Joness Chastity"]
+        assert cm[0]["url"] == (
+            "https://chastitymansion.com/forums/index.php"
+            "?threads/bradley-joness-chastity.50076/"
+        )
+        tmf = es.search_ticklingforum("")
+        assert [r["title"] for r in tmf] == ["A Real Story"]
+
+    def test_bare_browse_defaults(self, monkeypatch):
+        """Every bare-browse default hits the intended listing URL."""
+        from ficary.erotica import search as es
+
+        seen = {}
+
+        def fake_fetch(url):
+            seen["url"] = url
+            return ""
+
+        monkeypatch.setattr(es, "_fetch", fake_fetch)
+        es.search_mcstories("")
+        assert seen["url"] == "https://mcstories.com/WhatsNew.html"
+        es.search_lushstories("")
+        assert seen["url"] == "https://www.lushstories.com/stories"
+        es.search_wattpad_erotica("")
+        assert seen["url"] == "https://www.wattpad.com/stories/adult"
+        es.search_literotica_wrapped("")
+        assert seen["url"] == "https://www.literotica.com/new"
+
+    def test_ao3_bare_browse_proceeds(self, monkeypatch):
+        from ficary.erotica import search as es
+
+        calls = {}
+
+        def fake_search_ao3(query, *, page=1, **kwargs):
+            calls["query"] = query
+            calls["kwargs"] = kwargs
+            return [{"title": "x", "url": "u", "author": "a"}]
+
+        import ficary.search as top_search
+        monkeypatch.setattr(top_search, "search_ao3", fake_search_ao3)
+        rows = es.search_ao3_erotica("")
+        assert rows and rows[0]["site"] == "ao3"
+        assert calls["kwargs"]["rating"] == "explicit"
