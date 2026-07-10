@@ -1,5 +1,18 @@
 # Changelog
 
+## 2.12.2 — 2026-07-10
+
+**Bug fixes**
+
+* **Downloads from six erotica sites now sort into the Adult library
+  folder like the rest.** BDSM Library, The Mousepad, ReadOnlyMind,
+  Giantess World, Chastity Mansion, and TicklingForum were missing
+  from the library's site-identification and adult-routing tables, so
+  their stories landed under Misc or kink-named fandom folders — and
+  the library index couldn't attribute their source site at all. Both
+  tables now cover every erotica site, and a test pins the two lists
+  to the scraper registry so the next new site can't repeat this.
+
 ## 2.12.1 — 2026-07-10
 
 **Bug fixes**
