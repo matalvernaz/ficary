@@ -4523,11 +4523,15 @@ def _is_search_mode(args: argparse.Namespace) -> bool:
             "rr_max_pages", "rr_min_rating",
         )
     )
-    # Erotica tag browse: the tags ARE the search target, same as the
-    # GUI's tag-only flow.
+    # Erotica browse modes that need no free-text query: a tag pick
+    # (the tags ARE the target) or a bare per-site browse
+    # (--erotica-site alone = "show me that site's listing").
     erotica_tag_browse = (
         getattr(args, "site", "") == "erotica"
-        and getattr(args, "tags", None)
+        and (
+            getattr(args, "tags", None)
+            or getattr(args, "erotica_site", None)
+        )
     )
     return bool(
         args.search or rr_filter_only or erotica_tag_browse
