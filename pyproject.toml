@@ -14,8 +14,8 @@ namespaces = false
 
 [project]
 name = "ficary"
-version = "2.9.4"
-description = "Cross-platform fanfiction + erotica downloader (FFN, AO3, FicWad, Royal Road, MediaMiner, Wattpad, Webnovel, Literotica, AFF, StoriesOnline, Nifty, SexStories, MCStories, Lushstories, Fictionmania, TGStorytime, Chyoa, Dark Wanderer, GreatFeet, BDSM Library)"
+version = "2.10.0"
+description = "Cross-platform fanfiction + erotica downloader (FFN, AO3, FicWad, Royal Road, MediaMiner, Wattpad, Webnovel, Literotica, AFF, StoriesOnline, Nifty, SexStories, MCStories, Lushstories, Fictionmania, TGStorytime, Chyoa, Dark Wanderer, GreatFeet, BDSM Library, The Mousepad)"
 requires-python = ">=3.9"
 dependencies = [
     # 0.11 is the verified floor for curl_cffi.requests.exceptions

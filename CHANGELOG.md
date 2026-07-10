@@ -1,5 +1,35 @@
 # Changelog
 
+## 2.10.0 — 2026-07-10
+
+**New features**
+
+* **The Mousepad is now a searchable, downloadable erotica site.** The
+  foot-fetish story forum at tapatalk.com/groups/themousepad joins the
+  unified Erotic Story Search (site slug `mousepad`; carries the feet,
+  foot-worship, footjob, femdom, and trampling tags). Tapatalk hides
+  the website itself behind a Cloudflare challenge, so ficary talks to
+  the same XML-RPC API the Tapatalk mobile app uses — no account
+  needed. Because the source is a forum, a story is a thread: the
+  downloader keeps only posts written by the thread's author, so the
+  reader comments interleaved between chapters never end up in the
+  export. Both fiction sections (Stories and the Classic Story
+  Library) are covered, and Load More walks the full topic list —
+  all five-thousand-plus threads are reachable, newest activity first.
+* **Erotica results can now be sorted newest-first.** A new "Sort by"
+  dropdown in the Erotic Story Search window switches from the usual
+  site-grouped order to date order using each row's last-activity
+  timestamp, and a new "Updated" column shows the date on every row.
+  Forum listings carry dates on every row; the archive sites don't
+  expose them, so their rows follow after the dated block. Load More
+  re-sorts the whole accumulated list, keeping one global date order.
+* **Query searches on listing-windowed sites no longer stop early on
+  a quiet page.** A term that matched nothing in a site's newest
+  window used to mark that site exhausted, hiding older matches from
+  Load More. The fan-out now tells "nothing survived filtering on
+  this page" apart from "walked past the end of the listing" and
+  keeps the site eligible for deeper pages.
+
 ## 2.9.4 — 2026-07-09
 
 **Bug fixes**
