@@ -41,6 +41,7 @@ from bs4 import BeautifulSoup
 
 from ..scraper import BaseScraper
 from ..search import search_literotica
+from . import tapatalk
 
 logger = logging.getLogger(__name__)
 
@@ -83,6 +84,7 @@ EROTICA_SITE_SLUGS: list[str] = [
     "darkwanderer",
     "greatfeet",
     "bdsmlibrary",
+    "mousepad",
 ]
 """Site-picker options for the unified search window. The first entry
 (``all``) triggers fan-out; everything else scopes to a single site."""
@@ -104,7 +106,46 @@ EROTICA_SITE_LABELS: dict[str, str] = {
     "darkwanderer": "Dark Wanderer",
     "greatfeet": "GreatFeet",
     "bdsmlibrary": "BDSM Library",
+    "mousepad": "The Mousepad (forum)",
 }
+
+
+EROTICA_SORT: dict[str, str] = {
+    # GUI dropdown label → sort mode. First entry is the default; the
+    # GUI never sends it (index 0 means "no filter"), so
+    # ``search_erotica`` only ever receives "Newest first" — or a bare
+    # mode string from scripted callers.
+    "Site & title": "site",
+    "Newest first": "date",
+}
+
+
+def erotica_sort_mode(value) -> str:
+    """Resolve a sort dropdown label or bare mode string to a mode
+    (``"site"`` / ``"date"``). Unknown or empty input falls back to
+    the default site-and-title ordering."""
+    text = str(value or "").strip()
+    if not text:
+        return "site"
+    if text in EROTICA_SORT:
+        return EROTICA_SORT[text]
+    lowered = text.lower()
+    if lowered in EROTICA_SORT.values():
+        return lowered
+    return "site"
+
+
+def sort_rows_by_updated(rows: list) -> list:
+    """Newest-first ordering on each row's ``updated`` ISO stamp.
+
+    Only forum-backed adapters populate ``updated`` (archives don't
+    expose listing dates), so undated rows sort after every dated one.
+    The sort is stable, so rows tied on date — and the whole undated
+    block — keep their incoming site-and-title order.
+    """
+    return sorted(
+        rows, key=lambda r: r.get("updated") or "", reverse=True,
+    )
 
 EROTICA_TAG_VOCABULARY: list[str] = [
     # The unified discovery axis. Most entries are general kinks
@@ -1581,6 +1622,90 @@ def search_bdsmlibrary(query: str, *, page: int = 1,
     return out
 
 
+_MOUSEPAD_STORY_FORUMS: tuple[str, ...] = ("72", "97")
+"""The Mousepad's fiction sections: Stories (f72, ~5k topics) and the
+Classic Story Library (f97). Story Requests (f94) and Experiences
+(f96) are deliberately out — one is want-ads, the other blog-style
+anecdotes."""
+
+_MOUSEPAD_TAGS = frozenset({
+    "feet", "foot-worship", "footjob", "femdom", "trampling",
+})
+"""Tags the whole board plausibly satisfies. Mirrors the GreatFeet
+rule: The Mousepad is a foot-fetish forum end to end, so a tag-only
+browse for anything outside this set returns ``[]`` instead of
+leaking the entire topic listing into an unrelated fan-out."""
+
+
+def search_mousepad(query: str, *, page: int = 1,
+                    tags: Optional[list] = None,
+                    **_: object) -> list[dict]:
+    """The Mousepad: Tapatalk-hosted phpBB foot-fetish story forum.
+
+    A forum, not an archive — so browse and query share one path:
+    window the story forums' topic listings (newest activity first,
+    :data:`tapatalk.TOPIC_WINDOW` rows per forum per page) and filter
+    client-side with :func:`_matches_query` over title, author and
+    the last-post teaser. The board's native ``search`` method is
+    unusable (5-row cap, offset ignored — see
+    :mod:`ficary.erotica.tapatalk`).
+
+    Every row carries ``updated`` (last-activity ISO stamp straight
+    off the listing), which is what makes the "Newest first" sort
+    meaningful for this site.
+
+    Returns a :class:`SparsePage` when a query filtered out an entire
+    still-populated window, so the fan-out keeps the site eligible
+    for deeper pages instead of marking it exhausted.
+    """
+    if (
+        tags and not query
+        and not any(t.strip().lower() in _MOUSEPAD_TAGS for t in tags)
+    ):
+        return []
+    window_start = (max(1, int(page)) - 1) * tapatalk.TOPIC_WINDOW
+    out: list[dict] = []
+    fetched_any = False
+    for forum_id in _MOUSEPAD_STORY_FORUMS:
+        resp = tapatalk.mobiquo_call(
+            "get_topic", forum_id,
+            window_start, window_start + tapatalk.TOPIC_WINDOW - 1,
+        )
+        rows = resp.get("topics") or []
+        # The server clamps an out-of-range offset to the listing's
+        # tail instead of returning nothing, so a walked-past-the-end
+        # page would re-serve the last rows forever. Bound the window
+        # against the reported topic count ourselves.
+        total_topics = int(resp.get("total_topic_num") or 0)
+        if window_start >= total_topics:
+            rows = []
+        if rows:
+            fetched_any = True
+        for t in rows:
+            title = tapatalk.decode_value(t.get("topic_title"))
+            author = tapatalk.decode_value(t.get("topic_author_name"))
+            teaser = tapatalk.decode_value(t.get("short_content"))
+            if not title:
+                continue
+            if not _matches_query(query, title, author, teaser):
+                continue
+            out.append({
+                "title": title,
+                "author": author,
+                "url": tapatalk.topic_url(
+                    tapatalk.decode_value(t.get("topic_id")),
+                ),
+                "summary": teaser,
+                "words": "?", "chapters": "?",
+                "rating": "M", "fandom": "", "status": "",
+                "site": "mousepad",
+                "updated": tapatalk.iso_datetime(t.get("post_time")),
+            })
+    if not out and fetched_any:
+        return SparsePage()
+    return out
+
+
 # ── Fan-out ──────────────────────────────────────────────────────
 
 _SITE_FNS: dict[str, Callable[..., list[dict]]] = {
@@ -1599,6 +1724,7 @@ _SITE_FNS: dict[str, Callable[..., list[dict]]] = {
     "darkwanderer": search_darkwanderer,
     "greatfeet": search_greatfeet,
     "bdsmlibrary": search_bdsmlibrary,
+    "mousepad": search_mousepad,
 }
 
 
@@ -1649,19 +1775,20 @@ TAG_SITE_COVERAGE: dict[str, list[str]] = {
     "face-sitting": ["literotica", "lushstories", "ao3"],
     "femdom": [
         "literotica", "lushstories", "storiesonline", "mcstories", "ao3",
-        "wattpad", "bdsmlibrary",
+        "wattpad", "bdsmlibrary", "mousepad",
     ],
     "feet": [
         "literotica", "lushstories", "storiesonline", "greatfeet", "ao3",
-        "wattpad", "bdsmlibrary",
+        "wattpad", "bdsmlibrary", "mousepad",
     ],
     "female-led": ["literotica", "ao3", "wattpad"],
     "foot-worship": [
         "literotica", "lushstories", "storiesonline", "greatfeet", "ao3",
-        "wattpad",
+        "wattpad", "mousepad",
     ],
     "footjob": [
         "literotica", "lushstories", "storiesonline", "greatfeet", "ao3",
+        "mousepad",
     ],
     "fisting": [
         "literotica", "storiesonline", "sexstories", "ao3", "bdsmlibrary",
@@ -1739,7 +1866,7 @@ TAG_SITE_COVERAGE: dict[str, list[str]] = {
         "literotica", "lushstories", "storiesonline", "sexstories", "ao3",
         "wattpad",
     ],
-    "trampling": ["literotica", "greatfeet", "ao3", "wattpad"],
+    "trampling": ["literotica", "greatfeet", "ao3", "wattpad", "mousepad"],
     "transgender": [
         "literotica", "fictionmania", "tgstorytime", "storiesonline",
         "lushstories", "ao3",
@@ -1879,6 +2006,20 @@ def _normalise_tags(tags) -> list[str]:
     return [_TAG_COVERAGE_SUFFIX_RE.sub("", t).strip() for t in raw if t]
 
 
+class SparsePage(list):
+    """An empty result page whose source listing still has rows.
+
+    Windowed adapters that filter client-side (Mousepad's query path)
+    can have every row of a window fail the filter while thousands of
+    topics remain beyond it. A plain empty list tells the fan-out
+    "walked past the tail — stop polling this site"; returning this
+    subclass instead keeps the site eligible so deeper pages still get
+    scanned.
+    """
+
+    more_available = True
+
+
 class ErotiCAResults(list):
     """``list`` subclass that carries per-site stats alongside the
     merged result rows.
@@ -1907,12 +2048,17 @@ class ErotiCAResults(list):
     site_stats: dict
     exhausted_sites: set
     total_sites: set
+    more_available: bool
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.site_stats = {}
         self.exhausted_sites = set()
         self.total_sites = set()
+        # True when at least one site returned a SparsePage this call —
+        # tells the multi-page driver an empty merged page is worth
+        # following with a deeper one.
+        self.more_available = False
 
 
 def search_erotica(
@@ -1926,6 +2072,7 @@ def search_erotica(
     min_words: str = "",
     category: str = "",
     fandom: str = "",
+    sort: str = "",
     skip_sites: Optional[set] = None,
     **_: object,
 ) -> "ErotiCAResults":
@@ -1951,6 +2098,11 @@ def search_erotica(
             expose word counts in their listings).
         category, fandom: Passed through to sites that accept them
             (Lushstories, AFF respectively).
+        sort: ``"Newest first"`` / ``"date"`` orders this batch by each
+            row's ``updated`` stamp, newest first, undated rows last
+            (see :func:`sort_rows_by_updated`). Anything else keeps
+            the default site-then-title grouping. Applied per batch —
+            the GUI re-sorts the accumulated list on Load More.
 
     Returns:
         Merged list of result dicts. Every dict carries a ``site`` key
@@ -2045,7 +2197,11 @@ def search_erotica(
         for fut in concurrent.futures.as_completed(futures):
             site_slug = futures[fut]
             try:
-                site_results = fut.result() or []
+                # ``or []`` would flatten an empty SparsePage into a
+                # plain list and lose its ``more_available`` marker.
+                site_results = fut.result()
+                if site_results is None:
+                    site_results = []
                 site_stats[site_slug]["count"] = len(site_results)
                 # An empty page means we've walked past this site's
                 # tail (single-listing adapters return [] for any
@@ -2053,9 +2209,15 @@ def search_erotica(
                 # Load More stops polling it. A partial page stays
                 # eligible; its next poll returns [] and flips it,
                 # costing one wasted fetch at each site's tail.
+                # Exception: a SparsePage is "nothing survived the
+                # site's client-side filter but the listing continues"
+                # — keep the site eligible for deeper pages.
                 if not site_results:
-                    site_stats[site_slug]["exhausted"] = True
-                    merged.exhausted_sites.add(site_slug)
+                    if getattr(site_results, "more_available", False):
+                        merged.more_available = True
+                    else:
+                        site_stats[site_slug]["exhausted"] = True
+                        merged.exhausted_sites.add(site_slug)
             except Exception as exc:
                 logger.warning("erotica search (%s) failed: %s", site_slug, exc)
                 site_stats[site_slug].update(
@@ -2075,6 +2237,7 @@ def search_erotica(
         new_merged.site_stats = site_stats
         new_merged.exhausted_sites = merged.exhausted_sites
         new_merged.total_sites = initial_eligible
+        new_merged.more_available = merged.more_available
         merged = new_merged
     else:
         merged.site_stats = site_stats
@@ -2084,6 +2247,13 @@ def search_erotica(
     # users can scan results grouped by archive without the run order
     # of the ThreadPool shuffling things between searches.
     merged.sort(key=lambda r: (r.get("site", ""), r.get("title", "").lower()))
+    if erotica_sort_mode(sort) == "date":
+        resorted = ErotiCAResults(sort_rows_by_updated(merged))
+        resorted.site_stats = merged.site_stats
+        resorted.exhausted_sites = merged.exhausted_sites
+        resorted.total_sites = merged.total_sites
+        resorted.more_available = merged.more_available
+        merged = resorted
     return merged
 
 

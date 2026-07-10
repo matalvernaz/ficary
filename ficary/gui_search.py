@@ -56,6 +56,9 @@ _SEARCH_COLUMNS = [
     ("Ch", 40),
     ("Rating", 80),
     ("Status", 90),
+    # Last-activity date. Only forum-backed erotica sites (The
+    # Mousepad) expose one in their listings; blank everywhere else.
+    ("Updated", 90),
 ]
 # Column ordering: Site sits second so it's visible even in narrow
 # windows and the reader can group results by archive at a glance.
@@ -225,6 +228,7 @@ def _erotica_search_spec():
     from .erotica.search import (
         EROTICA_SITE_LABELS,
         EROTICA_SITE_SLUGS,
+        EROTICA_SORT,
         EROTICA_TAG_VOCABULARY,
         search_erotica,
         tag_site_count,
@@ -253,6 +257,12 @@ def _erotica_search_spec():
         "search_fn": search_erotica,
         "filters": [
             ("&Site:", "sites_choice", site_choices),
+            # First entry (the site-grouped default) is index 0, which
+            # ``_collect_filters`` treats as "no filter" — only
+            # "Newest first" ever reaches ``search_erotica``. Dates
+            # come from forum-backed sites (The Mousepad); undated
+            # archive rows sort after the dated block.
+            ("Sort &by:", "sort", list(EROTICA_SORT)),
         ],
         # Tags are the primary input — first multi-picker so the
         # tab order lands users on tags directly after the query box.
@@ -931,6 +941,18 @@ class SearchFrame(wx.Frame):
         else:
             processed = list(raw)
 
+        # "Newest first" re-sorts the full accumulated set (not just
+        # the new page) so Load More keeps one global date order. The
+        # list control is rebuilt from scratch below and checked rows
+        # re-tick by URL, so re-ordering between pages is safe.
+        if self.site_key == "erotica":
+            from .erotica.search import (
+                erotica_sort_mode, sort_rows_by_updated,
+            )
+            sort_choice = (self.last_filters or {}).get("sort", "")
+            if sort_choice and erotica_sort_mode(sort_choice) == "date":
+                processed = sort_rows_by_updated(processed)
+
         previous_count = len(self.results) if append else 0
         self.results = processed
         self.next_page = next_page
@@ -956,6 +978,7 @@ class SearchFrame(wx.Frame):
                 ctrl.SetItem(row, 5, str(r.get("chapters", "")))
                 ctrl.SetItem(row, 6, r.get("rating", "") or "")
                 ctrl.SetItem(row, 7, r.get("status", "") or "")
+                ctrl.SetItem(row, 8, (r.get("updated") or "")[:10])
             if previous_checked_urls:
                 for i, r in enumerate(self.results):
                     if (r.get("url") or "").strip() in previous_checked_urls:

@@ -18,6 +18,7 @@ from ficary.erotica import (
     LiteroticaScraper,
     LushStoriesScraper,
     MCStoriesScraper,
+    MousepadScraper,
     NiftyScraper,
     SexStoriesScraper,
     StoriesOnlineScraper,
@@ -46,6 +47,7 @@ def test_all_erotica_scrapers_registered():
         SexStoriesScraper, MCStoriesScraper, LushStoriesScraper,
         FictionmaniaScraper, TGStorytimeScraper, ChyoaScraper,
         DarkWandererScraper, GreatFeetScraper, BDSMLibraryScraper,
+        MousepadScraper,
     }
     assert set(EROTICA_SCRAPERS) == expected
 
@@ -68,6 +70,10 @@ def test_all_erotica_scrapers_registered():
     ("https://darkwanderer.net/threads/foo.12345/page-3",
      DarkWandererScraper),
     ("https://www.greatfeet.com/stories/ts1735.htm", GreatFeetScraper),
+    ("https://www.tapatalk.com/groups/themousepad/viewtopic.php?t=197281",
+     MousepadScraper),
+    ("https://www.tapatalk.com/groups/themousepad/something-about-her-t197281.html",
+     MousepadScraper),
     ("http://www.bdsmlibrary.com/stories/story.php?storyid=10994",
      BDSMLibraryScraper),
     ("http://www.bdsmlibrary.com/stories/chapter.php?storyid=10994&chapterid=31865",

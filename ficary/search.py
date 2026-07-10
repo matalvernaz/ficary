@@ -2157,7 +2157,12 @@ def fetch_erotica_until_limit(
         # If this page didn't add any new rows for any active site, the
         # remaining sites have nothing useful — bail rather than burn
         # the rest of the page budget polling for empty pages.
-        if not page_results:
+        # Exception: ``more_available`` means a windowed site filtered
+        # out a whole still-populated window (see ``SparsePage``) —
+        # deeper pages can still hit, so keep walking to the ceiling.
+        if not page_results and not getattr(
+            page_results, "more_available", False,
+        ):
             page += 1
             break
         page += 1

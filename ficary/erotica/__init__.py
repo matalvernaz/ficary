@@ -12,7 +12,9 @@ the existing convention — ``ao3.py``, ``literotica.py``, ``royalroad.py``
 
 Sites covered: AFF (Adult-FanFiction.org), StoriesOnline (SOL), Nifty,
 SexStories (xnxx), MCStories, Lushstories, Fictionmania, TGStorytime,
-Chyoa, Dark Wanderer, GreatFeet, and BDSM Library. AO3 is folded into
+Chyoa, Dark Wanderer, GreatFeet, BDSM Library, and The Mousepad (a
+Tapatalk-hosted phpBB story forum, reached through its mobile XML-RPC
+API — see :mod:`ficary.erotica.tapatalk`). AO3 is folded into
 the unified Erotic Story Search window's fan-out via an explicit-only
 adapter in :mod:`ficary.erotica.search`; the underlying scraper is
 :class:`ficary.ao3.AO3Scraper`. The unified Erotic Story Search window
@@ -39,6 +41,7 @@ from .greatfeet import GreatFeetScraper
 from .literotica import LiteroticaScraper
 from .lushstories import LushStoriesScraper
 from .mcstories import MCStoriesScraper
+from .mousepad import MousepadScraper
 from .nifty import NiftyScraper
 from .sexstories import SexStoriesScraper
 from .storiesonline import StoriesOnlineScraper
@@ -54,6 +57,7 @@ __all__ = [
     "LiteroticaScraper",
     "LushStoriesScraper",
     "MCStoriesScraper",
+    "MousepadScraper",
     "NiftyScraper",
     "SexStoriesScraper",
     "StoriesOnlineScraper",

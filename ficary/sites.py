@@ -20,6 +20,7 @@ from .erotica import (
     LiteroticaScraper,
     LushStoriesScraper,
     MCStoriesScraper,
+    MousepadScraper,
     NiftyScraper,
     SexStoriesScraper,
     StoriesOnlineScraper,
@@ -146,6 +147,14 @@ _STORY_URL_PATTERNS_STRICT: list[tuple[type[BaseScraper], re.Pattern[str]]] = [
         ),
     ),
     (
+        MousepadScraper,
+        re.compile(
+            r"https?://(?:www\.)?tapatalk\.com/groups/themousepad/"
+            r"(?:viewtopic\.php\?[^#\s]*t=\d+|[a-z0-9_-]+-t\d+)",
+            re.I,
+        ),
+    ),
+    (
         WebnovelScraper,
         re.compile(
             r"https?://(?:www\.|m\.)?webnovel\.com/book/(?:[^/?#]*_)?\d+",
@@ -205,6 +214,9 @@ _HOSTNAME_TO_SCRAPER: list[tuple[str, type[BaseScraper]]] = [
     ("darkwanderer.net", DarkWandererScraper),
     ("greatfeet.com", GreatFeetScraper),
     ("bdsmlibrary.com", BDSMLibraryScraper),
+    # Only The Mousepad group is supported; parse_story_id rejects
+    # other tapatalk.com/groups/* URLs with a clear error.
+    ("tapatalk.com", MousepadScraper),
 ]
 
 # Scrapers whose is_author_url / is_series_url static methods should be
@@ -230,6 +242,7 @@ ALL_SCRAPERS: list[type[BaseScraper]] = [
     DarkWandererScraper,
     GreatFeetScraper,
     BDSMLibraryScraper,
+    MousepadScraper,
 ]
 
 # Erotica-specific scraper classes, exported for the unified Erotic
@@ -250,6 +263,7 @@ EROTICA_SCRAPERS: tuple[type[BaseScraper], ...] = (
     DarkWandererScraper,
     GreatFeetScraper,
     BDSMLibraryScraper,
+    MousepadScraper,
 )
 
 
