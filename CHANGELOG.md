@@ -1,5 +1,45 @@
 # Changelog
 
+## 2.11.0 — 2026-07-10
+
+**New features**
+
+* **The erotica search now works from the command line.** `--site
+  erotica` fans out across every archive, with `--tags feet,femdom`
+  for tag browsing (no query needed), `--erotica-site mousepad` to
+  scope to one site, and `--sort date` for newest-first. Result rows
+  show each hit's site and last-updated date.
+
+**Bug fixes**
+
+* **Literotica stories no longer arrive chopped into fake "Page N"
+  chapters.** Literotica splits a submission across ?page=N URLs at
+  arbitrary length breaks — mid-scene, not at story beats — but the
+  downloader treated every page as a chapter. A submission is now one
+  merged chapter; real chapters (series parts) still come through the
+  series flow, one chapter per part. Previously-cached page-chapters
+  are ignored rather than mistaken for whole stories, and checking a
+  Literotica story for updates no longer costs a network fetch.
+* **Four erotica-site searches came back from the dead** (full live
+  audit of all 16 sites):
+  - *Fictionmania* rebuilt their site and killed both listing pages
+    ficary used; search now reads their RSS feed — and gains author,
+    synopsis, and date-sort support in the process. Downloads also
+    picked up story titles and authors again (the new page layout
+    broke both).
+  - *Chyoa*'s browse page moved; tag browses now use their real
+    category pages (mind-control, bdsm) and everything else lands on
+    the trending listing.
+  - *Dark Wanderer*'s guest search was disabled server-side and the
+    old browse leaked community threads ("Personals", "Off Topic")
+    into results; both paths now walk the Author's Den story forum.
+  - *Nifty* switched its directory links to absolute paths, which the
+    parser silently missed.
+* **BDSM Library downloads fail with an honest error now.** The
+  site's story database is currently serving blank pages for every
+  story (verified site-wide); instead of exporting a 0-chapter file,
+  ficary says the site is broken upstream.
+
 ## 2.10.1 — 2026-07-10
 
 **Improvements**
