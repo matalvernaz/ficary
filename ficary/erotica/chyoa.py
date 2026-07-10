@@ -363,12 +363,16 @@ class ChyoaScraper(BaseScraper):
         if entry_soup is not None:
             meta = self._parse_metadata(entry_soup, entry_kind, entry_numeric)
         else:
-            # Cache hit on entry — re-derive minimal metadata from
-            # the cached title; author/summary fall back to defaults.
+            # Cache hit on entry — the meta cache written at the end of
+            # the previous download carries the real author/summary, so
+            # read it back instead of degrading to defaults.
             # (Re-fetching the soup here would defeat the cache.)
+            cached = self._load_meta_cache(story_id) or {}
             meta = {
-                "title": entry_title, "author": "Unknown Author",
-                "author_url": "", "summary": "",
+                "title": entry_title,
+                "author": cached.get("author") or "Unknown Author",
+                "author_url": cached.get("author_url", ""),
+                "summary": cached.get("summary", ""),
                 "extra": {
                     "chyoa_kind": entry_kind, "numeric_id": entry_numeric,
                 },

@@ -1,5 +1,53 @@
 # Changelog
 
+## 2.13.0 — 2026-07-10
+
+**Search results now show each story's summary and word count wherever
+the site publishes one.** Most of the erotica archives were returning
+bare title lists — 14 of 20 sites left the summary pane empty and 18
+never filled the Words column, even where the listing pages carry the
+data. Every site's listing markup was re-captured and re-parsed:
+
+* **Real synopses in search results** on Adult-Fanfiction,
+  StoriesOnline, Lushstories, SexStories, TGStorytime, Chyoa,
+  GiantessWorld, MCStories (What's New), ReadOnlyMind, and the
+  Literotica site browse. Sites whose listings genuinely carry no
+  synopsis (Nifty's file archive, the XenForo forums' thread lists,
+  GreatFeet) are unchanged — the data doesn't exist there.
+* **Word counts in search results** where the site publishes one:
+  exact counts on StoriesOnline and GiantessWorld, site-rounded
+  counts on Lushstories, and fixed parsing on ReadOnlyMind (serial
+  and in-progress stories previously lost their count). Royal Road
+  author listings estimate from the site's page counts, marked
+  with ``~``.
+* **Richer rows across the board**: real titles on the XenForo story
+  forums (previously reconstructed from URL slugs, losing
+  punctuation), authors, chapter counts, completion status, native
+  ratings, and last-update dates that feed date sorting.
+* **The author/works picker now shows summaries** for
+  Adult-Fanfiction, StoriesOnline, Literotica, Royal Road,
+  MediaMiner, and FicWad — plus word counts where the author page
+  lists them. Royal Road author scraping now reads the profile's
+  Fictions tab, which also fixes multi-fiction authors listing only
+  one work.
+* **Keyword search fixed on ReadOnlyMind and Chyoa**: both sites
+  filter server-side, but results were being re-filtered locally by
+  the literal query string, silently dropping most relevance hits —
+  ReadOnlyMind keyword searches usually returned nothing.
+* **Downloaded-story metadata**: Chyoa re-downloads no longer lose
+  the author and summary on cache hits; Fictionmania stories whose
+  reader page is broken (the plain-text fallback path) now pull
+  title, author, and synopsis from the site's Story Details page;
+  MCStories and Royal Road downloads record the site's own word
+  count in the export header instead of a local count.
+* **BDSM Library listings report the outage honestly**: the site's
+  listing backend went dark in July 2026 (search died first, browse
+  followed). Browsing it now reports a site failure instead of a
+  silent zero-result page. Story downloads by URL still work.
+* MCStories browse results no longer include the site's navigation
+  links as bogus rows, and stories updated in consecutive weeks are
+  no longer listed twice.
+
 ## 2.12.5 — 2026-07-10
 
 **Bug fixes**

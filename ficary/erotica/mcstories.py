@@ -142,12 +142,20 @@ class MCStoriesScraper(BaseScraper):
                 tags = [a.get_text(strip=True) for a in codes.find_all("a")]
 
         chapters: list[tuple[str, str]] = []
+        total_words = 0
         for div in soup.find_all("div", class_="chapter"):
             a = div.find("a")
             if not a or not a.get("href"):
                 continue
             href = urljoin(MCS_BASE + f"/{slug}/", a["href"])
             chapters.append((a.get_text(" ", strip=True) or "Chapter", href))
+            # Each chapter div ends with the site's own count:
+            # <div class="chapter"><a>…</a> (2491 words)</div>.
+            m = re.search(
+                r"\(([\d,]+)\s+words\)", div.get_text(" ", strip=True),
+            )
+            if m:
+                total_words += int(m.group(1).replace(",", ""))
 
         if not chapters:
             # Single-chapter story with no chapter div — some old stories
@@ -162,6 +170,16 @@ class MCStoriesScraper(BaseScraper):
         } or {"1": title or "Chapter 1"}
         num_chapters = len(chapters) or 1
 
+        extra = {
+            "slug": slug,
+            "tags": tags,
+            "codes": " ".join(tags),
+        }
+        if total_words:
+            # Site-published count (summed per-chapter); exports prefer
+            # it over counting the downloaded text.
+            extra["words"] = f"{total_words:,}"
+
         return {
             "title": title or slug,
             "author": author,
@@ -170,11 +188,7 @@ class MCStoriesScraper(BaseScraper):
             "num_chapters": num_chapters,
             "chapter_titles": chapter_titles,
             "chapter_urls": [url for _, url in chapters],
-            "extra": {
-                "slug": slug,
-                "tags": tags,
-                "codes": " ".join(tags),
-            },
+            "extra": extra,
         }
 
     @staticmethod

@@ -1,0 +1,588 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN" "http://www.w3.org/TR/html4/loose.dtd"><html><head><link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Source+Sans+Pro:wght@400;600;700&display=swap" rel="stylesheet"><script src="https://code.jquery.com/jquery-3.4.1.slim.min.js" integrity="sha384-J6qa4849blE2+poT4WnyKhv5vZF5SrPo0iEjwBvKU7imGFAV0wwj1yYfoRSJoZ+n" crossorigin="anonymous"></script>
+    <link href="https://cdn.jsdelivr.net/npm/summernote@0.8.18/dist/summernote-lite.min.css" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/summernote@0.8.18/dist/summernote-lite.min.js"></script><title>Giantess World :: The home of people big and small.</title>
+<meta http-equiv="Content-Type" content="text/html; charset=UTF-8"><script language="javascript" type="text/javascript" src="includes/javascript.js"></script>
+<link rel="alternate" type="application/rss+xml" title="Giantess World RSS Feed" href="rss.php"><script language="javascript" type="text/javascript" src="includes/xmlhttp.js"></script><script language="javascript" type="text/javascript">
+lang = new Array( );
+
+lang['Back2Cats'] = 'Back to Main Categories';
+lang['ChooseCat'] = 'Choose a Category';
+lang['Categories'] = 'Categories';
+lang['Characters'] = 'Characters';
+lang['MoveTop'] = 'Move to Top';
+lang['TopLevel'] = 'Top Level Category';
+lang['CatLocked'] = 'This category is locked.';
+basedir = '';
+
+categories = new Array( );
+characters = new Array( );
+
+</script><style type="text/css">
+#columncontainer { margin: 1em auto; width: auto;}
+#browseblock, #memberblock { width: 100%; padding: 0; margin: 0; float: left; border: 0px solid transparent; }
+.column { float: left; width: 24%; }
+html>body .column { width: 25%; }
+.cleaner { clear: both; height: 1px; font-size: 1px; margin: 0; padding: 0; background: transparent; }
+#settingsform { margin: 0; padding: 0; border: none; }
+#settingsform FORM { width: 100%; margin: 0 10%; }
+#settingsform input { margin: 0 auto 0.2em; }
+#settingsform label { display:block; }
+#settingsform .submit {margin: 10px 0 0 0; }
+#settingsform .penname { font-size:15px; } 
+#settingsform { float: left; margin: 1ex 10%; }
+#settingsform .tinytoggle { text-align: center; }
+#settingsform .tinytoggle LABEL { float: none; display: inline; width: auto; text-align: center; padding: 0; clear: none; }
+#settingsform .fieldset { display: none; } 
+a.pophelp{
+    position: relative; /* this is the key*/
+    vertical-align: super;
+}
+
+a.pophelp:hover{z-index:100; border: none; text-decoration: none;}
+
+a.pophelp span{display: none; position: absolute; top: -25em; left: 20em; }
+
+a.pophelp:hover span{ /*the span will display just on :hover state*/
+    display:block;
+    position: absolute;
+    top: -3em; left: 8em; width: 225px;
+    border:1px solid #000;
+    background-color:#CCC; color:#000;
+    text-decoration: none;
+    text-align: left;
+    padding: 5px;
+    font-weight: normal;
+    visibility: visible;
+}
+.required { color: red; }
+.shim {
+	position: absolute;
+	display: none;
+	height: 0;
+	width:0;
+	margin: 0;
+	padding: 0;
+	z-index: 100;
+}
+
+.ajaxOptList {
+	background: #CCC;
+	border: 1px solid #000;
+	margin: 0;
+	position: absolute;
+	padding: 0;
+	z-index: 1000;
+	text-align: left;
+}
+.ajaxListOptOver {
+	padding: 4px;
+	background: #CCC;
+	margin: 0;
+}
+.ajaxListOpt {
+	background: #EEE;
+	padding: 4px;
+	margin: 0;
+}
+.multiSelect {
+	width: 300px;
+}
+
+</style>
+<link rel='stylesheet' type='text/css' href='skins/Light/style.css' /> 
+
+<meta name='viewport' content='width=device-width, initial-scale=1.0' />
+</head>
+<script src="https://js.hcaptcha.com/1/api.js" async defer></script>
+<!-- START BLOCK : header --!>
+<body>
+
+<!-- start header -->
+<!-- start menus -->
+<div id="menu">
+<ul id="menulist">
+<li><a href="index.php" title="Home">Home</a></li>
+<li><a href="user.php?action=register" title="Register">Register</a></li> 
+<li><a href="user.php?action=login" title="Login">Login</a></li> 
+<li><a href="browse.php?type=featured" title="Featured Stories">Featured Stories</a></li> 
+<li><a href="browse.php?type=recent" title="Most Recent">Most Recent</a></li> 
+<li><a href="browse.php" title="Browse" id="current">Browse</a></li>
+<li><a href="viewpage.php?page=oldstories" title="Old Archive">Old Archive</a></li>
+<li><a href="viewpage.php?page=tools" title="Writing Tools">Writing Tools</a></li>
+<li><a href="http://giantessworld.net/viewpage.php?page=Images_link" title="Images">Images</a><li>
+<li><a href="search.php" title="Search">Search</a></li> 
+<li></li>
+<li><a href="viewpage.php?page=help" title="Help">Help</a></li> 
+<li></li>
+</ul>
+</div>
+<!-- end menus -->
+<!-- end header -->
+
+<!-- start big container -->
+<div id="container">
+
+<!-- start main layout -->
+<div id="mainpage">
+
+
+<!-- Big Ol Sitename -->
+
+<!-- left column must come before middle column -->
+<!-- column is here so it appears on all pages -->
+<div id="leftindex">
+
+<div class="logo" style="font-weight: 600;color:#B4654A;font-size: 58px;text-align:center;padding:10px 0;letter-spacing: .15em;">
+	Giantess <span style="color:#00A9A5;">World</span>
+</div>
+<div align="center">
+<p>
+<a href="http://www.twitter.com/GiantessWorld"><img src="skins/Light/images/icons/twitter_icon.png" border="0"></a> 
+<a href="https://discord.gg/S7fk6va"><img src="skins/Light/images/icons/discord_icon.png" border="0"></a>
+<a href="./rss.php"><img src="skins/Light/images/icons/rss_icon.png" border="0"></a>
+</p>
+<form method="POST" id="loginblock" enctype="multipart/form-data" action="user.php?action=login"><label for="penname=">Penname:</label><INPUT type="text" class="textbox" name="penname" id="penname" size="15"> <label for="password">Password:</label><INPUT type="password" class="textbox" name="password" id="password" size="15"> <span id='rememberme'><INPUT type="checkbox" class="checkbox" name="cookiecheck" id="cookiecheck" value="1"><label for="cookiecheck=">Remember Me</label></span><div style="overflow:hidden" class="h-captcha" data-sitekey="e708a206-345b-446f-b8fc-0675788bf2f9"></div> <INPUT type="submit" class="button" name="submit" value="Go"> <div id='loginlinks'><a href="user.php?action=register" title="Register">Register</a> | <a href="user.php?action=lostpassword" title="Lost Password">Lost Password</a></div></form>
+</div>
+<div id="submenu">
+<ul id="submenulist">
+<li><a href="index.php" title="Home">Home</a></li>
+<li><a href="user.php?action=register" title="Register">Register</a></li>
+<li><a href="viewpage.php?page=help" title="Help">Help</a></li>
+<li></li>
+</ul>
+<ul id="othermenulist">
+<li><a href="browse.php?type=featured" title="Featured Stories">Featured Stories</a></li> 
+<li><a href="browse.php?type=recent" title="Most Recent">Most Recent</a></li> 
+<li><a href="authors.php?list=authors" title="Authors">Authors</a></li>
+<li><a href="browse.php?type=categories" title="Categories">Categories</a></li>
+<li><a href="browse.php?type=titles" title="Titles">Titles</a></li> 
+<li><a href="browse.php?type=series" title="Series">Series</a></li> 
+<li><a href="browse.php?type=challenges" title="Challenges">Challenges</a></li>
+<li></li>
+<li><a href="toplists.php" title="Top Tens">Top Tens</a></li>  
+<li><a href="viewpage.php?page=oldstories" title="Old Archive">Old Archive</a></li>
+<li><a href="viewpage.php?page=tools" title="Writing Tools">Writing Tools</a></li>
+<li><a href="http://giantessworld.net/viewpage.php?page=Images_link" title="Images">Images</a><li>
+<li><a href="search.php" title="Search">Search</a></li> 
+</ul>
+<ul id="submenulist">
+<li><a href="contact.php" title="Contact Us">Contact Us</a></li> 
+<li><a href="viewpage.php?page=rules" title="Rules">Rules</a></li> 
+<li><a href="viewpage.php?page=tos" title="Terms of Service">Terms of Service</a></li> 
+</ul>
+</div>
+<p>
+</p>
+<!-- End Left Column -->
+</div>
+
+<!-- Start Right Column -->
+<div id="middleindex">
+
+<div id="skinny">
+<div id="pagetitle">Stories updated in the last 7 days. <a href="rss.php" title="<img src='images/xml.gif' alt='RSS' border='0'>"><img src='images/xml.gif' alt='RSS' border='0'></a></div>
+<div id="sortform"><form style="margin:0" method="POST" id="form" enctype="multipart/form-data" action="browse.php?type=recent&amp;"><select class="textbox" name="catid" id="catid" onChange="browseCategories('catid')"><option value="-1">Categories</option>
+<option value="69">Giantess</option>
+<option value="41">Age of Characters</option>
+<option value="29">Transformation</option>
+</select>
+    <select class="textbox" name="rating">
+<option value="0">Ratings</option>
+<option value="1">G</option>
+<option value="2">PG</option>
+<option value="4">R</option>
+<option value="5">X</option>
+</select>
+ <select class="textbox" name="Growth">
+<option value="">Growth</option><option value="2">Amazon (7 ft. to 15 ft.)</option>
+<option value="19">Brobdnignagian (51 ft. to 100 ft.)</option>
+<option value="4">Giant (31 ft. to 50 ft.)</option>
+<option value="5">Giga (1 mi. to 100 mi.)</option>
+<option value="21">Mega (501 ft. to 5279 ft.)</option>
+<option value="6">Mini GTS (16-30ft)</option>
+<option value="27">Tera  (101 mi and up)</option>
+<option value="20">Titan (101 ft. to 500 ft.)</option>
+</select>
+ <select class="textbox" name="Shrink">
+<option value="">Shrink</option><option value="24">Doll (12 in. to 6 in.)</option>
+<option value="26">Dwarf (3 ft. to 5 ft.)</option>
+<option value="23">Lilliputian (6 in. to 3 in.)</option>
+<option value="3">Micro (1 in. to 1/2 in.)</option>
+<option value="1">Minikin (3 in. to 1 in.)</option>
+<option value="25">Munchkin (2.9 ft. to 1 ft.)</option>
+<option value="22">Nano (1/2 in. to 2.5 nanometers)</option>
+</select>
+ <select class="textbox" name="Size Roles">
+<option value="">Size Roles</option><option value="11">F/f</option>
+<option value="10">F/m</option>
+<option value="16">FF/f</option>
+<option value="17">FF/m</option>
+<option value="15">FM/f</option>
+<option value="28">FM/fm</option>
+<option value="14">FM/m</option>
+<option value="12">M/f</option>
+<option value="13">M/m</option>
+</select>
+ <select class="textbox" name="warnings">
+<option value="">Warnings</option><option value="8">Following story may contain inappropriate material for certain audiences</option>
+<option value="9">The Following story is appropriate for all audiences</option>
+<option value="7">This story is for entertainment purposes only.</option>
+</select>
+  <select class="textbox" name="sort">
+<option value=''>Sort</option><option value="alpha" selected>Alphabetically</option>
+<option value="update">Most Recent</option>
+</select>
+ <select class="textbox" name="complete">
+<option value="all" selected>All Stories</option>
+<option value="1">Completed Only</option>
+<option value="0">Work in Progress Only</option>
+</select>
+ <INPUT type="submit" class="button" name="go" value="Go"></form></div>
+<center>
+</center>
+
+
+
+
+<div class="sectionheader">Stories</div>
+<div class="listbox even">
+<div class="title"><span class="story-title"><a href="viewstory.php?sid=16798">Becoming Jack</a></span> by <a href="viewuser.php?uid=152684">Billy Bunchanumbas</a> <span class="label">Rated:</span> X  <span style='white-space: nowrap;'><img src="images/star.gif" alt="star"><img src="images/star.gif" alt="star"><img src="images/star.gif" alt="star"><img src="images/star.gif" alt="star"><img src="images/star.gif" alt="star"></span> [<a href="reviews.php?type=ST&amp;item=16798">Reviews</a> - <a href="reviews.php?type=ST&amp;item=16798">6</a>] New! </div>
+<div class="content"><span class="label">Summary: </span><p>A sentient bug longs to be human.</p><p>Disclaimer: All publicly recognizable characters, settings, etc. are the property of their respective owners. The original characters and plot are the property of the author. The author is in no way associated with the owners, creators, or producers of any media franchise. No copyright infringement is intended.</p><br />
+<span class="label">Categories:</span> <a href='browse.php?type=categories&amp;catid=104'>Body Exploration</a>, <a href='browse.php?type=categories&amp;catid=95'>Feet</a>, <a href='browse.php?type=categories&amp;catid=100'>Couples</a>, <a href='browse.php?type=categories&amp;catid=106'>Adventure</a>, <a href='browse.php?type=categories&amp;catid=99'>Crush</a>, <a href='browse.php?type=categories&amp;catid=88'>Humiliation</a>, <a href='browse.php?type=categories&amp;catid=84'>Lesbians</a>, <a href='browse.php?type=categories&amp;catid=75'>Slave</a>, <a href='browse.php?type=categories&amp;catid=73'>Unaware</a>, <a href='browse.php?type=categories&amp;catid=71'>Vore</a>, <a href='browse.php?type=categories&amp;catid=109'>Breasts</a>, <a href='browse.php?type=categories&amp;catid=30'>Animal</a>, <a href='browse.php?type=categories&amp;catid=34'>Young Adult  20-29</a>, <a href='browse.php?type=categories&amp;catid=35'>Adult 30-39</a>, <a href='browse.php?type=categories&amp;catid=36'>Mature (40-49)</a> <br />
+<span class="label">Characters: </span> None<br />
+<span class='label'>Growth: </span> <a href='browse.php?type=class&amp;type_id=1&amp;classid=5'>Giga (1 mi. to 100 mi.)</a><br /><span class='label'>Shrink: </span> <a href='browse.php?type=class&amp;type_id=4&amp;classid=22'>Nano (1/2 in. to 2.5 nanometers)</a><br /><span class='label'>Size Roles: </span> <a href='browse.php?type=class&amp;type_id=3&amp;classid=10'>F/m</a><br /><span class='label'>Warnings: </span> <a href='browse.php?type=class&amp;type_id=2&amp;classid=8'>Following story may contain inappropriate material for certain audiences</a><br />
+<span class="label">Series:</span> None<br />
+<span class="label">Chapters: </span> 6 <a href="viewstory.php?sid=16798&amp;index=1">Table of Contents</a><br />
+<span class="label">Completed:</span> No  
+<span class="label">Word count:</span> 30789 <span class="label">Read Count:</span> 5636
+</div>
+<div class="tail"><span class="label"> [<a href="contact.php?action=report&amp;url=viewstory.php?sid=16798">Report This</a>] Published: </span>July 04 2026 <span class="label">Updated:</span> July 10 2026</div>
+</div>
+
+<div class="listbox odd">
+<div class="title"><span class="story-title"><a href="viewstory.php?sid=11276">Mini Mason</a></span> by <a href="viewuser.php?uid=35816">Jessajess99</a> <span class="label">Rated:</span> R  <span style='white-space: nowrap;'><img src="images/star.gif" alt="star"><img src="images/star.gif" alt="star"><img src="images/star.gif" alt="star"><img src="images/star.gif" alt="star"><img src="images/star.gif" alt="star"></span> [<a href="reviews.php?type=ST&amp;item=11276">Reviews</a> - <a href="reviews.php?type=ST&amp;item=11276">14</a>] New! </div>
+<div class="content"><span class="label">Summary: </span><p>A meandering, day-in-the-life kind of story about a 3-inch boy, and his loving but frustrating relationship with his mom and sisters.</p><p>Done as a commission.</p><br />
+<span class="label">Categories:</span> <a href='browse.php?type=categories&amp;catid=6'>Teenager (13-19)</a>, <a href='browse.php?type=categories&amp;catid=34'>Young Adult  20-29</a>, <a href='browse.php?type=categories&amp;catid=109'>Breasts</a>, <a href='browse.php?type=categories&amp;catid=36'>Mature (40-49)</a>, <a href='browse.php?type=categories&amp;catid=104'>Body Exploration</a>, <a href='browse.php?type=categories&amp;catid=101'>Butt</a>, <a href='browse.php?type=categories&amp;catid=97'>Entrapment</a>, <a href='browse.php?type=categories&amp;catid=91'>Gentle</a>, <a href='browse.php?type=categories&amp;catid=87'>Incest</a>, <a href='browse.php?type=categories&amp;catid=83'>Maternal</a>, <a href='browse.php?type=categories&amp;catid=82'>Mouth Play</a>, <a href='browse.php?type=categories&amp;catid=73'>Unaware</a> <br />
+<span class="label">Characters: </span> None<br />
+<span class='label'>Growth: </span> None<br /><span class='label'>Shrink: </span> <a href='browse.php?type=class&amp;type_id=4&amp;classid=1'>Minikin (3 in. to 1 in.)</a><br /><span class='label'>Size Roles: </span> <a href='browse.php?type=class&amp;type_id=3&amp;classid=10'>F/m</a>, <a href='browse.php?type=class&amp;type_id=3&amp;classid=17'>FF/m</a><br /><span class='label'>Warnings: </span> None<br />
+<span class="label">Series:</span> None<br />
+<span class="label">Chapters: </span> 25 <a href="viewstory.php?sid=11276&amp;index=1">Table of Contents</a><br />
+<span class="label">Completed:</span> No  
+<span class="label">Word count:</span> 68528 <span class="label">Read Count:</span> 318731
+</div>
+<div class="tail"><span class="label"> [<a href="contact.php?action=report&amp;url=viewstory.php?sid=11276">Report This</a>] Published: </span>December 21 2021 <span class="label">Updated:</span> July 10 2026</div>
+</div>
+
+<div class="listbox even">
+<div class="title"><span class="story-title"><a href="viewstory.php?sid=16808">Jack’s Civilization </a></span> by <a href="viewuser.php?uid=152737">Sinner</a> <span class="label">Rated:</span> PG <img src="images/roundrobin.gif" alt="Round robin">  [<a href="reviews.php?type=ST&amp;item=16808">Reviews</a> - <a href="reviews.php?type=ST&amp;item=16808">0</a>] New! </div>
+<div class="content"><span class="label">Summary: </span><p style="margin: 0px; font-style: normal; font-variant-caps: normal; font-stretch: normal; font-size: 12px; line-height: normal; font-family: &quot;Times New Roman&quot;; font-size-adjust: none; font-kerning: auto; font-variant-alternates: normal; font-variant-ligatures: normal; font-variant-numeric: normal; font-variant-east-asian: normal; font-variant-position: normal; font-variant-emoji: normal; font-feature-settings: normal; font-optical-sizing: auto; font-variation-settings: normal; -webkit-text-stroke-width: 0px; -webkit-text-stroke-color: rgb(0, 0, 0);">Twelve-year-old Jack King wakes up to a normal morning, only to find himself flooded with an absolute, terrifyingly boundless cosmic energy that freezes his cells in perfect eternal youth. Seeking a realm to test his absolute supremacy, he uses his reality-warping power to shrink down all the world's religions.</p><br />
+<span class="label">Categories:</span> <a href='browse.php?type=categories&amp;catid=82'>Mouth Play</a>, <a href='browse.php?type=categories&amp;catid=6'>Teenager (13-19)</a>, <a href='browse.php?type=categories&amp;catid=80'>New World Order</a> <br />
+<span class="label">Characters: </span> None<br />
+<span class='label'>Growth: </span> None<br /><span class='label'>Shrink: </span> None<br /><span class='label'>Size Roles: </span> None<br /><span class='label'>Warnings: </span> None<br />
+<span class="label">Series:</span> None<br />
+<span class="label">Chapters: </span> 2 <a href="viewstory.php?sid=16808&amp;index=1">Table of Contents</a><br />
+<span class="label">Completed:</span> No  
+<span class="label">Word count:</span> 11658 <span class="label">Read Count:</span> 125
+</div>
+<div class="tail"><span class="label"> [<a href="contact.php?action=report&amp;url=viewstory.php?sid=16808">Report This</a>] Published: </span>July 10 2026 <span class="label">Updated:</span> July 10 2026</div>
+</div>
+
+<div class="listbox odd">
+<div class="title"><span class="story-title"><a href="viewstory.php?sid=16746">Kink Island</a></span> by <a href="viewuser.php?uid=74808">Joyce Julep</a> <span class="label">Rated:</span> X   [<a href="reviews.php?type=ST&amp;item=16746">Reviews</a> - <a href="reviews.php?type=ST&amp;item=16746">1</a>] New! </div>
+<div class="content"><span class="label">Summary: </span><p>Hey guys! I'm really excited to share this story with you! It's part of a long-term roleplay I've been having with a wonderful client for a number of years -- at this point there are almost 40 chapters! The premise is simple: a young man named Damien has won a trip to an island resort, but this island is...well...it's a special island. Let's just put it that way, lol. Something far and beyond what Damien could have imagined. And it scares him, but also desperately arouses him.<br style="margin: 0px; padding: 0px; color: rgb(51, 51, 51); font-family: &quot;Lucida Grande&quot;, &quot;Trebuchet MS&quot;, Verdana, Helvetica, Arial, sans-serif;"><br style="margin: 0px; padding: 0px; color: rgb(51, 51, 51); font-family: &quot;Lucida Grande&quot;, &quot;Trebuchet MS&quot;, Verdana, Helvetica, Arial, sans-serif;">The tags for this story include: futanari, general humiliation, small penis humiliation, size/height comparison, femdom, heels, big boobs/ass, endless teasing, futa on female, slow growth, size theft &lt;3 &lt;3</p><br />
+<span class="label">Categories:</span> <a href='browse.php?type=categories&amp;catid=74'>Slow Size Change</a>, <a href='browse.php?type=categories&amp;catid=109'>Breasts</a>, <a href='browse.php?type=categories&amp;catid=102'>Breast Enlargement</a>, <a href='browse.php?type=categories&amp;catid=101'>Butt</a>, <a href='browse.php?type=categories&amp;catid=97'>Entrapment</a>, <a href='browse.php?type=categories&amp;catid=94'>Footwear</a>, <a href='browse.php?type=categories&amp;catid=92'>Futanari</a>, <a href='browse.php?type=categories&amp;catid=90'>Growing/Shrinking Out of Clothes</a>, <a href='browse.php?type=categories&amp;catid=89'>Growing Woman</a>, <a href='browse.php?type=categories&amp;catid=88'>Humiliation</a>, <a href='browse.php?type=categories&amp;catid=107'>Legwear</a> <br />
+<span class="label">Characters: </span> None<br />
+<span class='label'>Growth: </span> <a href='browse.php?type=class&amp;type_id=1&amp;classid=2'>Amazon (7 ft. to 15 ft.)</a><br /><span class='label'>Shrink: </span> <a href='browse.php?type=class&amp;type_id=4&amp;classid=26'>Dwarf (3 ft. to 5 ft.)</a><br /><span class='label'>Size Roles: </span> <a href='browse.php?type=class&amp;type_id=3&amp;classid=10'>F/m</a>, <a href='browse.php?type=class&amp;type_id=3&amp;classid=17'>FF/m</a><br /><span class='label'>Warnings: </span> None<br />
+<span class="label">Series:</span> None<br />
+<span class="label">Chapters: </span> 5 <a href="viewstory.php?sid=16746&amp;index=1">Table of Contents</a><br />
+<span class="label">Completed:</span> No  
+<span class="label">Word count:</span> 18717 <span class="label">Read Count:</span> 8284
+</div>
+<div class="tail"><span class="label"> [<a href="contact.php?action=report&amp;url=viewstory.php?sid=16746">Report This</a>] Published: </span>June 04 2026 <span class="label">Updated:</span> July 10 2026</div>
+</div>
+
+<div class="listbox even">
+<div class="title"><span class="story-title"><a href="viewstory.php?sid=9467">East of Eve </a></span> by <a href="viewuser.php?uid=74808">Joyce Julep</a> <span class="label">Rated:</span> R  <span style='white-space: nowrap;'><img src="images/star.gif" alt="star"><img src="images/star.gif" alt="star"><img src="images/star.gif" alt="star"><img src="images/star.gif" alt="star"><img src="images/star.gif" alt="star"></span> [<a href="reviews.php?type=ST&amp;item=9467">Reviews</a> - <a href="reviews.php?type=ST&amp;item=9467">5</a>] New! </div>
+<div class="content"><span class="label">Summary: </span><p>Eve and Jason are boyfriend-girlfriend, and they're just about to start college. Eve is 6'1 and Jason is 5'8, but he more than compensates for his lack of height by being a heavily-muscled wrestling star. On the surface, their relationship looks like it couldn't be better. But underneath, what's actually going on? Especially now that Jason notices that Eve is actually...getting bigger. Tags: tall woman, size comparison, height comparison, slow growth, femdom, humiliation, heels</p><br />
+<span class="label">Categories:</span> <a href='browse.php?type=categories&amp;catid=6'>Teenager (13-19)</a>, <a href='browse.php?type=categories&amp;catid=100'>Couples</a>, <a href='browse.php?type=categories&amp;catid=89'>Growing Woman</a>, <a href='browse.php?type=categories&amp;catid=88'>Humiliation</a> <br />
+<span class="label">Characters: </span> None<br />
+<span class='label'>Growth: </span> None<br /><span class='label'>Shrink: </span> None<br /><span class='label'>Size Roles: </span> <a href='browse.php?type=class&amp;type_id=3&amp;classid=10'>F/m</a><br /><span class='label'>Warnings: </span> <a href='browse.php?type=class&amp;type_id=2&amp;classid=9'>The Following story is appropriate for all audiences</a><br />
+<span class="label">Series:</span> None<br />
+<span class="label">Chapters: </span> 19 <a href="viewstory.php?sid=9467&amp;index=1">Table of Contents</a><br />
+<span class="label">Completed:</span> No  
+<span class="label">Word count:</span> 78581 <span class="label">Read Count:</span> 172629
+</div>
+<div class="tail"><span class="label"> [<a href="contact.php?action=report&amp;url=viewstory.php?sid=9467">Report This</a>] Published: </span>July 27 2020 <span class="label">Updated:</span> July 10 2026</div>
+</div>
+
+<div class="listbox odd">
+<div class="title"><span class="story-title"><a href="viewstory.php?sid=15863">With the Faye’s</a></span> by <a href="viewuser.php?uid=148143">K4naan</a> <span class="label">Rated:</span> X  <span style='white-space: nowrap;'><img src="images/star.gif" alt="star"><img src="images/star.gif" alt="star"><img src="images/star.gif" alt="star"><img src="images/star.gif" alt="star"><img src="images/star.gif" alt="star"></span> [<a href="reviews.php?type=ST&amp;item=15863">Reviews</a> - <a href="reviews.php?type=ST&amp;item=15863">83</a>] New! </div>
+<div class="content"><span class="label">Summary: </span>A bored janitor curiously wanders into a restricted lab and gets more than he bargained for.  <br><br><p style="caret-color: rgb(53, 56, 70); color: rgb(53, 56, 70); font-family: " source="" sans="" pro",="" sans-serif;="" -webkit-text-size-adjust:="" auto;"="">Feel free to buy me a coffee:</p><p style="caret-color: rgb(53, 56, 70); color: rgb(53, 56, 70); font-family: " source="" sans="" pro",="" sans-serif;="" -webkit-text-size-adjust:="" auto;"="">https://coff.ee/k4naan</p><br>*7/5/2026 Update*: Happy to announce that daily updates are on the schedule until the story is completed.  Looking like it’s going to be close to around 100 chapters.  Thanks for reading, and enjoy the ride :)<br><br />
+<span class="label">Categories:</span> <a href='browse.php?type=categories&amp;catid=69'>Giantess</a>, <a href='browse.php?type=categories&amp;catid=106'>Adventure</a>, <a href='browse.php?type=categories&amp;catid=34'>Young Adult  20-29</a>, <a href='browse.php?type=categories&amp;catid=36'>Mature (40-49)</a>, <a href='browse.php?type=categories&amp;catid=104'>Body Exploration</a>, <a href='browse.php?type=categories&amp;catid=101'>Butt</a>, <a href='browse.php?type=categories&amp;catid=97'>Entrapment</a>, <a href='browse.php?type=categories&amp;catid=94'>Footwear</a>, <a href='browse.php?type=categories&amp;catid=91'>Gentle</a>, <a href='browse.php?type=categories&amp;catid=88'>Humiliation</a>, <a href='browse.php?type=categories&amp;catid=86'>Insertion</a>, <a href='browse.php?type=categories&amp;catid=85'>Instant Size Change</a>, <a href='browse.php?type=categories&amp;catid=84'>Lesbians</a>, <a href='browse.php?type=categories&amp;catid=83'>Maternal</a>, <a href='browse.php?type=categories&amp;catid=82'>Mouth Play</a>, <a href='browse.php?type=categories&amp;catid=78'>Odor</a>, <a href='browse.php?type=categories&amp;catid=76'>Sci-Fi</a>, <a href='browse.php?type=categories&amp;catid=73'>Unaware</a>, <a href='browse.php?type=categories&amp;catid=71'>Vore</a> <br />
+<span class="label">Characters: </span> None<br />
+<span class='label'>Growth: </span> None<br /><span class='label'>Shrink: </span> <a href='browse.php?type=class&amp;type_id=4&amp;classid=22'>Nano (1/2 in. to 2.5 nanometers)</a><br /><span class='label'>Size Roles: </span> <a href='browse.php?type=class&amp;type_id=3&amp;classid=17'>FF/m</a><br /><span class='label'>Warnings: </span> <a href='browse.php?type=class&amp;type_id=2&amp;classid=8'>Following story may contain inappropriate material for certain audiences</a><br />
+<span class="label">Series:</span> None<br />
+<span class="label">Chapters: </span> 76 <a href="viewstory.php?sid=15863&amp;index=1">Table of Contents</a><br />
+<span class="label">Completed:</span> No  
+<span class="label">Word count:</span> 116563 <span class="label">Read Count:</span> 374928
+</div>
+<div class="tail"><span class="label"> [<a href="contact.php?action=report&amp;url=viewstory.php?sid=15863">Report This</a>] Published: </span>June 29 2025 <span class="label">Updated:</span> July 10 2026</div>
+</div>
+
+<div class="listbox even">
+<div class="title"><span class="story-title"><a href="viewstory.php?sid=16778">Crista's Cockvore Crusade</a></span> by <a href="viewuser.php?uid=31049">AIumni</a> <span class="label">Rated:</span> X  <span style='white-space: nowrap;'><img src="images/star.gif" alt="star"><img src="images/star.gif" alt="star"><img src="images/star.gif" alt="star"><img src="images/star.gif" alt="star"><img src="images/star.gif" alt="star"></span> [<a href="reviews.php?type=ST&amp;item=16778">Reviews</a> - <a href="reviews.php?type=ST&amp;item=16778">1</a>] New! </div>
+<div class="content"><span class="label">Summary: </span><p>(We are definitely entering my era of simply not caring about the titles of my fics, huh?)</p>
+<p>Written as a commission! Crista is a trans high school girl who 
+nevertheless is self-conscious about the size of her balls. So she 
+decides to remedy this anxiety the only way her gooner brain knows how: 
+shrinking her other classmates and stuffing them down her dick! But just
+ how far will she be willing to take this scheme!?</p><p><br></p><br />
+<span class="label">Categories:</span> <a href='browse.php?type=categories&amp;catid=6'>Teenager (13-19)</a>, <a href='browse.php?type=categories&amp;catid=69'>Giantess</a>, <a href='browse.php?type=categories&amp;catid=97'>Entrapment</a>, <a href='browse.php?type=categories&amp;catid=88'>Humiliation</a>, <a href='browse.php?type=categories&amp;catid=86'>Insertion</a>, <a href='browse.php?type=categories&amp;catid=110'>Trans</a>, <a href='browse.php?type=categories&amp;catid=75'>Slave</a>, <a href='browse.php?type=categories&amp;catid=85'>Instant Size Change</a>, <a href='browse.php?type=categories&amp;catid=84'>Lesbians</a>, <a href='browse.php?type=categories&amp;catid=71'>Vore</a>, <a href='browse.php?type=categories&amp;catid=92'>Futanari</a> <br />
+<span class="label">Characters: </span> None<br />
+<span class='label'>Growth: </span> None<br /><span class='label'>Shrink: </span> <a href='browse.php?type=class&amp;type_id=4&amp;classid=23'>Lilliputian (6 in. to 3 in.)</a><br /><span class='label'>Size Roles: </span> <a href='browse.php?type=class&amp;type_id=3&amp;classid=11'>F/f</a>, <a href='browse.php?type=class&amp;type_id=3&amp;classid=16'>FF/f</a><br /><span class='label'>Warnings: </span> <a href='browse.php?type=class&amp;type_id=2&amp;classid=8'>Following story may contain inappropriate material for certain audiences</a>, <a href='browse.php?type=class&amp;type_id=2&amp;classid=7'>This story is for entertainment purposes only.</a><br />
+<span class="label">Series:</span> None<br />
+<span class="label">Chapters: </span> 3 <a href="viewstory.php?sid=16778&amp;index=1">Table of Contents</a><br />
+<span class="label">Completed:</span> No  
+<span class="label">Word count:</span> 11173 <span class="label">Read Count:</span> 3866
+</div>
+<div class="tail"><span class="label"> [<a href="contact.php?action=report&amp;url=viewstory.php?sid=16778">Report This</a>] Published: </span>June 22 2026 <span class="label">Updated:</span> July 10 2026</div>
+</div>
+
+<div class="listbox odd">
+<div class="title"><span class="story-title"><a href="viewstory.php?sid=16052">The Higher Plain </a></span> by <a href="viewuser.php?uid=113248">Prophet </a> <span class="label">Rated:</span> G  <span style='white-space: nowrap;'><img src="images/star.gif" alt="star"><img src="images/star.gif" alt="star"><img src="images/star.gif" alt="star"><img src="images/star.gif" alt="star"><img src="images/star.gif" alt="star"></span> [<a href="reviews.php?type=ST&amp;item=16052">Reviews</a> - <a href="reviews.php?type=ST&amp;item=16052">2</a>] New! </div>
+<div class="content"><span class="label">Summary: </span><p>All my life I was told of the great old ones that resided in the upper plain of Xylarion, these beings where so far above us that even a small strain of their hair could wipe out dozens of us regular people. </p><p><br></p><p>Never in my life did I ever think that I would see one of those legendary beings, yea that was until one landed right in front of my families farm. </p><p><br></p><p>This can't be good.</p><br />
+<span class="label">Categories:</span> <a href='browse.php?type=categories&amp;catid=53'>Middle Age (50+)</a>, <a href='browse.php?type=categories&amp;catid=69'>Giantess</a>, <a href='browse.php?type=categories&amp;catid=106'>Adventure</a>, <a href='browse.php?type=categories&amp;catid=109'>Breasts</a>, <a href='browse.php?type=categories&amp;catid=104'>Body Exploration</a>, <a href='browse.php?type=categories&amp;catid=100'>Couples</a>, <a href='browse.php?type=categories&amp;catid=96'>Fantasy</a>, <a href='browse.php?type=categories&amp;catid=91'>Gentle</a>, <a href='browse.php?type=categories&amp;catid=73'>Unaware</a>, <a href='browse.php?type=categories&amp;catid=80'>New World Order</a>, <a href='browse.php?type=categories&amp;catid=89'>Growing Woman</a>, <a href='browse.php?type=categories&amp;catid=34'>Young Adult  20-29</a>, <a href='browse.php?type=categories&amp;catid=35'>Adult 30-39</a>, <a href='browse.php?type=categories&amp;catid=36'>Mature (40-49)</a> <br />
+<span class="label">Characters: </span> None<br />
+<span class='label'>Growth: </span> <a href='browse.php?type=class&amp;type_id=1&amp;classid=5'>Giga (1 mi. to 100 mi.)</a>, <a href='browse.php?type=class&amp;type_id=1&amp;classid=21'>Mega (501 ft. to 5279 ft.)</a><br /><span class='label'>Shrink: </span> None<br /><span class='label'>Size Roles: </span> <a href='browse.php?type=class&amp;type_id=3&amp;classid=11'>F/f</a>, <a href='browse.php?type=class&amp;type_id=3&amp;classid=10'>F/m</a>, <a href='browse.php?type=class&amp;type_id=3&amp;classid=16'>FF/f</a>, <a href='browse.php?type=class&amp;type_id=3&amp;classid=17'>FF/m</a><br /><span class='label'>Warnings: </span> <a href='browse.php?type=class&amp;type_id=2&amp;classid=8'>Following story may contain inappropriate material for certain audiences</a><br />
+<span class="label">Series:</span> None<br />
+<span class="label">Chapters: </span> 4 <a href="viewstory.php?sid=16052&amp;index=1">Table of Contents</a><br />
+<span class="label">Completed:</span> No  
+<span class="label">Word count:</span> 5695 <span class="label">Read Count:</span> 4454
+</div>
+<div class="tail"><span class="label"> [<a href="contact.php?action=report&amp;url=viewstory.php?sid=16052">Report This</a>] Published: </span>August 25 2025 <span class="label">Updated:</span> July 10 2026</div>
+</div>
+
+<div class="listbox even">
+<div class="title"><span class="story-title"><a href="viewstory.php?sid=16807">Lila's Lilliput</a></span> by <a href="viewuser.php?uid=149528">273cooperdav</a> <span class="label">Rated:</span> G   [<a href="reviews.php?type=ST&amp;item=16807">Reviews</a> - <a href="reviews.php?type=ST&amp;item=16807">0</a>] New! </div>
+<div class="content"><span class="label">Summary: </span><p>In a cruel twist of fate, Lila is granted a wish that she never even knew she wished for. A bustling city is teleported to an extremely vulnerable place, and Tens of thousands perish in a matter of 30 minutes</p><br />
+<span class="label">Categories:</span> <a href='browse.php?type=categories&amp;catid=34'>Young Adult  20-29</a>, <a href='browse.php?type=categories&amp;catid=69'>Giantess</a>, <a href='browse.php?type=categories&amp;catid=98'>Destruction</a>, <a href='browse.php?type=categories&amp;catid=99'>Crush</a>, <a href='browse.php?type=categories&amp;catid=95'>Feet</a>, <a href='browse.php?type=categories&amp;catid=88'>Humiliation</a> <br />
+<span class="label">Characters: </span> None<br />
+<span class='label'>Growth: </span> None<br /><span class='label'>Shrink: </span> <a href='browse.php?type=class&amp;type_id=4&amp;classid=3'>Micro (1 in. to 1/2 in.)</a><br /><span class='label'>Size Roles: </span> None<br /><span class='label'>Warnings: </span> <a href='browse.php?type=class&amp;type_id=2&amp;classid=8'>Following story may contain inappropriate material for certain audiences</a><br />
+<span class="label">Series:</span> None<br />
+<span class="label">Chapters: </span> 1 <a href="viewstory.php?sid=16807&amp;index=1">Table of Contents</a><br />
+<span class="label">Completed:</span> Yes  
+<span class="label">Word count:</span> 1636 <span class="label">Read Count:</span> 418
+</div>
+<div class="tail"><span class="label"> [<a href="contact.php?action=report&amp;url=viewstory.php?sid=16807">Report This</a>] Published: </span>July 10 2026 <span class="label">Updated:</span> July 10 2026</div>
+</div>
+
+<div class="listbox odd">
+<div class="title"><span class="story-title"><a href="viewstory.php?sid=16649">Leprechauns & Giantesses Book 9: The Giant Garden of Youth</a></span> by <a href="viewuser.php?uid=133584">timescrybe2</a> <span class="label">Rated:</span> G   [<a href="reviews.php?type=ST&amp;item=16649">Reviews</a> - <a href="reviews.php?type=ST&amp;item=16649">0</a>] New! </div>
+<div class="content"><span class="label">Summary: </span><p>Fruit from the Giant Land’s Mountain of Youth is brought from the past into the present day. Later, a boy’s game of chess leads to a series of shrinking adventures on earth.</p><br />
+<span class="label">Categories:</span> <a href='browse.php?type=categories&amp;catid=69'>Giantess</a>, <a href='browse.php?type=categories&amp;catid=106'>Adventure</a>, <a href='browse.php?type=categories&amp;catid=96'>Fantasy</a>, <a href='browse.php?type=categories&amp;catid=82'>Mouth Play</a>, <a href='browse.php?type=categories&amp;catid=76'>Sci-Fi</a>, <a href='browse.php?type=categories&amp;catid=71'>Vore</a> <br />
+<span class="label">Characters: </span> None<br />
+<span class='label'>Growth: </span> <a href='browse.php?type=class&amp;type_id=1&amp;classid=19'>Brobdnignagian (51 ft. to 100 ft.)</a><br /><span class='label'>Shrink: </span> <a href='browse.php?type=class&amp;type_id=4&amp;classid=1'>Minikin (3 in. to 1 in.)</a><br /><span class='label'>Size Roles: </span> <a href='browse.php?type=class&amp;type_id=3&amp;classid=10'>F/m</a><br /><span class='label'>Warnings: </span> <a href='browse.php?type=class&amp;type_id=2&amp;classid=7'>This story is for entertainment purposes only.</a><br />
+<span class="label">Series:</span> <a href="viewseries.php?seriesid=9439">Leprechauns & Giantesses</a><br />
+<span class="label">Chapters: </span> 53 <a href="viewstory.php?sid=16649&amp;index=1">Table of Contents</a><br />
+<span class="label">Completed:</span> No  
+<span class="label">Word count:</span> 27743 <span class="label">Read Count:</span> 14566
+</div>
+<div class="tail"><span class="label"> [<a href="contact.php?action=report&amp;url=viewstory.php?sid=16649">Report This</a>] Published: </span>April 18 2026 <span class="label">Updated:</span> July 09 2026</div>
+</div>
+
+<div class="listbox even">
+<div class="title"><span class="story-title"><a href="viewstory.php?sid=16010">Summer of Discovery</a></span> by <a href="viewuser.php?uid=74818">Thatgirlyouknow</a> <span class="label">Rated:</span> X  <span style='white-space: nowrap;'><img src="images/star.gif" alt="star"><img src="images/star.gif" alt="star"><img src="images/star.gif" alt="star"><img src="images/star.gif" alt="star"><img src="images/star.gif" alt="star"></span> [<a href="reviews.php?type=ST&amp;item=16010">Reviews</a> - <a href="reviews.php?type=ST&amp;item=16010">3</a>] New! </div>
+<div class="content"><span class="label">Summary: </span><p>After graduating high school, a young girl grows up a lot over summer before college starts. With the help of some very special jewelry she learns a lot about herself, and grows (metaphorically) as a person.&nbsp;</p><br />
+<span class="label">Categories:</span> <a href='browse.php?type=categories&amp;catid=71'>Vore</a>, <a href='browse.php?type=categories&amp;catid=101'>Butt</a>, <a href='browse.php?type=categories&amp;catid=99'>Crush</a>, <a href='browse.php?type=categories&amp;catid=97'>Entrapment</a>, <a href='browse.php?type=categories&amp;catid=86'>Insertion</a>, <a href='browse.php?type=categories&amp;catid=73'>Unaware</a> <br />
+<span class="label">Characters: </span> None<br />
+<span class='label'>Growth: </span> None<br /><span class='label'>Shrink: </span> <a href='browse.php?type=class&amp;type_id=4&amp;classid=23'>Lilliputian (6 in. to 3 in.)</a>, <a href='browse.php?type=class&amp;type_id=4&amp;classid=3'>Micro (1 in. to 1/2 in.)</a>, <a href='browse.php?type=class&amp;type_id=4&amp;classid=1'>Minikin (3 in. to 1 in.)</a><br /><span class='label'>Size Roles: </span> <a href='browse.php?type=class&amp;type_id=3&amp;classid=11'>F/f</a>, <a href='browse.php?type=class&amp;type_id=3&amp;classid=10'>F/m</a><br /><span class='label'>Warnings: </span> <a href='browse.php?type=class&amp;type_id=2&amp;classid=8'>Following story may contain inappropriate material for certain audiences</a><br />
+<span class="label">Series:</span> None<br />
+<span class="label">Chapters: </span> 17 <a href="viewstory.php?sid=16010&amp;index=1">Table of Contents</a><br />
+<span class="label">Completed:</span> No  
+<span class="label">Word count:</span> 92519 <span class="label">Read Count:</span> 56701
+</div>
+<div class="tail"><span class="label"> [<a href="contact.php?action=report&amp;url=viewstory.php?sid=16010">Report This</a>] Published: </span>August 12 2025 <span class="label">Updated:</span> July 09 2026</div>
+</div>
+
+<div class="listbox odd">
+<div class="title"><span class="story-title"><a href="viewstory.php?sid=16800">The Giant Escort</a></span> by <a href="viewuser.php?uid=74574">Nugget01</a> <span class="label">Rated:</span> R  <span style='white-space: nowrap;'><img src="images/star.gif" alt="star"><img src="images/star.gif" alt="star"><img src="images/star.gif" alt="star"><img src="images/star.gif" alt="star"><img src="images/star.gif" alt="star"></span> [<a href="reviews.php?type=ST&amp;item=16800">Reviews</a> - <a href="reviews.php?type=ST&amp;item=16800">4</a>] New! </div>
+<div class="content"><span class="label">Summary: </span><p>Mark invents a shrink ray. After testing it multiple times safely shrinking down and growing back again he decides to test it out with his favourite dream girl.</p>
+<p>He scans scarlet blue looking for the perfect woman to test it with. Ones who's open, curious and into new experiences. <br><br>Her name Rachael. He makes contact..<br><br>Note - Written with a Jailbroken NSFW LMM</p><br />
+<span class="label">Categories:</span> <a href='browse.php?type=categories&amp;catid=69'>Giantess</a>, <a href='browse.php?type=categories&amp;catid=106'>Adventure</a>, <a href='browse.php?type=categories&amp;catid=104'>Body Exploration</a>, <a href='browse.php?type=categories&amp;catid=94'>Footwear</a>, <a href='browse.php?type=categories&amp;catid=91'>Gentle</a>, <a href='browse.php?type=categories&amp;catid=82'>Mouth Play</a>, <a href='browse.php?type=categories&amp;catid=73'>Unaware</a> <br />
+<span class="label">Characters: </span> None<br />
+<span class='label'>Growth: </span> None<br /><span class='label'>Shrink: </span> <a href='browse.php?type=class&amp;type_id=4&amp;classid=23'>Lilliputian (6 in. to 3 in.)</a>, <a href='browse.php?type=class&amp;type_id=4&amp;classid=3'>Micro (1 in. to 1/2 in.)</a>, <a href='browse.php?type=class&amp;type_id=4&amp;classid=22'>Nano (1/2 in. to 2.5 nanometers)</a><br /><span class='label'>Size Roles: </span> <a href='browse.php?type=class&amp;type_id=3&amp;classid=10'>F/m</a><br /><span class='label'>Warnings: </span> None<br />
+<span class="label">Series:</span> None<br />
+<span class="label">Chapters: </span> 15 <a href="viewstory.php?sid=16800&amp;index=1">Table of Contents</a><br />
+<span class="label">Completed:</span> No  
+<span class="label">Word count:</span> 40098 <span class="label">Read Count:</span> 14185
+</div>
+<div class="tail"><span class="label"> [<a href="contact.php?action=report&amp;url=viewstory.php?sid=16800">Report This</a>] Published: </span>July 05 2026 <span class="label">Updated:</span> July 09 2026</div>
+</div>
+
+<div class="listbox even">
+<div class="title"><span class="story-title"><a href="viewstory.php?sid=16806">Giant Lesbians Have Had Enough of Your Sh*t</a></span> by <a href="viewuser.php?uid=126541">tecks</a> <span class="label">Rated:</span> PG   [<a href="reviews.php?type=ST&amp;item=16806">Reviews</a> - <a href="reviews.php?type=ST&amp;item=16806">0</a>] New! </div>
+<div class="content"><span class="label">Summary: </span><p>Get ready for one of my longer books - a full novella of size-shifting fun with an emphasis on character, noms, and a little rare sauciness - find out what happens when two hapless lesbians get caught up in a world of size-warping forbidden tech! This is 20 chapters long, which I plan to release steadily in full here. (It is also available in eBook and paperback already.)</p><p>I've had an itch to share something a bit more substantial on here, and with my book sales channels generally drying up a little, I'd love this more ambitious project from a few years back to reach more people (I'm pretty sure this book doesn't even show on certain booksellers unless you're <i>really </i>specific with your search).</p><p>Here's the blurb:</p><p>Violet and Nova are ready for some big changes. A lot of people are going to get hurt.<br style="box-sizing: border-box;"><br style="box-sizing: border-box;">Violet is fed up with her boring life and society in general. Angry at her latest commute, she bumps into Dr Harper Roan at just the right time.<br style="box-sizing: border-box;"><br style="box-sizing: border-box;">Violet accidentally takes something of Harper’s: a device with the incredible power to shrink things – or make them grow. And with a little encouragement from her bombastic partner Nova, Violet realises it might be just what they need to shake things up.<br style="box-sizing: border-box;"><br style="box-sizing: border-box;">Starting by punishing anyone who crosses them.<br style="box-sizing: border-box;"><br style="box-sizing: border-box;">But the shrinking device comes with complications: Harper’s dangerous employees are out to recapture it, each use connects to something terrible, and Violet is getting new, voracious desires . . .<br style="box-sizing: border-box;"><br style="box-sizing: border-box;">Just as well this hapless couple are hungry for a fight.<br style="box-sizing: border-box;"><br style="box-sizing: border-box;">From miniaturising victims to earthshaking growth experiments, a bit of wild fun quickly turns deadly. If they can survive the horrors they’ve unleashed, how far are they prepared to go?<br style="box-sizing: border-box;"><br style="box-sizing: border-box;">One thing’s for sure: things are about to change in a BIG way.</p><br />
+<span class="label">Categories:</span> <a href='browse.php?type=categories&amp;catid=69'>Giantess</a>, <a href='browse.php?type=categories&amp;catid=100'>Couples</a>, <a href='browse.php?type=categories&amp;catid=99'>Crush</a>, <a href='browse.php?type=categories&amp;catid=98'>Destruction</a>, <a href='browse.php?type=categories&amp;catid=97'>Entrapment</a>, <a href='browse.php?type=categories&amp;catid=95'>Feet</a>, <a href='browse.php?type=categories&amp;catid=89'>Growing Woman</a>, <a href='browse.php?type=categories&amp;catid=86'>Insertion</a>, <a href='browse.php?type=categories&amp;catid=84'>Lesbians</a>, <a href='browse.php?type=categories&amp;catid=82'>Mouth Play</a>, <a href='browse.php?type=categories&amp;catid=76'>Sci-Fi</a>, <a href='browse.php?type=categories&amp;catid=72'>Violent</a>, <a href='browse.php?type=categories&amp;catid=71'>Vore</a> <br />
+<span class="label">Characters: </span> None<br />
+<span class='label'>Growth: </span> <a href='browse.php?type=class&amp;type_id=1&amp;classid=19'>Brobdnignagian (51 ft. to 100 ft.)</a>, <a href='browse.php?type=class&amp;type_id=1&amp;classid=4'>Giant (31 ft. to 50 ft.)</a><br /><span class='label'>Shrink: </span> <a href='browse.php?type=class&amp;type_id=4&amp;classid=23'>Lilliputian (6 in. to 3 in.)</a>, <a href='browse.php?type=class&amp;type_id=4&amp;classid=3'>Micro (1 in. to 1/2 in.)</a><br /><span class='label'>Size Roles: </span> <a href='browse.php?type=class&amp;type_id=3&amp;classid=11'>F/f</a>, <a href='browse.php?type=class&amp;type_id=3&amp;classid=10'>F/m</a>, <a href='browse.php?type=class&amp;type_id=3&amp;classid=16'>FF/f</a>, <a href='browse.php?type=class&amp;type_id=3&amp;classid=17'>FF/m</a><br /><span class='label'>Warnings: </span> <a href='browse.php?type=class&amp;type_id=2&amp;classid=8'>Following story may contain inappropriate material for certain audiences</a><br />
+<span class="label">Series:</span> None<br />
+<span class="label">Chapters: </span> 3 <a href="viewstory.php?sid=16806&amp;index=1">Table of Contents</a><br />
+<span class="label">Completed:</span> No  
+<span class="label">Word count:</span> 6606 <span class="label">Read Count:</span> 1194
+</div>
+<div class="tail"><span class="label"> [<a href="contact.php?action=report&amp;url=viewstory.php?sid=16806">Report This</a>] Published: </span>July 09 2026 <span class="label">Updated:</span> July 09 2026</div>
+</div>
+
+<div class="listbox odd">
+<div class="title"><span class="story-title"><a href="viewstory.php?sid=16677">The new neighbor</a></span> by <a href="viewuser.php?uid=128696">toy</a> <span class="label">Rated:</span> X  <span style='white-space: nowrap;'><img src="images/star.gif" alt="star"><img src="images/star.gif" alt="star"><img src="images/star.gif" alt="star"><img src="images/star.gif" alt="star"></span> [<a href="reviews.php?type=ST&amp;item=16677">Reviews</a> - <a href="reviews.php?type=ST&amp;item=16677">4</a>] New! </div>
+<div class="content"><span class="label">Summary: </span><p>Brad's living his life as a tiny, inch tall guy in this oversized, post-virus world when a strange, new girl comes to live next door.&nbsp;</p><p><br></p><p><br></p><br />
+<span class="label">Categories:</span> <a href='browse.php?type=categories&amp;catid=72'>Violent</a>, <a href='browse.php?type=categories&amp;catid=69'>Giantess</a>, <a href='browse.php?type=categories&amp;catid=109'>Breasts</a>, <a href='browse.php?type=categories&amp;catid=95'>Feet</a>, <a href='browse.php?type=categories&amp;catid=92'>Futanari</a>, <a href='browse.php?type=categories&amp;catid=91'>Gentle</a>, <a href='browse.php?type=categories&amp;catid=80'>New World Order</a> <br />
+<span class="label">Characters: </span> None<br />
+<span class='label'>Growth: </span> <a href='browse.php?type=class&amp;type_id=1&amp;classid=20'>Titan (101 ft. to 500 ft.)</a><br /><span class='label'>Shrink: </span> <a href='browse.php?type=class&amp;type_id=4&amp;classid=3'>Micro (1 in. to 1/2 in.)</a><br /><span class='label'>Size Roles: </span> <a href='browse.php?type=class&amp;type_id=3&amp;classid=10'>F/m</a><br /><span class='label'>Warnings: </span> <a href='browse.php?type=class&amp;type_id=2&amp;classid=8'>Following story may contain inappropriate material for certain audiences</a><br />
+<span class="label">Series:</span> None<br />
+<span class="label">Chapters: </span> 4 <a href="viewstory.php?sid=16677&amp;index=1">Table of Contents</a><br />
+<span class="label">Completed:</span> No  
+<span class="label">Word count:</span> 35081 <span class="label">Read Count:</span> 12302
+</div>
+<div class="tail"><span class="label"> [<a href="contact.php?action=report&amp;url=viewstory.php?sid=16677">Report This</a>] Published: </span>May 13 2026 <span class="label">Updated:</span> July 09 2026</div>
+</div>
+
+<div class="listbox even">
+<div class="title"><span class="story-title"><a href="viewstory.php?sid=15225">Shrunken Class Pet</a></span> by <a href="viewuser.php?uid=136002">Ava Greenwood</a> <span class="label">Rated:</span> X  <span style='white-space: nowrap;'><img src="images/star.gif" alt="star"><img src="images/star.gif" alt="star"><img src="images/star.gif" alt="star"><img src="images/star.gif" alt="star"><img src="images/star.gif" alt="star"></span> [<a href="reviews.php?type=ST&amp;item=15225">Reviews</a> - <a href="reviews.php?type=ST&amp;item=15225">54</a>] New! </div>
+<div class="content"><span class="label">Summary: </span><p></p><p style="text-align: center;">High school is a confusing time of sexual awakening for many young students. But navigating the bizarre social climate of high school becomes even more bizarre with the spread of a strange new disease, the Shrinking Virus: a virus that affects men at a disproportionate rate.</p><p style="text-align: center;">In the new world, diminishing teenage boys must discover their growing bodies, simultaneously shrinking. They must witness the beauty and danger of their goddess-like teachers. And they must dodge the deadly footfalls of colossal classmates as plaid skirts flutter overhead. All while the overgrown women discover their place as the dominant sex.</p><p style="text-align: center;">Ms. Stone, a strict yet encouraging math teacher, witnesses one of her only male students, Adam, shrink in her classroom. The teacher soon decides she must guide the younger generation of women as they navigate the world of shrinking men. And Adam will make for the perfect teaching prop, whether he likes it or not.</p><p style="text-align: center;"><strong style="background: transparent; text-align: left; color: rgb(14, 16, 26); margin-top: 0pt; margin-bottom: 0pt;"><strong style="background: transparent; margin-top: 0pt; margin-bottom: 0pt;"><strong style="background: transparent; margin-top: 0pt; margin-bottom: 0pt;"><strong style="background: transparent; margin-top: 0pt; margin-bottom: 0pt;"><strong style="background: transparent; margin-top: 0pt; margin-bottom: 0pt;"><u style="background: transparent; margin-top: 0pt; margin-bottom: 0pt;">WARNING:</u> Sexually explicit content intended for adults. All characters are fictional and written to be 18 years or older.</strong></strong></strong></strong></strong></p><p></p><p style="text-align: center;">Thank you so much for reading &amp; supporting me in creating more content!</p><p style="text-align: center;">For early access to this story &amp; more, consider checking out my Patreon at:</p><p style="text-align: center;">https://www.patreon.com/AvaGreenwood<br></p><br />
+<span class="label">Categories:</span> <a href='browse.php?type=categories&amp;catid=69'>Giantess</a>, <a href='browse.php?type=categories&amp;catid=6'>Teenager (13-19)</a>, <a href='browse.php?type=categories&amp;catid=109'>Breasts</a>, <a href='browse.php?type=categories&amp;catid=105'>BBW</a>, <a href='browse.php?type=categories&amp;catid=35'>Adult 30-39</a>, <a href='browse.php?type=categories&amp;catid=104'>Body Exploration</a>, <a href='browse.php?type=categories&amp;catid=101'>Butt</a>, <a href='browse.php?type=categories&amp;catid=99'>Crush</a>, <a href='browse.php?type=categories&amp;catid=97'>Entrapment</a>, <a href='browse.php?type=categories&amp;catid=95'>Feet</a>, <a href='browse.php?type=categories&amp;catid=91'>Gentle</a>, <a href='browse.php?type=categories&amp;catid=90'>Growing/Shrinking Out of Clothes</a>, <a href='browse.php?type=categories&amp;catid=88'>Humiliation</a>, <a href='browse.php?type=categories&amp;catid=83'>Maternal</a>, <a href='browse.php?type=categories&amp;catid=82'>Mouth Play</a>, <a href='browse.php?type=categories&amp;catid=80'>New World Order</a>, <a href='browse.php?type=categories&amp;catid=79'>Nose</a>, <a href='browse.php?type=categories&amp;catid=78'>Odor</a>, <a href='browse.php?type=categories&amp;catid=75'>Slave</a>, <a href='browse.php?type=categories&amp;catid=73'>Unaware</a>, <a href='browse.php?type=categories&amp;catid=72'>Violent</a>, <a href='browse.php?type=categories&amp;catid=71'>Vore</a> <br />
+<span class="label">Characters: </span> None<br />
+<span class='label'>Growth: </span> <a href='browse.php?type=class&amp;type_id=1&amp;classid=19'>Brobdnignagian (51 ft. to 100 ft.)</a><br /><span class='label'>Shrink: </span> <a href='browse.php?type=class&amp;type_id=4&amp;classid=24'>Doll (12 in. to 6 in.)</a><br /><span class='label'>Size Roles: </span> <a href='browse.php?type=class&amp;type_id=3&amp;classid=17'>FF/m</a><br /><span class='label'>Warnings: </span> <a href='browse.php?type=class&amp;type_id=2&amp;classid=8'>Following story may contain inappropriate material for certain audiences</a><br />
+<span class="label">Series:</span> None<br />
+<span class="label">Chapters: </span> 63 <a href="viewstory.php?sid=15225&amp;index=1">Table of Contents</a><br />
+<span class="label">Completed:</span> No  
+<span class="label">Word count:</span> 85530 <span class="label">Read Count:</span> 570778
+</div>
+<div class="tail"><span class="label"> [<a href="contact.php?action=report&amp;url=viewstory.php?sid=15225">Report This</a>] Published: </span>December 20 2024 <span class="label">Updated:</span> July 09 2026</div>
+</div>
+
+<div class="listbox odd">
+<div class="title"><span class="story-title"><a href="viewstory.php?sid=11243">Commissions</a></span> by <a href="viewuser.php?uid=126580">SlickEdgedrick</a> <span class="label">Rated:</span> X  <span style='white-space: nowrap;'><img src="images/star.gif" alt="star"><img src="images/star.gif" alt="star"><img src="images/star.gif" alt="star"><img src="images/star.gif" alt="star"><img src="images/starhalf.gif" alt="half-star"></span> [<a href="reviews.php?type=ST&amp;item=11243">Reviews</a> - <a href="reviews.php?type=ST&amp;item=11243">9</a>] New! </div>
+<div class="content"><span class="label">Summary: </span><p>This is going to be a compilation of every commission I take. If you yourself are interested in getting a commission, then shoot me a DM over on twitter @EdgedrickTheTiny. That said, I hope you enjoy these stories as much as I enjoyed writing them.</p><br />
+<span class="label">Categories:</span> <a href='browse.php?type=categories&amp;catid=69'>Giantess</a>, <a href='browse.php?type=categories&amp;catid=106'>Adventure</a>, <a href='browse.php?type=categories&amp;catid=109'>Breasts</a>, <a href='browse.php?type=categories&amp;catid=101'>Butt</a>, <a href='browse.php?type=categories&amp;catid=99'>Crush</a>, <a href='browse.php?type=categories&amp;catid=95'>Feet</a>, <a href='browse.php?type=categories&amp;catid=73'>Unaware</a> <br />
+<span class="label">Characters: </span> None<br />
+<span class='label'>Growth: </span> None<br /><span class='label'>Shrink: </span> <a href='browse.php?type=class&amp;type_id=4&amp;classid=22'>Nano (1/2 in. to 2.5 nanometers)</a><br /><span class='label'>Size Roles: </span> None<br /><span class='label'>Warnings: </span> None<br />
+<span class="label">Series:</span> None<br />
+<span class="label">Chapters: </span> 40 <a href="viewstory.php?sid=11243&amp;index=1">Table of Contents</a><br />
+<span class="label">Completed:</span> No  
+<span class="label">Word count:</span> 122386 <span class="label">Read Count:</span> 299588
+</div>
+<div class="tail"><span class="label"> [<a href="contact.php?action=report&amp;url=viewstory.php?sid=11243">Report This</a>] Published: </span>December 12 2021 <span class="label">Updated:</span> July 08 2026</div>
+</div>
+
+<div class="listbox even">
+<div class="title"><span class="story-title"><a href="viewstory.php?sid=16802">A Better Situation Than Divorce</a></span> by <a href="viewuser.php?uid=152731">PiotrRasputin</a> <span class="label">Rated:</span> R  <span style='white-space: nowrap;'><img src="images/star.gif" alt="star"><img src="images/star.gif" alt="star"><img src="images/star.gif" alt="star"><img src="images/star.gif" alt="star"><img src="images/star.gif" alt="star"></span> [<a href="reviews.php?type=ST&amp;item=16802">Reviews</a> - <a href="reviews.php?type=ST&amp;item=16802">1</a>] New! </div>
+<div class="content"><span class="label">Summary: </span><p class="MsoNormal">Can a shrinking virus change a family's life? Follow the story of Paul, a man infected by the virus who finds himself at the mercy of his unfaithful wife. Will his son help him, or side with his mother? Will Paul's sister-in-law make the situation even worse?</p><br />
+<span class="label">Categories:</span> <a href='browse.php?type=categories&amp;catid=80'>New World Order</a>, <a href='browse.php?type=categories&amp;catid=69'>Giantess</a>, <a href='browse.php?type=categories&amp;catid=100'>Couples</a>, <a href='browse.php?type=categories&amp;catid=95'>Feet</a>, <a href='browse.php?type=categories&amp;catid=94'>Footwear</a>, <a href='browse.php?type=categories&amp;catid=108'>Giant</a>, <a href='browse.php?type=categories&amp;catid=88'>Humiliation</a> <br />
+<span class="label">Characters: </span> None<br />
+<span class='label'>Growth: </span> <a href='browse.php?type=class&amp;type_id=1&amp;classid=4'>Giant (31 ft. to 50 ft.)</a><br /><span class='label'>Shrink: </span> <a href='browse.php?type=class&amp;type_id=4&amp;classid=3'>Micro (1 in. to 1/2 in.)</a><br /><span class='label'>Size Roles: </span> <a href='browse.php?type=class&amp;type_id=3&amp;classid=14'>FM/m</a><br /><span class='label'>Warnings: </span> <a href='browse.php?type=class&amp;type_id=2&amp;classid=8'>Following story may contain inappropriate material for certain audiences</a><br />
+<span class="label">Series:</span> None<br />
+<span class="label">Chapters: </span> 1 <a href="viewstory.php?sid=16802&amp;index=1">Table of Contents</a><br />
+<span class="label">Completed:</span> No  
+<span class="label">Word count:</span> 2401 <span class="label">Read Count:</span> 1369
+</div>
+<div class="tail"><span class="label"> [<a href="contact.php?action=report&amp;url=viewstory.php?sid=16802">Report This</a>] Published: </span>July 08 2026 <span class="label">Updated:</span> July 08 2026</div>
+</div>
+
+<div class="listbox odd">
+<div class="title"><span class="story-title"><a href="viewstory.php?sid=15833">Roommates</a></span> by <a href="viewuser.php?uid=140733">Smaller Luke Theory</a> <span class="label">Rated:</span> G  <span style='white-space: nowrap;'><img src="images/star.gif" alt="star"><img src="images/star.gif" alt="star"><img src="images/star.gif" alt="star"><img src="images/star.gif" alt="star"><img src="images/starhalf.gif" alt="half-star"></span> [<a href="reviews.php?type=ST&amp;item=15833">Reviews</a> - <a href="reviews.php?type=ST&amp;item=15833">6</a>] New! </div>
+<div class="content"><span class="label">Summary: </span><p style="margin: 0px; padding: 0px; border: 0px; font: inherit; vertical-align: baseline; color: inherit;">Dylan is a shy, awkward teen who's been spending way too much time looking at sizeplay porn instead of touching grass. He's hoping that heading off to college will give him a fresh start, but that gets complicated quickly when it turns out he's rooming with three gorgeous women that he can't stop fantasizing about! And, they might have a little secret of their own...</p><p class="empty-p" style="margin: 0px; padding: 0px; border: 0px; font: inherit; vertical-align: baseline; color: inherit;"><br style="color: rgb(177, 177, 185); font-family: devioussans02regular, "Helvetica Neue", Helvetica, Arial, "メイリオ, meiryo", "ヒラギノ角ゴ pro w3", "hiragino kaku gothic pro", sans-serif; font-size: 16px; letter-spacing: 0.3px; white-space-collapse: break-spaces; background-color: rgb(6, 7, 13);"></p><br />
+<span class="label">Categories:</span> <a href='browse.php?type=categories&amp;catid=109'>Breasts</a>, <a href='browse.php?type=categories&amp;catid=102'>Breast Enlargement</a>, <a href='browse.php?type=categories&amp;catid=101'>Butt</a>, <a href='browse.php?type=categories&amp;catid=88'>Humiliation</a>, <a href='browse.php?type=categories&amp;catid=74'>Slow Size Change</a> <br />
+<span class="label">Characters: </span> None<br />
+<span class='label'>Growth: </span> <a href='browse.php?type=class&amp;type_id=1&amp;classid=2'>Amazon (7 ft. to 15 ft.)</a><br /><span class='label'>Shrink: </span> <a href='browse.php?type=class&amp;type_id=4&amp;classid=24'>Doll (12 in. to 6 in.)</a>, <a href='browse.php?type=class&amp;type_id=4&amp;classid=26'>Dwarf (3 ft. to 5 ft.)</a><br /><span class='label'>Size Roles: </span> <a href='browse.php?type=class&amp;type_id=3&amp;classid=17'>FF/m</a><br /><span class='label'>Warnings: </span> None<br />
+<span class="label">Series:</span> None<br />
+<span class="label">Chapters: </span> 10 <a href="viewstory.php?sid=15833&amp;index=1">Table of Contents</a><br />
+<span class="label">Completed:</span> No  
+<span class="label">Word count:</span> 51631 <span class="label">Read Count:</span> 52833
+</div>
+<div class="tail"><span class="label"> [<a href="contact.php?action=report&amp;url=viewstory.php?sid=15833">Report This</a>] Published: </span>June 19 2025 <span class="label">Updated:</span> July 08 2026</div>
+</div>
+
+<div class="listbox even">
+<div class="title"><span class="story-title"><a href="viewstory.php?sid=16703">The Dare</a></span> by <a href="viewuser.php?uid=13920">Sapphiric</a> <span class="label">Rated:</span> R  <span style='white-space: nowrap;'><img src="images/star.gif" alt="star"><img src="images/star.gif" alt="star"><img src="images/star.gif" alt="star"><img src="images/star.gif" alt="star"><img src="images/star.gif" alt="star"></span> [<a href="reviews.php?type=ST&amp;item=16703">Reviews</a> - <a href="reviews.php?type=ST&amp;item=16703">3</a>] New! </div>
+<div class="content"><span class="label">Summary: </span><p>An introverted college student Eric decides to try to get out of his shell and expand his social circle by going to a party he was invited to last minute. The alcohol is flowing freely and the party games are escalating quick. Hopefully truth or dare won’t get too spicy?</p><p>-----------------------</p><p source="" sans="" pro",="" sans-serif;"="" style="color: rgb(53, 56, 70);">Disclaimer: This story is a work of fiction, and all characters depicted therein are at least 18 years of age or older.</p><br />
+<span class="label">Categories:</span> <a href='browse.php?type=categories&amp;catid=34'>Young Adult  20-29</a>, <a href='browse.php?type=categories&amp;catid=101'>Butt</a>, <a href='browse.php?type=categories&amp;catid=88'>Humiliation</a>, <a href='browse.php?type=categories&amp;catid=85'>Instant Size Change</a>, <a href='browse.php?type=categories&amp;catid=78'>Odor</a>, <a href='browse.php?type=categories&amp;catid=73'>Unaware</a> <br />
+<span class="label">Characters: </span> None<br />
+<span class='label'>Growth: </span> None<br /><span class='label'>Shrink: </span> <a href='browse.php?type=class&amp;type_id=4&amp;classid=1'>Minikin (3 in. to 1 in.)</a><br /><span class='label'>Size Roles: </span> <a href='browse.php?type=class&amp;type_id=3&amp;classid=10'>F/m</a><br /><span class='label'>Warnings: </span> None<br />
+<span class="label">Series:</span> None<br />
+<span class="label">Chapters: </span> 2 <a href="viewstory.php?sid=16703&amp;index=1">Table of Contents</a><br />
+<span class="label">Completed:</span> Yes  
+<span class="label">Word count:</span> 22015 <span class="label">Read Count:</span> 5278
+</div>
+<div class="tail"><span class="label"> [<a href="contact.php?action=report&amp;url=viewstory.php?sid=16703">Report This</a>] Published: </span>May 21 2026 <span class="label">Updated:</span> July 08 2026</div>
+</div>
+
+<div class="listbox odd">
+<div class="title"><span class="story-title"><a href="viewstory.php?sid=16765">Are You Sure You’re Ready to Submit?</a></span> by <a href="viewuser.php?uid=13920">Sapphiric</a> <span class="label">Rated:</span> R  <span style='white-space: nowrap;'><img src="images/star.gif" alt="star"><img src="images/star.gif" alt="star"><img src="images/star.gif" alt="star"><img src="images/star.gif" alt="star"><img src="images/star.gif" alt="star"></span> [<a href="reviews.php?type=ST&amp;item=16765">Reviews</a> - <a href="reviews.php?type=ST&amp;item=16765">4</a>] New! </div>
+<div class="content"><span class="label">Summary: </span><p>Evan and Haley are college students and resentful stepsiblings bound together by inheritance and a shared house after their parents' deaths. Evan, shy and secretly harboring a shrinking fetish, has always felt intimidated by his smug, sharp-tongued younger stepsister Haley and her effortlessly perfect body.</p><p>Hoping to impress his sweet crush Jessie, Evan secretly applies to ShrinkHaven for a gentle, one-day shrinking experience to share with her. But a random glitch during submission leaves his application vulnerable—something he fails to notice and never anticipates might completely upend his innocent plan.</p><p>-----------------------</p><p>Disclaimer: This story is a work of fiction, and all characters depicted therein are at least 18 years of age or older.</p><br />
+<span class="label">Categories:</span> <a href='browse.php?type=categories&amp;catid=34'>Young Adult  20-29</a>, <a href='browse.php?type=categories&amp;catid=101'>Butt</a>, <a href='browse.php?type=categories&amp;catid=88'>Humiliation</a>, <a href='browse.php?type=categories&amp;catid=86'>Insertion</a>, <a href='browse.php?type=categories&amp;catid=85'>Instant Size Change</a>, <a href='browse.php?type=categories&amp;catid=82'>Mouth Play</a>, <a href='browse.php?type=categories&amp;catid=78'>Odor</a>, <a href='browse.php?type=categories&amp;catid=76'>Sci-Fi</a> <br />
+<span class="label">Characters: </span> None<br />
+<span class='label'>Growth: </span> None<br /><span class='label'>Shrink: </span> <a href='browse.php?type=class&amp;type_id=4&amp;classid=3'>Micro (1 in. to 1/2 in.)</a>, <a href='browse.php?type=class&amp;type_id=4&amp;classid=1'>Minikin (3 in. to 1 in.)</a><br /><span class='label'>Size Roles: </span> <a href='browse.php?type=class&amp;type_id=3&amp;classid=10'>F/m</a><br /><span class='label'>Warnings: </span> None<br />
+<span class="label">Series:</span> None<br />
+<span class="label">Chapters: </span> 2 <a href="viewstory.php?sid=16765&amp;index=1">Table of Contents</a><br />
+<span class="label">Completed:</span> No  
+<span class="label">Word count:</span> 9036 <span class="label">Read Count:</span> 4876
+</div>
+<div class="tail"><span class="label"> [<a href="contact.php?action=report&amp;url=viewstory.php?sid=16765">Report This</a>] Published: </span>June 15 2026 <span class="label">Updated:</span> July 07 2026</div>
+</div>
+
+<div id="pagelinks"><a href='browse.php?type=recent&amp;offset=0'id='currentpage'>1</a> 
+<a href='browse.php?type=recent&amp;offset=20'>2</a> 
+<a href='browse.php?type=recent&amp;offset=40'>3</a> 
+ <a href='browse.php?type=recent&amp;offset=20' id='plnext'>[Next]</a></div>
+</div>
+</div>
+</div>
+		</div>
+		<!-- <div class="gb-20 sidebar">
+				<h3><span></span></h3><br /><br /> -->
+
+				<!-- Just delete the < !-- and -- > before and after the shoutbox/poll to make it visible. Remember to add the blocks at your admin panel. -->
+				
+				<!-- <h3></h3>  
+				<h3></h3>
+				<br />
+				<div align="center"> </div>
+		</div>
+
+		<div class="gb-full">
+				<div class="gb-33"><h3>Featured Stories</h3></div>
+				<div class="gb-33"><h3></h3></div>
+				<div class="gb-33"><h3></h3></div>
+		</div> -->
+		
+	<script>
+           if ($('textarea').length) {
+           $('textarea').summernote({
+             placeholder: '',
+             tabsize: 2,
+             height: 150,
+	     fontNames: ['Source Sans Pro'],
+             toolbar: [
+               ['style', ['style']],
+               ['font', ['bold','italic','underline', 'clear']],
+	       ['fontname', ['fontname']],
+               ['color', ['color']],
+               ['para', ['ul', 'ol', 'paragraph', 'height']],
+               ['insert', ['hr', 'picture']],
+               ['view', ['codeview', 'help']]
+             ]
+           });
+	   }
+	</script>
+    <div class="gb-full footer">
+			<!-- <hr /> -->
+			<p><span style="text-decoration: underline;">Disclaimer<a href="http://fotoredaktor.su/" target="_blank">:</a></span> All publicly recognizable characters, settings, etc. are the property of their respective owners.  The original characters and plot are the property of the author.  No money is being made from this work.  No copyright infringement is intended.</p>
+    </div>
+
+	</div> <!-- closing content grid -->   			
+
+	</body>
+</html>

@@ -32,6 +32,7 @@ the 8 sites; niche per-site tags still work as free-text entries.
 from __future__ import annotations
 
 import concurrent.futures
+import html as html_module
 import logging
 import re
 from typing import Callable, Optional
@@ -39,7 +40,7 @@ from typing import Callable, Optional
 from bs4 import BeautifulSoup
 
 from ..scraper import BaseScraper
-from ..search import search_literotica
+from ..search import _parse_literotica_results, search_literotica
 from . import tapatalk
 
 logger = logging.getLogger(__name__)
@@ -308,6 +309,41 @@ def _matches_query(query: str, *fields: str) -> bool:
         if field and q in field.lower():
             return True
     return False
+
+
+# Listing-date formats seen across the erotica archives, tried in
+# order. Locale-dependent month/day names are fine here: the sites
+# all render English dates.
+_LISTING_DATE_FORMATS = (
+    "%Y-%m-%d",             # 2026-07-10 (SOL noscript, ROM cards)
+    "%b %d, %Y",            # Jul 8, 2026 (AFF)
+    "%B %d %Y",             # July 10 2026 (GiantessWorld)
+    "%B %d, %Y",            # July 10, 2026
+    "%m/%d/%y",             # 07/09/26 (TGStorytime)
+    "%d %B %Y",             # 04 July 2026 (MCStories dateline)
+    "%A, %B %d, %Y",        # Thursday, April 9, 2026 (GreatFeet)
+)
+
+
+def _iso_date(raw: str) -> str:
+    """Normalise a site-rendered listing date to ``YYYY-MM-DD``.
+
+    Result rows carry ``updated`` as an ISO string (the GUI shows
+    ``updated[:10]`` and ``--sort date`` compares lexically), so every
+    site's native date format has to converge here. Returns ``""``
+    when the input doesn't parse — an unknown format must degrade to
+    "no date", not crash a whole listing page."""
+    raw = (raw or "").strip()
+    if not raw:
+        return ""
+    from datetime import datetime
+    for fmt in _LISTING_DATE_FORMATS:
+        try:
+            return datetime.strptime(raw, fmt).strftime("%Y-%m-%d")
+        except ValueError:
+            continue
+    m = re.match(r"(\d{4}-\d{2}-\d{2})", raw)
+    return m.group(1) if m else ""
 
 
 # ── Per-site tag-vocabulary translation ─────────────────────────────
@@ -662,7 +698,16 @@ def search_aff(query: str, *, page: int = 1, fandom: str = "",
         return []
     soup = BeautifulSoup(html, "lxml")
     out: list[dict] = []
-    for a in soup.find_all("a", href=re.compile(r"story\.php\?no=\d+")):
+    # index.php renders one div.story-entry card per story: title +
+    # author anchors, div.story-description blurb, "Chapters: N" /
+    # "Updated: Mon D, YYYY" meta items, a "Located: Fandom » Section"
+    # breadcrumb, and WIP/COMPLETE/Oneshot status tags. (The author
+    # profile fragments use a different card class — story-card — so
+    # don't unify the two parsers.)
+    for entry in soup.find_all("div", class_="story-entry"):
+        a = entry.find("a", href=re.compile(r"story\.php\?no=\d+"))
+        if a is None:
+            continue
         href = a.get("href", "")
         m = re.search(r"no=(\d+)", href)
         if not m:
@@ -670,13 +715,51 @@ def search_aff(query: str, *, page: int = 1, fandom: str = "",
         story_id = m.group(1)
         title = a.get_text(" ", strip=True) or f"AFF {story_id}"
         full = f"https://{fandom}.adult-fanfiction.org/{href.lstrip('/')}"
-        if not _matches_query(query, title):
+
+        summary = ""
+        desc = entry.find("div", class_="story-description")
+        if desc:
+            summary = desc.get_text(" ", strip=True)
+
+        author = ""
+        author_a = entry.find("a", class_="story-author")
+        if author_a:
+            author = author_a.get_text(" ", strip=True)
+
+        entry_text = entry.get_text(" ", strip=True)
+        ch_m = re.search(r"Chapters:\s*(\d+)", entry_text)
+        upd_m = re.search(
+            r"Updated:\s*([A-Za-z]{3} \d{1,2}, \d{4})", entry_text,
+        )
+        rating_m = re.search(r"Rated:\s*(Adult\s*\+*|Teen|All)", entry_text)
+
+        status = ""
+        tag_texts = [
+            t.get_text(strip=True)
+            for t in entry.find_all("span", class_="story-tag")
+        ]
+        if any(t.upper() == "COMPLETE" for t in tag_texts):
+            status = "Complete"
+        elif any(t.upper() == "WIP" for t in tag_texts):
+            status = "In progress"
+
+        location = ""
+        loc = entry.find("div", class_="story-location")
+        if loc:
+            location = re.sub(
+                r"^\s*Located\s*:?\s*", "", loc.get_text(" ", strip=True),
+            )
+
+        if not _matches_query(query, title, summary):
             continue
         out.append({
-            "title": title, "author": "", "url": full,
-            "summary": "", "words": "?", "chapters": "?",
-            "rating": "M", "fandom": fandom, "status": "",
+            "title": title, "author": author, "url": full,
+            "summary": summary, "words": "?",
+            "chapters": ch_m.group(1) if ch_m else "?",
+            "rating": rating_m.group(1).strip() if rating_m else "M",
+            "fandom": location or fandom, "status": status,
             "site": "aff",
+            "updated": _iso_date(upd_m.group(1)) if upd_m else "",
         })
         if len(out) >= PER_SITE_PAGE_MAX:
             break
@@ -720,8 +803,12 @@ def search_sol(query: str, *, page: int = 1, tags: Optional[list] = None,
     out: list[dict] = []
     seen_ids = set()
     # SOL renders rows like:
-    #   <h3 class="sname">N <a href="/n/<id>/<slug>">Title</a>
-    #                       by <a href="/a/<author>">Author</a></h3>
+    #   <div class="entry" id="sr<id>">
+    #     <h3 class="sname">N <a href="/n/<id>/<slug>">Title</a>
+    #                         by <a href="/a/<author>">Author</a></h3>
+    #     <div class="sdesc">[series/universe span.help banners] blurb</div>
+    #     <div class="misc"><b>Size:</b> 32KB | 6,022 words | ...</div>
+    #   </div>
     # Title hrefs mix two shapes on the same listing — /s/<id>/<slug>
     # and /n/<id>/<slug> (story-page redirect). Accept both: matching
     # only one silently drops the rows using the other (an /n/-only
@@ -745,15 +832,44 @@ def search_sol(query: str, *, page: int = 1, tags: Optional[list] = None,
             a_href = anchors[1].get("href", "")
             if a_href.startswith("/a/"):
                 author = anchors[1].get_text(" ", strip=True)
-        if not _matches_query(query, title, slug):
+
+        summary = ""
+        words = "?"
+        status = ""
+        updated = ""
+        entry = h3.find_parent("div", class_="entry")
+        if entry is not None:
+            sdesc = entry.find("div", class_="sdesc")
+            if sdesc is not None:
+                # Serial/universe banners ("A <Series> Story", "Part of
+                # the <U> universe") prefix the blurb in span.help —
+                # drop them so the summary starts with the synopsis.
+                for span in sdesc.find_all("span", class_="help"):
+                    span.decompose()
+                summary = sdesc.get_text(" ", strip=True)
+            misc = entry.find("div", class_="misc")
+            if misc is not None:
+                misc_text = misc.get_text(" ", strip=True)
+                w_m = re.search(r"([\d,]+)\s*words\b", misc_text)
+                if w_m:
+                    words = w_m.group(1)
+                d_m = re.search(r"(\d{4}-\d{2}-\d{2})", misc_text)
+                if d_m:
+                    updated = d_m.group(1)
+            ab = entry.find("span", class_="ab")
+            if ab is not None and "progress" in ab.get_text(" ", strip=True).lower():
+                status = "In progress"
+
+        if not _matches_query(query, title, slug, summary):
             continue
         seen_ids.add(story_id)
         out.append({
             "title": title, "author": author,
             "url": f"https://storiesonline.net/s/{story_id}/{slug}",
-            "summary": "", "words": "?", "chapters": "?",
-            "rating": "M", "fandom": "", "status": "",
+            "summary": summary, "words": words, "chapters": "?",
+            "rating": "M", "fandom": "", "status": status,
             "site": "storiesonline",
+            "updated": updated,
         })
         if len(out) >= PER_SITE_PAGE_MAX:
             break
@@ -790,26 +906,85 @@ def search_mcstories(query: str, *, page: int = 1,
         return []
     soup = BeautifulSoup(html, "lxml")
     out: list[dict] = []
-    # WhatsNew.html is a plain link list (no tables) with
-    # root-relative ``Slug/index.html`` hrefs; the tag pages render
-    # ``<tr>`` rows with ``../Slug/`` hrefs. Walk whichever shape the
-    # page has: anchors first, table context only for the code column.
-    rows_iter = soup.find_all("tr") or [
-        a for a in soup.find_all(
-            "a", href=re.compile(r"^([A-Z][A-Za-z0-9_-]+)/(?:index\.html)?$"),
-        )
-    ]
-    for row in rows_iter:
-        if row.name == "a":
-            a = row
-        else:
-            a = row.find(
-                "a", href=re.compile(r"^\.\./([A-Z][A-Za-z0-9_-]+)/"),
+    seen_slugs: set[str] = set()
+
+    # WhatsNew.html renders one ``div.story`` block per story — title
+    # anchor, "by <author>" line with the tag-code string, and a real
+    # ``div.synopsis`` blurb, grouped under ``h3.dateline`` sections.
+    # (The old anchor-regex walk also matched the page's nav links —
+    # Titles/Authors/Tags/ReadersPicks — and emitted them as four
+    # bogus rows at the top of every bare browse.)
+    story_divs = soup.find_all("div", class_="story")
+    if story_divs:
+        for div in story_divs:
+            a = div.find(
+                "a", href=re.compile(r"^([A-Z][A-Za-z0-9_-]+)/(?:index\.html)?$"),
             )
-            if a is None:
-                a = row.find(
-                    "a", href=re.compile(r"^([A-Z][A-Za-z0-9_-]+)/"),
+            if not a:
+                continue
+            m = re.match(r"^([A-Z][A-Za-z0-9_-]+)/", a.get("href", ""))
+            if not m:
+                continue
+            slug = m.group(1)
+            if slug in seen_slugs:
+                # Stories updated in both weekly sections appear twice;
+                # the first (newest) block wins.
+                continue
+            title = a.get_text(" ", strip=True)
+
+            summary = ""
+            syn = div.find("div", class_="synopsis")
+            if syn:
+                summary = syn.get_text(" ", strip=True)
+
+            author = ""
+            author_a = div.find("a", href=re.compile(r"^Authors/"))
+            if author_a:
+                author = author_a.get_text(" ", strip=True)
+
+            codes = ""
+            if author_a is not None and author_a.parent is not None:
+                codes_m = re.search(
+                    r"\(([a-z][a-z ]*)\)\s*$",
+                    author_a.parent.get_text(" ", strip=True),
                 )
+                if codes_m:
+                    codes = codes_m.group(1)
+
+            updated = ""
+            section = div.find_parent("section")
+            if section is not None:
+                dateline = section.find("h3", class_="dateline")
+                if dateline is not None:
+                    updated = _iso_date(dateline.get_text(" ", strip=True))
+
+            if not _matches_query(query, title, codes, summary):
+                continue
+            seen_slugs.add(slug)
+            out.append({
+                "title": title, "author": author,
+                "url": f"https://mcstories.com/{slug}/",
+                "summary": summary, "words": "?", "chapters": "?",
+                "rating": "M", "fandom": codes, "status": "",
+                "site": "mcstories",
+                "updated": updated,
+            })
+            if len(out) >= window_end:
+                break
+        return out[window_start:]
+
+    # Tag pages render bare two-column ``<tr>`` rows — title anchor
+    # (``../Slug/`` href) and the code string. No synopsis, author, or
+    # date columns exist there; the codes are the ceiling, so they
+    # stand in for the summary.
+    for row in soup.find_all("tr"):
+        a = row.find(
+            "a", href=re.compile(r"^\.\./([A-Z][A-Za-z0-9_-]+)/"),
+        )
+        if a is None:
+            a = row.find(
+                "a", href=re.compile(r"^([A-Z][A-Za-z0-9_-]+)/"),
+            )
         if not a:
             continue
         href = a.get("href", "")
@@ -817,6 +992,8 @@ def search_mcstories(query: str, *, page: int = 1,
         if not m:
             continue
         slug = m.group(1)
+        if slug in seen_slugs:
+            continue
         title = a.get_text(" ", strip=True)
         codes = ""
         tds = row.find_all("td")
@@ -824,6 +1001,7 @@ def search_mcstories(query: str, *, page: int = 1,
             codes = tds[1].get_text(" ", strip=True)
         if not _matches_query(query, title, codes):
             continue
+        seen_slugs.add(slug)
         out.append({
             "title": title, "author": "",
             "url": f"https://mcstories.com/{slug}/",
@@ -910,23 +1088,81 @@ def search_lushstories(query: str, *, page: int = 1,
     html = _fetch(url)
     if not html:
         return []
+    soup = BeautifulSoup(html, "lxml")
     out: list[dict] = []
     seen = set()
-    for m in re.finditer(
-        r'href="(/stories/([a-z0-9-]+)/([a-z0-9][a-z0-9-]+))"', html,
-    ):
-        href, found_cat, slug = m.group(1), m.group(2), m.group(3)
+    # Each story is an <article> card: h2 title, author profile link
+    # in the header, the author's one-liner in <em>, a footer stat
+    # whose title attribute is the site's rounded count ("2.6k words"),
+    # and a <time> whose title attribute is the absolute date. The
+    # page-top carousel repeats a few stories as bare image anchors —
+    # anchoring on <article> excludes it (it also produced the old
+    # slug-derived Title Cased titles with no metadata).
+    for card in soup.find_all("article"):
+        link = card.find("a", href=re.compile(
+            r"^/stories/([a-z0-9-]+)/([a-z0-9][a-z0-9-]+)$",
+        ))
+        if link is None:
+            continue
+        m = re.match(
+            r"^/stories/([a-z0-9-]+)/([a-z0-9][a-z0-9-]+)$", link["href"],
+        )
+        found_cat, slug = m.group(1), m.group(2)
         if slug in seen:
             continue
-        if not _matches_query(query, slug):
+
+        h2 = card.find("h2")
+        title = (
+            h2.get_text(" ", strip=True) if h2
+            else slug.replace("-", " ").title()
+        )
+
+        author = ""
+        header = card.find("header")
+        if header is not None:
+            for a in header.find_all("a", href=re.compile(r"^/profile/")):
+                text = a.get_text(" ", strip=True)
+                if text:  # first profile link is the text-empty avatar
+                    author = text
+                    break
+
+        summary = ""
+        em = card.find("em")
+        if em is not None:
+            summary = em.get_text(" ", strip=True)
+
+        words = "?"
+        updated = ""
+        footer = card.find("footer")
+        if footer is not None:
+            for div in footer.find_all(attrs={"title": True}):
+                w_m = re.match(
+                    r"([\d.,]+k?)\s*words$", div["title"].strip(), re.I,
+                )
+                if w_m:
+                    words = w_m.group(1)
+                    break
+        time_tag = card.find("time")
+        if time_tag is not None and time_tag.get("title"):
+            # title attr is US-locale "7/6/2026, 3:35:16 PM".
+            t_m = re.match(r"(\d{1,2})/(\d{1,2})/(\d{4})", time_tag["title"])
+            if t_m:
+                updated = (
+                    f"{t_m.group(3)}-{int(t_m.group(1)):02d}"
+                    f"-{int(t_m.group(2)):02d}"
+                )
+
+        if not _matches_query(query, title, slug, summary):
             continue
         seen.add(slug)
         out.append({
-            "title": slug.replace("-", " ").title(),
-            "author": "", "url": f"https://www.lushstories.com{href}",
-            "summary": "", "words": "?", "chapters": "?",
+            "title": title,
+            "author": author,
+            "url": f"https://www.lushstories.com{link['href']}",
+            "summary": summary, "words": words, "chapters": "?",
             "rating": "M", "fandom": found_cat, "status": "",
             "site": "lushstories",
+            "updated": updated,
         })
         if len(out) >= PER_SITE_PAGE_MAX:
             break
@@ -969,32 +1205,78 @@ def search_sexstories(query: str, *, page: int = 1,
         html = _fetch(url)
     if not html:
         return []
+    soup = BeautifulSoup(html, "lxml")
     out: list[dict] = []
     seen = set()
-    for m in re.finditer(
-        r'href="(/story/(\d+)/([a-z0-9_-]+))"[^>]*>([^<]*)<', html,
-    ):
-        href, story_id, slug, link_text = (
-            m.group(1), m.group(2), m.group(3), m.group(4).strip(),
-        )
+    # Both the homepage grid and the POST results render one <li> per
+    # story inside ul.stories_list: an <h4> holding the title anchor
+    # and the author's /profile link, an optional «guillemet-wrapped»
+    # author blurb in <p>, "Rated <strong>96.6%</strong>" / "Posted
+    # <strong>date</strong>" stats, and the category+tag line after a
+    # <br>. Section "More..." rows carry no h4 and are skipped.
+    for li in soup.select("ul.stories_list > li"):
+        link = li.select_one("h4 a[href^='/story/']")
+        if link is None:
+            continue
+        m = re.match(r"^/story/(\d+)/([a-z0-9_-]+)", link.get("href", ""))
+        if not m:
+            continue
+        story_id, slug = m.group(1), m.group(2)
         if story_id in seen:
             continue
-        seen.add(story_id)
-        # The link text is the real title when it's present; some rows
-        # are just thumbnails (no text) so we fall back to the slug.
-        title = link_text or slug.replace("_", " ").replace("-", " ").title()
+        title = (
+            link.get_text(" ", strip=True)
+            or slug.replace("_", " ").replace("-", " ").title()
+        )
+
+        author = ""
+        author_a = li.select_one("h4 a[href^='/profile']")
+        if author_a is not None:
+            author = author_a.get_text(" ", strip=True)
+
+        summary = ""
+        p = li.find("p")
+        if p is not None:
+            summary = p.get_text(" ", strip=True).strip("\xab\xbb ").strip()
+
+        li_text = li.get_text(" ", strip=True)
+        rating = "M"
+        r_m = re.search(r"Rated\s+([\d.]+%)", li_text)
+        if r_m:
+            rating = r_m.group(1)
+        updated = ""
+        d_m = re.search(
+            r"Posted\s+(?:\w{3}\s+)?(\d{1,2})(?:st|nd|rd|th)?\s+of\s+"
+            r"(\w+)\s+(\d{4})", li_text,
+        )
+        if d_m:
+            updated = _iso_date(
+                f"{d_m.group(2)} {d_m.group(1)}, {d_m.group(3)}",
+            )
+
+        category = ""
+        br = li.find("br")
+        if br is not None:
+            tail = " ".join(
+                s.strip() for s in br.find_next_siblings(string=True)
+                if s.strip()
+            )
+            category = tail.split(",")[0].strip()
+
         # With a combined query we already filtered server-side, so
         # accept every result. Without one (tag-less browse) keep the
-        # old client-side title filter to avoid mixing in every row
-        # the homepage happens to carry.
-        if not combined and not _matches_query(query, slug, title):
+        # old client-side filter to avoid mixing in every row the
+        # homepage happens to carry.
+        if not combined and not _matches_query(query, slug, title, summary):
             continue
+        seen.add(story_id)
         out.append({
-            "title": title, "author": "",
-            "url": f"https://www.sexstories.com{href}",
-            "summary": "", "words": "?", "chapters": "?",
-            "rating": "M", "fandom": "", "status": "",
+            "title": title, "author": author,
+            "url": f"https://www.sexstories.com/story/{story_id}/{slug}",
+            "summary": summary, "words": "?", "chapters": "?",
+            "rating": rating, "fandom": category, "status": "",
             "site": "sexstories",
+            "updated": updated,
         })
         if len(out) >= window_end:
             break
@@ -1155,16 +1437,89 @@ def search_tgstorytime(query: str, *, page: int = 1,
         return []
     out: list[dict] = []
     seen = set()
-    # Use BeautifulSoup so a title wrapped in nested formatting
-    # (``<i>``, ``<font>``, etc.) is captured in full. The previous
-    # regex truncated at the first ``<``, losing italicised words.
     try:
         soup = BeautifulSoup(html, "lxml")
     except Exception:
         soup = BeautifulSoup(html, "html.parser")
+    # The newest-stories block renders one div per story — class
+    # ``showcase`` (completed) or ``inprogress`` — whose div.content
+    # holds two span.sublabel runs (title+author links; date/rating/
+    # category/status meta) with the summary as bare text nodes
+    # between them. Anchoring on those classes also drops the
+    # sidebar "Random Story" block that the old flat anchor walk
+    # emitted as a bogus first row.
+    story_rows = soup.select("div.showcase, div.inprogress")
+    for row in story_rows:
+        content = row.find("div", class_="content")
+        if content is None:
+            continue
+        a = content.find("a", href=re.compile(r"viewstory\.php\?sid=\d+"))
+        if a is None:
+            continue
+        m = re.search(r"sid=(\d+)", a.get("href") or "")
+        if not m:
+            continue
+        sid = m.group(1)
+        title = a.get_text(" ", strip=True)
+        if sid in seen or not title or len(title) < 3:
+            continue
+
+        author = ""
+        author_a = content.find("a", href=re.compile(r"viewuser\.php\?uid=\d+"))
+        if author_a is not None:
+            author = author_a.get_text(" ", strip=True)
+
+        # Summary = the text nodes that are direct children of
+        # div.content (between the two sublabel spans).
+        summary = re.sub(
+            r"\s+", " ",
+            " ".join(content.find_all(string=True, recursive=False)),
+        ).strip()
+
+        rating = "M"
+        updated = ""
+        fandom = ""
+        labels = content.find_all("span", class_="sublabel")
+        if len(labels) >= 2:
+            meta_text = labels[1].get_text(" ", strip=True)
+            d_m = re.match(r"\s*(\d{2}/\d{2}/\d{2})", meta_text)
+            if d_m:
+                updated = _iso_date(d_m.group(1))
+            parts = [p.strip() for p in meta_text.split(",")]
+            if len(parts) >= 2 and parts[1]:
+                rating = parts[1]
+            cat_a = labels[1].find("a", href=re.compile(r"type=categories"))
+            if cat_a is not None:
+                fandom = cat_a.get_text(" ", strip=True)
+
+        status = (
+            "Complete" if "showcase" in (row.get("class") or [])
+            else "In progress"
+        )
+
+        if not _matches_query(query, title, summary):
+            continue
+        seen.add(sid)
+        out.append({
+            "title": title, "author": author,
+            "url": (
+                f"https://www.tgstorytime.com/viewstory.php"
+                f"?sid={sid}&ageconsent=ok&warning=3"
+            ),
+            "summary": summary, "words": "?", "chapters": "?",
+            "rating": rating, "fandom": fandom, "status": status,
+            "site": "tgstorytime",
+            "updated": updated,
+        })
+        if len(out) >= PER_SITE_PAGE_MAX:
+            break
+    if story_rows:
+        return out
+    # Deeper index.php pages may not use the showcase/inprogress
+    # homepage blocks — fall back to the flat anchor walk (titles
+    # only) rather than reporting a silently empty page.
     for a in soup.find_all("a", href=re.compile(r"viewstory\.php\?sid=\d+")):
-        href = a.get("href") or ""
-        m = re.search(r"sid=(\d+)", href)
+        m = re.search(r"sid=(\d+)", a.get("href") or "")
         if not m:
             continue
         sid = m.group(1)
@@ -1241,33 +1596,114 @@ def search_chyoa(query: str, *, page: int = 1,
         return []
     out: list[dict] = []
     seen: set[tuple[str, str]] = set()
-    # Chyoa renders search-result links as full URLs
-    # (``href="https://chyoa.com/story/..."``), not relative paths.
-    # The previous regex required a leading ``/`` and matched zero
-    # rows on every search.
-    for m in re.finditer(
-        r'href="(?:https?://chyoa\.com)?(/(story|chapter)/[^"]+?\.(\d+))"'
-        r'[^>]*>([^<]+)<',
-        html,
-    ):
-        href, kind, numeric, title = (
-            m.group(1), m.group(2), m.group(3), m.group(4).strip(),
+
+    # The 2026 redesign renders one <article> card per story with
+    # shared ``redesign-item__*`` parts: title anchor, byline link,
+    # a real description <p>, and an icon-keyed meta row. Card-scoping
+    # matters beyond the metadata: the old flat href regex also
+    # matched the sidebar spotlight/guide links and footer chapter
+    # links, which leaked site chrome into title-less browses.
+    soup = BeautifulSoup(html, "lxml")
+    cards = [
+        card for card in soup.find_all("article")
+        if card.select_one(
+            ".redesign-item__title a[href*='/story/'], "
+            ".redesign-item__title a[href*='/chapter/']",
         )
+        and card.find_parent("aside") is None
+    ]
+    for card in cards:
+        a = card.select_one(".redesign-item__title a")
+        href = a.get("href") or ""
+        m = re.search(r"/(story|chapter)/[^\"]*?\.(\d+)", href)
+        if not m:
+            continue
+        kind, numeric = m.group(1), m.group(2)
         key = (kind, numeric)
+        title = a.get_text(" ", strip=True)
         if key in seen or not title:
             continue
-        if not _matches_query(query, title):
-            continue
+
+        author = ""
+        byline = card.select_one(".redesign-item__byline a")
+        if byline is not None:
+            author = byline.get_text(" ", strip=True)
+
+        summary = ""
+        desc = card.find("p", class_="redesign-item__description")
+        if desc is not None:
+            summary = desc.get_text(" ", strip=True)
+
+        chapters = "?"
+        fandom = ""
+        updated = ""
+        meta = card.select_one(".redesign-item__meta")
+        if meta is not None:
+            # Trending cards state the story's total ("22 chapters");
+            # search cards only give branch depth ("17 Chapters Deep"),
+            # a different metric — don't map it to chapters.
+            ch_m = re.search(
+                r"([\d,]+)\s+chapters?\b(?!\s+deep)",
+                meta.get_text(" ", strip=True), re.I,
+            )
+            if ch_m:
+                chapters = ch_m.group(1)
+            folder_icon = meta.find(attrs={"data-lucide": "folder"})
+            if folder_icon is not None and folder_icon.parent is not None:
+                fandom = folder_icon.parent.get_text(" ", strip=True)
+        stamp = card.find(attrs={"data-livestamp": True})
+        if stamp is not None:
+            updated = str(stamp["data-livestamp"])[:10]
+
+        # No client-side re-filter on the card path: with a query the
+        # /search endpoint already filtered server-side (its relevance
+        # hits routinely lack the literal term), and the browse paths
+        # arrive query-less. Chrome links never reach here — cards are
+        # structurally scoped.
         seen.add(key)
+        full_url = (
+            href if href.startswith("http") else f"https://chyoa.com{href}"
+        )
         out.append({
-            "title": title, "author": "",
-            "url": f"https://chyoa.com{href}",
-            "summary": "", "words": "?", "chapters": "?",
-            "rating": "M", "fandom": "", "status": "",
+            "title": title, "author": author,
+            "url": full_url,
+            "summary": summary, "words": "?", "chapters": chapters,
+            "rating": "M", "fandom": fandom, "status": "",
             "site": "chyoa",
+            "updated": updated,
         })
         if len(out) >= PER_SITE_PAGE_MAX:
             break
+
+    if not cards:
+        # Unverified listing shapes (e.g. /category/<slug>) fall back
+        # to the flat href walk rather than returning a silently empty
+        # page. Chyoa renders search-result links as full URLs
+        # (``href="https://chyoa.com/story/..."``), not relative
+        # paths, so the host part stays optional in the regex.
+        for m in re.finditer(
+            r'href="(?:https?://chyoa\.com)?(/(story|chapter)/[^"]+?\.(\d+))"'
+            r'[^>]*>([^<]+)<',
+            html,
+        ):
+            href, kind, numeric, title = (
+                m.group(1), m.group(2), m.group(3), m.group(4).strip(),
+            )
+            key = (kind, numeric)
+            if key in seen or not title:
+                continue
+            if not _matches_query(query, title):
+                continue
+            seen.add(key)
+            out.append({
+                "title": title, "author": "",
+                "url": f"https://chyoa.com{href}",
+                "summary": "", "words": "?", "chapters": "?",
+                "rating": "M", "fandom": "", "status": "",
+                "site": "chyoa",
+            })
+            if len(out) >= PER_SITE_PAGE_MAX:
+                break
     if listing_window is not None:
         start, end = listing_window
         return out[start:end]
@@ -1289,8 +1725,9 @@ def _search_xenforo_forum(
     client-side. Shared by Dark Wanderer, Chastity Mansion, and
     TicklingForum — guest keyword search is disabled or unreliable on
     all three boards, and the story forums paginate natively as
-    ``page-N``. Titles derive from the thread slug; the download path
-    re-reads the real title anyway.
+    ``page-N``. Rows come from the ``structItem--thread`` blocks
+    (real titles, author, last-activity date); the flat href walk
+    with slug-derived titles remains as a markup-drift fallback.
 
     Returns a :class:`SparsePage` when the query filtered out a page
     that still had threads, so the fan-out keeps paging.
@@ -1302,9 +1739,32 @@ def _search_xenforo_forum(
     out: list[dict] = []
     seen = set()
     fetched_any = False
-    # XenForo emits both bare thread links and per-post permalinks;
-    # dedupe by tid so each thread counts once.
-    for m in re.finditer(thread_href_re, html):
+
+    # Preferred path: one div.structItem--thread per row. It carries
+    # the REAL thread title (data-tp-primary anchor — the old slug
+    # ``.title()`` reconstruction lost apostrophes, ampersands, and
+    # casing), the author (row's data-author attribute), and ISO
+    # timestamps. Thread listings expose no synopsis or word count —
+    # the only preview is an AJAX endpoint, one request per thread,
+    # which a listing walk must not multiply into.
+    soup = BeautifulSoup(html, "lxml")
+    for row in soup.select("div.structItem--thread"):
+        classes = row.get("class") or []
+        if any("sticky" in c for c in classes) or row.select_one(
+            ".structItem-status--sticky",
+        ):
+            # Pinned housekeeping threads (FAQs, author notes) — the
+            # slug blocklists caught only the known ones.
+            continue
+        title_a = row.select_one(".structItem-title a[data-tp-primary]")
+        if title_a is None:
+            title_a = row.select_one(".structItem-title a[href*='threads/']")
+        if title_a is None:
+            continue
+        href = title_a.get("href") or ""
+        m = re.search(r"threads/(?P<slug>[a-z0-9%-]+)\.(?P<tid>\d+)", href)
+        if not m:
+            continue
         slug, tid = m.group("slug"), m.group("tid")
         if tid in seen:
             continue
@@ -1312,18 +1772,52 @@ def _search_xenforo_forum(
         if slug.startswith(meta_slug_prefixes):
             continue
         fetched_any = True
-        title = slug.replace("-", " ").title()
+        title = title_a.get_text(" ", strip=True) or slug.replace("-", " ").title()
+
+        author = row.get("data-author") or ""
+        updated = ""
+        latest = row.select_one("time.structItem-latestDate")
+        if latest is not None and latest.get("datetime"):
+            updated = str(latest["datetime"])[:10]
+
         if not _matches_query(query, title, slug):
             continue
         out.append({
-            "title": title, "author": "",
+            "title": title, "author": author,
             "url": thread_url_template.format(slug=slug, tid=tid),
             "summary": "", "words": "?", "chapters": "?",
             "rating": "M", "fandom": fandom, "status": "",
             "site": site,
+            "updated": updated,
         })
         if len(out) >= PER_SITE_PAGE_MAX:
             break
+
+    if not fetched_any:
+        # Markup drift fallback: the old flat href walk over the raw
+        # HTML (slug-derived titles, no metadata). XenForo emits both
+        # bare thread links and per-post permalinks; dedupe by tid so
+        # each thread counts once.
+        for m in re.finditer(thread_href_re, html):
+            slug, tid = m.group("slug"), m.group("tid")
+            if tid in seen:
+                continue
+            seen.add(tid)
+            if slug.startswith(meta_slug_prefixes):
+                continue
+            fetched_any = True
+            title = slug.replace("-", " ").title()
+            if not _matches_query(query, title, slug):
+                continue
+            out.append({
+                "title": title, "author": "",
+                "url": thread_url_template.format(slug=slug, tid=tid),
+                "summary": "", "words": "?", "chapters": "?",
+                "rating": "M", "fandom": fandom, "status": "",
+                "site": site,
+            })
+            if len(out) >= PER_SITE_PAGE_MAX:
+                break
     if not out and fetched_any:
         return SparsePage()
     return out
@@ -1465,12 +1959,26 @@ def search_greatfeet(query: str, *, page: int = 1,
         if not _matches_query(query, title):
             continue
         seen.add(sid)
+        # No synopsis or word count exists anywhere in the listing —
+        # each row's only other text is the formulaic "This story was
+        # published for the update of <date>." sentence. Lift the date.
+        updated = ""
+        parent_p = a.find_parent("p")
+        if parent_p is not None:
+            d_m = re.search(
+                r"for the update of\s+([A-Za-z]+,\s+[A-Za-z]+\s+\d{1,2},"
+                r"\s+\d{4})",
+                parent_p.get_text(" ", strip=True), re.I,
+            )
+            if d_m:
+                updated = _iso_date(d_m.group(1))
         out.append({
             "title": title, "author": "Anonymous",
             "url": f"https://www.greatfeet.com/stories/ts{sid}.htm",
             "summary": "", "words": "?", "chapters": "1",
             "rating": "M", "fandom": "feet", "status": "",
             "site": "greatfeet",
+            "updated": updated,
         })
         if len(out) >= window_end:
             break
@@ -1511,31 +2019,20 @@ def search_literotica_wrapped(query: str, *, page: int = 1,
         # the newest ~80 stories (the JS search needs a query and the
         # tag endpoints need a slug, so neither covers "just show me
         # the site"). One un-paginated listing — window it per page.
+        #
+        # /new uses the same story-card markup as the tag-browse
+        # pages, so reuse the production card parser — it yields the
+        # real summary/author/rating/category per row, decodes
+        # entities, and skips the sidebar-widget links the old inline
+        # href regex emitted as title-only noise rows.
         window_start, window_end = _single_listing_window(page)
         html = _fetch("https://www.literotica.com/new")
         if not html:
             return []
-        out: list[dict] = []
-        seen: set[str] = set()
-        for m in re.finditer(
-            r'href="(?:https://www\.literotica\.com)?(/s/[a-z0-9-]+)"'
-            r'[^>]*>([^<]{2,90})<',
-            html,
-        ):
-            href, title = m.group(1), m.group(2).strip()
-            if href in seen or not title:
-                continue
-            seen.add(href)
-            out.append({
-                "title": title, "author": "",
-                "url": f"https://www.literotica.com{href}",
-                "summary": "", "words": "?", "chapters": "?",
-                "rating": "M", "fandom": "", "status": "",
-                "site": "literotica",
-            })
-            if len(out) >= window_end:
-                break
-        return out[window_start:]
+        out = _parse_literotica_results(html)
+        for r in out:
+            r["site"] = "literotica"
+        return out[window_start:window_end]
 
     kwargs: dict = {}
     if category:
@@ -1761,15 +2258,16 @@ def search_bdsmlibrary(query: str, *, page: int = 1,
     html = _fetch(url)
     if not html:
         return []
-    if code_id and "storyid=" not in html and 'name="term"' in html:
-        # search.php ignored the code parameters and served its search
-        # form back instead of a results page — the site removed the
-        # public code-based advanced search (observed 2026-07; story
-        # permalinks still resolve, but listings aren't reachable).
-        # Raise so the fan-out reports a failure instead of "0 results".
+    if "storyid=" not in html and 'name="term"' in html:
+        # The endpoint served a row-less page (the header search form
+        # is present but no story permalinks). Advanced code search
+        # died first (observed 2026-07); by July the list.php browse
+        # renders an empty table skeleton too — "Story - (Total
+        # Stories)" with blank dynamic slots. Raise so the fan-out
+        # reports a site failure instead of a silent "0 results".
         raise SearchFetchError(
-            "bdsmlibrary: search.php returned the search form instead "
-            "of results — the site's public code search is gone"
+            "bdsmlibrary: listing returned no story rows — the site's "
+            "public listing backend is down (dead since ~2026-07)"
         )
     out: list[dict] = []
     seen = set()
@@ -1818,10 +2316,17 @@ _ROM_TAG_SLUGS: dict[str, str] = {
 }
 
 _ROM_CARD_RE = re.compile(
+    # The word-count div wraps three optional parts: "[Ongoing]"
+    # status, "N chapters," and the count itself — "(6 chapters, 9232
+    # words)". The old pattern only matched the bare "(N words)" form,
+    # so every serial or Ongoing card lost its count. The description
+    # <p> follows the count div.
     r'story-card-publication-date">(?P<date>\d{4}-\d{2}-\d{2})</div>'
     r'.*?<a href="(?P<href>/@[^"]+/[^"/]+/)">(?P<title>[^<]+)</a>'
     r'.*?story-card-authors">\s*by <a[^>]*>(?P<author>[^<]*)</a>'
-    r'(?:.*?story-card-word-count">\s*\((?P<words>[\d,]+) words\))?',
+    r'(?:.*?story-card-word-count">\s*(?:\[(?P<status>[^\]]+)\]\s*)?'
+    r'\((?:(?P<chapters>\d+)\s+chapters?,\s+)?(?P<words>[\d,]+)\s+words\))?'
+    r'(?:.*?<p class="story-card-description">\s*(?P<desc>.*?)\s*</p>)?',
     re.S,
 )
 
@@ -1853,16 +2358,27 @@ def search_readonlymind(query: str, *, page: int = 1,
         m = _ROM_CARD_RE.search(chunk)
         if not m:
             continue
-        title = m.group("title").strip()
-        author = (m.group("author") or "").strip()
-        if not _matches_query(query, title, author):
-            continue
+        title = html_module.unescape(m.group("title").strip())
+        author = html_module.unescape((m.group("author") or "").strip())
+        summary = ""
+        if m.group("desc"):
+            summary = html_module.unescape(
+                re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", m.group("desc"))),
+            ).strip()
+        # No client-side re-filter: ``q`` went to the server, and ROM
+        # relevance hits routinely lack the literal query string in
+        # their title/author (re-filtering used to empty every
+        # keyword search).
         words = (m.group("words") or "?").replace(",", "")
+        chapters = m.group("chapters") or ("1" if m.group("words") else "?")
+        status = ""
+        if (m.group("status") or "").strip().lower() == "ongoing":
+            status = "In progress"
         out.append({
             "title": title, "author": author,
             "url": f"https://readonlymind.com{m.group('href')}",
-            "summary": "", "words": words or "?", "chapters": "?",
-            "rating": "M", "fandom": "", "status": "",
+            "summary": summary, "words": words or "?", "chapters": chapters,
+            "rating": "M", "fandom": "", "status": status,
             "site": "readonlymind",
             "updated": m.group("date"),
         })
@@ -1906,28 +2422,138 @@ def search_giantessworld(query: str, *, page: int = 1,
     out: list[dict] = []
     seen: set[str] = set()
     fetched_any = False
-    for m in re.finditer(
-        r'href="viewstory\.php\?sid=(?P<sid>\d+)[^"]*"[^>]*>(?P<text>[^<]{2,80})<',
-        html,
-    ):
-        sid, text = m.group("sid"), m.group("text").strip()
-        if not text or text.lower() in _GW_CHROME_LINK_TEXT:
+
+    # eFiction renders one div.listbox per story: div.title (title +
+    # author links, "Rated: X"), div.content (summary text after a
+    # "Summary:" span.label, then "Word count: N" / "Chapters: N" /
+    # "Completed: Yes|No" in the same text run), div.tail (Published/
+    # Updated dates).
+    soup = BeautifulSoup(html, "lxml")
+    listboxes = soup.find_all("div", class_="listbox")
+    for box in listboxes:
+        title_a = box.select_one(
+            "div.title a[href*='viewstory.php?sid=']",
+        )
+        if title_a is None:
             continue
+        m = re.search(r"sid=(\d+)", title_a.get("href") or "")
+        if not m:
+            continue
+        sid = m.group(1)
         if sid in seen:
             continue
         seen.add(sid)
         fetched_any = True
-        if not _matches_query(query, text):
+        title = title_a.get_text(" ", strip=True)
+        if not title or title.lower() in _GW_CHROME_LINK_TEXT:
+            continue
+
+        title_div = box.find("div", class_="title")
+        author = ""
+        rating = "M"
+        if title_div is not None:
+            author_a = title_div.find(
+                "a", href=re.compile(r"viewuser\.php\?uid=\d+"),
+            )
+            if author_a is not None:
+                author = author_a.get_text(" ", strip=True)
+            r_m = re.search(
+                r"Rated:\s*([^\[\]]+?)\s*\[",
+                title_div.get_text(" ", strip=True),
+            )
+            if r_m:
+                rating = r_m.group(1).strip()
+
+        summary = ""
+        words = "?"
+        chapters = "?"
+        status = ""
+        content = box.find("div", class_="content")
+        if content is not None:
+            label = next(
+                (
+                    lb for lb in content.find_all("span", class_="label")
+                    if lb.get_text(" ", strip=True).startswith("Summary")
+                ),
+                None,
+            )
+            if label is not None:
+                # The summary is the sibling run after the label, up
+                # to the next span.label. Walking siblings (not
+                # find_next("p")) handles the occasional row whose
+                # summary is bare text rather than a <p>.
+                parts: list[str] = []
+                for sib in label.next_siblings:
+                    if getattr(sib, "name", None) == "span" and \
+                            "label" in (sib.get("class") or []):
+                        break
+                    text = (
+                        sib.get_text(" ", strip=True)
+                        if hasattr(sib, "get_text") else str(sib).strip()
+                    )
+                    if text:
+                        parts.append(text)
+                summary = re.sub(r"\s+", " ", " ".join(parts)).strip()
+            content_text = content.get_text(" ", strip=True)
+            w_m = re.search(r"Word count:\s*([\d,]+)", content_text)
+            if w_m:
+                words = w_m.group(1)
+            ch_m = re.search(r"Chapters:\s*(\d+)", content_text)
+            if ch_m:
+                chapters = ch_m.group(1)
+            c_m = re.search(r"Completed:\s*(Yes|No)", content_text)
+            if c_m:
+                status = "Complete" if c_m.group(1) == "Yes" else "In progress"
+
+        updated = ""
+        tail = box.find("div", class_="tail")
+        if tail is not None:
+            u_m = re.search(
+                r"Updated:\s*([A-Za-z]+ \d{1,2} \d{4})",
+                tail.get_text(" ", strip=True),
+            )
+            if u_m:
+                updated = _iso_date(u_m.group(1))
+
+        if not _matches_query(query, title, summary):
             continue
         out.append({
-            "title": text, "author": "",
+            "title": title, "author": author,
             "url": f"https://giantessworld.net/viewstory.php?sid={sid}",
-            "summary": "", "words": "?", "chapters": "?",
-            "rating": "M", "fandom": "giantess", "status": "",
+            "summary": summary, "words": words, "chapters": chapters,
+            "rating": rating, "fandom": "giantess", "status": status,
             "site": "giantessworld",
+            "updated": updated,
         })
         if len(out) >= PER_SITE_PAGE_MAX:
             break
+
+    if not listboxes:
+        # Markup-drift fallback: the old flat anchor walk over raw
+        # HTML (titles only).
+        for m in re.finditer(
+            r'href="viewstory\.php\?sid=(?P<sid>\d+)[^"]*"[^>]*>'
+            r'(?P<text>[^<]{2,80})<',
+            html,
+        ):
+            sid, text = m.group("sid"), m.group("text").strip()
+            if not text or text.lower() in _GW_CHROME_LINK_TEXT:
+                continue
+            if sid in seen:
+                continue
+            seen.add(sid)
+            fetched_any = True
+            if not _matches_query(query, text):
+                continue
+            out.append({
+                "title": text, "author": "",
+                "url": f"https://giantessworld.net/viewstory.php?sid={sid}",
+                "summary": "", "words": "?", "chapters": "?",
+                "rating": "M", "fandom": "giantess", "status": "",
+                "site": "giantessworld",
+            })
+            if len(out) >= PER_SITE_PAGE_MAX:
+                break
     if not out and fetched_any:
         return SparsePage()
     return out
@@ -2623,10 +3249,11 @@ def _filter_by_min_words(results: list[dict], min_words: str) -> list[dict]:
         if not raw or raw == "?" or not raw[0].isdigit():
             kept.append(r)
             continue
-        try:
-            if int(raw) >= threshold:
-                kept.append(r)
-        except ValueError:
+        # Sites publish either exact counts ("6022") or rounded
+        # k-format ("2.6k", Lushstories) — _parse_word_threshold
+        # already speaks both.
+        value = _parse_word_threshold(raw)
+        if value <= 0 or value >= threshold:
             kept.append(r)
     return kept
 

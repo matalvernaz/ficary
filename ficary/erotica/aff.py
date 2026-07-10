@@ -174,6 +174,29 @@ class AFFScraper(BaseScraper):
                 if not title:
                     continue
                 seen.add(idm.group(1))
+
+                # Cards carry a real synopsis (div.story-card-description)
+                # plus "N chapters" / "Updated: <date>" meta items. No
+                # word count exists anywhere in the fragment.
+                summary = ""
+                desc = card.find("div", class_="story-card-description")
+                if desc is not None:
+                    summary = desc.get_text(" ", strip=True)
+                card_text = card.get_text(" ", strip=True)
+                ch_m = re.search(r"(\d+)\s+chapters?\b", card_text, re.I)
+                upd_m = re.search(
+                    r"Updated:\s*([A-Za-z]+ \d{1,2}, \d{4})", card_text,
+                )
+                updated = ""
+                if upd_m:
+                    try:
+                        from datetime import datetime
+                        updated = datetime.strptime(
+                            upd_m.group(1), "%B %d, %Y",
+                        ).strftime("%Y-%m-%d")
+                    except ValueError:
+                        pass
+
                 works.append({
                     "title": title,
                     # Fragment hrefs are absolute with the fandom subdomain
@@ -181,9 +204,10 @@ class AFFScraper(BaseScraper):
                     # one.
                     "url": urljoin(frag_url, href),
                     "author": author,
-                    "summary": "", "words": "?", "chapters": "?",
+                    "summary": summary, "words": "?",
+                    "chapters": ch_m.group(1) if ch_m else "?",
                     "rating": "M", "fandom": sub, "status": "",
-                    "updated": "", "section": "own",
+                    "updated": updated, "section": "own",
                 })
                 if max_results and len(works) >= max_results:
                     return author or "AFF author", works

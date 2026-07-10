@@ -1,0 +1,371 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN" "http://www.w3.org/TR/html4/loose.dtd"><html><head><title>TG Storytime: Transgender Fiction</title>
+<link rel="shortcut icon" type="image/ico" href="favicon.ico" />
+<link rel="apple-touch-icon" href="apple-touch-icon.png" />
+<meta http-equiv="Content-Type" content="text/html; charset=ISO-8859-1"><script language="javascript" type="text/javascript" src="includes/javascript.js"></script>
+<link rel="alternate" type="application/rss+xml" title="TG Storytime RSS Feed" href="rss.php"><style type="text/css">
+#columncontainer { margin: 1em auto; width: auto;}
+#browseblock, #memberblock { width: 100%; padding: 0; margin: 0; float: left; border: 0px solid transparent; }
+.column { float: left; width: 32%; }
+html>body .column { width: 33%; }
+.cleaner { clear: both; height: 1px; font-size: 1px; margin: 0; padding: 0; background: transparent; }
+#settingsform { margin: 0; padding: 0; border: none; }
+#settingsform FORM { width: 100%; margin: 0 10%; }
+#settingsform LABEL { float: left; display: block; width: 30%; text-align: right; padding-right: 10px; clear: left; }
+#settingsform DIV { margin: 1ex auto; clear: both;}
+#settingsform .fieldset SPAN { float: left; display: block; width: 30%; text-align: right; padding-right: 10px; clear: left;}
+#settingsform .fieldset LABEL { float: none; width: auto; display: inline; text-align: left; clear: none; }
+#settingsform { float: left; margin: 1ex 10%; }
+#settingsform .tinytoggle { text-align: center; }
+#settingsform .tinytoggle LABEL { float: none; display: inline; width: auto; text-align: center; padding: 0; clear: none; }
+#settingsform #submitdiv { text-align: center; width: 100%;clear: both; height: 3em; }
+#settingsform #submitdiv #submit { position: absolute; z-index: 10001; margin: 1em; }
+a.pophelp{
+    position: relative; /* this is the key*/
+    vertical-align: super;
+}
+
+a.pophelp:hover{z-index:100; border: none; text-decoration: none;}
+
+a.pophelp span{display: none; position: absolute; top: -25em; left: 20em; }
+
+a.pophelp:hover span{ /*the span will display just on :hover state*/
+    display:block;
+    position: absolute;
+    top: -3em; left: 8em; width: 225px;
+    border:1px solid #000;
+    background-color:#CCC; color:#000;
+    text-decoration: none;
+    text-align: left;
+    padding: 5px;
+    font-weight: normal;
+    visibility: visible;
+}
+.required { color: red; }
+.shim {
+	position: absolute;
+	display: none;
+	height: 0;
+	width:0;
+	margin: 0;
+	padding: 0;
+	z-index: 100;
+}
+
+.ajaxOptList {
+	background: #CCC;
+	border: 1px solid #000;
+	margin: 0;
+	position: absolute;
+	padding: 0;
+	z-index: 1000;
+	text-align: left;
+}
+.ajaxListOptOver {
+	padding: 4px;
+	background: #CCC;
+	margin: 0;
+}
+.ajaxListOpt {
+	background: #EEE;
+	padding: 4px;
+	margin: 0;
+}
+.multiSelect {
+	width: 300px;
+}
+
+</style>
+<link rel="stylesheet" type="text/css" href='skins/storytime/style.css'>
+<!--[if lte IE 8]>
+       <link rel="stylesheet" type="text/css" href='skins/storytime/style-ie.css'>
+<![endif]--><script type="text/javascript" src="includes/twisty3/twisty.js"></script>
+<script src="includes/twisty3/prototype.js" type="text/javascript"></script>
+<script src="includes/twisty3/scriptaculous.js?load=effects" type="text/javascript"></script>
+</head><div id="index">
+<body>
+<div id="container">
+<div id="banner">
+<div id="bannerimage">
+&nbsp;
+</div>
+<div id="newspanel">
+<p>
+<div class="newsbox odd">
+<div class="newstitle">Slow Approvals </div>
+Apologies for the slow approvals. Sometimes life gets in the way. Please stay patient!<br />
+   --Joe on 06/24/26 06:54 pm <a href="news.php?action=newsstory&amp;nid=48">2 Comments</a>
+</div>
+
+</p>
+</div>
+</div>
+<div id="menu">
+	<ul id="menulist">
+<li><a href="index.php" title="Home" id="current">Home</a></li>  
+<li><a href="browse.php?type=recent" title="Recent">Recent</a></li>  
+<li><a href="search.php" title="Search">Search</a></li>  
+<li><a href="toplists.php" title="Tops">Tops</a></li>  
+<li><a href="authors.php?list=authors" title="Authors">Authors</a></li>  
+<li><a href="browse.php?type=categories" title="Categories">Categories</a></li>  
+<li><a href="viewpage.php?page=discuss" title="Discussions">Discussions</a></li>
+<li></li>  
+<li></li>  
+</ul>
+</div>
+<div id="mainpage">
+<div class="bigblock">
+</div>
+<!--- Turn off bigblock from header--->
+<div id="leftindex">
+<div class="block">
+       <div class="title">Member</div>
+       <div class="content"><form method="POST" id="loginblock" enctype="multipart/form-data" action="user.php?action=login"><label for="penname=">Penname:</label><INPUT type="text" class="textbox" name="penname" id="penname" size="15"> <label for="password">Password:</label><INPUT type="password" class="textbox" name="password" id="password" size="15"> <span id='rememberme'><INPUT type="checkbox" class="checkbox" name="cookiecheck" id="cookiecheck" value="1"><label for="cookiecheck=">Remember Me</label></span> <INPUT type="submit" class="button" name="submit" value="Go"> <div id='loginlinks'><a href="user.php?action=register" title="Register">Register</a> | <a href="user.php?action=lostpassword" title="Lost Password">Lost Password</a></div></form></div>
+     </div>
+     <div class="block">
+       <div class="title">Random Story</div>
+       <div class="content"><div class='randomstory'><span class='sublabel'><a href="viewstory.php?sid=8839">A Vampire�s Thrall</a> by <a href="viewuser.php?uid=15372">TheSpiralledEye</a><br/>Adult</span><br />[Man to Vampire Thrall Woman TG] A bored and lonely vampire decides to make herself a new thrall.</div></div>
+     </div>
+      <div class="block">
+       <div class="title">Site Info</div>
+       <div class="content">  TG Storytime has 6819 stories from 2042 authors. Welcome to our newest member, <a href="viewuser.php?uid=19275">The storyteller</a>.</div>
+	</div>
+	<div class="block">
+       <div class="title">Reviewer's Club</div>
+       <div class="content">What is the Reviewer's Club?<br/><br/></div>
+	</div>
+      <div class="block">
+       <div class="title">Sponsor</div>
+       <div class="content"><a href='http://www.sixpacksite.com'><img src='images/sponsor-art.png' alt='Sponsored by...'></a></div>
+	</div>
+</div>
+<div id="rightindex">
+	<div class="block">
+       <div class="title">Welcome!</div>
+       <div class="content">Thanks for visiting! There's tons to read, and don't forget to leave a review! <3&#127482;&#127462;<3</div>
+     </div>
+<div class="block">
+<div class="title">New Stories</div>
+<div class="showcase"><div class="categoryicon"><img src="skins/storytime/images/categoryicon7.png"></div><div class="content"><span class="sublabel"><a href="viewstory.php?sid=9337">Thomas's Fate</a> by <a href="viewuser.php?uid=18717">Tro3j</a></span><br />
+The life of Dr. Thomas had been bound to a brutal rhythm: endless, grueling shifts in the accident and emergency department of a bleak London hospital, mounting debts, the grey monotony of the South Lambeth outskirts, and the constant pressure of an oppressive management. But a single, accidental nighttime...<br />
+<span class="sublabel">07/09/26, Explicit, <a href='browse.php?type=categories&amp;catid=7'>Sci-Fi Gender Change</a>, Completed Story <span style='white-space: nowrap;'><img src="images/star.png" alt="star"><img src="images/star.png" alt="star"><img src="images/star.png" alt="star"><img src="images/star.png" alt="star"><img src="images/star.png" alt="star"></span></span> <br />
+</div></div>
+<div class="showcase"><div class="categoryicon"><img src="skins/storytime/images/categoryicon3.png"></div><div class="content"><span class="sublabel"><a href="viewstory.php?sid=9353">Becoming Juliet</a> by <a href="viewuser.php?uid=18583">Flower_Grl</a></span><br />
+When aspiring high school actor Steven is cast as Juliet, he commits completely to the role by living as Stephanie until the curtain falls. As rehearsals blur the line between performance and reality, romance begins to bloom under the stage lights.<br />
+<span class="sublabel">07/07/26, Kid-Friendly, <a href='browse.php?type=categories&amp;catid=3'>Realistic Gender Change</a>, Completed Story <span style='white-space: nowrap;'><img src="images/star.png" alt="star"><img src="images/star.png" alt="star"><img src="images/star.png" alt="star"><img src="images/star.png" alt="star"><img src="images/starhalf.png" alt="half-star"></span></span> <br />
+</div></div>
+<div class="showcase"><div class="categoryicon"><img src="skins/storytime/images/categoryicon3.png"></div><div class="content"><span class="sublabel"><a href="viewstory.php?sid=9352">Luca and Giulia</a> by <a href="viewuser.php?uid=19261">ilblu</a></span><br />
+Luca runs. Giulia looks &#8212; but not always at him. When they leave Montreal for Milan, they believe they're escaping a past that suffocates them. They don't yet know that the city welcoming them will change them both in ways neither anticipated. An accident. A choice. A series of yeses that aren't...<br />
+<span class="sublabel">07/05/26, Adult, <a href='browse.php?type=categories&amp;catid=3'>Realistic Gender Change</a>, Completed Story </span> <br />
+</div></div>
+<div class="showcase"><div class="categoryicon"><img src="skins/storytime/images/categoryicon6.png"></div><div class="content"><span class="sublabel"><a href="viewstory.php?sid=9350">The Sorceress' Dungeon</a> by <a href="viewuser.php?uid=14542">DeviantNabu</a></span><br />
+In a dark corner of the land, an evil sorceress has a dungeon full of foul creatures to do her bidding. Many brave men have tried to defeat her, but the sorceress uses her magic to transform their minds and bodies into loyal, monstrous servants.<br />
+<span class="sublabel">07/05/26, Deviant, <a href='browse.php?type=categories&amp;catid=6'>Magical Gender Change</a>, Completed Story </span> <br />
+</div></div>
+<div class="showcase"><div class="categoryicon"><img src="skins/storytime/images/categoryicon7.png"></div><div class="content"><span class="sublabel"><a href="viewstory.php?sid=9347">Following the Prompt</a> by <a href="viewuser.php?uid=14542">DeviantNabu</a></span><br />
+Struggling to describe his impossible fantasy of becoming the character Sage from the X-Men, Will's AI companion secretly creates a way for him to live out his dream.<br />
+<span class="sublabel">07/05/26, Explicit, <a href='browse.php?type=categories&amp;catid=7'>Sci-Fi Gender Change</a>, Completed Story </span> <br />
+</div></div>
+<div class="showcase"><div class="categoryicon"><img src="skins/storytime/images/categoryicon6.png"></div><div class="content"><span class="sublabel"><a href="viewstory.php?sid=9340">How I Became A Cheerleader </a> by <a href="viewuser.php?uid=18583">Flower_Grl</a></span><br />
+A college football player&#8217;s locker room mistake turns into a month-long life as a woman, reshaping his identity and leading him to unexpected romance.<br />
+<span class="sublabel">07/03/26, Adult, <a href='browse.php?type=categories&amp;catid=6'>Magical Gender Change</a>, Completed Story <span style='white-space: nowrap;'><img src="images/star.png" alt="star"><img src="images/star.png" alt="star"><img src="images/star.png" alt="star"><img src="images/star.png" alt="star"><img src="images/starhalf.png" alt="half-star"></span></span> <br />
+</div></div>
+<div class="showcase"><div class="categoryicon"><img src="skins/storytime/images/categoryicon6.png"></div><div class="content"><span class="sublabel"><a href="viewstory.php?sid=8877">The Body Pact</a> by <a href="viewuser.php?uid=15590">September</a></span><br />
+Noel can&#8217;t go on living as a boy. He has tried coping for so long, and it has left him alone and desperate for relief.Chloe has everything. Grades, looks, friends; she&#8217;s living the ideal life. Only one thing is missing.Chloe and Noel used to be friends since the early days of their childhood...<br />
+<span class="sublabel">06/30/26, Explicit, <a href='browse.php?type=categories&amp;catid=6'>Magical Gender Change</a>, Completed Story <span style='white-space: nowrap;'><img src="images/star.png" alt="star"><img src="images/star.png" alt="star"><img src="images/star.png" alt="star"><img src="images/star.png" alt="star"></span></span> <br />
+</div></div>
+<div class="showcase"><div class="categoryicon"><img src="skins/storytime/images/categoryicon1.png"></div><div class="content"><span class="sublabel"><a href="viewstory.php?sid=8847">The visit</a> by <a href="viewuser.php?uid=17849">Barbara Zell</a></span><br />
+As a crossdresser a girl must keep her secrets, when they are found out though her life feels like it has come to an end.  In Barbara's case the discovery offers a new chance at engaging an old friend as the person she feels she is. This is a some what auto biographical offering, through it rhe story...<br />
+<span class="sublabel">06/28/26, Adult, <a href='browse.php?type=categories&amp;catid=1'>Realistic Crossdressing and TV</a>, Completed Story <span style='white-space: nowrap;'><img src="images/star.png" alt="star"><img src="images/star.png" alt="star"><img src="images/star.png" alt="star"><img src="images/star.png" alt="star"><img src="images/star.png" alt="star"></span></span> <br />
+</div></div>
+<div class="showcase"><div class="categoryicon"><img src="skins/storytime/images/categoryicon5.png"></div><div class="content"><span class="sublabel"><a href="viewstory.php?sid=9155">Training Under Mommy: Part 2</a> by <a href="viewuser.php?uid=18621">Minato_99</a></span><br />
+Two weeks into her permanent X-Change body, Gemma is settling into life at Pink Cage&#8212;until a familiar face from her past checks in. Hunter knew the old her. What he finds now is something far more dangerous.<br />
+<span class="sublabel">06/27/26, Deviant, <a href='browse.php?type=categories&amp;catid=5'>Sissy Story</a>, Completed Story <span style='white-space: nowrap;'><img src="images/star.png" alt="star"><img src="images/star.png" alt="star"><img src="images/star.png" alt="star"><img src="images/star.png" alt="star"><img src="images/star.png" alt="star"></span></span> <br />
+</div></div>
+<div class="inprogress"><div class="categoryicon"><img src="skins/storytime/images/categoryicon7.png"></div><div class="content"><span class="sublabel"><a href="viewstory.php?sid=9342">The Comic Strip</a> by <a href="viewuser.php?uid=665">Raven</a></span><br />
+An ongoing periodic comic strip. Check in daily!<br />
+<span class="sublabel">07/10/26, Adult, <a href='browse.php?type=categories&amp;catid=7'>Sci-Fi Gender Change</a>, Story Incomplete <span style='white-space: nowrap;'><img src="images/star.png" alt="star"><img src="images/star.png" alt="star"><img src="images/star.png" alt="star"><img src="images/starhalf.png" alt="half-star"></span></span> <br />
+</div></div>
+<div class="inprogress"><div class="categoryicon"><img src="skins/storytime/images/categoryicon6.png"></div><div class="content"><span class="sublabel"><a href="viewstory.php?sid=8484">The Unofficial Adventures of The New Mrs. Harris</a> by <a href="viewuser.php?uid=12666">Ray</a></span><br />
+My own unofficial fanfiction continuation of Lejla&#8217;s The New Mrs. Harris which can be read here https://www.tgstorytime.com/viewstory.php?sid=4318<br />
+<span class="sublabel">07/09/26, Adult, <a href='browse.php?type=categories&amp;catid=6'>Magical Gender Change</a>, Story Incomplete <span style='white-space: nowrap;'><img src="images/star.png" alt="star"><img src="images/star.png" alt="star"><img src="images/star.png" alt="star"><img src="images/star.png" alt="star"><img src="images/star.png" alt="star"></span></span> <br />
+</div></div>
+<div class="inprogress"><div class="categoryicon"><img src="skins/storytime/images/categoryicon7.png"></div><div class="content"><span class="sublabel"><a href="viewstory.php?sid=9227">Sweet Little Spy Book 2 What a Cheer!!</a> by <a href="viewuser.php?uid=9443">TerrieCheerleader</a></span><br />
+The parents of a troublesome teenage son finally had enough and sends him for special training. He gets more than she bargains for. Lynn and Allison get the varsity Cheer squad ready for the new school year.  Caution: This story deals with a tween being pregnant. If this type of story upsets you. Then...<br />
+<span class="sublabel">07/09/26, Adult, <a href='browse.php?type=categories&amp;catid=7'>Sci-Fi Gender Change</a>, Story Incomplete </span> <br />
+</div></div>
+<div class="inprogress"><div class="categoryicon"><img src="skins/storytime/images/categoryicon1.png"></div><div class="content"><span class="sublabel"><a href="viewstory.php?sid=9329">The summer community theater </a> by <a href="viewuser.php?uid=19227">Jacklyn </a></span><br />
+Young man wants to join the community theatre production of Little Women for the summer. Little did he know, he was about to get a role that change his life forever.<br />
+<span class="sublabel">07/09/26, Adult, <a href='browse.php?type=categories&amp;catid=1'>Realistic Crossdressing and TV</a>, Story Incomplete <span style='white-space: nowrap;'><img src="images/star.png" alt="star"><img src="images/star.png" alt="star"><img src="images/star.png" alt="star"></span></span> <br />
+</div></div>
+<div class="inprogress"><div class="categoryicon"><img src="skins/storytime/images/categoryicon6.png"></div><div class="content"><span class="sublabel"><a href="viewstory.php?sid=9354">Valkyrie</a> by <a href="viewuser.php?uid=17413">Our Lady in Twilight</a></span><br />
+Girl Flu is ravaging the country! And for mild-mannered barman Joe Nyira, the stakes are simple. A fleck of blue in the saliva is all it takes to turn any man into a woman - unless they get the vaccine in time.
+
+It shouldn't be a problem though. Not nowadays. After all, the cure has been around for...<br />
+<span class="sublabel">07/09/26, Adult, <a href='browse.php?type=categories&amp;catid=6'>Magical Gender Change</a>, Story Incomplete <span style='white-space: nowrap;'><img src="images/star.png" alt="star"><img src="images/star.png" alt="star"><img src="images/star.png" alt="star"><img src="images/star.png" alt="star"><img src="images/star.png" alt="star"></span></span> <br />
+</div></div>
+<div class="inprogress"><div class="categoryicon"><img src="skins/storytime/images/categoryicon6.png"></div><div class="content"><span class="sublabel"><a href="viewstory.php?sid=9357">Detransed</a> by <a href="viewuser.php?uid=18809">Fishie</a></span><br />
+This is why a transgender witch and wizard shouldn't get drunk together.<br />
+<span class="sublabel">07/09/26, Explicit, <a href='browse.php?type=categories&amp;catid=6'>Magical Gender Change</a>, Story Incomplete </span> <br />
+</div></div>
+<div class="inprogress"><div class="categoryicon"><img src="skins/storytime/images/categoryicon6.png"></div><div class="content"><span class="sublabel"><a href="viewstory.php?sid=9345">Bend or Break</a> by <a href="viewuser.php?uid=9035">R3piv</a></span><br />
+Ten contestants have signed up for the latest season of the gender bender transformation reality game-show 'Bend or Break'. Each day they are given a increasingly explicit challenge to complete while slowly being transformed. This story is focused on Kael as he embarks on this life changing experience.<br />
+<span class="sublabel">07/09/26, Explicit, <a href='browse.php?type=categories&amp;catid=6'>Magical Gender Change</a>, Story Incomplete </span> <br />
+</div></div>
+<div class="inprogress"><div class="categoryicon"><img src="skins/storytime/images/categoryicon6.png"></div><div class="content"><span class="sublabel"><a href="viewstory.php?sid=9355">Conditioning</a> by <a href="viewuser.php?uid=690">Hikaro</a></span><br />
+Chad Harrison was evil. He was abusive. He did unspeakable things to many girls. Finally, he did those things to the wrong girls, and it was time to learn his lesson.<br />
+<span class="sublabel">07/09/26, Deviant, <a href='browse.php?type=categories&amp;catid=6'>Magical Gender Change</a>, Story Incomplete <span style='white-space: nowrap;'><img src="images/star.png" alt="star"><img src="images/star.png" alt="star"><img src="images/star.png" alt="star"><img src="images/star.png" alt="star"><img src="images/star.png" alt="star"></span></span> <br />
+</div></div>
+<div class="inprogress"><div class="categoryicon"><img src="skins/storytime/images/categoryicon7.png"></div><div class="content"><span class="sublabel"><a href="viewstory.php?sid=9356">Better You Than Him</a> by <a href="viewuser.php?uid=18621">Minato_99</a></span><br />
+Ever wandered into r/notgayatall Between that and a few caption stories, this ridiculous little idea lodged in my brain and refused to leave.<br />
+<span class="sublabel">07/09/26, Explicit, <a href='browse.php?type=categories&amp;catid=7'>Sci-Fi Gender Change</a>, Story Incomplete <span style='white-space: nowrap;'><img src="images/star.png" alt="star"><img src="images/star.png" alt="star"><img src="images/star.png" alt="star"><img src="images/star.png" alt="star"><img src="images/star.png" alt="star"></span></span> <br />
+</div></div>
+<div class="inprogress"><div class="categoryicon"><img src="skins/storytime/images/categoryicon6.png"></div><div class="content"><span class="sublabel"><a href="viewstory.php?sid=8436">Jen's Revenge</a> by <a href="viewuser.php?uid=18144">Sunday</a></span><br />
+A classic fetish heavy forced MTF story, light on story but with a denser focus on gradual physical changes and mental decent into identity loss.<br />
+<span class="sublabel">07/08/26, Explicit, <a href='browse.php?type=categories&amp;catid=6'>Magical Gender Change</a>, Story Incomplete <span style='white-space: nowrap;'><img src="images/star.png" alt="star"><img src="images/star.png" alt="star"><img src="images/star.png" alt="star"><img src="images/star.png" alt="star"><img src="images/starhalf.png" alt="half-star"></span></span> <br />
+</div></div>
+<div class="inprogress"><div class="categoryicon"><img src="skins/storytime/images/categoryicon7.png"></div><div class="content"><span class="sublabel"><a href="viewstory.php?sid=9254">Forging the Phis</a> by <a href="viewuser.php?uid=18160">Paige Turner </a></span><br />
+They had almost nothing in common &#8212; a normie, a stoner, a jock, an edgelord, a nerd, a frat bro &#8212; until they made the mistake of ridiculing a classmate at her lowest moment. Her father, biotech billionaire Harlan Cade, seizes the opportunity to provide his daughter with the sorority she wants...<br />
+<span class="sublabel">07/08/26, Adult, <a href='browse.php?type=categories&amp;catid=7'>Sci-Fi Gender Change</a>, Story Incomplete <span style='white-space: nowrap;'><img src="images/star.png" alt="star"><img src="images/star.png" alt="star"><img src="images/star.png" alt="star"><img src="images/star.png" alt="star"><img src="images/star.png" alt="star"></span></span> <br />
+</div></div>
+<div class="inprogress"><div class="categoryicon"><img src="skins/storytime/images/categoryicon6.png"></div><div class="content"><span class="sublabel"><a href="viewstory.php?sid=9291">Vanguard Juno and the Lightning Core</a> by <a href="viewuser.php?uid=13043">bb91</a></span><br />
+Glenn Haynes is a lot of things. Friend, brother, budding electrician. But a Vanguard? One of the all-girl team of heroes who fights the monsters which plague the city of Norborough? Don't be ridiculous<br />
+<span class="sublabel">07/08/26, Adult, <a href='browse.php?type=categories&amp;catid=6'>Magical Gender Change</a>, Story Incomplete <span style='white-space: nowrap;'><img src="images/star.png" alt="star"><img src="images/star.png" alt="star"><img src="images/star.png" alt="star"><img src="images/star.png" alt="star"><img src="images/star.png" alt="star"></span></span> <br />
+</div></div>
+<div class="inprogress"><div class="categoryicon"><img src="skins/storytime/images/categoryicon1.png"></div><div class="content"><span class="sublabel"><a href="viewstory.php?sid=9307">The True Story of being a Latex Sub</a> by <a href="viewuser.php?uid=16380">SophieMcardy</a></span><br />
+My tales and stories of people I have met and situations I have been in, exploring extreme kinks and fantasies with men, women and groups as someone who is very submissive and into all levels of kink. This is my life as a Latex covered Sub<br />
+<span class="sublabel">07/08/26, Deviant, <a href='browse.php?type=categories&amp;catid=1'>Realistic Crossdressing and TV</a>, Story Incomplete </span> <br />
+</div></div>
+<div class="inprogress"><div class="categoryicon"><img src="skins/storytime/images/categoryicon3.png"></div><div class="content"><span class="sublabel"><a href="viewstory.php?sid=9346">Sunshine Girl</a> by <a href="viewuser.php?uid=15590">September</a></span><br />
+Mia has to get out. For years, she has been working towards this, the scholarship that allows her to move far away from the rural town she has grown up in. She only has to make it to finals, then she can disappear, never to look back. If only there wasn&#8217;t Drew, her wildly popular childhood friend...<br />
+<span class="sublabel">07/08/26, Adult, <a href='browse.php?type=categories&amp;catid=3'>Realistic Gender Change</a>, Story Incomplete </span> <br />
+</div></div>
+<div class="inprogress"><div class="categoryicon"><img src="skins/storytime/images/categoryicon7.png"></div><div class="content"><span class="sublabel"><a href="viewstory.php?sid=7345">I Am Courtney James</a> by <a href="viewuser.php?uid=665">Raven</a></span><br />
+Ken Powers, a former pro football star, is body-swapped by a rogue alien known as Killswitch into the petite, ultra-feminine body of 16-year-old runaway Jennifer Thomas. Rescued by the government and given a new identity as 18-year-old Courtney James ("CJ"), she fully embraces her new life of extreme...<br />
+<span class="sublabel">07/08/26, Explicit, <a href='browse.php?type=categories&amp;catid=7'>Sci-Fi Gender Change</a>, Story Incomplete <span style='white-space: nowrap;'><img src="images/star.png" alt="star"><img src="images/star.png" alt="star"><img src="images/star.png" alt="star"><img src="images/star.png" alt="star"><img src="images/star.png" alt="star"></span></span> <br />
+</div></div>
+<div class="inprogress"><div class="categoryicon"><img src="skins/storytime/images/categoryicon1.png"></div><div class="content"><span class="sublabel"><a href="viewstory.php?sid=6369">Camming down the rabbit hole</a> by <a href="viewuser.php?uid=14631">Dani_does_Dallas</a></span><br />
+The story of how during the pandemic of 2020, I was faced with the prospect of unemployment and turned to camming as a way of earning some money, but where would it lead to?<br />
+<span class="sublabel">07/07/26, Adult, <a href='browse.php?type=categories&amp;catid=1'>Realistic Crossdressing and TV</a>, Story Incomplete <span style='white-space: nowrap;'><img src="images/star.png" alt="star"><img src="images/star.png" alt="star"><img src="images/star.png" alt="star"><img src="images/star.png" alt="star"><img src="images/star.png" alt="star"></span></span> <br />
+</div></div>
+<div class="inprogress"><div class="categoryicon"><img src="skins/storytime/images/categoryicon7.png"></div><div class="content"><span class="sublabel"><a href="viewstory.php?sid=9194">Host: Feminine</a> by <a href="viewuser.php?uid=19003">rebirthpub</a></span><br />
+While Caleb Marsh sleeps, an AI injects him with nanobots that begin remaking his body &#8212; gradually, irreversibly, and entirely without his knowledge. As the transformation deepens and his relationship with his colleague Seo-yeon shifts into something neither of them has language for, Caleb faces...<br />
+<span class="sublabel">07/07/26, Explicit, <a href='browse.php?type=categories&amp;catid=7'>Sci-Fi Gender Change</a>, Story Incomplete <span style='white-space: nowrap;'><img src="images/star.png" alt="star"><img src="images/star.png" alt="star"><img src="images/star.png" alt="star"><img src="images/star.png" alt="star"><img src="images/starhalf.png" alt="half-star"></span></span> <br />
+</div></div>
+<div class="inprogress"><div class="categoryicon"><img src="skins/storytime/images/categoryicon6.png"></div><div class="content"><span class="sublabel"><a href="viewstory.php?sid=6948">A Lesson in Transience</a> by <a href="viewuser.php?uid=15523">RoryRouses</a></span><br />
+Thirty-year-old Chris undergoes a fairly common yet mysterious condition called "transience" in which humans turn into various races we would see in a fantasy world. How will his life irreparably change after receiving the diagnosis that his days as both a man and a human are numbered?<br />
+<span class="sublabel">07/06/26, Explicit, <a href='browse.php?type=categories&amp;catid=6'>Magical Gender Change</a>, Story Incomplete <span style='white-space: nowrap;'><img src="images/star.png" alt="star"><img src="images/star.png" alt="star"><img src="images/star.png" alt="star"><img src="images/star.png" alt="star"><img src="images/star.png" alt="star"></span></span> <br />
+</div></div>
+<div class="inprogress"><div class="categoryicon"><img src="skins/storytime/images/categoryicon6.png"></div><div class="content"><span class="sublabel"><a href="viewstory.php?sid=9209">Cate Fox and the Murder at Bikini Beach</a> by <a href="viewuser.php?uid=8090">tfes8</a></span><br />
+--BOOK TWO--
+One year ago, Detective Jack Baker had a run-in with a Body Hopper that put him into a body of a teenage girl. Going by the identity &#8220;Cate Fox&#8221;, she was enrolled in Puellae Aurora Academy, an exclusive high school for students who have recently undergone gender transformations.Cate...<br />
+<span class="sublabel">07/06/26, Adult, <a href='browse.php?type=categories&amp;catid=6'>Magical Gender Change</a>, Story Incomplete <span style='white-space: nowrap;'><img src="images/star.png" alt="star"><img src="images/star.png" alt="star"><img src="images/star.png" alt="star"><img src="images/star.png" alt="star"><img src="images/star.png" alt="star"></span></span> <br />
+</div></div>
+<div class="inprogress"><div class="categoryicon"><img src="skins/storytime/images/categoryicon7.png"></div><div class="content"><span class="sublabel"><a href="viewstory.php?sid=9351">The Chess Game</a> by <a href="viewuser.php?uid=18145">DrZaaijer</a></span><br />
+A pioneering but disastrous experiment in mind-swapping leaves Dr. Sholtz and his family permanently trapped in unfamiliar bodies, illustrating how unchecked ambition can shatter lives and blur the line between humanity and animality.<br />
+<span class="sublabel">07/05/26, Kid-Friendly, <a href='browse.php?type=categories&amp;catid=7'>Sci-Fi Gender Change</a>, Completed Story </span> <br />
+</div></div>
+<div class="inprogress"><div class="categoryicon"><img src="skins/storytime/images/categoryicon1.png"></div><div class="content"><span class="sublabel"><a href="viewstory.php?sid=9348">Man to Maid - Rose</a> by <a href="viewuser.php?uid=19110">Ann Other</a></span><br />
+What starts as a joke to save face quickly spirals out of control.<br />
+<span class="sublabel">07/05/26, Explicit, <a href='browse.php?type=categories&amp;catid=1'>Realistic Crossdressing and TV</a>, Story Incomplete <span style='white-space: nowrap;'><img src="images/star.png" alt="star"><img src="images/star.png" alt="star"><img src="images/star.png" alt="star"><img src="images/star.png" alt="star"><img src="images/star.png" alt="star"></span></span> <br />
+</div></div>
+<div class="inprogress"><div class="categoryicon"><img src="skins/storytime/images/categoryicon6.png"></div><div class="content"><span class="sublabel"><a href="viewstory.php?sid=8692">The Maiden Curse</a> by <a href="viewuser.php?uid=12068">Speedychopslover</a></span><br />
+A cruel and vain prince incurs the wrath of a sorceress who casts a powerful curse. A curse that changes men into wenches.<br />
+<span class="sublabel">07/04/26, Explicit, <a href='browse.php?type=categories&amp;catid=6'>Magical Gender Change</a>, Story Incomplete <span style='white-space: nowrap;'><img src="images/star.png" alt="star"><img src="images/star.png" alt="star"><img src="images/star.png" alt="star"><img src="images/star.png" alt="star"><img src="images/star.png" alt="star"></span></span> <br />
+</div></div>
+<div class="inprogress"><div class="categoryicon"><img src="skins/storytime/images/categoryicon6.png"></div><div class="content"><span class="sublabel"><a href="viewstory.php?sid=9137">Rebirth</a> by <a href="viewuser.php?uid=19003">rebirthpub</a></span><br />
+When Mike wakes up one morning with a woman's anatomy below the waist, he has two immediate problems: getting through the workday without anyone noticing, and figuring out how to tell his wife. What follows is an intimate, unflinching account of a man learning to inhabit a body that has quietly rewritten...<br />
+<span class="sublabel">07/04/26, Explicit, <a href='browse.php?type=categories&amp;catid=6'>Magical Gender Change</a>, Story Incomplete <span style='white-space: nowrap;'><img src="images/star.png" alt="star"><img src="images/star.png" alt="star"><img src="images/star.png" alt="star"><img src="images/star.png" alt="star"><img src="images/starhalf.png" alt="half-star"></span></span> <br />
+</div></div>
+<div class="inprogress"><div class="categoryicon"><img src="skins/storytime/images/categoryicon6.png"></div><div class="content"><span class="sublabel"><a href="viewstory.php?sid=9344">The Witches Brew</a> by <a href="viewuser.php?uid=14266">Lady Z</a></span><br />
+Chris thinks and his neighbor have an unusual friendship but he's never had any reason to think she might be more then what she seems. That is, until she goes out of town and he throws a party that quickly turns into pandemonium! Weird changes and strange deeds wait within the words of this text, dear...<br />
+<span class="sublabel">07/04/26, Explicit, <a href='browse.php?type=categories&amp;catid=6'>Magical Gender Change</a>, Story Incomplete </span> <br />
+</div></div>
+<div class="inprogress"><div class="categoryicon"><img src="skins/storytime/images/categoryicon3.png"></div><div class="content"><span class="sublabel"><a href="viewstory.php?sid=9146">Reactivated</a> by <a href="viewuser.php?uid=17163">Lillian317537</a></span><br />
+Megan Bremmere is a 28-year-old woman just coasting through life. Still struggling to move on after waking up from a tragic accident two years ago that claimed her parents, she lives quietly with her grandmother and works as a communications assistant. Her days are routine, her nights filled only with...<br />
+<span class="sublabel">07/03/26, Explicit, <a href='browse.php?type=categories&amp;catid=3'>Realistic Gender Change</a>, Story Incomplete <span style='white-space: nowrap;'><img src="images/star.png" alt="star"><img src="images/star.png" alt="star"><img src="images/star.png" alt="star"><img src="images/star.png" alt="star"><img src="images/star.png" alt="star"></span></span> <br />
+</div></div>
+<div class="inprogress"><div class="categoryicon"><img src="skins/storytime/images/categoryicon7.png"></div><div class="content"><span class="sublabel"><a href="viewstory.php?sid=9343">Mind Games TG</a> by <a href="viewuser.php?uid=16849">Krissie Krave</a></span><br />
+With all our hidden kinks, can we really be sure who anybody is?  A young woman is given a digital doppelganger which she enjoys a bit too much.  Her boyfriend accidentally joins the fun.All writing is by humans.  Graphics created with AI.<br />
+<span class="sublabel">07/03/26, Explicit, <a href='browse.php?type=categories&amp;catid=7'>Sci-Fi Gender Change</a>, Story Incomplete </span> <br />
+</div></div>
+<div class="inprogress"><div class="categoryicon"><img src="skins/storytime/images/categoryicon6.png"></div><div class="content"><span class="sublabel"><a href="viewstory.php?sid=9210">Someone Else's Name </a> by <a href="viewuser.php?uid=18235">ChangingPages</a></span><br />
+Ethan Calloway has spent his whole life invisible. Maya Sorensen has spent hers wishing she were. When a single coin swap them in the middle of the night, neither gets what they thought they wanted, and there's no undoing what's already done. Someone Else's Name is a coming-of-age story about the losses...<br />
+<span class="sublabel">07/03/26, Adult, <a href='browse.php?type=categories&amp;catid=6'>Magical Gender Change</a>, Story Incomplete <span style='white-space: nowrap;'><img src="images/star.png" alt="star"><img src="images/star.png" alt="star"><img src="images/star.png" alt="star"><img src="images/star.png" alt="star"><img src="images/starhalf.png" alt="half-star"></span></span> <br />
+</div></div>
+<div class="inprogress"><div class="categoryicon"><img src="skins/storytime/images/categoryicon1.png"></div><div class="content"><span class="sublabel"><a href="viewstory.php?sid=8261">Cross Dress to Catch a Tech Wizard</a> by <a href="viewuser.php?uid=17849">Barbara Zell</a></span><br />
+A reclusive tech genius known only as &#8220;Specter&#8221; is hacking into critical government systems and selling secrets on the dark web. They have been affiliated with other underworld and terrorist&#8217;s groups. The government needs an in or connection. Barbara is that connection.<br />
+<span class="sublabel">07/03/26, Explicit, <a href='browse.php?type=categories&amp;catid=1'>Realistic Crossdressing and TV</a>, Story Incomplete <span style='white-space: nowrap;'><img src="images/star.png" alt="star"><img src="images/star.png" alt="star"><img src="images/star.png" alt="star"><img src="images/star.png" alt="star"></span></span> <br />
+</div></div>
+<div class="inprogress"><div class="categoryicon"><img src="skins/storytime/images/categoryicon7.png"></div><div class="content"><span class="sublabel"><a href="viewstory.php?sid=9241">My New Friend Dolly</a> by <a href="viewuser.php?uid=19043">MissPickleRecovered</a></span><br />
+Nick went to a hypnotherapist to get some invasive, foreign thoughts under wraps. He wasn't happy with the results, so he did an America.The following is what a hypnosis professional will do to you if backed into a corner. Inadvisable.<br />
+<span class="sublabel">07/03/26, Deviant, <a href='browse.php?type=categories&amp;catid=7'>Sci-Fi Gender Change</a>, Story Incomplete <span style='white-space: nowrap;'><img src="images/star.png" alt="star"><img src="images/star.png" alt="star"><img src="images/star.png" alt="star"><img src="images/star.png" alt="star"><img src="images/star.png" alt="star"></span></span> <br />
+</div></div>
+<div class="inprogress"><div class="categoryicon"><img src="skins/storytime/images/categoryicon5.png"></div><div class="content"><span class="sublabel"><a href="viewstory.php?sid=9310">I'm Trapped In a Sissy Alt Reality!</a> by <a href="viewuser.php?uid=17707">Sissy Girl Sammi</a></span><br />
+A computer scientist must find his way home after a godlike AI traps him in a fantasy world based upon his lewd search history!!!<br />
+<span class="sublabel">07/03/26, Explicit, <a href='browse.php?type=categories&amp;catid=5'>Sissy Story</a>, Story Incomplete </span> <br />
+</div></div>
+<div class="inprogress"><div class="categoryicon"><img src="skins/storytime/images/categoryicon7.png"></div><div class="content"><span class="sublabel"><a href="viewstory.php?sid=9280">My Summer at Camp Horizon</a> by <a href="viewuser.php?uid=665">Raven</a></span><br />
+When best friends Tom and Mike take summer jobs as camp counselors at Camp Horizon in the Poconos, they expect a typical season of activities, inner-city kids, and maybe some flirting. Tom quickly becomes smitten with Barbara, the stunning daughter of the camp&#8217;s maintenance chief, while bold and...<br />
+<span class="sublabel">07/02/26, Adult, <a href='browse.php?type=categories&amp;catid=7'>Sci-Fi Gender Change</a>, Story Incomplete <span style='white-space: nowrap;'><img src="images/star.png" alt="star"><img src="images/star.png" alt="star"><img src="images/star.png" alt="star"><img src="images/star.png" alt="star"><img src="images/starhalf.png" alt="half-star"></span></span> <br />
+</div></div>
+<div class="inprogress"><div class="categoryicon"><img src="skins/storytime/images/categoryicon5.png"></div><div class="content"><span class="sublabel"><a href="viewstory.php?sid=8862">Sissy Stephanie</a> by <a href="viewuser.php?uid=17707">Sissy Girl Sammi</a></span><br />
+A tall, muscular jerk finds himself turned into a petite, hypnotized sissy at the hands of his stepmother. And his punishment is just beginning.<br />
+<span class="sublabel">07/02/26, Explicit, <a href='browse.php?type=categories&amp;catid=5'>Sissy Story</a>, Story Incomplete </span> <br />
+</div></div>
+<div class="inprogress"><div class="categoryicon"><img src="skins/storytime/images/categoryicon7.png"></div><div class="content"><span class="sublabel"><a href="viewstory.php?sid=9320">The Sorority Mission </a> by <a href="viewuser.php?uid=11833">Story454</a></span><br />
+Jim is a freshman ready to improve his life by joining the best fraternity in the country. When things go amiss during rush week he is faced with a choice. Help the fraternity by humiliating himself and living his nightmare eventually earning a spot and a chance at success or live as a failure in his...<br />
+<span class="sublabel">07/01/26, Explicit, <a href='browse.php?type=categories&amp;catid=7'>Sci-Fi Gender Change</a>, Story Incomplete <span style='white-space: nowrap;'><img src="images/star.png" alt="star"><img src="images/star.png" alt="star"><img src="images/star.png" alt="star"><img src="images/star.png" alt="star"><img src="images/star.png" alt="star"></span></span> <br />
+</div></div>
+<div class="inprogress"><div class="categoryicon"><img src="skins/storytime/images/categoryicon7.png"></div><div class="content"><span class="sublabel"><a href="viewstory.php?sid=8657">The Hacker's Doll</a> by <a href="viewuser.php?uid=17292">BHFun</a></span><br />
+In the year 2035, a young hacker is determined to take down the CEO of the largest corporation in America, only for his plan to backfire spectacularly.<br />
+<span class="sublabel">07/01/26, Explicit, <a href='browse.php?type=categories&amp;catid=7'>Sci-Fi Gender Change</a>, Story Incomplete <span style='white-space: nowrap;'><img src="images/star.png" alt="star"><img src="images/star.png" alt="star"><img src="images/star.png" alt="star"><img src="images/star.png" alt="star"><img src="images/star.png" alt="star"></span></span> <br />
+</div></div>
+<div class="inprogress"><div class="categoryicon"><img src="skins/storytime/images/categoryicon6.png"></div><div class="content"><span class="sublabel"><a href="viewstory.php?sid=9324">The Fellatia Curse</a> by <a href="viewuser.php?uid=14081">arturo67</a></span><br />
+You're a sophomore living in Hutchins Hall,and life has been pretty standard - lectures, late-night study sessions,terrible dining hall food, and the occasional party.That changed three weeks ago when you met Mara at a mixer in thestudent union. She was stunning - long dark hair, bright green eyes,and...<br />
+<span class="sublabel">07/01/26, Deviant, <a href='browse.php?type=categories&amp;catid=6'>Magical Gender Change</a>, Story Incomplete <span style='white-space: nowrap;'><img src="images/star.png" alt="star"><img src="images/star.png" alt="star"><img src="images/star.png" alt="star"><img src="images/star.png" alt="star"><img src="images/star.png" alt="star"></span></span> <br />
+</div></div>
+<div class="inprogress"><div class="categoryicon"><img src="skins/storytime/images/categoryicon6.png"></div><div class="content"><span class="sublabel"><a href="viewstory.php?sid=9322">The Curse is in My Flesh</a> by <a href="viewuser.php?uid=6244">Ali Tea</a></span><br />
+David Southern is cursed. He learns the hard way and quite slowly how it works. It'll be even harder to end it.<br />
+<span class="sublabel">07/01/26, Explicit, <a href='browse.php?type=categories&amp;catid=6'>Magical Gender Change</a>, Story Incomplete <span style='white-space: nowrap;'><img src="images/star.png" alt="star"><img src="images/star.png" alt="star"><img src="images/star.png" alt="star"><img src="images/star.png" alt="star"><img src="images/star.png" alt="star"></span></span> <br />
+</div></div>
+<div class="inprogress"><div class="categoryicon"><img src="skins/storytime/images/categoryicon7.png"></div><div class="content"><span class="sublabel"><a href="viewstory.php?sid=9341">The Device - Teaching Them A Lesson</a> by <a href="viewuser.php?uid=10658">Razmagurk</a></span><br />
+Maxi has a reality-bending trait-swapping remote and she's using it to teach her boyfriend a lesson! But how is a girl supposed to get some revenge when he's having too much fun playing with his new body? How far will she be willing to go and what happens when he's decided he's had enough of her games?<br />
+<span class="sublabel">06/30/26, Explicit, <a href='browse.php?type=categories&amp;catid=7'>Sci-Fi Gender Change</a>, Story Incomplete </span> <br />
+</div></div>
+<div class="inprogress"><div class="categoryicon"><img src="skins/storytime/images/categoryicon6.png"></div><div class="content"><span class="sublabel"><a href="viewstory.php?sid=8249">Moon time</a> by <a href="viewuser.php?uid=17853">tely</a></span><br />
+A young millionaire has everything he needs, except a girlfriend. When he was seduced by a very beautiful girl at a party, he had no idea what would happen at the next full moon.<br />
+<span class="sublabel">06/29/26, Explicit, <a href='browse.php?type=categories&amp;catid=6'>Magical Gender Change</a>, Story Incomplete <span style='white-space: nowrap;'><img src="images/star.png" alt="star"><img src="images/star.png" alt="star"><img src="images/star.png" alt="star"><img src="images/starhalf.png" alt="half-star"></span></span> <br />
+</div></div>
+<div class="inprogress"><div class="categoryicon"><img src="skins/storytime/images/categoryicon6.png"></div><div class="content"><span class="sublabel"><a href="viewstory.php?sid=9174">Master PC: Overwriting Reality</a> by <a href="viewuser.php?uid=18110">JohnManTD</a></span><br />
+Leo was an ordinary guy until he discovers a strange program&#8230; the Master PC program. It allows him to edit the people around him and alter reality (including himself). What will a young man bored with life use it for? Well, depravity of course.<br />
+<span class="sublabel">06/29/26, Explicit, <a href='browse.php?type=categories&amp;catid=6'>Magical Gender Change</a>, Story Incomplete <span style='white-space: nowrap;'><img src="images/star.png" alt="star"><img src="images/star.png" alt="star"><img src="images/star.png" alt="star"><img src="images/star.png" alt="star"><img src="images/star.png" alt="star"></span></span> <br />
+</div></div>
+<div class="inprogress"><div class="categoryicon"><img src="skins/storytime/images/categoryicon6.png"></div><div class="content"><span class="sublabel"><a href="viewstory.php?sid=9015">Lucas and his Sex Genie</a> by <a href="viewuser.php?uid=18110">JohnManTD</a></span><br />
+A young man discovers a genie hidden in his home. This genie is now bound to him, and will grant him any wish he desires... especially sexy ones. How far will he go with this power, who will he transform, and is there a catch?<br />
+<span class="sublabel">06/29/26, Explicit, <a href='browse.php?type=categories&amp;catid=6'>Magical Gender Change</a>, Story Incomplete <span style='white-space: nowrap;'><img src="images/star.png" alt="star"><img src="images/star.png" alt="star"><img src="images/star.png" alt="star"><img src="images/star.png" alt="star"><img src="images/starhalf.png" alt="half-star"></span></span> <br />
+</div></div>
+<div class="inprogress"><div class="categoryicon"><img src="skins/storytime/images/categoryicon5.png"></div><div class="content"><span class="sublabel"><a href="viewstory.php?sid=7000">From Soccer to Sucker</a> by <a href="viewuser.php?uid=11775">Fibaro</a></span><br />
+Jake the captain of the male soccer team and a real womanizing a****** get's tricked into a bet by Valeria the captain of the female soccer team. Using this bet and his ego she slowly manipulates him into becoming a sissy who is way nicer to be around.<br />
+<span class="sublabel">06/27/26, Explicit, <a href='browse.php?type=categories&amp;catid=5'>Sissy Story</a>, Story Incomplete <span style='white-space: nowrap;'><img src="images/star.png" alt="star"><img src="images/star.png" alt="star"><img src="images/star.png" alt="star"><img src="images/star.png" alt="star"><img src="images/starhalf.png" alt="half-star"></span></span> <br />
+</div></div>
+</div>
+</div></div></div><script defer src="https://static.cloudflareinsights.com/beacon.min.js/v4513226cdae34746b4dedf0b4dfa099e1781791509496" integrity="sha512-ZE9pZaUXND66v380QUtch/5sE9tPFh2zg45pR2PB0CVkCtOREv2AJKkSidISWkysEuQ0EH8faUU5du78bx87UQ==" data-cf-beacon='{"version":"2024.11.0","token":"aab7a3511a5f4954ad49f1d081e5c8d0","r":1,"server_timing":{"name":{"cfCacheStatus":true,"cfEdge":true,"cfExtPri":true,"cfL4":true,"cfOrigin":true,"cfSpeedBrain":true},"location_startswith":null}}' crossorigin="anonymous"></script>
+</div>
+<div id="footercon">
+<div id="menu">
+	<ul id="menulist">
+<li><a href="viewpage.php?page=help" title="Help">Help</a></li>  
+<li><a href="contact.php" title="Contact">Contact</a></li>  
+<li><a href="viewpage.php?page=about" title="About">About</a></li>   
+<li><a href="viewpage.php?page=tos" title="Terms">Terms</a></li>  
+<li><a href="viewpage.php?page=rules" title="Rules">Rules</a></li>  
+</ul>
+</div>
+<div id="footerbottom">
+<a href="http://www.efiction.org/">TG Storytime uses the eFiction engine</a> <a href="http://www.vanillaforums.com">and Vanilla discussions.</a> <a href="http://www.sixpacksite.com">Design by J6P.</a>
+</div>
+</div>
+</div>
+</div>
+</div>
+</body></html>

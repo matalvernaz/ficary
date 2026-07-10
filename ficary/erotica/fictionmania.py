@@ -64,6 +64,33 @@ class FictionmaniaScraper(BaseScraper):
         return f"{FM_BASE}/stories/readtextstory.html?storyID={story_id}"
 
     @staticmethod
+    def _details_url(story_id: int) -> str:
+        return f"{FM_BASE}/stories/details.html?storyID={story_id}"
+
+    @staticmethod
+    def _parse_details(html: str) -> dict:
+        """Parse the Story Details page into a label→value dict.
+
+        The details page is a WebDNA table of ``<TR><TD><B>Label:</B>
+        </TD><TD>value</TD></TR>`` rows (Title, Author, Synopsis,
+        Rating, Complete, Categories, ...). It's the only surface that
+        carries the author-written synopsis when the HTML reader page
+        renders empty and the plain-text fallback (which has no
+        metadata at all) kicks in.
+        """
+        soup = BeautifulSoup(html, "lxml")
+        details: dict[str, str] = {}
+        for tr in soup.find_all("tr"):
+            tds = tr.find_all("td")
+            if len(tds) != 2:
+                continue
+            label = tds[0].get_text(" ", strip=True).rstrip(":").strip()
+            value = tds[1].get_text(" ", strip=True)
+            if label and value:
+                details[label.lower()] = value
+        return details
+
+    @staticmethod
     def _parse_metadata(soup, story_id: int) -> dict:
         title = ""
         title_tag = soup.find("title")
@@ -190,6 +217,28 @@ class FictionmaniaScraper(BaseScraper):
         soup = BeautifulSoup(page_html, "lxml")
 
         meta = self._parse_metadata(soup, story_id)
+        if wrapped_text or not meta["summary"]:
+            # The wrapped plain-text page carries no metadata (no
+            # title/author/synopsis markup), and even HTML pages
+            # occasionally lack the italic blurb. The Story Details
+            # page has all three — one extra fetch, only on the
+            # degraded paths.
+            try:
+                details = self._parse_details(
+                    self._fetch(self._details_url(story_id)),
+                )
+            except Exception as exc:  # noqa: BLE001 — details are best-effort
+                logger.warning(
+                    "Fictionmania details page failed for %s (%s); "
+                    "keeping reader-page metadata.", story_id, exc,
+                )
+                details = {}
+            if details.get("title") and meta["title"] == f"Fictionmania {story_id}":
+                meta["title"] = details["title"]
+            if details.get("author") and meta["author"] == "Unknown Author":
+                meta["author"] = details["author"]
+            if details.get("synopsis") and not meta["summary"]:
+                meta["summary"] = details["synopsis"]
         self._save_meta_cache(story_id, meta)
 
         story = Story(

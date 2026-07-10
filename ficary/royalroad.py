@@ -18,6 +18,23 @@ logger = logging.getLogger(__name__)
 
 RR_BASE = "https://www.royalroad.com"
 
+# RR's house conversion for its "N pages" stat (words per page); the
+# same factor the search-card parser in ficary.search uses.
+RR_WORDS_PER_PAGE = 275
+
+
+def _parse_abbreviated_count(raw: str) -> int:
+    """Parse RR's abbreviated counters — "2.7k" → 2700, "796" → 796.
+    Returns 0 on anything unparseable."""
+    s = raw.strip().lower().replace(",", "")
+    multiplier = 1000 if s.endswith("k") else 1
+    if s.endswith("k"):
+        s = s[:-1]
+    try:
+        return int(float(s) * multiplier)
+    except ValueError:
+        return 0
+
 
 class RoyalRoadScraper(BaseScraper):
     """Scraper for royalroad.com."""
@@ -98,6 +115,22 @@ class RoyalRoadScraper(BaseScraper):
             extra["genre"] = ", ".join(
                 a.get_text(strip=True) for a in tag_links[:12]
             )
+
+        # The fiction page shows page counts up front, but the real
+        # word count hides in the pages-tooltip text: "... an average
+        # of 275 words per page, calculated from 751,549 words." It's
+        # the authoritative site count, so exports prefer it over
+        # counting the downloaded text.
+        w_m = re.search(
+            r"calculated from\s+([\d,]+)\s+words",
+            soup.get_text(" ", strip=True),
+        )
+        if not w_m:
+            # The tooltip sometimes lives in a data-content/title
+            # attribute rather than rendered text.
+            w_m = re.search(r"calculated from\s+([\d,]+)\s+words", str(soup))
+        if w_m:
+            extra["words"] = w_m.group(1)
 
         return {
             "title": title,
@@ -317,13 +350,23 @@ class RoyalRoadScraper(BaseScraper):
                         "span.tags a.fiction-tag",
                     )[:8]
                 )
+                # Cards expose "N Pages", not a word count — estimate
+                # at RR's house 275 words/page, "~"-prefixed, matching
+                # the GUI search parser.
+                item_text = item.get_text(" ", strip=True)
+                pages_m = re.search(r"(\d[\d,]*)\s+Pages", item_text)
+                words = (
+                    f"~{int(pages_m.group(1).replace(',', '')) * 275:,}"
+                    if pages_m else ""
+                )
+                ch_m = re.search(r"(\d[\d,]*)\s+Chapters", item_text)
                 works.append({
                     "title": title_link.get_text(strip=True) or f"Fiction {fid}",
                     "url": f"{RR_BASE}/fiction/{fid}",
                     "author": author_link.get_text(strip=True) if author_link else "",
                     "summary": desc.get_text(" ", strip=True) if desc else "",
-                    "words": "",
-                    "chapters": "",
+                    "words": words,
+                    "chapters": ch_m.group(1) if ch_m else "",
                     "rating": "",
                     "fandom": tags,
                     "status": "",
@@ -339,8 +382,18 @@ class RoyalRoadScraper(BaseScraper):
         return label or "Search results", works
 
     def scrape_author_works(self, url):
-        """Return (author_name, [work_dict]) from a RR profile page."""
-        html = self._fetch(url)
+        """Return (author_name, [work_dict]) from a RR profile page.
+
+        The bare ``/profile/<id>`` page only shows aggregate stats —
+        the fiction list lives on the ``/fictions`` tab, one
+        ``div.mt-overlay-3`` card per fiction with the title, a
+        STUB/status ribbon, "N pages" (k-abbreviated), and the full
+        description.
+        """
+        fictions_url = url.rstrip("/")
+        if not fictions_url.endswith("/fictions"):
+            fictions_url += "/fictions"
+        html = self._fetch(fictions_url)
         soup = BeautifulSoup(html, "lxml")
 
         author_name = "Unknown Author"
@@ -349,12 +402,17 @@ class RoyalRoadScraper(BaseScraper):
             t = title.get_text(strip=True)
             if " |" in t:
                 author_name = t.split(" |")[0].strip()
+            # The /fictions tab titles itself "<Name>'s Fictions".
+            author_name = re.sub(
+                r"['’]s Fictions$", "", author_name,
+            ).strip() or author_name
 
         seen = set()
         works = []
-        for a in soup.find_all(
-            "a", href=re.compile(r"^/fiction/\d+(?:/[^/]+)?/?$")
-        ):
+        for card in soup.find_all("div", class_="mt-overlay-3"):
+            a = card.find("a", href=re.compile(r"^/fiction/\d+(?:/[^/]+)?/?$"))
+            if a is None:
+                continue
             match = re.search(r"/fiction/(\d+)", a["href"])
             if not match:
                 continue
@@ -362,15 +420,48 @@ class RoyalRoadScraper(BaseScraper):
             if fid in seen:
                 continue
             seen.add(fid)
+
+            h2 = card.find("h2")
+            work_title = ""
+            status = ""
+            words = ""
+            if h2 is not None:
+                # h2 holds the title as its first text line, then
+                # <small>STUB</small> / <small>2.7k pages</small>.
+                first_line = next(
+                    (
+                        t.strip() for t in h2.find_all(string=True)
+                        if t.strip()
+                    ),
+                    "",
+                )
+                work_title = first_line
+                h2_text = h2.get_text(" ", strip=True)
+                if re.search(r"\bSTUB\b", h2_text):
+                    status = "Stub"
+                p_m = re.search(r"([\d.]+k?|\d[\d,]*)\s+pages", h2_text, re.I)
+                if p_m:
+                    pages = _parse_abbreviated_count(p_m.group(1))
+                    if pages:
+                        words = f"~{pages * RR_WORDS_PER_PAGE:,}"
+            if not work_title:
+                work_title = a.get_text(strip=True) or f"Fiction {fid}"
+
+            summary = ""
+            desc = card.find("div", class_="fiction-description")
+            if desc is not None:
+                summary = desc.get_text(" ", strip=True)
+
             works.append({
-                "title": a.get_text(strip=True) or f"Fiction {fid}",
+                "title": work_title,
                 "url": f"{RR_BASE}/fiction/{fid}",
                 "author": author_name,
-                "words": "",
+                "summary": summary,
+                "words": words,
                 "chapters": "",
                 "rating": "",
                 "fandom": "",
-                "status": "",
+                "status": status,
                 "updated": "",
                 "section": "own",
             })

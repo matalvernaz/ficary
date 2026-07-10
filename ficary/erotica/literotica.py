@@ -281,11 +281,71 @@ class LiteroticaScraper(BaseScraper):
         h1 = soup.find("h1")
         if h1:
             text = h1.get_text(strip=True)
+            # The works page titles itself "Stories by <name>".
+            text = re.sub(r"^Stories\s+by\s+", "", text, flags=re.I)
             if text and len(text) < 60:
                 author_name = text
 
         seen = set()
         works = []
+        # The works page is React SSR with content-hashed CSS-module
+        # classes (``_card_1gpbw_15`` — the hash churns per build, so
+        # match on the stable prefix). Each <article> card: h3 title
+        # anchor, a real per-story blurb in p._description_*, and a
+        # meta row with the category link and a M/D/YYYY date. No word
+        # or page count appears anywhere on the cards.
+        for card in soup.select("article[class*='_card_']"):
+            a = card.find("a", href=_SLUG_RE)
+            if a is None:
+                continue
+            m2 = _SLUG_RE.search(a["href"])
+            if not m2:
+                continue
+            story_slug = m2.group(1)
+            if story_slug in seen:
+                continue
+            seen.add(story_slug)
+
+            summary = ""
+            desc = card.select_one("p[class*='_description_']")
+            if desc is not None:
+                summary = desc.get_text(" ", strip=True)
+
+            fandom = ""
+            updated = ""
+            meta = card.select_one("div[class*='_meta_row_']")
+            if meta is not None:
+                cat_a = meta.find(
+                    "a", href=re.compile(r"literotica\.com/c/|^/c/"),
+                )
+                if cat_a is not None:
+                    fandom = cat_a.get_text(" ", strip=True)
+                d_m = re.search(
+                    r"\b(\d{1,2})/(\d{1,2})/(\d{4})\b",
+                    meta.get_text(" ", strip=True),
+                )
+                if d_m:
+                    updated = (
+                        f"{d_m.group(3)}-{int(d_m.group(1)):02d}"
+                        f"-{int(d_m.group(2)):02d}"
+                    )
+
+            works.append({
+                "title": a.get_text(strip=True) or story_slug,
+                "url": f"{LIT_BASE}/s/{story_slug}",
+                "author": author_name,
+                "summary": summary,
+                "words": "",
+                "chapters": "",
+                "rating": "",
+                "fandom": fandom,
+                "status": "",
+                "updated": updated,
+                "section": "own",
+            })
+        if works:
+            return author_name, works
+        # Markup-drift fallback: the old flat anchor walk (titles only).
         for a in soup.find_all("a", href=_SLUG_RE):
             m2 = _SLUG_RE.search(a["href"])
             if not m2:

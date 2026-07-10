@@ -110,12 +110,40 @@ class StoriesOnlineScraper(BaseScraper):
                 if not title:
                     continue
                 seen.add(sm.group(1))
+
+                # Rows sit in div.entry with the same sdesc/misc parts
+                # as the tag listings: a synopsis (after dropping the
+                # span.help series/universe banners) and a stats line
+                # with the site's exact word count.
+                summary = ""
+                words = "?"
+                status = ""
+                entry = h3.find_parent("div", class_="entry")
+                if entry is not None:
+                    sdesc = entry.find("div", class_="sdesc")
+                    if sdesc is not None:
+                        for span in sdesc.find_all("span", class_="help"):
+                            span.decompose()
+                        summary = sdesc.get_text(" ", strip=True)
+                    misc = entry.find("div", class_="misc")
+                    if misc is not None:
+                        w_m = re.search(
+                            r"([\d,]+)\s*words\b",
+                            misc.get_text(" ", strip=True),
+                        )
+                        if w_m:
+                            words = w_m.group(1)
+                    ab = entry.find("span", class_="ab")
+                    if ab is not None and "progress" in ab.get_text(
+                            " ", strip=True).lower():
+                        status = "In progress"
+
                 works.append({
                     "title": title,
                     "url": f"{SOL_BASE}/s/{sm.group(1)}/{sm.group(2)}",
                     "author": author or author_slug,
-                    "summary": "", "words": "?", "chapters": "?",
-                    "rating": "M", "fandom": "", "status": "",
+                    "summary": summary, "words": words, "chapters": "?",
+                    "rating": "M", "fandom": "", "status": status,
                     "updated": "", "section": "own",
                 })
                 new_on_page += 1

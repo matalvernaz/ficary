@@ -357,22 +357,68 @@ class MediaMinerScraper(BaseScraper):
     def scrape_author_works(self, url):
         """Return (author_name, [work_dict]) from a MediaMiner user page.
 
-        MediaMiner's listings don't carry much per-row metadata; we take
-        the title from the link text and leave word/chapter counts blank.
+        Each story is an ``<article>`` block whose text carries the
+        full stat line — ``Chapters: 29 | Words: 200.4K | ...
+        Summary: <blurb> read more`` — so the picker rows get a real
+        synopsis and the site's (K-abbreviated) word count without a
+        second fetch.
         """
         author_name, soup = self._fetch_author_listing(url)
         works = []
-        for sid, text in self._extract_story_ids(soup):
+        seen = set()
+        for a in soup.find_all("a", href=True):
+            href = a["href"]
+            m1 = re.search(r"/fanfic/view_st\.php/(\d+)", href)
+            m2 = re.search(r"/fanfic/s/[^?#]+?/(\d+)(?:/|$)", href)
+            sid = (m1.group(1) if m1 else None) or (m2.group(1) if m2 else None)
+            if not sid or sid in seen:
+                continue
+            seen.add(sid)
+            title = a.get_text(strip=True)
+
+            summary = ""
+            words = ""
+            chapters = ""
+            updated = ""
+            art = a.find_parent("article")
+            if art is not None:
+                art_text = art.get_text(" ", strip=True)
+                s_m = re.search(
+                    r"Summary:\s*(.+?)(?:\s*read more|\s*Review\(s\)|$)",
+                    art_text,
+                )
+                if s_m:
+                    summary = s_m.group(1).strip()
+                w_m = re.search(r"Words:\s*([\d.,]+[KM]?)\b", art_text)
+                if w_m:
+                    words = w_m.group(1)
+                c_m = re.search(r"Chapters:\s*(\d+)", art_text)
+                if c_m:
+                    chapters = c_m.group(1)
+                d_m = re.search(
+                    r"Latest Revision:\s*([A-Za-z]+ \d{1,2}, \d{4})",
+                    art_text,
+                )
+                if d_m:
+                    try:
+                        from datetime import datetime
+                        updated = datetime.strptime(
+                            d_m.group(1), "%B %d, %Y",
+                        ).strftime("%Y-%m-%d")
+                    except ValueError:
+                        pass
+
             works.append({
-                "title": text or f"Story {sid}",
+                "title": title or f"Story {sid}",
                 "url": f"{MM_BASE}/fanfic/view_st.php/{sid}",
                 "author": author_name,
-                "words": "",
-                "chapters": "",
+                "summary": summary,
+                "words": words,
+                "chapters": chapters,
                 "rating": "",
                 "fandom": "",
                 "status": "",
-                "updated": "",
+                "updated": updated,
                 "section": "own",
             })
         return author_name, works

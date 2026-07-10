@@ -257,10 +257,10 @@ class FicWadScraper(BaseScraper):
     def scrape_author_works(self, url):
         """Return (author_name, [work_dict]) from a FicWad author page.
 
-        FicWad author-page anchors carry the story title as link text, so
-        the picker can display something readable without a second fetch.
-        Other fields (words, chapters, rating) would require visiting each
-        story and are left blank.
+        Each story is an ``<li>`` block carrying a ``blockquote.summary``
+        blurb and a meta line with the rating, an ISO ``Updated:`` date,
+        "N words", and a Complete marker — so the picker rows are fully
+        populated without a second fetch.
         """
         html = self._fetch(url)
         soup = BeautifulSoup(html, "lxml")
@@ -285,16 +285,49 @@ class FicWadScraper(BaseScraper):
             if story_id in seen_ids:
                 continue
             seen_ids.add(story_id)
+
+            summary = ""
+            words = ""
+            rating = ""
+            status = ""
+            updated = ""
+            row_author = ""
+            li = a_tag.find_parent("li")
+            if li is not None:
+                bq = li.find("blockquote", class_="summary")
+                if bq is not None:
+                    summary = bq.get_text(" ", strip=True)
+                author_a = li.select_one("span.author a")
+                if author_a is not None:
+                    row_author = author_a.get_text(strip=True)
+                meta = li.find("div", class_="meta")
+                if meta is not None:
+                    meta_text = meta.get_text(" ", strip=True)
+                    w_m = re.search(r"([\d,]+)\s*words", meta_text)
+                    if w_m:
+                        words = w_m.group(1)
+                    r_m = re.search(r"Rating:\s*([A-Za-z0-9+-]+)", meta_text)
+                    if r_m:
+                        rating = r_m.group(1)
+                    u_m = re.search(
+                        r"Updated:\s*(\d{4}-\d{2}-\d{2})", meta_text,
+                    )
+                    if u_m:
+                        updated = u_m.group(1)
+                    if re.search(r"-\s*Complete\b", meta_text):
+                        status = "Complete"
+
             works.append({
                 "title": a_tag.get_text(strip=True) or f"Story {story_id}",
                 "url": f"{FICWAD_BASE}/story/{story_id}",
-                "author": "",
-                "words": "",
+                "author": row_author,
+                "summary": summary,
+                "words": words,
                 "chapters": "",
-                "rating": "",
+                "rating": rating,
                 "fandom": "",
-                "status": "",
-                "updated": "",
+                "status": status,
+                "updated": updated,
                 "section": "own",
             })
         return author_name, works
