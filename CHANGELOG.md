@@ -43,7 +43,8 @@ data. Every site's listing markup was re-captured and re-parsed:
 * **BDSM Library listings report the outage honestly**: the site's
   listing backend went dark in July 2026 (search died first, browse
   followed). Browsing it now reports a site failure instead of a
-  silent zero-result page. Story downloads by URL still work.
+  silent zero-result page, matching the clear error downloads have
+  raised since 2.11.0 — the whole site is broken at the source.
 * MCStories browse results no longer include the site's navigation
   links as bogus rows, and stories updated in consecutive weeks are
   no longer listed twice.
