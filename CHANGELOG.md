@@ -1,5 +1,17 @@
 # Changelog
 
+## 2.12.4 — 2026-07-10
+
+**Bug fixes**
+
+* **Browsing a single site can't be silently emptied by a leftover
+  tag anymore.** The search window remembers your last session's
+  filters, including the Tags box — so scoping to one site and
+  hitting Search could return nothing if a stale tag the site
+  doesn't carry was still in the box. With one site explicitly
+  picked, tags the site doesn't cover now fall back to the site's
+  normal listing instead of zero results.
+
 ## 2.12.3 — 2026-07-10
 
 Changelog copyedits — release-note wording tightened across several
