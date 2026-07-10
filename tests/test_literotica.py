@@ -356,3 +356,58 @@ class TestParseTagBrowseArticleMarkup:
         </body></html>
         """
         assert _parse_literotica_results(html) == []
+
+
+class TestSubmissionIsOneChapter:
+    """The fix for pages-as-chapters: a submission's ?page=N splits are
+    length breaks, so downloads must emit exactly one merged chapter."""
+
+    def _scraper_with_fixture(self, monkeypatch):
+        from ficary.erotica.literotica import LiteroticaScraper
+
+        html = (FIXTURES / "literotica_story.html").read_text(
+            encoding="utf-8",
+        )
+        scraper = LiteroticaScraper(
+            use_cache=False, delay_floor=0.0, delay_start=0.0,
+        )
+        fetched = []
+
+        def fake_fetch_page(slug, page_num):
+            fetched.append(page_num)
+            return html
+
+        monkeypatch.setattr(scraper, "_fetch_page", fake_fetch_page)
+        return scraper, fetched
+
+    def test_multi_page_story_merges_to_single_chapter(self, monkeypatch):
+        scraper, fetched = self._scraper_with_fixture(monkeypatch)
+        story = scraper.download("stop-toying-with-me-miss-yamanaka")
+        # Fixture reports 3 pages; all must be fetched, one chapter out.
+        assert fetched == [1, 2, 3]
+        assert len(story.chapters) == 1
+        ch = story.chapters[0]
+        assert ch.number == 1
+        assert "Page" not in ch.title
+        assert ch.title == story.title
+
+    def test_get_chapter_count_is_always_one_and_offline(self, monkeypatch):
+        from ficary.erotica.literotica import LiteroticaScraper
+
+        scraper = LiteroticaScraper(use_cache=False)
+
+        def boom(*a, **kw):
+            raise AssertionError("get_chapter_count must not fetch")
+
+        monkeypatch.setattr(scraper, "_fetch", boom)
+        assert scraper.get_chapter_count(
+            "https://www.literotica.com/s/some-story",
+        ) == 1
+
+    def test_skip_chapters_skips_the_whole_submission(self, monkeypatch):
+        scraper, fetched = self._scraper_with_fixture(monkeypatch)
+        story = scraper.download(
+            "stop-toying-with-me-miss-yamanaka", skip_chapters=1,
+        )
+        assert story.chapters == []
+        assert fetched == [1]  # metadata page only, no page walk

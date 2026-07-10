@@ -1,10 +1,13 @@
 """Literotica (literotica.com) scraper.
 
-Literotica publishes a single story as one URL (/s/<slug>) that may be
-paginated via ?page=N. We treat each page as a chapter in the Story
-model so long stories navigate naturally in EPUB readers. Related
-stories (serial fiction) are grouped under /series/se/<id>; expanding
-those works the same way as AO3 series.
+Literotica publishes a single submission as one URL (/s/<slug>) that
+may be paginated via ?page=N. The pages are an arbitrary length split
+— they break mid-scene, not at story beats — so a submission is ONE
+chapter in the Story model with its pages concatenated. (Earlier
+versions emitted each page as its own "chapter", which littered
+exports with fake "Page 2" chapter headings.) Real chapters are
+separate submissions grouped under /series/se/<id>; expanding those
+works the same way as AO3 series, one chapter per part.
 
 The layout uses CSS-module hashed class names that change between
 site builds, so selectors match on the module *prefix* (e.g.
@@ -23,6 +26,12 @@ from ..scraper import BaseScraper
 logger = logging.getLogger(__name__)
 
 LIT_BASE = "https://www.literotica.com"
+
+# Cache stem for the merged one-chapter-per-submission format. Distinct
+# from the ordinal ``ch_NNNN`` stems the old page-per-chapter versions
+# wrote, so a stale page-1-only cache can never be served as the whole
+# story.
+MERGED_CACHE_KEY = "submission"
 
 _SLUG_RE = re.compile(r"literotica\.com/s/([a-z0-9-]+)", re.IGNORECASE)
 _SERIES_RE = re.compile(r"literotica\.com/series/se/(\d+)", re.IGNORECASE)
@@ -206,6 +215,9 @@ class LiteroticaScraper(BaseScraper):
             "summary": summary,
             "extra": extra,
             "num_pages": num_pages,
+            # One chapter per submission — pages are a length split,
+            # not story structure.
+            "num_chapters": 1,
         }
 
     def _fetch_page(self, slug, page_num):
@@ -215,10 +227,12 @@ class LiteroticaScraper(BaseScraper):
         return self._fetch(url)
 
     def get_chapter_count(self, url_or_id):
-        slug = self.parse_story_id(url_or_id)
-        html = self._fetch(f"{LIT_BASE}/s/{slug}")
-        soup = BeautifulSoup(html, "lxml")
-        return self._page_count(soup)
+        """A submission is always exactly one chapter (its pages are a
+        length split, not story structure), so this never needs the
+        network. New parts of a serial arrive as new submissions in
+        the series — an existing submission doesn't grow."""
+        self.parse_story_id(url_or_id)  # still validate the URL shape
+        return 1
 
     def scrape_author_stories(self, url):
         """Return (author_name, [story_urls]) for a Literotica author page."""
@@ -379,40 +393,39 @@ class LiteroticaScraper(BaseScraper):
                     tag.decompose()
             return body.decode_contents()
 
-        # Walk pages and fetch on demand. Earlier versions fetched
-        # *every* page upfront, then walked them applying skip/spec —
-        # so a ``--chapters 1`` request on a 30-page story still hit
-        # the network 30 times, and cached chapters were silently
-        # re-fetched. Going one-page-at-a-time lets us short-circuit
-        # on cache hits and on out-of-range chapters at the cost of
-        # nothing (page 1 is reused via the soup we already have).
-        page_soups: dict[int, BeautifulSoup] = {1: soup}
-        any_fetched = False
-        for i in range(1, num_pages + 1):
-            if i <= skip_chapters:
-                continue
-            if not chapter_in_spec(i, chapters):
-                continue
-            cached = self._load_chapter_cache(story_id, i)
-            if cached is not None:
-                story.chapters.append(cached)
-                if progress_callback:
-                    progress_callback(i, num_pages, cached.title, True)
-                continue
-            page_soup = page_soups.get(i)
-            if page_soup is None:
-                if any_fetched:
-                    self._delay()
-                page_html = self._fetch_page(slug, i)
-                any_fetched = True
-                page_soup = BeautifulSoup(page_html, "lxml")
-                page_soups[i] = page_soup
-            html_body = extract_body(page_soup)
-            title = f"Page {i}" if num_pages > 1 else meta["title"]
-            ch = Chapter(number=i, title=title, html=html_body)
-            self._save_chapter_cache(story_id, ch)
-            story.chapters.append(ch)
+        # A submission's ?page=N splits are arbitrary length breaks
+        # (mid-scene), not story structure — so all pages concatenate
+        # into ONE chapter. Skip/spec therefore apply to that single
+        # chapter, and the merged body caches under MERGED_CACHE_KEY
+        # (ordinal ``ch_NNNN`` stems belong to the retired
+        # page-per-chapter format; reading them here would serve a
+        # page-1-only story from stale caches).
+        if skip_chapters >= 1 or not chapter_in_spec(1, chapters):
+            return story
+
+        cached = self._load_chapter_cache(
+            story_id, 1, cache_key=MERGED_CACHE_KEY,
+        )
+        if cached is not None:
+            story.chapters.append(cached)
             if progress_callback:
-                progress_callback(i, num_pages, title, False)
+                progress_callback(1, 1, cached.title, True)
+            return story
+
+        bodies = [extract_body(soup)]
+        for page in range(2, num_pages + 1):
+            self._delay()
+            if progress_callback:
+                progress_callback(
+                    page, num_pages, f"{meta['title']} (page {page})", False,
+                )
+            page_html = self._fetch_page(slug, page)
+            bodies.append(extract_body(BeautifulSoup(page_html, "lxml")))
+
+        ch = Chapter(number=1, title=meta["title"], html="\n".join(bodies))
+        self._save_chapter_cache(story_id, ch, cache_key=MERGED_CACHE_KEY)
+        story.chapters.append(ch)
+        if progress_callback:
+            progress_callback(1, 1, ch.title, False)
 
         return story
