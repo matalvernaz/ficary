@@ -472,3 +472,22 @@ def test_mousepad_registered_everywhere():
         "https://www.tapatalk.com/groups/themousepad/viewtopic.php?t=1",
     )
     assert cls is MousepadScraper
+
+
+def test_single_site_scope_with_unclaimed_tag_browses_bare(monkeypatch):
+    """A stale tag in the restored Tags box must not silently zero an
+    explicit one-site browse — the tag gate is for fan-outs. The
+    scoped site falls back to its bare listing."""
+    calls = {}
+
+    def fake_mousepad(query, *, page=1, tags=None, **_):
+        calls["tags"] = tags
+        return [{"title": "t", "url": "u", "site": "mousepad"}]
+
+    monkeypatch.setitem(es._SITE_FNS, "mousepad", fake_mousepad)
+    rows = search_erotica("", sites=["mousepad"], tags=["bdsm"])
+    assert calls["tags"] == []
+    assert len(rows) == 1
+    # A tag the site DOES claim still passes through.
+    search_erotica("", sites=["mousepad"], tags=["feet"])
+    assert calls["tags"] == ["feet"]

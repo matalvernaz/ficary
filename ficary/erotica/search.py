@@ -2464,6 +2464,22 @@ def search_erotica(
                 normalised_query,
             )
 
+    # Explicit single-site scope + tags the site doesn't carry: browse
+    # the site bare instead of returning nothing. The user picking one
+    # site has opted into that site's catalogue; the tag gate exists
+    # to keep off-topic sites out of *fan-outs*, and the search window
+    # restores last session's tag box, so a stale tag here otherwise
+    # turns "browse The Mousepad, newest first" into a silent zero.
+    if (
+        resolved_sites and len(resolved_sites) == 1 and tag_list
+        and not _site_handles_any_tag(resolved_sites[0], tag_list)
+    ):
+        logger.info(
+            "erotica: %s doesn't carry %s — browsing the site bare",
+            resolved_sites[0], tag_list,
+        )
+        tag_list = []
+
     if resolved_sites is None:
         active = [s for s in _SITE_FNS if s not in skip_set]
     else:
