@@ -155,6 +155,79 @@ def test_library_frame_roundtrip(wx_app):
         frame.Destroy()
 
 
+def test_no_default_save_location(wx_app):
+    """Save-to starts empty — no hardcoded ~/Downloads default (which on
+    frozen builds landed inside the portable app folder)."""
+    from ficary.gui import MainFrame
+    frame = MainFrame()
+    try:
+        assert frame.output_ctrl.GetValue() == ""
+    finally:
+        frame.Destroy()
+
+
+def test_require_save_target_uses_library_without_prompting(wx_app, monkeypatch):
+    """With a library configured, _require_save_target seeds Save-to from
+    it and returns True — no folder-picker modal."""
+    from ficary.gui import MainFrame
+    from ficary import prefs as _p
+    frame = MainFrame()
+    try:
+        real = frame.prefs.get
+        monkeypatch.setattr(
+            frame.prefs, "get",
+            lambda k, d=None: "/tmp" if k == _p.KEY_LIBRARY_PATH else real(k, d),
+        )
+        frame.output_ctrl.SetValue("")
+        assert frame._require_save_target() is True
+        assert frame.output_ctrl.GetValue() == "/tmp"
+    finally:
+        frame.Destroy()
+
+
+def test_require_save_target_respects_explicit_output(wx_app):
+    """An explicit Save-to short-circuits — no library needed, no modal."""
+    from ficary.gui import MainFrame
+    frame = MainFrame()
+    try:
+        frame.output_ctrl.SetValue("/tmp/staging")
+        assert frame._require_save_target() is True
+    finally:
+        frame.Destroy()
+
+
+def test_update_covers_main_and_adult_roots(wx_app):
+    """Check-for-Updates probes the separate adult root, not just the
+    main library. _update_roots is the seam that decides which roots the
+    per-root probe loop visits."""
+    import tempfile
+    from pathlib import Path
+    from ficary.gui import MainFrame
+    from ficary.library.gui import LibraryFrame
+
+    frame = MainFrame()
+    lf = LibraryFrame(frame, frame.prefs)
+    try:
+        main = tempfile.mkdtemp()
+        adult = tempfile.mkdtemp()
+        lf.path_ctrl.SetValue(main)
+        lf.adult_path_ctrl.SetValue(adult)
+        roots = [str(r) for r in lf._update_roots(Path(main))]
+        assert str(Path(main)) in roots
+        assert str(Path(adult)) in roots
+
+        # No adult root configured → main only, no phantom entry.
+        lf.adult_path_ctrl.SetValue("")
+        assert lf._update_roots(Path(main)) == [Path(main)]
+
+        # Adult path equal to main (or a non-existent dir) isn't added twice.
+        lf.adult_path_ctrl.SetValue(main)
+        assert lf._update_roots(Path(main)) == [Path(main)]
+    finally:
+        lf.Destroy()
+        frame.Destroy()
+
+
 def test_announce_label_updates_label_and_accessible_name(wx_app):
     """``_announce_label`` mirrors the visible label into the MSAA
     accessible name. Without that mirror, NVDA on Windows reads the

@@ -1143,6 +1143,8 @@ class SearchFrame(wx.Frame):
         # Without it a user who'd ticked rows 1+2 and then double-clicked
         # row 5 would download 1+2 (ticks beat the explicit activation),
         # which surprised everyone the first time it happened.
+        if not self.main_frame._require_save_target():
+            return
         if override_idx is not None:
             idx = override_idx
             if idx < 0 or idx >= len(self.results):
@@ -1302,6 +1304,8 @@ class SearchFrame(wx.Frame):
         delegate to its existing queue runner so bookmarks, author
         batches, and erotica-picker batches share one code path."""
         if not picked_urls:
+            return
+        if not self.main_frame._require_save_target():
             return
         if self.main_frame._downloading:
             return

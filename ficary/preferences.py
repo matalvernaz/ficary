@@ -294,11 +294,16 @@ class PreferencesDialog(wx.Dialog):
         # Optional per-site session cookies — set-once secrets, so they
         # live here rather than cluttering the main window. Password-
         # styled; stored plain-text in prefs like the other secrets.
+        # Each cookie field gets a SHORT accessible name (matching its
+        # visible label) plus the long explanation as help text. A
+        # sentence-long SetName made NVDA read a whole paragraph as the
+        # field's name instead of a clean label.
         self.webnovel_cookie_ctrl = wx.TextCtrl(panel, style=wx.TE_PASSWORD)
-        self.webnovel_cookie_ctrl.SetName(
-            "Webnovel.com session cookie — paste a logged-in browser Cookie "
-            "header to download chapters you have unlocked; leave blank for "
-            "free chapters only. Stored locally; coins are never spent."
+        self.webnovel_cookie_ctrl.SetName("Webnovel.com cookie")
+        self.webnovel_cookie_ctrl.SetHelpText(
+            "Paste a logged-in browser Cookie header to download chapters "
+            "you have unlocked; leave blank for free chapters only. Stored "
+            "locally; coins are never spent."
         )
         sizer.Add(
             self._make_labeled_row(
@@ -308,11 +313,11 @@ class PreferencesDialog(wx.Dialog):
         )
 
         self.ao3_cookie_ctrl = wx.TextCtrl(panel, style=wx.TE_PASSWORD)
-        self.ao3_cookie_ctrl.SetName(
-            "AO3 session cookie — paste a logged-in browser Cookie header to "
-            "download restricted works and your private bookmarks / "
-            "marked-for-later; leave blank for anonymous access. Stored "
-            "locally."
+        self.ao3_cookie_ctrl.SetName("AO3 cookie")
+        self.ao3_cookie_ctrl.SetHelpText(
+            "Paste a logged-in browser Cookie header to download restricted "
+            "works and your private bookmarks / marked-for-later; leave "
+            "blank for anonymous access. Stored locally."
         )
         sizer.Add(
             self._make_labeled_row(
@@ -322,11 +327,11 @@ class PreferencesDialog(wx.Dialog):
         )
 
         self.scribblehub_cookie_ctrl = wx.TextCtrl(panel, style=wx.TE_PASSWORD)
-        self.scribblehub_cookie_ctrl.SetName(
-            "ScribbleHub session cookie — paste a browser Cookie header to "
-            "get past Cloudflare and, when logged in, download members-only "
-            "and mature chapters; leave blank to rely on the Cloudflare "
-            "solver. Stored locally."
+        self.scribblehub_cookie_ctrl.SetName("ScribbleHub cookie")
+        self.scribblehub_cookie_ctrl.SetHelpText(
+            "Paste a browser Cookie header to get past Cloudflare and, when "
+            "logged in, download members-only and mature chapters; leave "
+            "blank to rely on the Cloudflare solver. Stored locally."
         )
         sizer.Add(
             self._make_labeled_row(
@@ -336,10 +341,11 @@ class PreferencesDialog(wx.Dialog):
         )
 
         self.subscribestar_cookie_ctrl = wx.TextCtrl(panel, style=wx.TE_PASSWORD)
-        self.subscribestar_cookie_ctrl.SetName(
-            "SubscribeStar session cookie — paste a logged-in browser Cookie "
-            "header to download a creator's posts (the feed is "
-            "subscriber-only, so this is required). Stored locally."
+        self.subscribestar_cookie_ctrl.SetName("SubscribeStar cookie")
+        self.subscribestar_cookie_ctrl.SetHelpText(
+            "Paste a logged-in browser Cookie header to download a creator's "
+            "posts (the feed is subscriber-only, so this is required). "
+            "Stored locally."
         )
         sizer.Add(
             self._make_labeled_row(

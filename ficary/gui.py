@@ -620,8 +620,13 @@ class MainFrame(wx.Frame):
 
         out_sizer = wx.BoxSizer(wx.HORIZONTAL)
         out_sizer.Add(wx.StaticText(root, label="&Save to:"), 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 4)
-        default_dir = str(Path.home() / "Downloads")
-        self.output_ctrl = wx.TextCtrl(root, value=default_dir)
+        # No hardcoded default: an empty Save-to plus no configured
+        # library forces the "choose your library folder" prompt on the
+        # first download (see _require_save_target). The old
+        # ``~/Downloads`` default silently sent downloads into the
+        # portable app folder on frozen Windows builds, where
+        # ``portable.setup_env`` redirects HOME to the exe dir.
+        self.output_ctrl = wx.TextCtrl(root)
         self.output_ctrl.SetName("Save to folder")
         set_help(
             self.output_ctrl,
@@ -1966,10 +1971,56 @@ class MainFrame(wx.Frame):
 
     # ── Download ─────────────────────────────────────────────
 
+    def _require_save_target(self) -> bool:
+        """Guarantee there's somewhere to save before a download starts.
+
+        Returns True when a Save-to folder or a configured library
+        exists. When neither does, forces the user to choose a library
+        folder — no silent default (the old ``~/Downloads`` default
+        landed inside the portable app folder on frozen builds and
+        ignored the user's library entirely). The chosen folder becomes
+        both the library root and the Save-to, so downloads sort into it
+        automatically from then on. Returns False if the user cancels,
+        which the caller treats as "abort this download".
+
+        MAIN THREAD ONLY — it can show a modal folder picker.
+        """
+        from . import prefs as _p
+
+        if (self.output_ctrl.GetValue() or "").strip():
+            return True
+        library = (self.prefs.get(_p.KEY_LIBRARY_PATH, "") or "").strip()
+        if library:
+            self.output_ctrl.SetValue(library)
+            return True
+
+        with wx.DirDialog(
+            self,
+            "Choose the folder where ficary should keep your downloaded "
+            "stories — your library. Downloads are saved here and sorted "
+            "into fandom subfolders automatically.",
+            style=wx.DD_DEFAULT_STYLE | wx.DD_DIR_MUST_EXIST,
+        ) as dlg:
+            if dlg.ShowModal() != wx.ID_OK:
+                self._log(
+                    "No download: choose a library folder first "
+                    "(Save-to is empty and no library is set)."
+                )
+                return False
+            chosen = dlg.GetPath()
+
+        self.prefs.set(_p.KEY_LIBRARY_PATH, chosen)
+        self.prefs.set(_p.KEY_OUTPUT_DIR, chosen)
+        self.output_ctrl.SetValue(chosen)
+        self._log(f"Library folder set: {chosen}")
+        return True
+
     def _on_download(self, event):
         url = self.url_ctrl.GetValue().strip()
         if not url:
             self._log("Error: Please enter a story URL or ID.")
+            return
+        if not self._require_save_target():
             return
         # Snapshot wx-widget settings on the main thread here so the
         # worker thread reads only from the immutable params object.
@@ -2001,6 +2052,8 @@ class MainFrame(wx.Frame):
         ticks through the same per-site queue a single download uses."""
         from .gui_dialogs import AddFromUrlListDialog
 
+        if not self._require_save_target():
+            return
         dlg = AddFromUrlListDialog(self)
         try:
             if dlg.ShowModal() != wx.ID_OK:

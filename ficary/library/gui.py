@@ -419,16 +419,22 @@ class LibraryFrame(wx.Frame):
     # ── Event handlers ─────────────────────────────────────────
 
     def _on_browse(self, event: wx.Event) -> None:
-        current = self.path_ctrl.GetValue() or str(Path.home())
-        dlg = wx.DirDialog(self, "Choose library folder", defaultPath=current)
+        # No fallback to Path.home(): on frozen builds portable.setup_env
+        # redirects HOME to the exe folder, so defaulting there opened the
+        # picker inside the app's own directory. An empty defaultPath lets
+        # wx open at a sensible OS location instead.
+        dlg = wx.DirDialog(
+            self, "Choose library folder",
+            defaultPath=self.path_ctrl.GetValue() or "",
+        )
         if dlg.ShowModal() == wx.ID_OK:
             self.path_ctrl.SetValue(dlg.GetPath())
         dlg.Destroy()
 
     def _on_browse_adult(self, event: wx.Event) -> None:
-        current = self.adult_path_ctrl.GetValue() or str(Path.home())
         dlg = wx.DirDialog(
-            self, "Choose separate adult-library folder", defaultPath=current,
+            self, "Choose separate adult-library folder",
+            defaultPath=self.adult_path_ctrl.GetValue() or "",
         )
         if dlg.ShowModal() == wx.ID_OK:
             self.adult_path_ctrl.SetValue(dlg.GetPath())
@@ -605,6 +611,8 @@ class LibraryFrame(wx.Frame):
         if refetch_all is None:
             refetch_all = bool(self.refetch_all_chk.GetValue())
 
+        roots = self._update_roots(root)
+
         # Describe exactly what combination is about to run so the
         # status log reflects the toggle state (easier to diagnose
         # "why is it slow" / "why did it re-probe").
@@ -613,12 +621,14 @@ class LibraryFrame(wx.Frame):
             mode_bits.append("ignoring recent-probe TTL")
         if refetch_all:
             mode_bits.append("re-downloading every chapter")
+        scope = (
+            f"{len(roots)} library roots"
+            if len(roots) > 1 else str(root)
+        )
         if mode_bits:
-            self._append_status(
-                f"Updating {root} ({', '.join(mode_bits)})..."
-            )
+            self._append_status(f"Updating {scope} ({', '.join(mode_bits)})...")
         else:
-            self._append_status(f"Checking {root} for updates...")
+            self._append_status(f"Checking {scope} for updates...")
         # Fresh cancel event per run — creating it up here so the
         # worker closure captures the exact instance the Cancel button
         # toggles.
@@ -627,126 +637,24 @@ class LibraryFrame(wx.Frame):
         self._set_busy(True)
         cancel_event = self._update_cancel_event
 
-        # Lazy-import cli inside the worker so the module-load graph
-        # stays library-independent (cli imports library, not the
-        # other way around).
         def worker():
             try:
-                from .. import cli
-                from .index import LibraryIndex
                 from .refresh import DEFAULT_GUI_RECHECK_INTERVAL_S
-                from .scanner import scan as rescan
-
                 recheck_interval = (
                     0 if force else DEFAULT_GUI_RECHECK_INTERVAL_S
                 )
-                args = default_refresh_args(
-                    recheck_interval_s=recheck_interval,
-                    force_recheck=force,
-                    refetch_all=refetch_all,
-                    skip_complete=not force,
-                )
-                probe_queue, skipped = build_refresh_queue(
-                    root,
-                    skip_complete=not force,
-                    recheck_interval_s=recheck_interval,
-                    progress=self._post_status,
-                )
-                if not probe_queue and not skipped:
-                    self._post_status(
-                        f"No indexed stories for {root}. Run Scan Library first."
-                    )
-                    wx.CallAfter(self._update_finished)
-                    return
-
-                # Surface the TTL decision up front so users who click
-                # Check for Updates twice in a row can see whether the
-                # recent-probe skip is firing (N stories in TTL) or
-                # whether they've hit a case where no entries have a
-                # ``last_probed`` stamp yet (fresh index / pre-TTL
-                # upgrade) and everything ends up queued.
-                if recheck_interval > 0:
-                    ttl_hours = recheck_interval / 3600
-                    self._post_status(
-                        f"TTL {ttl_hours:.1f}h: {len(skipped)} recently-"
-                        f"probed story(ies) skipped, {len(probe_queue)} "
-                        f"to probe. "
-                        f"(Click Force Full Recheck to ignore the TTL.)"
-                    )
-
-                # Incremental ``last_probed`` stamping: the previous
-                # "stamp everything at the end" pattern lost all work
-                # whenever a user closed the app mid-probe — an 80-minute
-                # FFN scan with 800+ stories is very easy to abandon
-                # before completion, and every abandoned run made the
-                # next one re-probe the entries we already checked.
-                # Buffer stamps in memory and flush to disk every N
-                # probes, plus once at the end. At worst we lose the
-                # last-batch window on a crash.
-                STAMP_FLUSH_EVERY = 25
-                stamp_lock = threading.Lock()
-                pending_stamps: dict[str, int | None] = {}
-
-                def _flush_stamps_locked():
-                    """Caller must hold ``stamp_lock``. Reloads the
-                    on-disk index, stamps all pending URLs (with their
-                    remote chapter counts so the next refresh can
-                    resume interrupted pending downloads), saves, and
-                    clears the buffer. Reloading per-flush makes the
-                    stamp survive a concurrent rescan — we merge into
-                    whatever the current disk state is rather than
-                    overwrite with our stale in-memory copy."""
-                    if not pending_stamps:
-                        return
-                    try:
-                        idx = LibraryIndex.load()
-                        idx.mark_probed(root, dict(pending_stamps))
-                    except Exception as exc:
-                        logger.exception(
-                            "probe-stamp flush failed (pending=%d)",
-                            len(pending_stamps),
-                        )
-                        self._post_status(
-                            f"Warning: probe-stamp flush failed: {exc}"
-                        )
-                    pending_stamps.clear()
-
-                def on_probe_complete(
-                    url: str, remote_count: int | None = None,
-                ) -> None:
-                    """Called from a probe-worker thread once the
-                    remote chapter count for ``url`` has been
-                    retrieved. ``remote_count`` is the fresh upstream
-                    count (or ``None`` if the probe answered with
-                    "story gone"). Stored alongside ``last_probed``
-                    so a later refresh after this process dies can
-                    see remote > local and resume the download
-                    without re-probing. Thread-safe via ``stamp_lock``.
-                    """
-                    with stamp_lock:
-                        pending_stamps[url] = remote_count
-                        if len(pending_stamps) >= STAMP_FLUSH_EVERY:
-                            _flush_stamps_locked()
-
-                cli._run_update_queue(
-                    probe_queue, args, args.probe_workers,
-                    skipped_count=len(skipped),
-                    label="Library update",
-                    progress=self._post_status,
-                    on_probe_complete=on_probe_complete,
-                    cancel_event=cancel_event,
-                )
-
-                # Final flush picks up the trailing <25 stamps that
-                # never hit the batch threshold.
-                with stamp_lock:
-                    _flush_stamps_locked()
-
-                try:
-                    rescan(root)
-                except Exception as exc:
-                    self._post_status(
-                        f"Warning: post-update index refresh failed: {exc}"
+                multi = len(roots) > 1
+                for one_root in roots:
+                    if cancel_event.is_set():
+                        break
+                    if multi:
+                        self._post_status(f"\n— {one_root} —")
+                    self._probe_one_root(
+                        one_root,
+                        force=force,
+                        refetch_all=refetch_all,
+                        recheck_interval=recheck_interval,
+                        cancel_event=cancel_event,
                     )
             except Exception as exc:
                 self._post_status(f"Update failed: {exc}")
@@ -754,6 +662,114 @@ class LibraryFrame(wx.Frame):
                 wx.CallAfter(self._update_finished)
 
         threading.Thread(target=worker, daemon=True).start()
+
+    def _update_roots(self, root: Path) -> list[Path]:
+        """Roots to probe for updates: the main library plus the separate
+        adult-library root when configured. Probing only the main root
+        silently skipped every adult download; mirrors _on_scan, which
+        already scans both. Deduped, existing dirs only."""
+        roots: list[Path] = [root]
+        adult_raw = (self.adult_path_ctrl.GetValue() or "").strip()
+        if adult_raw:
+            adult_root = Path(adult_raw).expanduser()
+            try:
+                distinct = adult_root.resolve() != root.resolve()
+            except OSError:
+                distinct = str(adult_root) != str(root)
+            if adult_root.is_dir() and distinct:
+                roots.append(adult_root)
+        return roots
+
+    def _probe_one_root(
+        self, root, *, force, refetch_all, recheck_interval, cancel_event,
+    ) -> None:
+        """Probe one library root for updates. Worker-thread body,
+        factored out of _on_check_updates so the main + adult roots can
+        each run it. Self-contained probe-stamp buffer per root."""
+        from .. import cli
+        from .index import LibraryIndex
+        from .scanner import scan as rescan
+
+        args = default_refresh_args(
+            recheck_interval_s=recheck_interval,
+            force_recheck=force,
+            refetch_all=refetch_all,
+            skip_complete=not force,
+        )
+        probe_queue, skipped = build_refresh_queue(
+            root,
+            skip_complete=not force,
+            recheck_interval_s=recheck_interval,
+            progress=self._post_status,
+        )
+        if not probe_queue and not skipped:
+            self._post_status(
+                f"No indexed stories for {root}. Run Scan Library first."
+            )
+            return
+
+        # Surface the TTL decision up front so users who click Check for
+        # Updates twice in a row can see whether the recent-probe skip is
+        # firing (N stories in TTL) or whether no entries have a
+        # ``last_probed`` stamp yet (fresh index) and everything queued.
+        if recheck_interval > 0:
+            ttl_hours = recheck_interval / 3600
+            self._post_status(
+                f"TTL {ttl_hours:.1f}h: {len(skipped)} recently-probed "
+                f"story(ies) skipped, {len(probe_queue)} to probe. "
+                f"(Click Force Full Recheck to ignore the TTL.)"
+            )
+
+        # Incremental ``last_probed`` stamping: buffer stamps and flush
+        # every N probes plus once at the end, so closing the app
+        # mid-probe doesn't lose all progress and force a full re-probe.
+        STAMP_FLUSH_EVERY = 25
+        stamp_lock = threading.Lock()
+        pending_stamps: dict[str, int | None] = {}
+
+        def _flush_stamps_locked():
+            """Caller holds ``stamp_lock``. Reload the on-disk index,
+            stamp pending URLs (with remote chapter counts so a later
+            refresh can resume interrupted downloads), save, clear.
+            Reloading per-flush merges into current disk state rather
+            than overwriting with a stale in-memory copy."""
+            if not pending_stamps:
+                return
+            try:
+                idx = LibraryIndex.load()
+                idx.mark_probed(root, dict(pending_stamps))
+            except Exception as exc:
+                logger.exception(
+                    "probe-stamp flush failed (pending=%d)",
+                    len(pending_stamps),
+                )
+                self._post_status(f"Warning: probe-stamp flush failed: {exc}")
+            pending_stamps.clear()
+
+        def on_probe_complete(url: str, remote_count: int | None = None) -> None:
+            with stamp_lock:
+                pending_stamps[url] = remote_count
+                if len(pending_stamps) >= STAMP_FLUSH_EVERY:
+                    _flush_stamps_locked()
+
+        cli._run_update_queue(
+            probe_queue, args, args.probe_workers,
+            skipped_count=len(skipped),
+            label="Library update",
+            progress=self._post_status,
+            on_probe_complete=on_probe_complete,
+            cancel_event=cancel_event,
+        )
+
+        with stamp_lock:
+            _flush_stamps_locked()
+
+        try:
+            rescan(root)
+        except Exception as exc:
+            self._post_status(
+                f"Warning: post-update index refresh failed: {exc}"
+            )
 
     def _update_finished(self) -> None:
         self._update_running = False

@@ -622,6 +622,34 @@ class BaseScraper:
                 )
                 time.sleep(TIMEOUT_RETRY_SLEEP_S)
                 continue
+            except OSError as exc:
+                # A low-level OS/socket handle failure from the transport
+                # layer — notably Windows "[WinError 6] The handle is
+                # invalid", observed on frozen builds when a per-thread
+                # curl session's socket handle goes bad partway through a
+                # library-update sweep. Left unhandled it propagates out
+                # of _fetch and fails the probe/download for that one
+                # story, even though a retry on a fresh session succeeds.
+                # Rotate to a new session (a fresh handle clears the bad
+                # one) and retry with the same backoff as a connection
+                # error, so a transient handle glitch no longer silently
+                # skips a story. After max_retries the loop falls through
+                # to the retries-exhausted RateLimitError, which is a far
+                # clearer report than a raw WinError.
+                logger.warning(
+                    "OS error on fetch (attempt %d/%d): %s",
+                    attempt + 1, self.max_retries, exc,
+                )
+                try:
+                    sess = self._rotate_browser()
+                except Exception:
+                    logger.debug(
+                        "session rotation after OS error failed",
+                        exc_info=True,
+                    )
+                time.sleep(backoff + random.uniform(0, CONNECTION_ERROR_JITTER_S))
+                backoff = min(backoff * 2, MAX_BACKOFF_S)
+                continue
 
             if resp.status_code == 200:
                 # Force a non-default decoding codec on sites whose

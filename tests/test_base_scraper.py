@@ -506,6 +506,33 @@ class TestFetchExceptionHandling:
         ) == _StubResponse.text
         assert len(sess.urls) == 2
 
+    def test_os_error_is_retried_on_a_fresh_session(self, scraper, monkeypatch):
+        """A transport-layer OSError (Windows '[WinError 6] the handle is
+        invalid' on frozen builds when a curl session's socket handle
+        goes bad) is retried on a rotated session, not left to kill the
+        probe/download for that one story."""
+        monkeypatch.setattr("ficary.scraper.time.sleep", lambda s: None)
+        bad = _StubSession([OSError(6, "The handle is invalid")])
+        good = _StubSession([_StubResponse()])
+        monkeypatch.setattr(scraper, "_rotate_browser", lambda: good)
+        assert scraper._fetch(
+            "https://example.invalid/x", session=bad,
+        ) == _StubResponse.text
+        assert len(bad.urls) == 1   # failed once on the bad handle
+        assert len(good.urls) == 1  # succeeded after rotation
+
+    def test_persistent_os_error_exhausts_to_ratelimit(self, scraper, monkeypatch):
+        """If every attempt hits the OS error, the loop ends with the
+        clean retries-exhausted error, not a raw OSError bubbling out."""
+        from ficary.scraper import RateLimitError
+        monkeypatch.setattr("ficary.scraper.time.sleep", lambda s: None)
+        always_bad = _StubSession(
+            [OSError(6, "The handle is invalid")] * (scraper.max_retries + 2)
+        )
+        monkeypatch.setattr(scraper, "_rotate_browser", lambda: always_bad)
+        with pytest.raises(RateLimitError):
+            scraper._fetch("https://example.invalid/x", session=always_bad)
+
     def test_scheme_less_url_is_normalised(self, scraper):
         # GUI-box / CLI input like "fanfiction.net/~plums" must fetch
         # over https — libcurl's http:// guess hangs on hosts that

@@ -1,5 +1,34 @@
 # Changelog
 
+## 2.13.9 — 2026-07-11
+
+**Bug fixes**
+
+* **Downloads respect your library instead of a folder inside the app.**
+  On the portable Windows build, the Save-to box defaulted to a
+  Downloads folder that resolved *inside* the app's own portable
+  directory (a side effect of how the portable build relocates the
+  home folder), so downloads ignored the library you'd chosen. There's
+  no default location now: if you have a library set, downloads go
+  there; if you don't, the first download prompts you to pick a library
+  folder rather than silently saving somewhere useless. The Library
+  window's folder pickers also no longer open inside the app folder.
+* **Check for Updates now covers the separate adult library.** The
+  update scan only probed the main library root, silently skipping
+  every story in a configured separate adult-library folder. It now
+  probes both, the same way Scan Library already scans both.
+* **Update no longer skips stories on a transient handle error.** A
+  low-level OS/socket error during a probe fetch — seen on Windows as
+  "[WinError 6] The handle is invalid" — killed that one story's
+  update outright. Those are now retried on a fresh connection like any
+  other transport hiccup, so a passing glitch no longer leaves a story
+  un-updated.
+* **Preferences: cleaner screen-reader labels on the cookie fields.**
+  The Webnovel / AO3 / ScribbleHub / SubscribeStar cookie boxes had
+  their entire help paragraph set as the field's accessible name, so a
+  screen reader read a wall of text instead of a short label. They now
+  announce a concise name, with the explanation as help text.
+
 ## 2.13.8 — 2026-07-11
 
 **New features**
