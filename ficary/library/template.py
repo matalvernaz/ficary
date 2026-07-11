@@ -50,7 +50,7 @@ entirely if they want to."""
 # than the misc bucket. Keyed by the string returned by
 # :func:`ficary.library.identifier.adapter_for_url` so the library
 # package doesn't need to import every scraper class.
-ORIGINAL_FICTION_ADAPTERS = frozenset({"royalroad"})
+ORIGINAL_FICTION_ADAPTERS = frozenset({"royalroad", "scribblehub"})
 
 # Site adapters whose entire catalog is adult-only erotica. Routed
 # to the dedicated adult folder by the auto-sorter, mirroring how
@@ -61,7 +61,7 @@ ADULT_FICTION_ADAPTERS = frozenset({
     "lushstories", "fictionmania", "tgstorytime", "chyoa",
     "darkwanderer", "greatfeet", "literotica", "bdsmlibrary",
     "mousepad", "readonlymind", "giantessworld", "chastitymansion",
-    "ticklingforum",
+    "ticklingforum", "subscribestar",
 })
 
 

@@ -132,12 +132,52 @@ def test_extract_metadata_bare_txt_no_url(tmp_path: Path):
         ("https://www.literotica.com/s/foo", "literotica"),
         ("https://www.wattpad.com/story/1", "wattpad"),
         ("https://mediaminer.org/fanfic/s/foo/1", "mediaminer"),
+        ("https://www.scribblehub.com/series/1/x/", "scribblehub"),
+        ("https://subscribestar.adult/fibaro", "subscribestar"),
+        ("https://subscribestar.adult/posts/123", "subscribestar"),
         ("https://example.com/nothing", None),
         ("", None),
     ],
 )
 def test_adapter_for_url(url: str, expected: str | None):
     assert adapter_for_url(url) == expected
+
+
+def test_subscribestar_routes_to_adult_and_scribblehub_to_original():
+    """Regression for the 2026-07 recurrence: a newly-added scraper that
+    isn't wired into the library's identification + bucket tables has its
+    downloads fandom-sorted instead of routed to Adult/Original.
+    SubscribeStar is adult-by-domain; ScribbleHub is original fiction."""
+    from ficary.library.template import (
+        ADULT_FICTION_ADAPTERS,
+        ORIGINAL_FICTION_ADAPTERS,
+    )
+    assert adapter_for_url("https://subscribestar.adult/x") in ADULT_FICTION_ADAPTERS
+    assert adapter_for_url(
+        "https://www.scribblehub.com/series/1/x/"
+    ) in ORIGINAL_FICTION_ADAPTERS
+
+
+def test_download_registry_hosts_are_library_identifiable():
+    """Every site the downloader can handle must also be recognisable by
+    the library's ``adapter_for_url`` — otherwise its downloads can't be
+    attributed or bucket-routed (the bug where new sites landed under a
+    fandom folder). Pins the two registries together so the next new
+    scraper can't drift them apart again."""
+    from ficary.sites import _HOSTNAME_TO_SCRAPER
+
+    for hostname, _cls in _HOSTNAME_TO_SCRAPER:
+        # tapatalk hosts many boards; only the Mousepad group path is
+        # supported, so probe with that specific URL shape.
+        sample = (
+            f"https://www.tapatalk.com/groups/themousepad/viewtopic.php?t=1"
+            if "tapatalk" in hostname
+            else f"https://{hostname}/x/1"
+        )
+        assert adapter_for_url(sample) is not None, (
+            f"{hostname} is downloadable but unknown to adapter_for_url — "
+            "add it to identifier._URL_MARKERS"
+        )
 
 
 def test_identify_high_confidence_from_url(tmp_path: Path):

@@ -41,10 +41,15 @@ _URL_MARKERS = [
     ("archiveofourown.org", "ao3"),
     ("ao3.org", "ao3"),
     ("royalroad.com", "royalroad"),
+    ("scribblehub.com", "scribblehub"),
     ("mediaminer.org", "mediaminer"),
     ("literotica.com", "literotica"),
     ("wattpad.com", "wattpad"),
+    ("webnovel.com", "webnovel"),
     ("fanfiction.net", "ffn"),
+    # Subscriber-only creator platform (adult by domain); routed to the
+    # Adult bucket like the erotica archives below.
+    ("subscribestar.adult", "subscribestar"),
     # Erotica sites — share the routing-by-adapter machinery so
     # downloads from these sources can be sorted into a dedicated
     # adult-fiction folder rather than falling through to "Misc".

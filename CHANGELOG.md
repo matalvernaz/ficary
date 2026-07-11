@@ -1,5 +1,20 @@
 # Changelog
 
+## 2.13.7 — 2026-07-10
+
+**Bug fixes**
+
+* **SubscribeStar downloads now sort into the Adult library folder.**
+  The new SubscribeStar and ScribbleHub sites were missing from the
+  library's site-identification table, so their downloads couldn't be
+  attributed and fell through to fandom-based sorting (landing under a
+  fandom folder instead of Adult). SubscribeStar is now routed to the
+  Adult bucket, and ScribbleHub — an original-fiction site — to the
+  Original Works bucket, alongside Royal Road. Webnovel, which had the
+  same missing-identification gap, is now recognised too. A test pins
+  every downloadable site to the identification table so a future new
+  scraper can't reopen this.
+
 ## 2.13.6 — 2026-07-10
 
 **New features**
