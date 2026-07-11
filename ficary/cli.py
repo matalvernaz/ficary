@@ -722,6 +722,12 @@ def _build_scraper(url: str, args: argparse.Namespace):
         "max_retries": args.max_retries,
         "use_cache": not args.no_cache,
     }
+    # A fresh-copy re-pull (--refetch-all) must ignore the chapter cache,
+    # or a chapter the author edited upstream is served stale from disk —
+    # _materialise_chapters returns any cached chapter regardless of
+    # skip_chapters, so cache-off is the only thing that forces a refetch.
+    if getattr(args, "refetch_all", False):
+        kwargs["use_cache"] = False
     if args.delay_min is not None and args.delay_max is not None:
         kwargs["delay_range"] = (args.delay_min, args.delay_max)
     elif args.delay_min is not None or args.delay_max is not None:

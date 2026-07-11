@@ -309,6 +309,54 @@ def test_add_story_window_hosts_download_form(wx_app):
         frame.Destroy()
 
 
+def test_scraper_for_use_cache_false(wx_app):
+    """Audit #1 (GUI path): a fresh-copy re-pull threads use_cache=False
+    through _scraper_for so cached chapters aren't served stale."""
+    from ficary.gui import MainFrame
+    frame = MainFrame()
+    try:
+        url = "https://www.fanfiction.net/s/12345/1/"
+        assert frame._scraper_for(url).use_cache is True
+        assert frame._scraper_for(url, use_cache=False).use_cache is False
+    finally:
+        frame.Destroy()
+
+
+def test_hide_add_story_refocuses_library(wx_app):
+    """Audit #3: dismissing the Add Story window (Escape/close) hides it
+    AND refocuses the library list, and a non-vetoable close (forced
+    shutdown) is allowed through rather than blocked."""
+    from ficary.gui import MainFrame
+    frame = MainFrame()
+    try:
+        frame._on_add_story()
+        assert frame.add_story_frame.IsShown()
+        # Escape/menu path: event is None → hide + refocus.
+        frame._hide_add_story()
+        assert not frame.add_story_frame.IsShown()
+
+        # A user-initiated (vetoable) close hides, keeps the frame alive.
+        frame._on_add_story()
+
+        class _Evt:
+            def __init__(self, can): self._c = can; self.vetoed = False; self.skipped = False
+            def CanVeto(self): return self._c
+            def Veto(self): self.vetoed = True
+            def Skip(self): self.skipped = True
+
+        ev = _Evt(True)
+        frame._hide_add_story(ev)
+        assert ev.vetoed and not ev.skipped
+        assert not frame.add_story_frame.IsShown()
+
+        # A forced shutdown (CanVeto False) must be let through.
+        ev2 = _Evt(False)
+        frame._hide_add_story(ev2)
+        assert ev2.skipped and not ev2.vetoed
+    finally:
+        frame.Destroy()
+
+
 def test_no_default_save_location(wx_app):
     """Save-to starts empty — no hardcoded ~/Downloads default (which on
     frozen builds landed inside the portable app folder)."""

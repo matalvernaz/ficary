@@ -504,7 +504,13 @@ def _fill_from_epub(path: Path, md: "FileMetadata") -> None:
     for item in book.get_items():
         if not hasattr(item, "file_name"):
             continue
-        if not item.file_name.startswith("title"):
+        # Match the title page by its basename, case-insensitively:
+        # ebooklib can report a path ("OEBPS/title.xhtml"), and foreign
+        # EPUBs capitalise it ("Title.xhtml"/"TitlePage.xhtml"). A bare
+        # case-sensitive ``startswith("title")`` missed both, leaving
+        # updated-date / status / rating blank (audit #4).
+        from posixpath import basename
+        if not basename(item.file_name or "").lower().startswith("title"):
             continue
         body = item.content.decode("utf-8", errors="replace")
         kv = _parse_kv_table(body)
@@ -573,6 +579,14 @@ def _merge_metadata_field(
     setattr(md, field_name, value)
 
 
+_METADATA_SCAN_LIMIT = 65536
+"""Byte cap for the header slice the HTML metadata regexes scan. The
+title-page / metadata block always sits at the top of the file; 64 KB
+is far more than any real header needs and keeps a multi-MB fic's
+metadata parse cheap. Chapter-count body fallbacks scan the full text
+separately."""
+
+
 def _fill_from_html(path: Path, md: "FileMetadata") -> None:
     """Populate ``md`` from an HTML file in any of the recognised formats.
 
@@ -591,8 +605,14 @@ def _fill_from_html(path: Path, md: "FileMetadata") -> None:
     # Parse every supported HTML metadata shape into a single dict. Keys
     # are lowercase; first-wins precedence keeps a genuine <th>/<td>
     # row from being overwritten by a later paragraph-label match.
-    kv = _parse_kv_table(text)
-    paragraphs = _parse_paragraph_labels(text)
+    # The metadata block is always in the title page / header at the top
+    # of the file, so cap what the (dotall) label regexes scan — a
+    # multi-MB single-file HTML export otherwise pays a full-body sweep
+    # per file during a library update (audit #10). Chapter-count body
+    # fallbacks below still use the full ``text``.
+    head = text[:_METADATA_SCAN_LIMIT]
+    kv = _parse_kv_table(head)
+    paragraphs = _parse_paragraph_labels(head)
     merged: dict[str, str] = dict(paragraphs)
     merged.update(kv)  # kv has priority — more structured shape
 

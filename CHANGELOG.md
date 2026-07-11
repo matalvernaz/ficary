@@ -1,5 +1,39 @@
 # Changelog
 
+## 2.14.3 — 2026-07-11
+
+**Bug fixes (from a full code audit)**
+
+* **"Update with Fresh Copy" now actually refetches every chapter.** It
+  was still reading chapters from the on-disk cache, so a chapter the
+  author had quietly edited came back as the old text. Fresh-copy pulls
+  now bypass the cache entirely.
+* **Downloads no longer fail outright when the cache folder can't be
+  written.** On a locked-down or read-only home directory the chapter
+  cache couldn't be created and that aborted the whole download; it now
+  falls back to running without a cache and carries on.
+* **Rescan drops stories whose files you've deleted.** The library's
+  Rescan button merged instead of pruning, so a story deleted from disk
+  lingered in the list forever; it now removes orphans (while keeping
+  any file that merely failed to parse this pass).
+* **Add Story window returns you to the library on Escape/close.**
+  Dismissing it now moves focus back to the story list instead of
+  leaving a screen reader stranded on a hidden control, and it no longer
+  interferes with an OS log-out/shutdown.
+* **Updated-date reads from more EPUBs.** The story's updated date and
+  status are now recognised in EPUBs whose title page is named with a
+  different capitalisation or folder path (some third-party EPUBs), so
+  the new "Story updated" column fills in for them.
+* **Cloudflare-challenge handling stops wasting its retries.** When a
+  cached challenge cookie had gone stale, it was re-applied on every
+  retry instead of rotating or solving; it's now tried once, then the
+  normal rotation/solver path runs.
+* Faster metadata reads on very large single-file HTML stories; sturdier
+  library-index handling under concurrent writes and against a
+  hand-corrupted index file; and multi-chapter downloads on the
+  parallel-fetch sites reuse their connection instead of reconnecting
+  per chapter.
+
 ## 2.14.2 — 2026-07-11
 
 **New**

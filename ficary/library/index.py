@@ -96,13 +96,23 @@ class IndexConflictError(RuntimeError):
 _EMPTY_LIBRARY = {"last_scan": None, "stories": {}, "untrackable": []}
 
 
-def _stat_mtime(path: Path) -> float | None:
-    """Return the file's modification time, or ``None`` on any stat
-    failure (file missing, permissions, network blip). Used by the
-    save() conflict check; missing mtime is treated as "first write"
-    which is safe."""
+def _stat_signature(path: Path) -> "tuple[float, int] | None":
+    """Return an ``(mtime, size)`` change-signature for the file, or
+    ``None`` on any stat failure (file missing, permissions, network
+    blip). Used by the save() conflict check; a missing signature is
+    treated as "first write", which is safe.
+
+    Size is folded in alongside mtime because a coarse-resolution
+    filesystem (FAT/exFAT, some network mounts) can hand two writes the
+    same mtime — two concurrent single-story writes produce different
+    byte counts, so the size mismatch still trips the conflict guard
+    that a bare mtime comparison would miss (audit #8). Not a full
+    compare-and-swap (that needs a real lock); a cheap tightening of
+    the existing optimistic check with no extra I/O — size is already
+    in the stat we take."""
     try:
-        return path.stat().st_mtime
+        st = path.stat()
+        return (st.st_mtime, st.st_size)
     except OSError:
         return None
 
@@ -120,11 +130,12 @@ class LibraryIndex:
         # Cleared by :meth:`discard_save_blocker` (wired to the CLI's
         # ``--discard-bad-index`` and a future GUI recovery dialog).
         self._save_blocker: str | None = None
-        # mtime captured at load time. ``save()`` re-stats before writing;
-        # a mismatch means another writer touched the file and a blind
-        # overwrite would lose those changes. None means "never loaded
-        # from disk" (first write, no prior state to conflict with).
-        self._loaded_mtime: float | None = None
+        # (mtime, size) signature captured at load time. ``save()``
+        # re-stats before writing; a mismatch means another writer
+        # touched the file and a blind overwrite would lose those
+        # changes. None means "never loaded from disk" (first write, no
+        # prior state to conflict with).
+        self._loaded_sig: "tuple[float, int] | None" = None
 
     # ── Construction ────────────────────────────────────────────
 
@@ -161,23 +172,31 @@ class LibraryIndex:
             # recoverable by hand. Mtime stays captured so a concurrent
             # writer that fixed the file in the meantime still triggers
             # the conflict path on save.
-            inst._loaded_mtime = _stat_mtime(p)
+            inst._loaded_sig = _stat_signature(p)
             inst._save_blocker = (
                 f"unreadable JSON at {p} (parse error or I/O); "
                 "saves blocked until acknowledged via discard_save_blocker()"
             )
             return inst
-        if not isinstance(raw, dict) or raw.get("version") != SCHEMA_VERSION:
+        if (
+            not isinstance(raw, dict)
+            or raw.get("version") != SCHEMA_VERSION
+            # A structurally-valid-but-wrong shape (e.g. ``libraries`` as
+            # a list from a hand-edit) must be treated as unreadable, not
+            # crash _migrate_non_canonical_keys with an AttributeError and
+            # break load()'s "never raises" contract (audit #9).
+            or not isinstance(raw.get("libraries", {}), dict)
+        ):
             snapshot_path, blocker = _snapshot_unreadable_index(p, raw)
             inst = cls(p, _empty())
-            inst._loaded_mtime = _stat_mtime(p)
+            inst._loaded_sig = _stat_signature(p)
             if blocker is not None:
                 inst._save_blocker = blocker
             return inst
         raw.setdefault("libraries", {})
         _migrate_non_canonical_keys(raw)
         inst = cls(p, raw)
-        inst._loaded_mtime = _stat_mtime(p)
+        inst._loaded_sig = _stat_signature(p)
         return inst
 
     def save(self) -> None:
@@ -195,9 +214,9 @@ class LibraryIndex:
                 f"library index in unsafe state, refusing to save: "
                 f"{self._save_blocker}"
             )
-        if self._loaded_mtime is not None:
-            current = _stat_mtime(self._path)
-            if current is not None and current != self._loaded_mtime:
+        if self._loaded_sig is not None:
+            current = _stat_signature(self._path)
+            if current is not None and current != self._loaded_sig:
                 raise IndexConflictError(
                     f"library index at {self._path} was modified by "
                     "another process since load(); reload before saving "
@@ -210,7 +229,7 @@ class LibraryIndex:
         )
         # Re-stat after our own write so subsequent saves don't
         # spuriously detect our last write as another writer's.
-        self._loaded_mtime = _stat_mtime(self._path)
+        self._loaded_sig = _stat_signature(self._path)
 
     @property
     def save_blocker(self) -> str | None:

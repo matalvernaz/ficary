@@ -131,7 +131,15 @@ class CloudflareBlockError(Exception):
     """Raised when Cloudflare blocks the request."""
 
 
-def _default_cache_dir() -> Path:
+def _default_cache_dir() -> Optional[Path]:
+    """Return the default chapter-cache dir, creating it if needed, or
+    None when it can't be created.
+
+    Returning None (rather than raising) lets ``BaseScraper.__init__``
+    degrade to caching-off instead of blocking every download on a
+    read-only or unwritable home — the cache is an optimisation, not a
+    prerequisite for downloading.
+    """
     # Frozen Windows builds keep their chapter cache inside the
     # portable folder so uninstall is still "delete the folder".
     try:
@@ -142,9 +150,15 @@ def _default_cache_dir() -> Path:
             return path
     except Exception:
         pass
-    path = Path.home() / ".cache" / "ficary"
-    path.mkdir(parents=True, exist_ok=True)
-    return path
+    try:
+        path = Path.home() / ".cache" / "ficary"
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+    except OSError as exc:
+        logger.warning(
+            "Chapter cache unavailable (%s); downloading with cache off", exc,
+        )
+        return None
 
 
 class CookieAuthMixin:
@@ -285,12 +299,22 @@ class BaseScraper:
         )
         self.max_retries = max_retries
         self.timeout = timeout
+        # Resolve the cache dir defensively: a read-only or unwritable
+        # home (locked-down machine, portable install on read-only
+        # media) must NOT abort scraper construction and block all
+        # downloads — the cache is an optimisation. On failure, degrade
+        # to caching off. (_default_cache_dir returns None when it
+        # can't create the root; an explicit cache_dir is trusted, with
+        # per-story mkdir already guarded in _story_cache_dir.)
+        resolved_cache_dir = None
+        if use_cache:
+            resolved_cache_dir = (
+                Path(cache_dir) if cache_dir else _default_cache_dir()
+            )
+            if resolved_cache_dir is None:
+                use_cache = False
         self.use_cache = use_cache
-        self.cache_dir = (
-            (Path(cache_dir) if cache_dir else _default_cache_dir())
-            if use_cache
-            else None
-        )
+        self.cache_dir = resolved_cache_dir
         self.chunk_size = chunk_size
         self.chunk_delay_range = chunk_delay_range
         self.use_wayback = use_wayback
@@ -604,6 +628,13 @@ class BaseScraper:
         # before the first retry settled). ``None`` while no throttle
         # has been seen on this call.
         delay_at_throttle: Optional[float] = None
+        # Seed cached Cloudflare cookies at most once per fetch. Re-seeding
+        # the same on-disk cookie on every challenge just replays a
+        # known-bad clearance and burns the whole retry budget in
+        # milliseconds without ever rotating the browser profile or
+        # invoking the Playwright solver (audit #7). After the one seed,
+        # subsequent challenges fall through to rotation / the solver.
+        seeded_cf_cookies = False
         for attempt in range(self.max_retries):
             try:
                 resp = sess.get(url, timeout=self.timeout)
@@ -692,7 +723,8 @@ class BaseScraper:
                     # which clobbered the freshly-seeded cookies on a
                     # brand-new session — defeating the seeding path's
                     # whole purpose.
-                    if self._maybe_seed_cf_cookies(sess, url):
+                    if not seeded_cf_cookies and self._maybe_seed_cf_cookies(sess, url):
+                        seeded_cf_cookies = True
                         continue
                     wait = FORBIDDEN_QUICK_RETRY_S + random.uniform(
                         0, FORBIDDEN_QUICK_RETRY_S,
@@ -751,7 +783,8 @@ class BaseScraper:
                 # Playwright-backed solver when the caller opted in —
                 # but only on the last retry so the cheap rotations
                 # get a chance first.
-                if self._maybe_seed_cf_cookies(sess, url):
+                if not seeded_cf_cookies and self._maybe_seed_cf_cookies(sess, url):
+                    seeded_cf_cookies = True
                     continue
                 if (
                     self.cf_solve
@@ -951,9 +984,14 @@ class BaseScraper:
                 delay_before = self._current_delay
 
             def fetch_one(url):
-                # Each worker gets its own session so concurrent libcurl
-                # handles don't race on the shared one.
-                session = self._new_session()
+                # Reuse this worker thread's session (thread-local) rather
+                # than minting a fresh one per chapter: the thread-local
+                # gives the same per-worker isolation that keeps concurrent
+                # libcurl handles from racing, while preserving HTTP
+                # keep-alive / HTTP/2 reuse across the chapters this worker
+                # handles — a per-call _new_session() forced a new TLS
+                # handshake for every chapter (audit #5).
+                session = self._session()
                 return self._fetch(url, session=session)
 
             first_error: BaseException | None = None

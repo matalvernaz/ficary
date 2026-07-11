@@ -672,12 +672,10 @@ class MainFrame(wx.Frame):
         form.Layout()
         self.add_story_frame.SetClientSize(form.GetBestSize())
         self._update_audio_panel_visibility()
-        self.add_story_frame.Bind(
-            wx.EVT_CLOSE, lambda e: self.add_story_frame.Hide(),
-        )
+        self.add_story_frame.Bind(wx.EVT_CLOSE, self._hide_add_story)
         _hide_id = wx.NewIdRef()
         self.add_story_frame.Bind(
-            wx.EVT_MENU, lambda e: self.add_story_frame.Hide(), id=int(_hide_id),
+            wx.EVT_MENU, self._hide_add_story, id=int(_hide_id),
         )
         self.add_story_frame.SetAcceleratorTable(wx.AcceleratorTable([
             (wx.ACCEL_NORMAL, wx.WXK_ESCAPE, int(_hide_id)),
@@ -2125,13 +2123,30 @@ class MainFrame(wx.Frame):
         self._dismiss_add_story()
 
     def _dismiss_add_story(self):
-        """Once a download has started, hide the Add Story window and put
-        focus back on the library list — that's where the status strip
-        reports progress and where the new story appears. No-op if the
-        window is already hidden (e.g. a clipboard-watch auto-download)."""
+        """Hide the Add Story window and put focus back on the library
+        list — that's where the status strip reports progress and where
+        a new story appears. No-op on the hide if already hidden (e.g. a
+        clipboard-watch auto-download); still refocuses so a
+        screen-reader user always lands somewhere real."""
         if self.add_story_frame.IsShown():
             self.add_story_frame.Hide()
         self.library_panel.list_ctrl.SetFocus()
+
+    def _hide_add_story(self, event=None):
+        """Dismiss the Add Story window from Escape or its close box,
+        then refocus the library. Without the refocus an NVDA user who
+        opened the window and pressed Escape was left in silence on a
+        hidden control (audit #3).
+
+        A close event during a forced OS shutdown/logout (``CanVeto``
+        false) must be allowed through — hiding-instead-of-closing there
+        would block logout — so only veto user-initiated closes."""
+        if event is not None and hasattr(event, "CanVeto"):
+            if not event.CanVeto():
+                event.Skip()  # forced shutdown — let it close/destroy
+                return
+            event.Veto()      # user close — keep the window alive, hidden
+        self._dismiss_add_story()
 
     def _on_add_from_url_list(self, event):
         """Open the bulk URL-list picker; enqueue every fic the user
@@ -2556,33 +2571,39 @@ class MainFrame(wx.Frame):
     # ── Download worker ──────────────────────────────────────
 
     def _scraper_for(self, url, *, use_fichub=False, webnovel_cookie="",
-                     ao3_cookie="", scribblehub_cookie="", subscribestar_cookie=""):
+                     ao3_cookie="", scribblehub_cookie="", subscribestar_cookie="",
+                     use_cache=True):
         from .sites import detect_scraper
         cls = detect_scraper(url)
+        # ``use_cache=False`` threads through every branch: a fresh-copy
+        # re-pull must ignore the chapter cache or edited-upstream
+        # chapters come back stale (_materialise_chapters serves any
+        # cached chapter regardless of skip_chapters).
+        base = {} if use_cache else {"use_cache": False}
         # use_fichub / *_cookie are per-site constructor kwargs; only forward
         # each to the scraper that accepts it so other site scrapers don't
         # choke on an unexpected kwarg.
         if use_fichub:
             from .scraper import FFNScraper
             if cls is FFNScraper:
-                return cls(use_fichub=True)
+                return cls(use_fichub=True, **base)
         if webnovel_cookie:
             from .webnovel import WebnovelScraper
             if cls is WebnovelScraper:
-                return cls(session_cookie=webnovel_cookie)
+                return cls(session_cookie=webnovel_cookie, **base)
         if ao3_cookie:
             from .ao3 import AO3Scraper
             if cls is AO3Scraper:
-                return cls(session_cookie=ao3_cookie)
+                return cls(session_cookie=ao3_cookie, **base)
         if scribblehub_cookie:
             from .scribblehub import ScribbleHubScraper
             if cls is ScribbleHubScraper:
-                return cls(session_cookie=scribblehub_cookie)
+                return cls(session_cookie=scribblehub_cookie, **base)
         if subscribestar_cookie:
             from .subscribestar import SubscribeStarScraper
             if cls is SubscribeStarScraper:
-                return cls(session_cookie=subscribestar_cookie)
-        return cls()
+                return cls(session_cookie=subscribestar_cookie, **base)
+        return cls(**base)
 
     def _snapshot_download_params(self) -> _DownloadParams:
         """MAIN THREAD ONLY. Bundle every wx-widget setting a worker
@@ -3064,6 +3085,9 @@ class MainFrame(wx.Frame):
                 ao3_cookie=params.ao3_cookie,
                 scribblehub_cookie=params.scribblehub_cookie,
                 subscribestar_cookie=params.subscribestar_cookie,
+                # Fresh-copy re-pull ignores the chapter cache so edited
+                # chapters actually refetch (audit #1).
+                use_cache=not refetch_all,
             )
 
             if not is_update and AO3Scraper.is_bookmarks_url(url):

@@ -858,7 +858,13 @@ class LibraryPanel(wx.Panel):
         def worker():
             try:
                 for root in roots:
-                    scan(root, recursive=True)
+                    # Explicit Rescan prunes orphans (files deleted off
+                    # disk) instead of merging, so a deleted story stops
+                    # lingering in the list. The scanner re-injects any
+                    # file whose metadata fails to parse this pass, so
+                    # clearing can't drop a present-but-unreadable file
+                    # (audit #6).
+                    scan(root, recursive=True, clear_existing=True)
             except Exception as exc:
                 wx.CallAfter(self._rescan_done, str(exc))
                 return
