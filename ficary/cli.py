@@ -442,6 +442,97 @@ def _handle_merge_parts(
     return True
 
 
+def _handle_subscribestar_story(
+    urls: list[str], args: argparse.Namespace, output_dir: Path,
+) -> bool:
+    """Merge a SubscribeStar creator's ``"<TITLE> Pt.N"`` posts into one
+    file. Driven by ``--subscribestar-story TITLE`` plus a creator URL;
+    each part's linked Google Doc supplies the chapter text."""
+    from .subscribestar import SubscribeStarScraper
+
+    if not urls:
+        print(
+            "Error: --subscribestar-story needs a SubscribeStar creator URL "
+            "(e.g. https://subscribestar.adult/<creator>).",
+            file=sys.stderr,
+        )
+        return False
+    creator_url = urls[0]
+    if len(urls) > 1:
+        print(
+            "Note: --subscribestar-story uses the first URL only; "
+            f"ignoring {len(urls) - 1} other(s).",
+            file=sys.stderr,
+        )
+
+    scraper = _build_scraper(creator_url, args)
+    if not isinstance(scraper, SubscribeStarScraper):
+        print(
+            f"Error: {creator_url} is not a subscribestar.adult creator URL.",
+            file=sys.stderr,
+        )
+        return False
+    if not scraper.has_auth:
+        print(
+            "Error: SubscribeStar is subscriber-only. Pass "
+            "--subscribestar-cookie (or set $FICARY_SUBSCRIBESTAR_COOKIE).",
+            file=sys.stderr,
+        )
+        return False
+
+    try:
+        check_format_deps(args.format)
+    except ImportError as exc:
+        print(f"Missing dependency: {exc}", file=sys.stderr)
+        return False
+
+    def progress(current, total, label, failed):
+        print(f"  [{current}/{total}] {label}{' FAILED' if failed else ''}")
+
+    print(f"Fetching '{args.subscribestar_story}' from {creator_url}...")
+    try:
+        story = scraper.download_creator_story(
+            creator_url, args.subscribestar_story, progress_callback=progress,
+        )
+    except _DOWNLOAD_EXPECTED_ERRORS as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return False
+    if not story.chapters:
+        print(
+            "No parts downloaded — check the story title and that the cookie "
+            "is a live, subscribed session.",
+            file=sys.stderr,
+        )
+        return False
+
+    if args.format == "audio":
+        path = generate_audiobook(
+            story, str(output_dir),
+            progress_callback=lambda c, t, title, cached: progress(
+                c, t, title, False,
+            ),
+            speech_rate=args.speech_rate,
+            attribution_backend=args.attribution,
+            attribution_model_size=args.attribution_model_size,
+            attribution_llm_config=_llm_config_from_args(args),
+            enabled_tts_providers=_tts_providers_from_args(args),
+            strip_notes=args.strip_notes,
+            hr_as_stars=args.hr_as_stars,
+        )
+    else:
+        exporter = EXPORTERS[args.format]
+        path = exporter(
+            story, str(output_dir), template=args.name,
+            hr_as_stars=args.hr_as_stars,
+            strip_notes=args.strip_notes,
+            html_style=args.html_style,
+            llm_config=_llm_strip_notes_config(args),
+            progress=print,
+        )
+    print(f"Saved: {path} ({len(story.chapters)} parts)")
+    return True
+
+
 def _apply_library_autosort(args: argparse.Namespace) -> None:
     """If no explicit --output was passed and a library is configured,
     route fresh downloads into it. Sets args.output to the library
@@ -660,6 +751,16 @@ def _build_scraper(url: str, args: argparse.Namespace):
         cookie = (
             getattr(args, "scribblehub_cookie", None)
             or _legacy.getenv_compat("FICARY_SCRIBBLEHUB_COOKIE")
+        )
+        if cookie:
+            kwargs["session_cookie"] = cookie
+    # SubscribeStar auth is mandatory in practice — the feed is
+    # subscriber-only, so without the cookie there's nothing to read.
+    from .subscribestar import SubscribeStarScraper
+    if scraper_cls is SubscribeStarScraper:
+        cookie = (
+            getattr(args, "subscribestar_cookie", None)
+            or _legacy.getenv_compat("FICARY_SUBSCRIBESTAR_COOKIE")
         )
         if cookie:
             kwargs["session_cookie"] = cookie
@@ -4013,6 +4114,30 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--subscribestar-cookie",
+        type=str,
+        default=None,
+        metavar="COOKIE",
+        help=(
+            "For subscribestar.adult, a logged-in browser 'Cookie:' header "
+            "string. Required — the post feed is subscriber-only. Reads "
+            "$FICARY_SUBSCRIBESTAR_COOKIE if the flag is omitted."
+        ),
+    )
+    parser.add_argument(
+        "--subscribestar-story",
+        type=str,
+        default=None,
+        metavar="TITLE",
+        help=(
+            "With a SubscribeStar creator URL, download every 'Pt.N' post "
+            "whose title matches TITLE and merge them into one work in part "
+            "order (each post's linked Google Doc is the chapter text). "
+            "E.g. --subscribestar-story \"From Soccer to Sucker\" "
+            "https://subscribestar.adult/<creator>"
+        ),
+    )
+    parser.add_argument(
         "--hr-as-stars",
         action="store_true",
         help=(
@@ -5327,6 +5452,19 @@ def main(argv: list[str] | None = None) -> None:
         except FileNotFoundError as exc:
             print(f"Error: {exc}", file=sys.stderr)
             sys.exit(1)
+
+        # --subscribestar-story: a creator URL + a story title collapses
+        # that creator's matching "Pt.N" posts into one merged work,
+        # before author-URL expansion would fan the creator out to every
+        # post.
+        if getattr(args, "subscribestar_story", None):
+            if args.format is None:
+                args.format = "epub"
+            if args.output is None:
+                args.output = "."
+            output_dir = Path(args.output)
+            output_dir.mkdir(parents=True, exist_ok=True)
+            sys.exit(0 if _handle_subscribestar_story(urls, args, output_dir) else 1)
 
         # --merge-series: peel off series URLs and render each as one file.
         if args.merge_series:

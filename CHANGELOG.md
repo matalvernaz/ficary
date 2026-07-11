@@ -1,5 +1,25 @@
 # Changelog
 
+## 2.13.4 — 2026-07-10
+
+**New features**
+
+* **SubscribeStar is now supported.** A creator on subscribestar.adult
+  posts serialized chapters as numbered "Pt.N" posts, each linking a
+  Google Doc with the chapter text. `--subscribestar-story "TITLE"`
+  with a creator URL walks the creator's whole feed, keeps the posts
+  whose title matches, fetches each part's Google Doc, and merges them
+  in part order into one work — for example:
+  `ficary --subscribestar-story "From Soccer to Sucker" --subscribestar-cookie "$COOKIE" https://subscribestar.adult/<creator>`.
+  A single `subscribestar.adult/posts/<id>` link downloads that one
+  post on its own. The feed is subscriber-only, so a logged-in browser
+  cookie is required (`--subscribestar-cookie`, a SubscribeStar box
+  under Preferences, or `$FICARY_SUBSCRIBESTAR_COOKIE`); the linked
+  Google Docs (native docs and uploaded Word files alike) export
+  without Google sign-in. Because a story can be spread across sites,
+  the parts a creator posts to SubscribeStar can be combined by hand
+  with the same story's earlier chapters from a site like Literotica.
+
 ## 2.13.3 — 2026-07-10
 
 **New features**

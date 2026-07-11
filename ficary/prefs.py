@@ -84,6 +84,9 @@ KEY_AO3_COOKIE = "ao3_cookie"
 # Cloudflare clearance cookie so fetches get past the challenge, and
 # unlocks members-only / mature chapters when logged in.
 KEY_SCRIBBLEHUB_COOKIE = "scribblehub_cookie"
+# SubscribeStar cookie (raw "Cookie:" header). Required for any download —
+# the creator feed is subscriber-only.
+KEY_SUBSCRIBESTAR_COOKIE = "subscribestar_cookie"
 KEY_SPEECH_RATE = "speech_rate"
 KEY_ATTRIBUTION_BACKEND = "attribution_backend"
 KEY_ATTRIBUTION_MODEL_SIZE = "attribution_model_size"
@@ -211,6 +214,7 @@ DEFAULTS = {
     KEY_WEBNOVEL_COOKIE: "",
     KEY_AO3_COOKIE: "",
     KEY_SCRIBBLEHUB_COOKIE: "",
+    KEY_SUBSCRIBESTAR_COOKIE: "",
     KEY_SPEECH_RATE: "0",
     KEY_ATTRIBUTION_BACKEND: "builtin",
     KEY_ATTRIBUTION_MODEL_SIZE: "",

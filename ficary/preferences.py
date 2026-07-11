@@ -335,6 +335,19 @@ class PreferencesDialog(wx.Dialog):
             0, wx.EXPAND | wx.ALL, 6,
         )
 
+        self.subscribestar_cookie_ctrl = wx.TextCtrl(panel, style=wx.TE_PASSWORD)
+        self.subscribestar_cookie_ctrl.SetName(
+            "SubscribeStar session cookie — paste a logged-in browser Cookie "
+            "header to download a creator's posts (the feed is "
+            "subscriber-only, so this is required). Stored locally."
+        )
+        sizer.Add(
+            self._make_labeled_row(
+                panel, "S&ubscribeStar cookie:", self.subscribestar_cookie_ctrl,
+            ),
+            0, wx.EXPAND | wx.ALL, 6,
+        )
+
         self._add_help_text(
             sizer, panel,
             "These set the defaults that load on launch. Format, filename, "
@@ -675,6 +688,8 @@ class PreferencesDialog(wx.Dialog):
         self.ao3_cookie_ctrl.SetValue(self.prefs.get(_p.KEY_AO3_COOKIE) or "")
         self.scribblehub_cookie_ctrl.SetValue(
             self.prefs.get(_p.KEY_SCRIBBLEHUB_COOKIE) or "")
+        self.subscribestar_cookie_ctrl.SetValue(
+            self.prefs.get(_p.KEY_SUBSCRIBESTAR_COOKIE) or "")
 
         # Audiobook
         try:
@@ -806,6 +821,10 @@ class PreferencesDialog(wx.Dialog):
         self.prefs.set(
             _p.KEY_SCRIBBLEHUB_COOKIE,
             self.scribblehub_cookie_ctrl.GetValue().strip(),
+        )
+        self.prefs.set(
+            _p.KEY_SUBSCRIBESTAR_COOKIE,
+            self.subscribestar_cookie_ctrl.GetValue().strip(),
         )
 
         # Audiobook

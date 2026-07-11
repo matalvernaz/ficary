@@ -34,6 +34,7 @@ from .ficwad import FicWadScraper
 from .mediaminer import MediaMinerScraper
 from .royalroad import RoyalRoadScraper
 from .scribblehub import ScribbleHubScraper
+from .subscribestar import SubscribeStarScraper
 from .scraper import BaseScraper, FFNScraper
 from .scraper import ensure_scheme as _ensure_scheme
 from .wattpad import WattpadScraper
@@ -236,6 +237,7 @@ _HOSTNAME_TO_SCRAPER: list[tuple[str, type[BaseScraper]]] = [
     ("ao3.org", AO3Scraper),
     ("royalroad.com", RoyalRoadScraper),
     ("scribblehub.com", ScribbleHubScraper),
+    ("subscribestar.adult", SubscribeStarScraper),
     ("mediaminer.org", MediaMinerScraper),
     ("literotica.com", LiteroticaScraper),
     ("wattpad.com", WattpadScraper),
@@ -269,6 +271,7 @@ ALL_SCRAPERS: list[type[BaseScraper]] = [
     AO3Scraper,
     RoyalRoadScraper,
     ScribbleHubScraper,
+    SubscribeStarScraper,
     MediaMinerScraper,
     LiteroticaScraper,
     WattpadScraper,
