@@ -3811,6 +3811,10 @@ class MainFrame(wx.Frame):
     def _notify_library_frame_closed(self):
         """Called by LibraryFrame._on_close so the menu reopens cleanly."""
         self._library_frame = None
+        # A scan/update in that window may have changed the index; make
+        # sure the embedded list reflects it (belt-and-braces alongside
+        # the per-scan refresh, in case the window is closed mid-flight).
+        self._refresh_library_panel()
 
     def _on_reader_menu(self, event):
         """Open a downloaded story (EPUB/HTML) in the in-app reader."""

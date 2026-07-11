@@ -560,6 +560,21 @@ class LibraryFrame(wx.Frame):
         for root, result in results:
             self._report_scan_result(result, root=root if multi else None)
         self._set_busy(False)
+        self._notify_main_refresh()
+
+    def _notify_main_refresh(self) -> None:
+        """Reload the main window's embedded library list after a scan or
+        update here changed the index on disk. Without this the embedded
+        list keeps showing its startup snapshot — blank story_updated,
+        missing newly-added stories — until the app restarts, which reads
+        as "the update-date sort doesn't work" (the column is empty, so
+        sorting it does nothing)."""
+        refresh = getattr(self.GetParent(), "_refresh_library_panel", None)
+        if callable(refresh):
+            try:
+                refresh()
+            except Exception:
+                logger.debug("main library-panel refresh failed", exc_info=True)
 
     def _scan_failed(self, exc: Exception) -> None:
         if not self._alive:
@@ -777,6 +792,7 @@ class LibraryFrame(wx.Frame):
         if not self._alive:
             return
         self._set_busy(False)
+        self._notify_main_refresh()
 
     def _on_review(self, event: wx.Event) -> None:
         root = self._current_path()

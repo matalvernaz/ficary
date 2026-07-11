@@ -1,5 +1,19 @@
 # Changelog
 
+## 2.14.4 — 2026-07-11
+
+**Bug fix**
+
+* **The main window's library list now refreshes after a scan or update
+  run from the Library window.** Previously that list kept showing the
+  snapshot it loaded at startup, so stories you'd just scanned in —
+  including their "Updated" dates — didn't appear until you restarted
+  the app. Because the dates were missing from the on-screen rows,
+  sorting by "Story updated" appeared to do nothing. The list now
+  reloads when a scan/update finishes and when the Library window
+  closes. (If you're on an older build: click Rescan in the main list,
+  or reopen the app, to load the dates.)
+
 ## 2.14.3 — 2026-07-11
 
 **Bug fixes (from a full code audit)**

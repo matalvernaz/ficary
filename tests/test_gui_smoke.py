@@ -357,6 +357,36 @@ def test_hide_add_story_refocuses_library(wx_app):
         frame.Destroy()
 
 
+def test_library_window_scan_refreshes_embedded_list(wx_app, monkeypatch):
+    """A scan/update run from the separate Library window must reload the
+    main window's embedded list, or that list keeps showing its startup
+    snapshot (blank story_updated, missing new stories) — which reads as
+    "the update-date sort doesn't work" because the column is empty."""
+    from ficary.gui import MainFrame
+    from ficary.library.gui import LibraryFrame
+
+    frame = MainFrame()
+    lib = LibraryFrame(frame, frame.prefs)
+    try:
+        calls = {"n": 0}
+        monkeypatch.setattr(
+            frame, "_refresh_library_panel",
+            lambda: calls.__setitem__("n", calls["n"] + 1),
+        )
+        # Scan completion notifies the main window.
+        lib._scan_finished([])
+        assert calls["n"] == 1
+        # Update completion does too.
+        lib._update_finished()
+        assert calls["n"] == 2
+        # And closing the window is a backstop refresh.
+        frame._notify_library_frame_closed()
+        assert calls["n"] == 3
+    finally:
+        lib.Destroy()
+        frame.Destroy()
+
+
 def test_no_default_save_location(wx_app):
     """Save-to starts empty — no hardcoded ~/Downloads default (which on
     frozen builds landed inside the portable app folder)."""
