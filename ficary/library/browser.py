@@ -50,6 +50,7 @@ _COLUMNS: tuple[tuple[str, int], ...] = (
     ("Format", 70),
     ("Library", 90),
     ("Added", 100),
+    ("Updated", 100),
 )
 
 # Sort-by dropdown options: label → (row attribute, descending). Kept as
@@ -64,11 +65,13 @@ _SORT_CHOICES: tuple[tuple[str, tuple[str, bool]], ...] = (
     ("Library", ("library_label", False)),
     ("Date added (newest first)", ("added_at", True)),
     ("Date added (oldest first)", ("added_at", False)),
+    ("Story updated (newest first)", ("story_updated", True)),
+    ("Story updated (oldest first)", ("story_updated", False)),
 )
 
 # Column index → row attribute, for header-click sorting.
 _COLUMN_SORT_ATTRS = ("title", "author", "fandom", "fmt", "library_label",
-                      "added_at")
+                      "added_at", "story_updated")
 
 _REEXPORT_FORMATS = ("epub", "html", "txt")
 
@@ -106,6 +109,11 @@ class _Row:
     """ISO first-seen stamp from the index; empty on entries indexed
     before the field existed. Empty values sort to the end under
     "newest first" (and the start under oldest-first)."""
+    story_updated: str = ""
+    """The story's last-updated date on the source site (YYYY-MM-DD),
+    read from the file's metadata block at scan time. Empty when the
+    file carries no recognisable date — rescan after upgrading to
+    populate older entries."""
 
 
 class LibraryPanel(wx.Panel):
@@ -374,6 +382,7 @@ class LibraryPanel(wx.Panel):
                     adult_overridden=override is not None,
                     is_abandoned=bool(entry.get("abandoned_at")),
                     added_at=str(entry.get("added_at") or ""),
+                    story_updated=str(entry.get("story_updated") or ""),
                 ))
         self._apply_sort()
         self._apply_filter()
@@ -430,7 +439,7 @@ class LibraryPanel(wx.Panel):
             self._sort_attr = attr
             # Dates default to newest-first — the useful order; text
             # columns default ascending.
-            self._sort_desc = attr == "added_at"
+            self._sort_desc = attr in ("added_at", "story_updated")
         # Mirror into the dropdown when an option matches, so the
         # accessible control always reflects reality.
         for i, (_label, (a, d)) in enumerate(_SORT_CHOICES):
@@ -476,6 +485,7 @@ class LibraryPanel(wx.Panel):
             self.list_ctrl.SetItem(i, 3, row.fmt)
             self.list_ctrl.SetItem(i, 4, row.library_label)
             self.list_ctrl.SetItem(i, 5, _added_display(row.added_at))
+            self.list_ctrl.SetItem(i, 6, _added_display(row.story_updated))
 
         self._update_count()
         if self._visible:
@@ -545,6 +555,7 @@ class LibraryPanel(wx.Panel):
             f"Adult: {adult_state}",
             f"Abandoned: {'yes' if row.is_abandoned else 'no'}",
             f"Added: {_added_display(row.added_at) or '(unknown)'}",
+            f"Story updated: {_added_display(row.story_updated) or '(unknown)'}",
             f"File: {row.abs_path or '(missing path)'}",
             f"Source: {row.url}",
         ]))

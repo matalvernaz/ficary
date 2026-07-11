@@ -21,9 +21,52 @@ def _story(url):
         summary="S", url=url,
     )
     s.metadata["status"] = "Complete"
+    # 2026-07-06 00:00 UTC — drives the exporter's "Updated" field.
+    s.metadata["date_updated"] = 1783296000
     s.chapters.append(Chapter(number=1, title="Ch1", html="<p>hello</p>"))
     s.chapters.append(Chapter(number=2, title="Ch2", html="<p>world</p>"))
     return s
+
+
+class TestNormalizeDate:
+    def test_shapes(self):
+        from ficary.updater import _normalize_date
+        assert _normalize_date("2026-07-05") == "2026-07-05"
+        assert _normalize_date("2026-07-05T12:30:00Z") == "2026-07-05"
+        assert _normalize_date("5 Jan 2026") == "2026-01-05"
+        assert _normalize_date("January 5, 2026") == "2026-01-05"
+        assert _normalize_date("2026/07/05") == "2026-07-05"
+        # Unrecognised shapes return None — a blank cell beats a wrong
+        # date, and sort keys must stay lexicographically comparable.
+        assert _normalize_date("last Tuesday") is None
+        assert _normalize_date("") is None
+        assert _normalize_date(None) is None
+
+
+class TestStoryUpdatedRoundTrip:
+    """The site's last-updated date survives export → extract_metadata
+    for every format, normalised to YYYY-MM-DD. This is what feeds the
+    library's story_updated column and 'Story updated' sort."""
+
+    def _assert_updated(self, path):
+        from ficary.updater import extract_metadata
+        md = extract_metadata(path)
+        assert md.updated == "2026-07-06", (path, md.updated)
+
+    def test_html(self, tmp_path):
+        self._assert_updated(
+            export_html(_story("https://x.invalid/1"), str(tmp_path)))
+
+    def test_txt(self, tmp_path):
+        self._assert_updated(
+            export_txt(_story("https://x.invalid/1"), str(tmp_path)))
+
+    def test_epub(self, tmp_path):
+        try:
+            path = export_epub(_story("https://x.invalid/1"), str(tmp_path))
+        except ImportError:
+            pytest.skip("ebooklib not installed")
+        self._assert_updated(path)
 
 
 class TestRoundTripTxt:

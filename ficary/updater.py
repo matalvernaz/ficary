@@ -38,6 +38,12 @@ class FileMetadata:
     status: str | None = None
     chapter_count: int = 0
     format: str = ""
+    updated: str | None = None
+    """The story's last-updated date ON THE SOURCE SITE, normalised to
+    YYYY-MM-DD (see :func:`_normalize_date`). Read back from the
+    "Updated" field ficary's exporters write into every file's metadata
+    block; None when the file doesn't carry one or the date shape isn't
+    recognised. Distinct from the local file's mtime."""
 
 
 _HTML_DIV_WITH_CLASS_RE = re.compile(
@@ -510,7 +516,44 @@ def _fill_from_epub(path: Path, md: "FileMetadata") -> None:
             md.status = kv.get("status")
         if not md.rating:
             md.rating = kv.get("rating")
+        if not md.updated:
+            md.updated = _normalize_date(kv.get("updated"))
         break
+
+
+_DATE_FORMATS = (
+    "%d %b %Y",    # 5 Jan 2026
+    "%b %d, %Y",   # Jan 5, 2026
+    "%d %B %Y",    # 5 January 2026
+    "%B %d, %Y",   # January 5, 2026
+    "%Y/%m/%d",
+)
+
+_ISO_DATE_RE = re.compile(r"^(\d{4}-\d{2}-\d{2})")
+
+
+def _normalize_date(raw: str | None) -> str | None:
+    """Normalise a human/site date string to YYYY-MM-DD, or None.
+
+    ficary's own exports already write ISO dates ("2026-07-05"), which
+    pass straight through (datetime suffixes are trimmed). A small set
+    of common site/export shapes is parsed; anything else returns None
+    rather than a guess — a blank cell beats a wrong date, and the
+    sort keys must stay lexicographically comparable.
+    """
+    if not raw:
+        return None
+    text = str(raw).strip()
+    m = _ISO_DATE_RE.match(text)
+    if m:
+        return m.group(1)
+    from datetime import datetime
+    for fmt in _DATE_FORMATS:
+        try:
+            return datetime.strptime(text, fmt).strftime("%Y-%m-%d")
+        except ValueError:
+            continue
+    return None
 
 
 def _merge_metadata_field(
@@ -557,6 +600,7 @@ def _fill_from_html(path: Path, md: "FileMetadata") -> None:
     _merge_metadata_field(md, "author", merged.get("author"))
     _merge_metadata_field(md, "status", merged.get("status"))
     _merge_metadata_field(md, "rating", merged.get("rating"))
+    _merge_metadata_field(md, "updated", _normalize_date(merged.get("updated")))
 
     # Fandoms can live under any of several label aliases; take the
     # first populated one.
@@ -853,6 +897,8 @@ def _fill_from_txt(path: Path, md: "FileMetadata") -> None:
             md.status = value
         elif label == "Rating":
             md.rating = value
+        elif label == "Updated":
+            md.updated = _normalize_date(value)
         elif label == "Source" and value.startswith(("http://", "https://")):
             md.source_url = value
 

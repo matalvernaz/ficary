@@ -343,6 +343,13 @@ class LibraryIndex:
                 "format": md.format,
                 "confidence": candidate.confidence.value,
                 "chapter_count": md.chapter_count,
+                # The story's last-updated date on the SOURCE SITE
+                # (YYYY-MM-DD, read from the file's metadata block) —
+                # not the local file's mtime. Deliberately NOT in the
+                # preserved keys above: merging new chapters rewrites
+                # the file with a fresh date, and the next scan must
+                # pick that up rather than keep the stale one.
+                "story_updated": md.updated,
                 "last_checked": _now_iso(),
                 # First-seen stamp; overwritten from existing_preserved
                 # below when this story was already indexed, so it only

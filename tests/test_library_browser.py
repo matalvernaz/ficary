@@ -60,12 +60,14 @@ def _install_index(monkeypatch, main_root: Path, adult_root: Path) -> None:
                         "author": "A", "fandoms": ["Harry Potter"],
                         "format": "epub", "adapter": "ffn",
                         "added_at": "2026-07-01T00:00:00Z",
+                        "story_updated": "2026-06-01",
                     },
                     _AO3: {
                         "relpath": "Naruto/Two - B.epub", "title": "Two",
                         "author": "B", "fandoms": ["Naruto"],
                         "format": "epub", "adapter": "ao3",
                         "added_at": "2026-07-05T00:00:00Z",
+                        "story_updated": "2026-07-10",
                     },
                 },
                 "untrackable": [],
@@ -300,6 +302,46 @@ def test_browser_sorting(wx_app, monkeypatch, tmp_path):
         assert [r.author for r in frame._visible] == ["C", "B", "A"]
         # The count line names the active sort.
         assert "sorted by" in frame.count_ctrl.GetLabel().lower()
+    finally:
+        frame.Destroy()
+        parent.Destroy()
+
+
+def test_browser_sort_by_story_updated(wx_app, monkeypatch, tmp_path):
+    """'Story updated' sorts by the story's own last-updated date from
+    the source site (story_updated in the index). Entries with no date
+    (Spicy — older file, no metadata) sort last under newest-first."""
+    from ficary.library.browser import LibraryBrowserFrame, _SORT_CHOICES
+
+    main_root = tmp_path / "lib"
+    adult_root = tmp_path / "adult"
+    main_root.mkdir()
+    adult_root.mkdir()
+    _install_index(monkeypatch, main_root, adult_root)
+
+    parent = wx.Frame(None)
+    frame = LibraryBrowserFrame(parent, _StubPrefs(str(adult_root)))
+    try:
+        frame.adult_chk.SetValue(True)
+        frame._apply_filter()
+        i = next(
+            i for i, (label, _) in enumerate(_SORT_CHOICES)
+            if label == "Story updated (newest first)"
+        )
+        frame.sort_ctrl.SetSelection(i)
+        frame._on_sort_choice(None)
+        # Two (07-10) > One (06-01) > Spicy (no date, sorts last).
+        assert [r.title for r in frame._visible] == ["Two", "One", "Spicy"]
+        # The Updated column shows the date part; blank when unknown.
+        assert frame.list_ctrl.GetItemText(0, 6) == "2026-07-10"
+        assert frame.list_ctrl.GetItemText(2, 6) == ""
+        # Header click on Updated defaults to newest-first too.
+        class _FakeColEvent:
+            def __init__(self, col): self._col = col
+            def GetColumn(self): return self._col
+        frame._on_col_click(_FakeColEvent(0))  # move off (title)
+        frame._on_col_click(_FakeColEvent(6))  # Updated column
+        assert [r.title for r in frame._visible] == ["Two", "One", "Spicy"]
     finally:
         frame.Destroy()
         parent.Destroy()

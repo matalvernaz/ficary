@@ -1,5 +1,22 @@
 # Changelog
 
+## 2.14.2 — 2026-07-11
+
+**New**
+
+* **Sort the library by when the story itself was last updated.** The
+  library list gains an "Updated" column and two sort options — "Story
+  updated (newest first / oldest first)" — based on the last-updated
+  date the source site reports for the story, not the file on disk.
+  The date is read from the metadata block ficary writes into every
+  export, is refreshed whenever an update merges new chapters, and
+  shows in the details pane too. Clicking the Updated column header
+  sorts newest-first.
+* Existing libraries: run a **Rescan** once to populate the column for
+  stories you downloaded before this release. Files whose source site
+  doesn't report an updated date (or foreign files without one in
+  their metadata) show a blank cell and sort to the end.
+
 ## 2.14.1 — 2026-07-11
 
 **Add Story window (library-first, stage 2)**

@@ -99,6 +99,7 @@ class _FakeMeta:
         self.status = None
         self.chapter_count = 1
         self.format = "html"
+        self.updated = None
 
 
 class _FakeCandidate:
