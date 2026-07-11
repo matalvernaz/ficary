@@ -18,6 +18,12 @@ headers, and a read-only Summary pane below it updates on every arrow-key
 focus change so a keyboard-only user hears the full details (path, URL,
 library) without leaving the list. Enter (or double-click) opens the selected
 story in the reader.
+
+Structure: all of the above lives in :class:`LibraryPanel`, a plain
+``wx.Panel`` so it can be hosted standalone (:class:`LibraryBrowserFrame`,
+the Library window) *or* embedded directly in the main window as the
+library-first central view. Cross-window actions (open in the reader, start
+an update) are delegated to a ``main_frame`` handle rather than done here.
 """
 
 from __future__ import annotations
@@ -102,40 +108,41 @@ class _Row:
     "newest first" (and the start under oldest-first)."""
 
 
-class LibraryBrowserFrame(wx.Frame):
-    """Browse the indexed library and act on individual stories."""
+class LibraryPanel(wx.Panel):
+    """Browse the indexed library and act on individual stories.
 
-    def __init__(self, main_frame: wx.Window, prefs):
-        super().__init__(
-            main_frame,
-            title="Library Browser",
-            size=(900, 620),
-        )
+    Hosted standalone by :class:`LibraryBrowserFrame` and mountable
+    directly in the main window. Cross-window actions go through
+    ``main_frame`` (``_open_reader_for_file``, ``_begin_update_for_path``,
+    ``_global_busy``). ``on_close``, when given, adds a Close button wired
+    to it — the standalone frame passes its own ``Close``; the embedded
+    main-window view passes nothing (there's nothing to close)."""
+
+    def __init__(self, parent, main_frame, prefs, *, on_close=None):
+        super().__init__(parent)
         self._main = main_frame
         self._prefs = prefs
+        self._on_close = on_close         # callable → adds a Close button
         self._rows: list[_Row] = []       # everything loaded from the index
         self._visible: list[_Row] = []    # current filtered view (parallel to list rows)
         self._adult_hidden = 0            # count hidden by the adult filter, for the status line
         self._sort_attr = "title"         # current sort field (row attribute)
         self._sort_desc = False
         self._build_ui()
-        self._install_escape_accel()
-        self.Bind(wx.EVT_CLOSE, self._on_close)
-        self._reload()
+        self.reload()
 
     # ── UI ─────────────────────────────────────────────────────
 
     def _build_ui(self) -> None:
-        panel = wx.Panel(self)
         sizer = wx.BoxSizer(wx.VERTICAL)
 
         # Search + adult toggle row.
         top = wx.BoxSizer(wx.HORIZONTAL)
         top.Add(
-            wx.StaticText(panel, label="&Search:"),
+            wx.StaticText(self, label="&Search:"),
             0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 6,
         )
-        self.search_ctrl = wx.TextCtrl(panel, style=wx.TE_PROCESS_ENTER)
+        self.search_ctrl = wx.TextCtrl(self, style=wx.TE_PROCESS_ENTER)
         self.search_ctrl.SetName("Search stories")
         self.search_ctrl.SetHint("title, author, or fandom")
         set_help(
@@ -147,11 +154,11 @@ class LibraryBrowserFrame(wx.Frame):
         top.Add(self.search_ctrl, 1, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 12)
 
         top.Add(
-            wx.StaticText(panel, label="S&ort by:"),
+            wx.StaticText(self, label="S&ort by:"),
             0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 6,
         )
         self.sort_ctrl = wx.Choice(
-            panel, choices=[label for label, _ in _SORT_CHOICES],
+            self, choices=[label for label, _ in _SORT_CHOICES],
         )
         self.sort_ctrl.SetSelection(0)
         self.sort_ctrl.SetName("Sort stories by")
@@ -164,7 +171,7 @@ class LibraryBrowserFrame(wx.Frame):
         self.sort_ctrl.Bind(wx.EVT_CHOICE, self._on_sort_choice)
         top.Add(self.sort_ctrl, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 12)
 
-        self.adult_chk = wx.CheckBox(panel, label="Show &adult")
+        self.adult_chk = wx.CheckBox(self, label="Show &adult")
         self.adult_chk.SetName("Show adult stories")
         self.adult_chk.SetValue(False)
         set_help(
@@ -178,7 +185,7 @@ class LibraryBrowserFrame(wx.Frame):
 
         # Story list.
         self.list_ctrl = wx.ListCtrl(
-            panel, style=wx.LC_REPORT | wx.LC_SINGLE_SEL,
+            self, style=wx.LC_REPORT | wx.LC_SINGLE_SEL,
         )
         self.list_ctrl.SetName("Library stories")
         set_help(
@@ -198,17 +205,17 @@ class LibraryBrowserFrame(wx.Frame):
         self.list_ctrl.Bind(wx.EVT_LIST_COL_CLICK, self._on_col_click)
         sizer.Add(self.list_ctrl, 3, wx.EXPAND | wx.LEFT | wx.RIGHT, 8)
 
-        self.count_ctrl = wx.StaticText(panel, label="")
+        self.count_ctrl = wx.StaticText(self, label="")
         sizer.Add(self.count_ctrl, 0, wx.LEFT | wx.RIGHT | wx.TOP, 8)
 
         # Read-only detail pane — mirrors the picker-dialog convention so
         # keyboard users get the full record without leaving the list.
         sizer.Add(
-            wx.StaticText(panel, label="&Details:"),
+            wx.StaticText(self, label="&Details:"),
             0, wx.LEFT | wx.RIGHT | wx.TOP, 8,
         )
         self.summary_ctrl = wx.TextCtrl(
-            panel, style=wx.TE_MULTILINE | wx.TE_READONLY, size=(-1, 130),
+            self, style=wx.TE_MULTILINE | wx.TE_READONLY, size=(-1, 130),
         )
         self.summary_ctrl.SetName("Story details")
         set_help(
@@ -221,7 +228,7 @@ class LibraryBrowserFrame(wx.Frame):
 
         # Action buttons.
         btns = wx.BoxSizer(wx.HORIZONTAL)
-        self.open_btn = wx.Button(panel, label="&Open in Reader")
+        self.open_btn = wx.Button(self, label="&Open in Reader")
         self.open_btn.Bind(wx.EVT_BUTTON, self._on_open)
         set_help(
             self.open_btn,
@@ -230,7 +237,7 @@ class LibraryBrowserFrame(wx.Frame):
         )
         btns.Add(self.open_btn, 0, wx.RIGHT, 6)
 
-        self.update_btn = wx.Button(panel, label="Check for &Updates")
+        self.update_btn = wx.Button(self, label="Check for &Updates")
         self.update_btn.Bind(wx.EVT_BUTTON, self._on_update)
         set_help(
             self.update_btn,
@@ -239,7 +246,7 @@ class LibraryBrowserFrame(wx.Frame):
         )
         btns.Add(self.update_btn, 0, wx.RIGHT, 6)
 
-        self.reexport_btn = wx.Button(panel, label="Re-&export...")
+        self.reexport_btn = wx.Button(self, label="Re-&export...")
         self.reexport_btn.Bind(wx.EVT_BUTTON, self._on_reexport)
         set_help(
             self.reexport_btn,
@@ -248,7 +255,7 @@ class LibraryBrowserFrame(wx.Frame):
         )
         btns.Add(self.reexport_btn, 0, wx.RIGHT, 6)
 
-        self.path_btn = wx.Button(panel, label="Copy &Path")
+        self.path_btn = wx.Button(self, label="Copy &Path")
         self.path_btn.Bind(wx.EVT_BUTTON, self._on_copy_path)
         set_help(
             self.path_btn,
@@ -259,7 +266,7 @@ class LibraryBrowserFrame(wx.Frame):
         # Per-story management: adult classification and abandoned flag.
         # Labels are set per selection in _update_summary so the button
         # states the exact action it will take on the current story.
-        self.adult_btn = wx.Button(panel, label="Mark Ad&ult")
+        self.adult_btn = wx.Button(self, label="Mark Ad&ult")
         self.adult_btn.Bind(wx.EVT_BUTTON, self._on_toggle_adult_flag)
         set_help(
             self.adult_btn,
@@ -270,7 +277,7 @@ class LibraryBrowserFrame(wx.Frame):
         )
         btns.Add(self.adult_btn, 0, wx.RIGHT, 6)
 
-        self.abandon_btn = wx.Button(panel, label="Mark A&bandoned")
+        self.abandon_btn = wx.Button(self, label="Mark A&bandoned")
         self.abandon_btn.Bind(wx.EVT_BUTTON, self._on_toggle_abandoned)
         set_help(
             self.abandon_btn,
@@ -280,7 +287,7 @@ class LibraryBrowserFrame(wx.Frame):
         )
         btns.Add(self.abandon_btn, 0, wx.RIGHT, 6)
 
-        self.delete_btn = wx.Button(panel, label="&Delete...")
+        self.delete_btn = wx.Button(self, label="&Delete...")
         self.delete_btn.Bind(wx.EVT_BUTTON, self._on_delete)
         set_help(
             self.delete_btn,
@@ -289,7 +296,7 @@ class LibraryBrowserFrame(wx.Frame):
         )
         btns.Add(self.delete_btn, 0, wx.RIGHT, 6)
 
-        self.rescan_btn = wx.Button(panel, label="Re&scan")
+        self.rescan_btn = wx.Button(self, label="Re&scan")
         self.rescan_btn.Bind(wx.EVT_BUTTON, self._on_rescan)
         set_help(
             self.rescan_btn,
@@ -298,26 +305,26 @@ class LibraryBrowserFrame(wx.Frame):
         )
         btns.Add(self.rescan_btn, 0, wx.RIGHT, 6)
 
-        close_btn = wx.Button(panel, id=wx.ID_CLOSE, label="&Close")
-        close_btn.Bind(wx.EVT_BUTTON, lambda e: self.Close())
-        set_help(close_btn, "Close the library browser (Escape).")
-        btns.Add(close_btn, 0)
+        # Close only exists when a host asked for it (the standalone
+        # window). The embedded main-window view has nothing to close.
+        if self._on_close is not None:
+            close_btn = wx.Button(self, id=wx.ID_CLOSE, label="&Close")
+            close_btn.Bind(wx.EVT_BUTTON, lambda e: self._on_close())
+            set_help(close_btn, "Close the library browser (Escape).")
+            btns.Add(close_btn, 0)
         sizer.Add(btns, 0, wx.ALL, 8)
 
-        panel.SetSizer(sizer)
+        self.SetSizer(sizer)
         self._enable_actions(False)
-
-    def _install_escape_accel(self) -> None:
-        close_id = wx.NewIdRef()
-        self.Bind(wx.EVT_MENU, lambda e: self.Close(), id=int(close_id))
-        self.SetAcceleratorTable(wx.AcceleratorTable([
-            (wx.ACCEL_NORMAL, wx.WXK_ESCAPE, int(close_id)),
-        ]))
 
     # ── Data loading / filtering ───────────────────────────────
 
-    def _reload(self) -> None:
-        """(Re)load rows from the on-disk index and refresh the view."""
+    def reload(self) -> None:
+        """(Re)load rows from the on-disk index and refresh the view.
+
+        Public so a host can refresh the list after an external change —
+        e.g. the main window re-reading it once a download has been
+        auto-indexed."""
         from .index import LibraryIndex
         from .template import ADULT_FICTION_ADAPTERS
 
@@ -694,7 +701,7 @@ class LibraryBrowserFrame(wx.Frame):
                 "Library Browser", wx.OK | wx.ICON_ERROR, self,
             )
             return
-        self._reload()
+        self.reload()
         found = self._reselect_by_url(row.url)
         msg = (
             f"Marked “{row.title}” as adult."
@@ -728,7 +735,7 @@ class LibraryBrowserFrame(wx.Frame):
                 "Library Browser", wx.OK | wx.ICON_ERROR, self,
             )
             return
-        self._reload()
+        self.reload()
         self._reselect_by_url(row.url)
         self.count_ctrl.SetLabel(
             f"Revived “{row.title}” — it will be checked for "
@@ -771,7 +778,7 @@ class LibraryBrowserFrame(wx.Frame):
         except Exception:
             logger.debug("index remove after delete failed", exc_info=True)
         self.count_ctrl.SetLabel(f"Deleted: {path.name}")
-        self._reload()
+        self.reload()
 
     def _on_reexport(self, event: wx.Event) -> None:
         row = self._selected_row()
@@ -856,13 +863,53 @@ class LibraryBrowserFrame(wx.Frame):
                 "Library Browser", wx.OK | wx.ICON_ERROR, self,
             )
             return
-        self._reload()
+        self.reload()
 
     def _on_search(self, event: wx.Event) -> None:
         self._apply_filter()
 
     def _on_toggle_adult(self, event: wx.Event) -> None:
         self._apply_filter()
+
+
+class LibraryBrowserFrame(wx.Frame):
+    """Standalone Library window hosting a :class:`LibraryPanel`.
+
+    Thin wrapper: the panel holds all the list logic and actions; this
+    frame adds the window chrome (title, size), the Escape-to-close
+    accelerator, and the close notification back to the main window.
+    Attribute access falls through to the panel, so existing callers and
+    tests that reach ``frame.list_ctrl`` / ``frame._rows`` / ``frame._on_*``
+    keep working after the panel extraction."""
+
+    def __init__(self, main_frame: wx.Window, prefs):
+        super().__init__(
+            main_frame, title="Library Browser", size=(900, 620),
+        )
+        self._main = main_frame
+        self.panel = LibraryPanel(self, main_frame, prefs, on_close=self.Close)
+        sizer = wx.BoxSizer(wx.VERTICAL)
+        sizer.Add(self.panel, 1, wx.EXPAND)
+        self.SetSizer(sizer)
+        self._install_escape_accel()
+        self.Bind(wx.EVT_CLOSE, self._on_close)
+
+    def __getattr__(self, name):
+        # Only reached when normal attribute lookup fails — i.e. for the
+        # panel's Python attributes, never for wx's own methods (those
+        # resolve on the class). Lets frame.<x> mean panel.<x> without
+        # enumerating every attribute the panel exposes.
+        panel = self.__dict__.get("panel")
+        if panel is not None:
+            return getattr(panel, name)
+        raise AttributeError(name)
+
+    def _install_escape_accel(self) -> None:
+        close_id = wx.NewIdRef()
+        self.Bind(wx.EVT_MENU, lambda e: self.Close(), id=int(close_id))
+        self.SetAcceleratorTable(wx.AcceleratorTable([
+            (wx.ACCEL_NORMAL, wx.WXK_ESCAPE, int(close_id)),
+        ]))
 
     def _on_close(self, event: wx.Event) -> None:
         # Let the main window drop its reference if it tracks one.
