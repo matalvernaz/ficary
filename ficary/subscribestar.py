@@ -36,6 +36,8 @@ import html as _html
 import logging
 import re
 
+from urllib.parse import quote, unquote
+
 from bs4 import BeautifulSoup
 
 from .models import Chapter, Story, chapter_in_spec
@@ -46,6 +48,13 @@ logger = logging.getLogger(__name__)
 SS_BASE = "https://subscribestar.adult"
 
 _POST_URL_RE = re.compile(r"subscribestar\.adult/posts/(\d+)", re.IGNORECASE)
+# Synthetic per-story URL minted by scrape_author_works so a creator's
+# grouped serials flow through the normal author-picker + batch-download
+# machinery: subscribestar.adult/<handle>/story/<url-encoded title>.
+# download() recognises it and routes to download_creator_story.
+_STORY_URL_RE = re.compile(
+    r"subscribestar\.adult/([^/?#]+)/story/(.+)$", re.IGNORECASE,
+)
 # Fibaro's posts link two Google shapes: native docs (/document/d/<id>)
 # and uploaded Word files in Drive (/file/d/<id>?filetype=msword). Both
 # render via the document export endpoint, so accept either id form.
@@ -90,6 +99,9 @@ class SubscribeStarScraper(CookieAuthMixin, BaseScraper):
         m = _POST_URL_RE.search(text)
         if m:
             return int(m.group(1))
+        # Synthetic per-story URL (a merged serial) has no single post id.
+        if _STORY_URL_RE.search(text):
+            return 0
         raise ValueError(
             f"Cannot parse a SubscribeStar post id from: {text!r}\n"
             "Expected a post URL like https://subscribestar.adult/posts/12345 "
@@ -248,26 +260,70 @@ class SubscribeStarScraper(CookieAuthMixin, BaseScraper):
 
     # ── ficary entry points ────────────────────────────────────
 
-    def scrape_author_stories(self, url):
-        """List a creator's stories, grouped by base title.
+    def _story_url(self, handle: str, display_title: str) -> str:
+        """Mint the synthetic per-story URL the picker/batch path treats
+        as one downloadable work."""
+        return f"{SS_BASE}/{handle}/story/{quote(display_title, safe='')}"
 
-        Returns ``(creator_name, [labels])`` where each label is the
-        distinct story base-title. Callers pick one and route it to
-        :meth:`download_creator_story`. (The base tit­les are returned as
-        the "story urls" slot the author flow expects — they're not URLs,
-        but the merge path keys on the title, not a URL.)"""
+    @staticmethod
+    def _display_title(title: str) -> str:
+        return re.sub(
+            r"\s*(?:Pt|Part|Ch|Chapter)\.?\s*\d+.*$", "", title,
+            flags=re.IGNORECASE,
+        ).strip() or title
+
+    def scrape_author_works(self, url):
+        """List a creator's numbered serials as pickable works.
+
+        Groups the creator's posts by base title and returns one entry
+        per story, its ``url`` a synthetic per-story link that
+        :meth:`download` expands into a merged download. This lets a
+        SubscribeStar creator page flow through the same author-picker
+        and batch-download path every other site uses — pick a story,
+        get its parts merged into one file."""
         handle = self._handle_from_url(url)
         posts = self._enumerate_posts(handle)
-        titles = {}
+        groups: dict[str, dict] = {}
         for p in posts:
             base = _base_title(p["title"])
-            if base:
-                titles.setdefault(base, p["title"])
-        return handle, sorted(titles.values())
+            if not base or _part_number(p["title"]) is None:
+                continue  # only numbered serials can be auto-merged
+            g = groups.setdefault(
+                base, {"display": self._display_title(p["title"]), "parts": 0},
+            )
+            g["parts"] += 1
+        works = [
+            {
+                "title": f"{g['display']} ({g['parts']} parts)",
+                "url": self._story_url(handle, g["display"]),
+                "author": handle,
+                "section": "own",
+            }
+            for g in sorted(groups.values(), key=lambda x: x["display"].lower())
+        ]
+        return handle, works
+
+    def scrape_author_stories(self, url):
+        """(name, [synthetic story urls]) — the plain-list author flow
+        the CLI uses. Downloading each merges that story's parts."""
+        handle, works = self.scrape_author_works(url)
+        return handle, [w["url"] for w in works]
 
     def download(self, url_or_id, progress_callback=None, skip_chapters=0,
                  chapters=None):
-        """Download a single post as a one-chapter story."""
+        """Download a SubscribeStar work.
+
+        A synthetic ``/<handle>/story/<title>`` URL (from
+        :meth:`scrape_author_works`) merges that story's parts; a plain
+        ``/posts/<id>`` URL downloads that single post."""
+        m = _STORY_URL_RE.search(str(url_or_id))
+        if m:
+            handle = m.group(1)
+            display_title = unquote(m.group(2))
+            return self.download_creator_story(
+                handle, display_title, progress_callback=progress_callback,
+            )
+
         post_id = self.parse_story_id(url_or_id)
         post_url = f"{SS_BASE}/posts/{post_id}"
         html = self._fetch(post_url)

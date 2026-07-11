@@ -1,5 +1,19 @@
 # Changelog
 
+## 2.13.6 — 2026-07-10
+
+**New features**
+
+* **SubscribeStar creator pages work in the GUI like author pages.**
+  Paste a creator URL (or download one on the CLI) and ficary lists the
+  creator's serials in the story picker — each entry a whole story, not
+  a loose pile of posts. Pick one and its parts download merged into a
+  single file, the same "pick a work, get the book" flow every other
+  site's author page uses. (Previously a creator URL only worked via
+  the `--subscribestar-story` CLI flag, which still works.) The
+  SubscribeStar cookie set under **Preferences → Downloads** is applied
+  throughout, so this needs no command line.
+
 ## 2.13.5 — 2026-07-10
 
 **Bug fixes**

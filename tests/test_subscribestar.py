@@ -51,6 +51,50 @@ class TestURLParsing:
             "https://subscribestar.adult/posts/2563358"
         ) is SubscribeStarScraper
 
+    def test_synthetic_story_url_is_not_an_author_url(self):
+        # The per-story URL the picker downloads must NOT re-match
+        # is_author_url, or the GUI author flow would loop.
+        syn = "https://subscribestar.adult/fibaro/story/From%20Soccer%20to%20Sucker"
+        assert SubscribeStarScraper.is_author_url(
+            "https://subscribestar.adult/fibaro"
+        )
+        assert not SubscribeStarScraper.is_author_url(syn)
+        assert detect_scraper(syn) is SubscribeStarScraper
+        assert SubscribeStarScraper.parse_story_id(syn) == 0
+
+
+class TestAuthorWorks:
+    def test_scrape_author_works_groups_numbered_serials(self, monkeypatch):
+        sc = SubscribeStarScraper()
+        posts = [
+            {"id": "5", "title": "Tale A Pt.2", "doc_url": None, "body_html": "x"},
+            {"id": "4", "title": "Tale A Pt.1", "doc_url": None, "body_html": "x"},
+            {"id": "3", "title": "Tale B Pt.1", "doc_url": None, "body_html": "x"},
+            {"id": "2", "title": "Just an update", "doc_url": None, "body_html": "x"},
+        ]
+        monkeypatch.setattr(sc, "_enumerate_posts", lambda h: posts)
+        handle, works = sc.scrape_author_works("https://subscribestar.adult/x")
+        assert handle == "x"
+        titles = {w["title"] for w in works}
+        assert titles == {"Tale A (2 parts)", "Tale B (1 parts)"}
+        # Unnumbered "Just an update" post is excluded.
+        assert all("/story/" in w["url"] for w in works)
+
+    def test_synthetic_url_download_routes_to_merge(self, monkeypatch):
+        sc = SubscribeStarScraper()
+        captured = {}
+
+        def fake_merge(handle, title, progress_callback=None):
+            captured["handle"] = handle
+            captured["title"] = title
+            from ficary.models import Story
+            return Story(id=0, title=title, author=handle, summary="",
+                         url="", chapters=[])
+
+        monkeypatch.setattr(sc, "download_creator_story", fake_merge)
+        sc.download(sc._story_url("fibaro", "From Soccer to Sucker"))
+        assert captured == {"handle": "fibaro", "title": "From Soccer to Sucker"}
+
     def test_gdoc_id_matches_both_document_and_file_forms(self):
         from ficary.subscribestar import _GDOC_ID_RE
         assert _GDOC_ID_RE.search(
