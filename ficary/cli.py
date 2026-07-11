@@ -1111,8 +1111,12 @@ def _build_search_spec(args: argparse.Namespace):
         }
         search_fn = search_royalroad
     elif args.site == "literotica":
-        site_label = "literotica.com (tag browse)"
-        filters = {"category": getattr(args, "lit_category", None)}
+        _lit_cat = getattr(args, "lit_category", None)
+        site_label = (
+            "literotica.com (tag browse)" if _lit_cat
+            else "literotica.com (keyword search)"
+        )
+        filters = {"category": _lit_cat}
         search_fn = search_literotica
         if getattr(args, "lit_page", None):
             args.start_page = max(args.start_page, int(args.lit_page))

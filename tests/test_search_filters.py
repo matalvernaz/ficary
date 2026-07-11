@@ -783,3 +783,142 @@ class TestLiteroticaCategory:
         S.search_literotica("", category="Cuckold Husband")
         # Unknown → slugified ("cuckold-husband").
         assert "cuckold-husband" in captured["url"]
+
+
+# search.literotica.com results use schema.org microdata; two cards, one
+# a series part, mirroring the real markup (property/typeof attrs, hashed
+# ai_* classes omitted since the parser must not depend on them).
+_LIT_SEARCH_RESULTS_HTML = """
+<div typeof="ItemList" vocab="http://schema.org/">
+  <meta content="2" property="numberOfItems"/>
+  <div class="panel ai_gJ" property="itemListElement" typeof="CreativeWork"
+       resource="https://www.literotica.com/s/you-stupid-slut-pt-01">
+    <meta content="https://www.literotica.com/s/you-stupid-slut-pt-01" property="url"/>
+    <a class="ai_ii" href="https://www.literotica.com/s/you-stupid-slut-pt-01">
+      <h4>You Stupid Slut Pt. 01</h4></a>
+    <meta content="You Stupid Slut Pt. 01" property="name"/>
+    <div class="ai_ij"><p property="headline">Lara meets Ms. Baker.</p></div>
+    <a class="ai_in" href="https://www.literotica.com/authors/Fibaro/works"
+       property="author copyrightHolder accountablePerson">
+      <meta content="Fibaro" property="name"/><span>by</span><span>Fibaro</span></a>
+    <a href="https://www.literotica.com/c/mind-control"><span>Mind Control</span></a>
+  </div>
+  <div class="panel ai_gJ" property="itemListElement" typeof="CreativeWork"
+       resource="https://www.literotica.com/s/another-tale">
+    <meta content="https://www.literotica.com/s/another-tale" property="url"/>
+    <a class="ai_ii" href="https://www.literotica.com/s/another-tale"><h4>Another Tale</h4></a>
+    <meta content="Another Tale" property="name"/>
+    <div class="ai_ij"><p property="headline">A different story.</p></div>
+    <a class="ai_in" href="https://www.literotica.com/authors/Someone/works"
+       property="author copyrightHolder accountablePerson">
+      <meta content="Someone" property="name"/></a>
+    <a href="https://www.literotica.com/c/bdsm"><span>BDSM</span></a>
+  </div>
+</div>
+"""
+
+# The intermittent soft-throttle answer: small page, no result cards.
+_LIT_SEARCH_THROTTLE_HTML = "<html><body><div>please try again</div></body></html>"
+
+# Genuine no-results: no cards, but large (full search chrome) — over the
+# throttle byte threshold so the code treats it as a real empty answer.
+_LIT_SEARCH_EMPTY_HTML = "<html><body>" + ("x" * 130_000) + "</body></html>"
+
+
+def _fake_lit_requests(monkeypatch, responses):
+    """Stub ``ficary.search.curl_requests`` so each ``Session().get`` pops
+    the next body from ``responses``. Returns a dict recording the hit
+    URLs and total GET count, so tests can assert routing and retries."""
+    import ficary.search as S
+
+    rec = {"urls": [], "calls": 0}
+    queue = list(responses)
+
+    class FakeResp:
+        status_code = 200
+
+        def __init__(self, text):
+            self.text = text
+
+    class FakeSession:
+        def get(self, url, timeout=30, allow_redirects=True):
+            rec["urls"].append(url)
+            rec["calls"] += 1
+            body = queue.pop(0) if queue else responses[-1]
+            return FakeResp(body)
+
+    class FakeRequests:
+        @staticmethod
+        def Session(impersonate="chrome"):
+            return FakeSession()
+
+    monkeypatch.setattr(S, "curl_requests", FakeRequests)
+    monkeypatch.setattr(S.time, "sleep", lambda *a, **k: None)
+    return rec
+
+
+class TestLiteroticaKeywordSearch:
+    def test_parse_search_results_microdata(self):
+        import ficary.search as S
+
+        rows = S._parse_literotica_search_results(_LIT_SEARCH_RESULTS_HTML)
+        assert len(rows) == 2
+        first = rows[0]
+        assert first["title"] == "You Stupid Slut Pt. 01"
+        assert first["author"] == "Fibaro"          # "by" prefix stripped
+        assert first["summary"] == "Lara meets Ms. Baker."
+        assert first["url"].endswith("/s/you-stupid-slut-pt-01")
+        assert first["fandom"] == "Mind Control"
+
+    def test_query_without_category_hits_search_host(self, monkeypatch):
+        import ficary.search as S
+
+        rec = _fake_lit_requests(monkeypatch, [_LIT_SEARCH_RESULTS_HTML])
+        rows = S.search_literotica("you stupid slut")
+        # Routed to the keyword host, not the tag-browse subdomain.
+        assert rec["urls"] and rec["urls"][0].startswith(S.LIT_SEARCH_BASE)
+        assert "tags.literotica.com" not in rec["urls"][0]
+        assert "query=you" in rec["urls"][0]
+        assert [r["title"] for r in rows] == [
+            "You Stupid Slut Pt. 01", "Another Tale",
+        ]
+
+    def test_category_still_uses_tag_host(self, monkeypatch):
+        import ficary.search as S
+
+        rec = _fake_lit_requests(monkeypatch, ["<html></html>"])
+        S.search_literotica("you stupid slut", category="Loving Wives")
+        assert "tags.literotica.com" in rec["urls"][0]
+        assert rec["urls"][0].startswith(S.LIT_TAGS_BASE)
+
+    def test_throttle_shell_is_retried(self, monkeypatch):
+        import ficary.search as S
+
+        # Two throttle shells, then a real results page.
+        rec = _fake_lit_requests(monkeypatch, [
+            _LIT_SEARCH_THROTTLE_HTML,
+            _LIT_SEARCH_THROTTLE_HTML,
+            _LIT_SEARCH_RESULTS_HTML,
+        ])
+        rows = S.search_literotica("you stupid slut")
+        assert rec["calls"] == 3
+        assert len(rows) == 2
+
+    def test_genuine_empty_is_not_retried(self, monkeypatch):
+        import ficary.search as S
+
+        rec = _fake_lit_requests(monkeypatch, [_LIT_SEARCH_EMPTY_HTML])
+        rows = S.search_literotica("no such story anywhere")
+        # Large empty page → real no-results; don't burn the retry budget.
+        assert rec["calls"] == 1
+        assert rows == []
+
+    def test_throttle_exhausts_attempts_then_empty(self, monkeypatch):
+        import ficary.search as S
+
+        rec = _fake_lit_requests(
+            monkeypatch, [_LIT_SEARCH_THROTTLE_HTML] * 10,
+        )
+        rows = S.search_literotica("you stupid slut")
+        assert rec["calls"] == S._LIT_SEARCH_ATTEMPTS
+        assert rows == []

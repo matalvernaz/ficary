@@ -1,5 +1,21 @@
 # Changelog
 
+## 2.13.2 — 2026-07-10
+
+**Bug fixes**
+
+* **Literotica keyword and title search works.** Searching Literotica
+  for anything but a single tag word came back empty, because the
+  search converted the whole query into one tag slug and looked it up
+  on the tag-browse pages — so a multi-word title like a specific
+  series name matched no tag and returned nothing. A free-text query
+  with no category now runs a real full-text search against
+  Literotica's search service and finds stories by title, author, or
+  wording; series parts still collapse into a single result. Tag and
+  category browsing are unchanged. (Literotica's search service
+  occasionally answers with an empty throttle page; ficary now detects
+  that and retries, rather than reporting no results.)
+
 ## 2.13.1 — 2026-07-10
 
 **New features**

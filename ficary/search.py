@@ -2002,6 +2002,135 @@ def _parse_literotica_results(html):
     return results
 
 
+LIT_SEARCH_BASE = "https://search.literotica.com"
+
+# search.literotica.com intermittently answers a valid query with a
+# ~81 KB "shell" page carrying zero result cards — a soft rate-limit /
+# load-shed response, stochastic per request and independent of session
+# or spacing (simply re-issuing the request usually succeeds). A genuine
+# no-results page is far larger (~176 KB) because it still renders the
+# full search chrome, and a page with hits is larger still. So: zero
+# cards on a small page is a retryable throttle; zero cards on a large
+# page is a true empty result. The threshold sits well clear of both
+# observed sizes.
+_LIT_SEARCH_GENUINE_EMPTY_MIN_BYTES = 120_000
+_LIT_SEARCH_ATTEMPTS = 4
+_LIT_SEARCH_RETRY_DELAY_S = 1.0
+
+# Author link carries a space-separated schema.org property list
+# ("author copyrightHolder accountablePerson"); match the author token.
+_LIT_SEARCH_AUTHOR_PROP_RE = re.compile(r"\bauthor\b")
+
+
+def _parse_literotica_search_results(html):
+    """Parse story cards from a ``search.literotica.com`` results page.
+
+    The search host renders schema.org microdata rather than the
+    tag-browse card markup, so :func:`_parse_literotica_results` finds
+    nothing on it. Each hit is a ``[typeof="CreativeWork"]`` container
+    carrying a ``resource`` story URL, a ``[property="name"]`` title, a
+    ``[property="headline"]`` summary, a ``[property~="author"]`` author
+    link, and a ``/c/<slug>`` category link. Keyed on those stable
+    ``property`` / ``typeof`` attributes rather than the build-randomised
+    ``ai_*`` class names, mirroring the resilience of the tag-page
+    parser. Returns the same row shape as
+    :func:`_parse_literotica_results`.
+    """
+    soup = BeautifulSoup(html, "lxml")
+    results = []
+    seen_urls = set()
+    for card in soup.find_all(attrs={"typeof": "CreativeWork"}):
+        url = card.get("resource") or ""
+        url_meta = card.find("meta", attrs={"property": "url"})
+        if url_meta and url_meta.get("content"):
+            url = url_meta["content"]
+        if not url or url in seen_urls or not _LIT_STORY_HREF_RE.match(url):
+            continue
+        seen_urls.add(url)
+
+        name_meta = card.find("meta", attrs={"property": "name"})
+        title = (name_meta.get("content") if name_meta else "") or ""
+        if not title:
+            heading = card.find(["h3", "h4", "h5"])
+            title = heading.get_text(" ", strip=True) if heading else ""
+        if not title:
+            continue
+
+        head = card.find(attrs={"property": "headline"})
+        summary = head.get_text(" ", strip=True) if head else ""
+
+        author = ""
+        author_el = card.find(attrs={"property": _LIT_SEARCH_AUTHOR_PROP_RE})
+        if author_el:
+            author_meta = author_el.find("meta", attrs={"property": "name"})
+            author = (
+                (author_meta.get("content") if author_meta else "")
+                or author_el.get_text(" ", strip=True)
+            )
+            author = re.sub(r"^\s*by\s+", "", author, flags=re.I).strip()
+
+        fandom = ""
+        cat_a = card.find("a", href=_LIT_CATEGORY_HREF_RE)
+        if cat_a:
+            fandom = cat_a.get_text(" ", strip=True)
+
+        results.append({
+            "title": title,
+            "author": author,
+            "url": url,
+            "summary": summary,
+            "words": "?",
+            "chapters": "?",
+            "rating": "?",
+            "fandom": fandom,
+            "status": "",
+        })
+    return results
+
+
+def _search_literotica_keyword(query, *, page=1):
+    """Full-text keyword/title search via ``search.literotica.com``.
+
+    ``search_literotica``'s tag-slug lookup can only match Literotica
+    *tags*, so a title search ("you stupid slut") found nothing. The
+    search host does real full-text search over titles and summaries and
+    returns the same story-card data. It also intermittently serves a
+    throttle shell with no cards (see
+    :data:`_LIT_SEARCH_GENUINE_EMPTY_MIN_BYTES`), so retry a few times on
+    an empty-but-small page — each attempt uses a fresh session because
+    the throttle is per-request, not sticky — before giving up.
+    """
+    q = (query or "").strip()
+    if not q:
+        return []
+    try:
+        page_n = max(1, int(str(page).strip()))
+    except (TypeError, ValueError):
+        page_n = 1
+    params = {"query": q}
+    if page_n > 1:
+        params["page"] = page_n
+    url = f"{LIT_SEARCH_BASE}/?{urlencode(params)}"
+
+    for attempt in range(_LIT_SEARCH_ATTEMPTS):
+        session = curl_requests.Session(impersonate="chrome")
+        resp = session.get(url, timeout=30, allow_redirects=True)
+        if resp.status_code != 200:
+            raise RuntimeError(
+                f"Literotica search failed (HTTP {resp.status_code})."
+            )
+        rows = _parse_literotica_search_results(resp.text)
+        if rows:
+            return rows
+        # No cards: a large page is a genuine no-results answer; a small
+        # one is the throttle shell and worth another attempt.
+        if len(resp.text) >= _LIT_SEARCH_GENUINE_EMPTY_MIN_BYTES:
+            return []
+        if attempt < _LIT_SEARCH_ATTEMPTS - 1:
+            time.sleep(_LIT_SEARCH_RETRY_DELAY_S * (attempt + 1))
+    return []
+
+
 # Hard ceiling on how many pages ``fetch_until_limit`` will request,
 # regardless of ``limit``. A misbehaving site that returns the same
 # rows on every page (CDN caching the wrong query, server-side bug,
@@ -2671,10 +2800,19 @@ LIT_CATEGORIES = {
 
 
 def search_literotica(query, *, page=1, **filters):
-    """Search Literotica by tag or category. `query` is converted to a
-    tag slug (lowercased, whitespace → hyphens) and looked up on
-    tags.literotica.com — the server-rendered alternative to
-    Literotica's JS-only keyword search.
+    """Search Literotica.
+
+    A free-text `query` with no `category` is a real keyword/title
+    search via ``search.literotica.com`` (see
+    :func:`_search_literotica_keyword`) — this is what finds a story by
+    its title, e.g. a specific series.
+
+    When `category` is set, `query` is instead treated as a tag/category
+    browse: the category (or a slugified query) is looked up on
+    tags.literotica.com, the server-rendered alternative to Literotica's
+    JS-only keyword search. Callers that want "tag browse narrowed by
+    query" post-filter the tag results themselves (see
+    ``search_literotica_wrapped``).
 
     Keyword filters (optional):
         category: picks one of Literotica's top-level categories from
@@ -2688,6 +2826,12 @@ def search_literotica(query, *, page=1, **filters):
     `page` (keyword-only) selects a specific results page.
     """
     cat_raw = filters.get("category") if filters else None
+
+    # Free-text query with no category → real keyword/title search. The
+    # tag-slug path below can only match Literotica *tags*, never story
+    # titles, so a title search returned nothing before this branch.
+    if (query or "").strip() and not (cat_raw and str(cat_raw).strip()):
+        return _search_literotica_keyword(query, page=page)
     slug = None
     if cat_raw:
         cat_str = str(cat_raw).strip()
