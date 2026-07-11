@@ -295,7 +295,9 @@ class MainFrame(wx.Frame):
         super().__init__(
             None,
             title=f"Ficary {__version__} - Fanfiction Downloader & Reader",
-            size=(820, 720),
+            # Taller default now that the library list is the centre of
+            # the window rather than a separate browser dialog.
+            size=(900, 820),
             style=wx.DEFAULT_FRAME_STYLE,
         )
         from .prefs import Prefs
@@ -642,6 +644,20 @@ class MainFrame(wx.Frame):
 
         root_sizer.Add(out_sizer, 0, wx.EXPAND | wx.ALL, pad)
 
+        # ── Library (the main view) ──────────────────────────
+        # The indexed library is the centre of the window: the controls
+        # above add to it, the status pane below reports on it. This is
+        # the library-first pivot — the list, not the download form, is
+        # what fills the window. A download refreshes it via
+        # _refresh_library_panel once the file is auto-indexed.
+        from .library.browser import LibraryPanel
+        root_sizer.Add(
+            wx.StaticText(root, label="&Library:"),
+            0, wx.LEFT | wx.TOP | wx.RIGHT, pad,
+        )
+        self.library_panel = LibraryPanel(root, self, self.prefs)
+        root_sizer.Add(self.library_panel, 1, wx.EXPAND | wx.ALL, pad)
+
         # ── Status log ───────────────────────────────────────
         # Log level, "Save log to file", and "Open log folder" live in
         # the View menu instead of cluttering the status row.
@@ -655,9 +671,12 @@ class MainFrame(wx.Frame):
             0, wx.LEFT | wx.TOP | wx.RIGHT, pad,
         )
 
+        # Fixed-height strip now that the library list owns the stretch:
+        # the log is a status ticker at the bottom, not the main surface.
         self.log_ctrl = wx.TextCtrl(
             root,
             style=wx.TE_MULTILINE | wx.TE_READONLY | wx.TE_DONTWRAP,
+            size=(-1, 130),
         )
         self.log_ctrl.SetName("Status log")
         set_help(
@@ -665,7 +684,7 @@ class MainFrame(wx.Frame):
             "Live progress and messages for the current job — download "
             "progress, chapter counts, and any errors. Read-only.",
         )
-        root_sizer.Add(self.log_ctrl, 1, wx.EXPAND | wx.ALL, pad)
+        root_sizer.Add(self.log_ctrl, 0, wx.EXPAND | wx.ALL, pad)
 
         # Logging plumbing: bridge Python's root logger to _log() so
         # scraper / updater / TTS log records show up in the status pane
@@ -2921,8 +2940,21 @@ class MainFrame(wx.Frame):
             )
             if recorded:
                 self._log("  Added to library index.")
+                # Reflect the new story in the embedded list immediately.
+                # Runs on a worker thread, so hop to the main thread.
+                wx.CallAfter(self._refresh_library_panel)
         except Exception:
             logger.debug("auto-index after download failed", exc_info=True)
+
+    def _refresh_library_panel(self):
+        """Reload the embedded library list from the index. Main-thread
+        only; no-op if the panel isn't up yet (early startup)."""
+        panel = getattr(self, "library_panel", None)
+        if panel is not None:
+            try:
+                panel.reload()
+            except Exception:
+                logger.debug("library panel refresh failed", exc_info=True)
 
     def _upload_to_abs(self, m4b_path, story):
         """Push a finished M4B to Audiobookshelf. Worker-thread safe (no
@@ -3729,25 +3761,19 @@ class MainFrame(wx.Frame):
         self._reader_frame = None
 
     def _open_library_browser(self, event=None):
-        """Open the library browser (non-modal, single instance).
+        """Focus the embedded library list (Browse Library / Ctrl+B).
 
-        Lists every story the last scan indexed and lets the user read,
-        update, re-export, locate, or delete one. Lazy import keeps the
-        browser off gui.py's startup path for users who never open it.
-        """
-        if self._browser_frame is not None:
-            try:
-                self._browser_frame.Raise()
-                self._browser_frame.SetFocus()
-                return
-            except RuntimeError:
-                # Destroyed without hitting our closed-notify — reset.
-                self._browser_frame = None
-        from .library.browser import LibraryBrowserFrame
-
-        frame = LibraryBrowserFrame(self, self.prefs)
-        self._browser_frame = frame
-        frame.Show()
+        The library now lives in the main window rather than a separate
+        browser window, so "Browse Library" refreshes it and drops focus
+        onto the list for keyboard/screen-reader users."""
+        panel = getattr(self, "library_panel", None)
+        if panel is None:
+            return
+        panel.reload()
+        panel.list_ctrl.SetFocus()
+        if panel.list_ctrl.GetItemCount() and panel.list_ctrl.GetFirstSelected() < 0:
+            panel.list_ctrl.Select(0)
+            panel.list_ctrl.Focus(0)
 
     def _notify_browser_frame_closed(self):
         self._browser_frame = None

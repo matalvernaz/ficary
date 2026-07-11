@@ -1,5 +1,25 @@
 # Changelog
 
+## 2.14.0 — 2026-07-11
+
+**Library-first main window (stage 1)**
+
+* **Your library is now the centre of the main window.** The list of
+  every downloaded story — with its search box, sort control, adult
+  toggle, details pane, and per-story actions (open in reader, check
+  for updates, re-export, mark adult/abandoned, delete) — is embedded
+  directly in the main window instead of a separate browser window. The
+  URL box and Download button sit above it as the "add a story" area,
+  and the status log is now a compact strip along the bottom. Anything
+  you download lands in the library and appears in the list right away.
+* **Browse Library (Ctrl+B)** now jumps focus straight to that embedded
+  list rather than opening a second window.
+* Enter on a story opens it in the built-in reader, as before.
+
+This is the first step of a larger shift to a library-centred design;
+the download options above the list will be tidied in a later step.
+Nothing about how downloads, updates, or the CLI work has changed.
+
 ## 2.13.11 — 2026-07-11
 
 **Bug fixes**

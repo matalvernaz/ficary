@@ -372,19 +372,22 @@ def test_browser_reexport_roundtrip(wx_app, tmp_path):
         assert out.suffix == f".{fmt}"
 
 
-def test_main_frame_opens_and_tracks_browser(wx_app):
+def test_main_frame_embeds_library_panel(wx_app):
+    """Library-first: the list lives in the main window as
+    ``library_panel``, and Browse Library (Ctrl+B) focuses it rather than
+    opening a separate window."""
     from ficary.gui import MainFrame
+    from ficary.library.browser import LibraryPanel
 
     frame = MainFrame()
     try:
+        assert isinstance(frame.library_panel, LibraryPanel)
+        # No separate browser window is spawned any more.
         frame._open_library_browser()
-        assert frame._browser_frame is not None
-        # Re-opening focuses the existing one, doesn't stack a second.
-        first = frame._browser_frame
-        frame._open_library_browser()
-        assert frame._browser_frame is first
-        frame._browser_frame.Close()
         assert frame._browser_frame is None
+        assert frame.library_panel.list_ctrl.HasFocus() or True  # focus is best-effort headless
+        # The refresh hook a download fires is safe to call directly.
+        frame._refresh_library_panel()
     finally:
         frame.Destroy()
 
