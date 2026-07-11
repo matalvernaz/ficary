@@ -1,5 +1,25 @@
 # Changelog
 
+## 2.13.8 — 2026-07-11
+
+**New features**
+
+* **Downloads are added to the library automatically.** A story saved
+  into your library folder (or the separate adult folder) now enters
+  the library index the moment the download finishes — it shows up in
+  Browse Library and is tracked by Check for Updates immediately, with
+  no manual Scan Library needed. Files saved anywhere else are left
+  alone. Works from the app and the command line, including series
+  merges and SubscribeStar story merges.
+* **The library browser is sortable.** A new "Sort by" dropdown orders
+  the list by title, author, fandom, format, library, or date added
+  (newest or oldest first), and clicking a column header sorts by that
+  column (click again to reverse). A new "Added" column shows when
+  each story entered the library; the index now records that
+  first-seen date, and it survives rescans. Stories indexed before
+  this version show a blank Added date until re-downloaded — their
+  original add date isn't known, and the browser doesn't invent one.
+
 ## 2.13.7 — 2026-07-10
 
 **Bug fixes**

@@ -59,11 +59,13 @@ def _install_index(monkeypatch, main_root: Path, adult_root: Path) -> None:
                         "relpath": "HP/One - A.epub", "title": "One",
                         "author": "A", "fandoms": ["Harry Potter"],
                         "format": "epub", "adapter": "ffn",
+                        "added_at": "2026-07-01T00:00:00Z",
                     },
                     _AO3: {
                         "relpath": "Naruto/Two - B.epub", "title": "Two",
                         "author": "B", "fandoms": ["Naruto"],
                         "format": "epub", "adapter": "ao3",
+                        "added_at": "2026-07-05T00:00:00Z",
                     },
                 },
                 "untrackable": [],
@@ -74,6 +76,7 @@ def _install_index(monkeypatch, main_root: Path, adult_root: Path) -> None:
                         "relpath": "Spicy - C.epub", "title": "Spicy",
                         "author": "C", "fandoms": ["Adult"],
                         "format": "epub", "adapter": "literotica",
+                        "added_at": "2026-07-09T00:00:00Z",
                     },
                 },
                 "untrackable": [],
@@ -251,6 +254,101 @@ def test_browser_abandoned_toggle(wx_app, monkeypatch, tmp_path):
         two = _select_by_title(frame, "Two")
         assert two.is_abandoned is False
         assert "Mark" in frame.abandon_btn.GetLabel()
+    finally:
+        frame.Destroy()
+        parent.Destroy()
+
+
+def test_browser_sorting(wx_app, monkeypatch, tmp_path):
+    """The Sort-by dropdown and column-header clicks reorder the list;
+    the Added column carries the index's added_at date."""
+    from ficary.library.browser import LibraryBrowserFrame, _SORT_CHOICES
+
+    main_root = tmp_path / "lib"
+    adult_root = tmp_path / "adult"
+    main_root.mkdir()
+    adult_root.mkdir()
+    _install_index(monkeypatch, main_root, adult_root)
+
+    parent = wx.Frame(None)
+    frame = LibraryBrowserFrame(parent, _StubPrefs(str(adult_root)))
+    try:
+        frame.adult_chk.SetValue(True)
+        frame._apply_filter()
+        # Default: title ascending.
+        assert [r.title for r in frame._visible] == ["One", "Spicy", "Two"]
+
+        # Dropdown: date added, newest first (Spicy 07-09 > Two 07-05 > One).
+        newest_i = next(
+            i for i, (label, _) in enumerate(_SORT_CHOICES)
+            if "newest" in label.lower()
+        )
+        frame.sort_ctrl.SetSelection(newest_i)
+        frame._on_sort_choice(None)
+        assert [r.title for r in frame._visible] == ["Spicy", "Two", "One"]
+        # Added column shows the date part.
+        assert frame.list_ctrl.GetItemText(0, 5) == "2026-07-09"
+
+        # Header click on Author sorts ascending by author (A, B, C).
+        class _FakeColEvent:
+            def __init__(self, col): self._col = col
+            def GetColumn(self): return self._col
+        frame._on_col_click(_FakeColEvent(1))
+        assert [r.author for r in frame._visible] == ["A", "B", "C"]
+        # Second click on the same column reverses it.
+        frame._on_col_click(_FakeColEvent(1))
+        assert [r.author for r in frame._visible] == ["C", "B", "A"]
+        # The count line names the active sort.
+        assert "sorted by" in frame.count_ctrl.GetLabel().lower()
+    finally:
+        frame.Destroy()
+        parent.Destroy()
+
+
+def test_browser_rows_missing_added_at_sort_last_on_newest(wx_app, monkeypatch, tmp_path):
+    """Entries indexed before added_at existed (no stamp) must not
+    float to the top of "newest first" — they sort after dated rows."""
+    from ficary.library.browser import LibraryBrowserFrame, _SORT_CHOICES
+    from ficary.library.index import SCHEMA_VERSION, LibraryIndex
+
+    main_root = tmp_path / "lib"
+    main_root.mkdir()
+    data = {
+        "version": SCHEMA_VERSION,
+        "libraries": {
+            str(main_root): {
+                "stories": {
+                    "https://www.fanfiction.net/s/1/": {
+                        "relpath": "a.epub", "title": "Dated", "author": "A",
+                        "fandoms": [], "format": "epub", "adapter": "ffn",
+                        "added_at": "2026-07-01T00:00:00Z",
+                    },
+                    "https://www.fanfiction.net/s/2/": {
+                        "relpath": "b.epub", "title": "Undated", "author": "B",
+                        "fandoms": [], "format": "epub", "adapter": "ffn",
+                    },
+                },
+                "untrackable": [],
+            },
+        },
+    }
+    fake = LibraryIndex(main_root / "idx.json", data)
+    monkeypatch.setattr(
+        LibraryIndex, "load", classmethod(lambda cls, path=None: fake),
+    )
+
+    parent = wx.Frame(None)
+    frame = LibraryBrowserFrame(parent, _StubPrefs())
+    try:
+        newest_i = next(
+            i for i, (label, _) in enumerate(_SORT_CHOICES)
+            if "newest" in label.lower()
+        )
+        frame.sort_ctrl.SetSelection(newest_i)
+        frame._on_sort_choice(None)
+        assert [r.title for r in frame._visible] == ["Dated", "Undated"]
+        # Undated rows show an empty Added cell, not a fake date.
+        assert frame.list_ctrl.GetItemText(1, 5) == ""
     finally:
         frame.Destroy()
         parent.Destroy()

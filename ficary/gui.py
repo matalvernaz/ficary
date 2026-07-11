@@ -2811,6 +2811,8 @@ class MainFrame(wx.Frame):
                 wx.CallAfter(self.cancel_render_btn.Disable)
             if params.send_to_abs and m4b is not None:
                 self._upload_to_abs(m4b, story)
+            if m4b is not None:
+                self._auto_index_download(m4b)
             return m4b
 
         from .exporters import EXPORTERS
@@ -2821,13 +2823,42 @@ class MainFrame(wx.Frame):
                 f"  LLM A/N strip: {an_llm_config['provider']}/"
                 f"{an_llm_config['model']} (one call per chapter)"
             )
-        return exporter(
+        path = exporter(
             story, output_dir, template=params.filename_template,
             hr_as_stars=params.hr_as_stars, strip_notes=params.strip_notes,
             html_style=params.html_style,
             llm_config=an_llm_config,
             progress=self._log,
         )
+        self._auto_index_download(path)
+        return path
+
+    def _auto_index_download(self, path):
+        """Record a just-exported file in the library index when it
+        landed inside a configured library (main or separate adult
+        root), so it shows up in Browse Library and the update tools
+        without waiting for the next manual Scan Library.
+
+        Worker-thread safe (no wx); prefs reads off-main follow the
+        same pattern as _resolve_output_dir. Never raises — indexing
+        is best-effort on top of an already-successful download.
+        """
+        try:
+            from . import prefs as _p
+            from .library.scanner import record_downloaded_file
+            recorded = record_downloaded_file(
+                path,
+                library_root=(
+                    self.prefs.get(_p.KEY_LIBRARY_PATH, "") or ""
+                ).strip() or None,
+                adult_root=(
+                    self.prefs.get(_p.KEY_LIBRARY_ADULT_PATH, "") or ""
+                ).strip() or None,
+            )
+            if recorded:
+                self._log("  Added to library index.")
+        except Exception:
+            logger.debug("auto-index after download failed", exc_info=True)
 
     def _upload_to_abs(self, m4b_path, story):
         """Push a finished M4B to Audiobookshelf. Worker-thread safe (no

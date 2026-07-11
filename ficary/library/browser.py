@@ -38,14 +38,40 @@ logger = logging.getLogger(__name__)
 # (heading, initial width). Title gets the lion's share; Library is the
 # short root label / "Adult" bucket marker.
 _COLUMNS: tuple[tuple[str, int], ...] = (
-    ("Title", 320),
-    ("Author", 160),
-    ("Fandom", 150),
+    ("Title", 300),
+    ("Author", 150),
+    ("Fandom", 140),
     ("Format", 70),
-    ("Library", 100),
+    ("Library", 90),
+    ("Added", 100),
 )
 
+# Sort-by dropdown options: label → (row attribute, descending). Kept as
+# an explicit control rather than column-header clicks alone because
+# header clicks are mouse-only — invisible to a keyboard/screen-reader
+# user. Header clicks still work and drive the same state.
+_SORT_CHOICES: tuple[tuple[str, tuple[str, bool]], ...] = (
+    ("Title", ("title", False)),
+    ("Author", ("author", False)),
+    ("Fandom", ("fandom", False)),
+    ("Format", ("fmt", False)),
+    ("Library", ("library_label", False)),
+    ("Date added (newest first)", ("added_at", True)),
+    ("Date added (oldest first)", ("added_at", False)),
+)
+
+# Column index → row attribute, for header-click sorting.
+_COLUMN_SORT_ATTRS = ("title", "author", "fandom", "fmt", "library_label",
+                      "added_at")
+
 _REEXPORT_FORMATS = ("epub", "html", "txt")
+
+
+def _added_display(added_at: str) -> str:
+    """Human column value for an ISO ``added_at`` stamp: just the date
+    part; empty for entries indexed before the field existed (their
+    true add date is unknown — showing scan time would be a lie)."""
+    return added_at[:10] if added_at else ""
 
 
 @dataclass
@@ -70,6 +96,10 @@ class _Row:
     library_label: str
     adult_overridden: bool = False
     is_abandoned: bool = False
+    added_at: str = ""
+    """ISO first-seen stamp from the index; empty on entries indexed
+    before the field existed. Empty values sort to the end under
+    "newest first" (and the start under oldest-first)."""
 
 
 class LibraryBrowserFrame(wx.Frame):
@@ -86,6 +116,8 @@ class LibraryBrowserFrame(wx.Frame):
         self._rows: list[_Row] = []       # everything loaded from the index
         self._visible: list[_Row] = []    # current filtered view (parallel to list rows)
         self._adult_hidden = 0            # count hidden by the adult filter, for the status line
+        self._sort_attr = "title"         # current sort field (row attribute)
+        self._sort_desc = False
         self._build_ui()
         self._install_escape_accel()
         self.Bind(wx.EVT_CLOSE, self._on_close)
@@ -113,6 +145,24 @@ class LibraryBrowserFrame(wx.Frame):
         )
         self.search_ctrl.Bind(wx.EVT_TEXT, self._on_search)
         top.Add(self.search_ctrl, 1, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 12)
+
+        top.Add(
+            wx.StaticText(panel, label="S&ort by:"),
+            0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 6,
+        )
+        self.sort_ctrl = wx.Choice(
+            panel, choices=[label for label, _ in _SORT_CHOICES],
+        )
+        self.sort_ctrl.SetSelection(0)
+        self.sort_ctrl.SetName("Sort stories by")
+        set_help(
+            self.sort_ctrl,
+            "Order the story list — by title, author, fandom, format, "
+            "library, or the date each story was added. Clicking a column "
+            "header sorts by that column too (click again to reverse).",
+        )
+        self.sort_ctrl.Bind(wx.EVT_CHOICE, self._on_sort_choice)
+        top.Add(self.sort_ctrl, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 12)
 
         self.adult_chk = wx.CheckBox(panel, label="Show &adult")
         self.adult_chk.SetName("Show adult stories")
@@ -145,6 +195,7 @@ class LibraryBrowserFrame(wx.Frame):
         self.list_ctrl.Bind(wx.EVT_LIST_ITEM_FOCUSED, self._on_select)
         self.list_ctrl.Bind(wx.EVT_LIST_ITEM_DESELECTED, self._on_deselect)
         self.list_ctrl.Bind(wx.EVT_LIST_ITEM_ACTIVATED, self._on_activate)
+        self.list_ctrl.Bind(wx.EVT_LIST_COL_CLICK, self._on_col_click)
         sizer.Add(self.list_ctrl, 3, wx.EXPAND | wx.LEFT | wx.RIGHT, 8)
 
         self.count_ctrl = wx.StaticText(panel, label="")
@@ -315,9 +366,71 @@ class LibraryBrowserFrame(wx.Frame):
                     library_label="Adult" if root_is_adult else (root.name or root_str),
                     adult_overridden=override is not None,
                     is_abandoned=bool(entry.get("abandoned_at")),
+                    added_at=str(entry.get("added_at") or ""),
                 ))
-        self._rows.sort(key=lambda r: (r.title.lower(), r.author.lower()))
+        self._apply_sort()
         self._apply_filter()
+
+    def _apply_sort(self) -> None:
+        """Sort ``self._rows`` by the current field/direction. Strings
+        compare case-insensitively; the ISO ``added_at`` stamps compare
+        lexicographically (which is chronological); rows missing the
+        stamp (indexed before it existed) sort after dated rows under
+        "newest first". Title breaks ties so equal keys stay stable and
+        predictable."""
+        attr = self._sort_attr
+        desc = self._sort_desc
+
+        def key(row: _Row):
+            value = getattr(row, attr, "") or ""
+            return (str(value).lower(), row.title.lower(), row.author.lower())
+
+        self._rows.sort(key=key, reverse=desc)
+
+    def _sort_description(self) -> str:
+        for label, (attr, desc) in _SORT_CHOICES:
+            if attr == self._sort_attr and desc == self._sort_desc:
+                return label
+        heading = dict(zip(_COLUMN_SORT_ATTRS, (c[0] for c in _COLUMNS))).get(
+            self._sort_attr, self._sort_attr,
+        )
+        return f"{heading} ({'descending' if self._sort_desc else 'ascending'})"
+
+    def _resort(self) -> None:
+        """Re-sort, refresh the view, and reflect the order in the count
+        line so the active sort is visible (and readable) at a glance."""
+        self._apply_sort()
+        self._apply_filter()
+        self.count_ctrl.SetLabel(
+            f"{self.count_ctrl.GetLabel()} — sorted by {self._sort_description()}"
+        )
+
+    def _on_sort_choice(self, event: wx.Event) -> None:
+        i = self.sort_ctrl.GetSelection()
+        if not (0 <= i < len(_SORT_CHOICES)):
+            return
+        self._sort_attr, self._sort_desc = _SORT_CHOICES[i][1]
+        self._resort()
+
+    def _on_col_click(self, event: wx.Event) -> None:
+        col = event.GetColumn()
+        if not (0 <= col < len(_COLUMN_SORT_ATTRS)):
+            return
+        attr = _COLUMN_SORT_ATTRS[col]
+        if attr == self._sort_attr:
+            self._sort_desc = not self._sort_desc
+        else:
+            self._sort_attr = attr
+            # Dates default to newest-first — the useful order; text
+            # columns default ascending.
+            self._sort_desc = attr == "added_at"
+        # Mirror into the dropdown when an option matches, so the
+        # accessible control always reflects reality.
+        for i, (_label, (a, d)) in enumerate(_SORT_CHOICES):
+            if a == self._sort_attr and d == self._sort_desc:
+                self.sort_ctrl.SetSelection(i)
+                break
+        self._resort()
 
     def _configured_adult_root(self) -> Optional[Path]:
         raw = (self._prefs.get(_prefs.KEY_LIBRARY_ADULT_PATH, "") or "").strip()
@@ -355,6 +468,7 @@ class LibraryBrowserFrame(wx.Frame):
             self.list_ctrl.SetItem(i, 2, row.fandom)
             self.list_ctrl.SetItem(i, 3, row.fmt)
             self.list_ctrl.SetItem(i, 4, row.library_label)
+            self.list_ctrl.SetItem(i, 5, _added_display(row.added_at))
 
         self._update_count()
         if self._visible:
@@ -423,6 +537,7 @@ class LibraryBrowserFrame(wx.Frame):
             f"Library: {row.library_label}",
             f"Adult: {adult_state}",
             f"Abandoned: {'yes' if row.is_abandoned else 'no'}",
+            f"Added: {_added_display(row.added_at) or '(unknown)'}",
             f"File: {row.abs_path or '(missing path)'}",
             f"Source: {row.url}",
         ]))

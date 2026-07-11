@@ -323,6 +323,11 @@ class LibraryIndex:
                     "remote_chapter_count",
                     "duplicate_relpaths",
                     "chapter_hashes",
+                    # First-seen timestamp: set once when the story first
+                    # enters the index (a download or the first scan) and
+                    # preserved across rescans, so the browser can sort by
+                    # "date added" without it resetting on every scan.
+                    "added_at",
                 ):
                     if k in existing:
                         existing_preserved[k] = existing[k]
@@ -339,6 +344,11 @@ class LibraryIndex:
                 "confidence": candidate.confidence.value,
                 "chapter_count": md.chapter_count,
                 "last_checked": _now_iso(),
+                # First-seen stamp; overwritten from existing_preserved
+                # below when this story was already indexed, so it only
+                # ever reflects the FIRST time the story entered the
+                # index (its download / first-scan time).
+                "added_at": _now_iso(),
             }
             # Stamp mtime/size so build_refresh_queue can skip the
             # ebooklib re-parse on unchanged files. Stat can race

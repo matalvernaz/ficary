@@ -154,6 +154,31 @@ def _resolve_llm_timeout(args, cli_prefs, _prefs_mod) -> int:
     return pref if pref > 0 else 0
 
 
+def _auto_index_exported(path) -> None:
+    """Best-effort: record a just-exported file in the library index
+    when it landed inside a configured library root (main or separate
+    adult). Keeps Browse Library and the update tools current without
+    a manual Scan Library. Silent no-op for files saved elsewhere;
+    never raises — indexing must not fail an already-good download.
+    """
+    try:
+        from .library.scanner import record_downloaded_file
+        from .prefs import KEY_LIBRARY_ADULT_PATH, KEY_LIBRARY_PATH, Prefs
+
+        prefs = Prefs()
+        recorded = record_downloaded_file(
+            path,
+            library_root=(prefs.get(KEY_LIBRARY_PATH, "") or "").strip() or None,
+            adult_root=(
+                prefs.get(KEY_LIBRARY_ADULT_PATH, "") or ""
+            ).strip() or None,
+        )
+        if recorded:
+            print("  Added to library index.")
+    except Exception:
+        logger.debug("auto-index after export failed", exc_info=True)
+
+
 def _llm_strip_notes_config(args: argparse.Namespace) -> dict | None:
     """Resolve the LLM config used by ``--llm-strip-notes`` exports.
 
@@ -341,6 +366,7 @@ def _handle_merge_series(
                 progress=print,
             )
         print(f"  Saved: {path}")
+        _auto_index_exported(path)
     return all_ok
 
 
@@ -439,6 +465,7 @@ def _handle_merge_parts(
             progress=print,
         )
     print(f"  Saved: {path}")
+    _auto_index_exported(path)
     return True
 
 
@@ -530,6 +557,7 @@ def _handle_subscribestar_story(
             progress=print,
         )
     print(f"Saved: {path} ({len(story.chapters)} parts)")
+    _auto_index_exported(path)
     return True
 
 
@@ -1080,6 +1108,7 @@ def _download_one(
                 path.replace(update_path)
                 path = update_path
         status(f"\nSaved to: {path}")
+        _auto_index_exported(path)
         if on_export is not None:
             on_export(path)
 

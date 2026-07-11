@@ -213,3 +213,79 @@ def scan(
     index.mark_scan_complete(root)
     index.save()
     return result
+
+
+def record_downloaded_file(
+    path: Path | str,
+    *,
+    library_root: str | Path | None,
+    adult_root: str | Path | None = None,
+    index_path: Path | None = None,
+) -> bool:
+    """Index a single just-downloaded file, if it landed in a library.
+
+    Downloads used to enter the index only via a full Scan Library
+    pass, so a fresh download was invisible to the browser and the
+    update tools until the next manual scan. This is the per-file
+    equivalent of one scan-loop iteration: identify the file, record
+    it under whichever configured root contains it, save.
+
+    Returns True when the file was recorded, False when it was left
+    alone (no configured root contains it, unsupported extension, or
+    the file couldn't be read). Never raises — a failed index write
+    must not turn a successful download into an error. Concurrent
+    writers (a library update running alongside the download) are
+    handled by one reload-and-retry on the index's optimistic
+    concurrency check.
+    """
+    path = Path(path).expanduser()
+    if path.suffix.lower() not in _EXTS:
+        return False
+    try:
+        resolved = path.resolve(strict=True)
+    except OSError:
+        return False
+
+    owning_root: Path | None = None
+    for raw_root in (library_root, adult_root):
+        if not raw_root or not str(raw_root).strip():
+            continue
+        root = Path(str(raw_root)).expanduser()
+        try:
+            root_resolved = root.resolve(strict=True)
+        except OSError:
+            continue
+        if resolved == root_resolved:
+            continue
+        if root_resolved in resolved.parents:
+            owning_root = root_resolved
+            break
+    if owning_root is None:
+        return False
+
+    try:
+        md = extract_metadata(resolved)
+        adult_folder, original_folder = _resolve_bucket_folders()
+        candidate = identify(
+            resolved, md, root=owning_root,
+            adult_folder=adult_folder,
+            original_folder=original_folder,
+        )
+        from .index import IndexConflictError
+        for attempt in range(2):
+            index = LibraryIndex.load(index_path)
+            index.record(owning_root, candidate)
+            try:
+                index.save()
+                return True
+            except IndexConflictError:
+                if attempt == 0:
+                    continue  # another writer landed first; merge onto theirs
+                raise
+    except Exception:
+        import logging
+        logging.getLogger(__name__).warning(
+            "Could not index downloaded file %s — it will be picked up "
+            "by the next library scan.", path, exc_info=True,
+        )
+    return False
