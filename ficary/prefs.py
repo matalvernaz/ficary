@@ -80,6 +80,10 @@ KEY_WEBNOVEL_COOKIE = "webnovel_cookie"
 # AO3 logged-in session cookie (raw "Cookie:" header). Optional — unlocks
 # restricted works and private bookmarks. Plain-text, same as the others.
 KEY_AO3_COOKIE = "ao3_cookie"
+# ScribbleHub cookie (raw "Cookie:" header). Optional — carries the
+# Cloudflare clearance cookie so fetches get past the challenge, and
+# unlocks members-only / mature chapters when logged in.
+KEY_SCRIBBLEHUB_COOKIE = "scribblehub_cookie"
 KEY_SPEECH_RATE = "speech_rate"
 KEY_ATTRIBUTION_BACKEND = "attribution_backend"
 KEY_ATTRIBUTION_MODEL_SIZE = "attribution_model_size"
@@ -206,6 +210,7 @@ DEFAULTS = {
     KEY_MERGE_SERIES: False,
     KEY_WEBNOVEL_COOKIE: "",
     KEY_AO3_COOKIE: "",
+    KEY_SCRIBBLEHUB_COOKIE: "",
     KEY_SPEECH_RATE: "0",
     KEY_ATTRIBUTION_BACKEND: "builtin",
     KEY_ATTRIBUTION_MODEL_SIZE: "",

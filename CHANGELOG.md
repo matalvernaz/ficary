@@ -1,5 +1,21 @@
 # Changelog
 
+## 2.13.3 — 2026-07-10
+
+**New features**
+
+* **ScribbleHub is now supported.** Paste a ScribbleHub series link
+  (or an id) and ficary downloads the whole story, pulling the full
+  table of contents — not just the recent chapters the series page
+  shows — from the site's chapter-list endpoint. Author profile links
+  list that member's series. ScribbleHub sits behind Cloudflare, so
+  fetching relies on either the optional Cloudflare solver or a
+  browser cookie: a new `--scribblehub-cookie` flag (and a ScribbleHub
+  cookie box under Preferences) accepts a logged-in `Cookie:` header,
+  which clears the challenge and unlocks members-only and mature
+  chapters. Reads `$FICARY_SCRIBBLEHUB_COOKIE` when the flag is
+  omitted.
+
 ## 2.13.2 — 2026-07-10
 
 **Bug fixes**

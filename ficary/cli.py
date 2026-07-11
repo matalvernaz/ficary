@@ -653,6 +653,16 @@ def _build_scraper(url: str, args: argparse.Namespace):
         )
         if cookie:
             kwargs["session_cookie"] = cookie
+    # ScribbleHub optional auth: a browser cookie both clears Cloudflare
+    # (cf_clearance) and unlocks members-only / mature chapters.
+    from .scribblehub import ScribbleHubScraper
+    if scraper_cls is ScribbleHubScraper:
+        cookie = (
+            getattr(args, "scribblehub_cookie", None)
+            or _legacy.getenv_compat("FICARY_SCRIBBLEHUB_COOKIE")
+        )
+        if cookie:
+            kwargs["session_cookie"] = cookie
     return scraper_cls(**kwargs)
 
 
@@ -3987,6 +3997,19 @@ def _build_parser() -> argparse.ArgumentParser:
             "download restricted / Archive-locked works and your own private "
             "bookmarks and marked-for-later. Reads $FICARY_AO3_COOKIE if the "
             "flag is omitted."
+        ),
+    )
+    parser.add_argument(
+        "--scribblehub-cookie",
+        type=str,
+        default=None,
+        metavar="COOKIE",
+        help=(
+            "For scribblehub.com, a browser 'Cookie:' header string. "
+            "Carries the Cloudflare clearance cookie so fetches get past "
+            "the challenge, and, when logged in, unlocks members-only and "
+            "mature chapters. Reads $FICARY_SCRIBBLEHUB_COOKIE if the flag "
+            "is omitted."
         ),
     )
     parser.add_argument(

@@ -55,6 +55,7 @@ class _DownloadParams:
     merge_series: bool = False
     webnovel_cookie: str = ""
     ao3_cookie: str = ""
+    scribblehub_cookie: str = ""
     send_to_abs: bool = False
     # HTML title-page layout (exporters.HTML_STYLE_*). Set from the
     # "Default HTML layout" preference — there's no per-download control
@@ -2064,6 +2065,7 @@ class MainFrame(wx.Frame):
                     url,
                     webnovel_cookie=params.webnovel_cookie,
                     ao3_cookie=params.ao3_cookie,
+                    scribblehub_cookie=params.scribblehub_cookie,
                 )
             else:
                 scraper = self._scraper_for(url)
@@ -2256,6 +2258,7 @@ class MainFrame(wx.Frame):
                     series_url,
                     webnovel_cookie=params.webnovel_cookie,
                     ao3_cookie=params.ao3_cookie,
+                    scribblehub_cookie=params.scribblehub_cookie,
                 )
                 if AO3Scraper.is_series_url(series_url) and not isinstance(scraper, AO3Scraper):
                     scraper = AO3Scraper()
@@ -2285,6 +2288,7 @@ class MainFrame(wx.Frame):
                         work_url,
                         webnovel_cookie=params.webnovel_cookie,
                         ao3_cookie=params.ao3_cookie,
+                        scribblehub_cookie=params.scribblehub_cookie,
                     )
                     stories.append(
                         work_scraper.download(work_url, progress_callback=progress)
@@ -2404,7 +2408,8 @@ class MainFrame(wx.Frame):
 
     # ── Download worker ──────────────────────────────────────
 
-    def _scraper_for(self, url, *, use_fichub=False, webnovel_cookie="", ao3_cookie=""):
+    def _scraper_for(self, url, *, use_fichub=False, webnovel_cookie="",
+                     ao3_cookie="", scribblehub_cookie=""):
         from .sites import detect_scraper
         cls = detect_scraper(url)
         # use_fichub / *_cookie are per-site constructor kwargs; only forward
@@ -2422,6 +2427,10 @@ class MainFrame(wx.Frame):
             from .ao3 import AO3Scraper
             if cls is AO3Scraper:
                 return cls(session_cookie=ao3_cookie)
+        if scribblehub_cookie:
+            from .scribblehub import ScribbleHubScraper
+            if cls is ScribbleHubScraper:
+                return cls(session_cookie=scribblehub_cookie)
         return cls()
 
     def _snapshot_download_params(self) -> _DownloadParams:
@@ -2471,6 +2480,9 @@ class MainFrame(wx.Frame):
             merge_series=self.prefs.get_bool(_p.KEY_MERGE_SERIES),
             webnovel_cookie=(self.prefs.get(_p.KEY_WEBNOVEL_COOKIE) or "").strip(),
             ao3_cookie=(self.prefs.get(_p.KEY_AO3_COOKIE) or "").strip(),
+            scribblehub_cookie=(
+                self.prefs.get(_p.KEY_SCRIBBLEHUB_COOKIE) or ""
+            ).strip(),
             html_style=(self.prefs.get(_p.KEY_HTML_STYLE) or "modern"),
             send_to_abs=(
                 self.abs_send_ctrl.GetValue() if fmt == "audio" else False
@@ -2852,6 +2864,7 @@ class MainFrame(wx.Frame):
                 url, use_fichub=(params.use_fichub and not is_update),
                 webnovel_cookie=params.webnovel_cookie,
                 ao3_cookie=params.ao3_cookie,
+                scribblehub_cookie=params.scribblehub_cookie,
             )
 
             if not is_update and AO3Scraper.is_bookmarks_url(url):
@@ -3176,6 +3189,7 @@ class MainFrame(wx.Frame):
                     story_url, use_fichub=params.use_fichub,
                     webnovel_cookie=params.webnovel_cookie,
                     ao3_cookie=params.ao3_cookie,
+                    scribblehub_cookie=params.scribblehub_cookie,
                 )
 
                 def progress(current, total, t, cached):

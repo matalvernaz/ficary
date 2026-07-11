@@ -321,6 +321,20 @@ class PreferencesDialog(wx.Dialog):
             0, wx.EXPAND | wx.ALL, 6,
         )
 
+        self.scribblehub_cookie_ctrl = wx.TextCtrl(panel, style=wx.TE_PASSWORD)
+        self.scribblehub_cookie_ctrl.SetName(
+            "ScribbleHub session cookie — paste a browser Cookie header to "
+            "get past Cloudflare and, when logged in, download members-only "
+            "and mature chapters; leave blank to rely on the Cloudflare "
+            "solver. Stored locally."
+        )
+        sizer.Add(
+            self._make_labeled_row(
+                panel, "Scr&ibbleHub cookie:", self.scribblehub_cookie_ctrl,
+            ),
+            0, wx.EXPAND | wx.ALL, 6,
+        )
+
         self._add_help_text(
             sizer, panel,
             "These set the defaults that load on launch. Format, filename, "
@@ -659,6 +673,8 @@ class PreferencesDialog(wx.Dialog):
         self.webnovel_cookie_ctrl.SetValue(
             self.prefs.get(_p.KEY_WEBNOVEL_COOKIE) or "")
         self.ao3_cookie_ctrl.SetValue(self.prefs.get(_p.KEY_AO3_COOKIE) or "")
+        self.scribblehub_cookie_ctrl.SetValue(
+            self.prefs.get(_p.KEY_SCRIBBLEHUB_COOKIE) or "")
 
         # Audiobook
         try:
@@ -786,6 +802,10 @@ class PreferencesDialog(wx.Dialog):
         )
         self.prefs.set(
             _p.KEY_AO3_COOKIE, self.ao3_cookie_ctrl.GetValue().strip(),
+        )
+        self.prefs.set(
+            _p.KEY_SCRIBBLEHUB_COOKIE,
+            self.scribblehub_cookie_ctrl.GetValue().strip(),
         )
 
         # Audiobook
