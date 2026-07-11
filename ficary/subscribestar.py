@@ -117,20 +117,31 @@ class SubscribeStarScraper(CookieAuthMixin, BaseScraper):
 
     @staticmethod
     def _parse_posts(soup) -> list[dict]:
-        """Extract ``{id, title, doc_url}`` from every ``div.post`` in a
-        page or an AJAX feed fragment. ``doc_url`` is the clean Google Doc
-        link from the post link's ``data-href`` (the visible ``href`` is a
-        base64 ``/away`` redirect); ``None`` when the post carries no doc
-        link."""
+        """Extract ``{id, title, doc_url, body_html}`` from every
+        ``div.post``.
+
+        Two content styles occur in the wild: the post links a Google Doc
+        (Fibaro) — captured as ``doc_url`` from the anchor's ``data-href``
+        (the visible ``href`` is a base64 ``/away`` redirect) — or the
+        prose is written straight into the post (the more common case) —
+        captured as ``body_html``. Either can be empty; a post with
+        neither (a locked/teaser post the viewer can't access, or one with
+        no ``.trix-content`` at all) yields both empty.
+
+        The title is the post's first heading (``h1``–``h4``); posts
+        without a heading get an empty title and are simply never matched
+        by the title-keyed story grouping.
+        """
         posts = []
         for post in soup.select("div.post"):
-            heading = post.select_one(".trix-content h1")
-            if not heading:
+            trix = post.select_one(".trix-content")
+            if trix is None:
                 continue
-            title = heading.get_text(strip=True)
+            heading = trix.find(["h1", "h2", "h3", "h4"])
+            title = heading.get_text(strip=True) if heading else ""
             doc_url = None
-            for a in post.select(".trix-content a[data-href]"):
-                href = _html.unescape(a.get("data-href") or "")
+            for a in trix.find_all("a"):
+                href = _html.unescape(a.get("data-href") or a.get("href") or "")
                 if "docs.google.com" in href:
                     doc_url = href
                     break
@@ -138,8 +149,36 @@ class SubscribeStarScraper(CookieAuthMixin, BaseScraper):
                 "id": post.get("data-id") or "",
                 "title": title,
                 "doc_url": doc_url,
+                "body_html": SubscribeStarScraper._inline_body_html(trix),
             })
         return posts
+
+    @staticmethod
+    def _inline_body_html(trix) -> str:
+        """Return a post's inline prose as HTML — the ``.trix-content``
+        minus its title heading and any chrome. Empty string when the
+        post body carries no real text (e.g. a bare Google-Doc link post,
+        where the prose lives in the doc instead)."""
+        clone = BeautifulSoup(str(trix), "lxml")
+        for tag in clone.find_all(["h1", "h2", "h3", "h4", "style", "script"]):
+            tag.decompose()
+        text = clone.get_text(" ", strip=True)
+        # A doc-link post reduces to just the URL; don't treat that as
+        # prose. Require enough real text to be a chapter body.
+        if len(text) < 20 or re.fullmatch(r"https?://\S+", text):
+            return ""
+        container = clone.body or clone
+        return (container.decode_contents() or "").strip()
+
+    def _resolve_body(self, post: dict):
+        """Return a post's chapter body HTML: the linked Google Doc when
+        present (fuller than any teaser), else the inline prose. None when
+        neither is available (a locked post)."""
+        if post.get("doc_url"):
+            doc = self._fetch_gdoc_html(post["doc_url"])
+            if doc:
+                return doc
+        return post.get("body_html") or None
 
     @staticmethod
     def _next_page_url(soup):
@@ -240,55 +279,61 @@ class SubscribeStarScraper(CookieAuthMixin, BaseScraper):
                 "(is the SubscribeStar cookie set and the subscription active?)."
             )
         post = parsed[0]
-        body = (
-            self._fetch_gdoc_html(post["doc_url"])
-            if post.get("doc_url") else None
-        )
+        body = self._resolve_body(post)
+        title = post["title"] or f"SubscribeStar post {post_id}"
         story = Story(
             id=post_id,
-            title=post["title"],
+            title=title,
             author="",
             summary="",
             url=post_url,
             chapters=[],
         )
         if body and not skip_chapters and chapter_in_spec(1, chapters):
-            story.chapters.append(Chapter(number=1, title=post["title"], html=body))
+            story.chapters.append(Chapter(number=1, title=title, html=body))
         return story
 
     def download_creator_story(self, url_or_handle, base_title, *,
                                progress_callback=None):
         """Enumerate a creator's posts, keep the ones whose base title
-        matches ``base_title``, fetch each part's Google Doc, and return a
-        single merged :class:`Story` with one chapter per part in part
-        order. This is the ``--subscribestar-story`` path."""
+        matches ``base_title``, resolve each part's body (linked Google
+        Doc or inline prose), and return a single merged :class:`Story`
+        with one chapter per part in part order. This is the
+        ``--subscribestar-story`` path."""
         handle = (
             url_or_handle if "/" not in str(url_or_handle)
             else self._handle_from_url(url_or_handle)
         )
         want = _base_title(base_title)
         posts = self._enumerate_posts(handle)
-        parts = []
+        # Keep the first post seen per part number (the feed is newest
+        # first; a re-posted duplicate later shouldn't override it).
+        by_part: dict[int, dict] = {}
         for p in posts:
             if _base_title(p["title"]) != want:
                 continue
             n = _part_number(p["title"])
-            if n is not None and p.get("doc_url"):
-                parts.append((n, p["title"], p["doc_url"]))
-        parts = sorted(set(parts))
-        if not parts:
+            if n is None or n in by_part:
+                continue
+            by_part[n] = p
+        if not by_part:
             raise StoryNotFoundError(
-                f"No posts matched {base_title!r} for creator {handle!r}."
+                f"No numbered posts matched {base_title!r} for creator "
+                f"{handle!r}. (A creator who doesn't number posts "
+                "'Pt.N'/'Chapter N' can't be auto-merged; download "
+                "individual /posts/<id> links instead.)"
             )
+        first_title = by_part[min(by_part)]["title"]
         display_title = re.sub(
-            r"\s*(?:Pt|Part|Ch|Chapter)\.?\s*\d+.*$", "", parts[0][1],
+            r"\s*(?:Pt|Part|Ch|Chapter)\.?\s*\d+.*$", "", first_title,
             flags=re.IGNORECASE,
         ).strip() or base_title
 
         chapters = []
-        total = len(parts)
-        for i, (n, _title, doc_url) in enumerate(parts, 1):
-            body = self._fetch_gdoc_html(doc_url)
+        ordered = sorted(by_part.items())
+        total = len(ordered)
+        for i, (n, post) in enumerate(ordered, 1):
+            body = self._resolve_body(post)
             if progress_callback:
                 progress_callback(i, total, f"Part {n}", body is None)
             if body:

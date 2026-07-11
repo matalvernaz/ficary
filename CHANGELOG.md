@@ -1,5 +1,23 @@
 # Changelog
 
+## 2.13.5 — 2026-07-10
+
+**Bug fixes**
+
+* **SubscribeStar: stories written straight into the post now download.**
+  The first cut only handled creators who link a Google Doc per part;
+  a creator who writes the prose directly in the post (the more common
+  style) had every part silently skipped. Posts now use their inline
+  text when there's no linked doc, and the post title is read from any
+  heading (not only an `<h1>`). Locked posts you can't access are
+  skipped cleanly instead of derailing the run, and a creator who
+  doesn't number posts `Pt.N` / `Chapter N` now gets a clear message
+  pointing at single-post downloads rather than an empty result.
+* **ScribbleHub: long serials are no longer truncated.** The chapter
+  list is fetched by walking the table-of-contents pages to the end
+  rather than reading only the first, so a story whose contents span
+  multiple pages downloads in full.
+
 ## 2.13.4 — 2026-07-10
 
 **New features**

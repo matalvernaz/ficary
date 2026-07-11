@@ -127,6 +127,62 @@ class TestChapterList:
         assert [c["id"] for c in chapters] == [20, 10]  # reversed, deduped
 
 
+class TestTocPaging:
+    def test_full_toc_accumulates_across_ajax_pages(self, monkeypatch):
+        """A long series whose AJAX TOC is paginated must be walked to the
+        end, not truncated at page 1."""
+        from bs4 import BeautifulSoup
+
+        def page(ids):
+            lis = "".join(
+                f'<a class="toc_a" href="https://www.scribblehub.com/read/1-x/'
+                f'chapter/{i}/">Chapter {i}</a>' for i in ids
+            )
+            return f"<ol>{lis}</ol>"
+
+        # Two populated pages then an empty one (loop should stop there).
+        pages = {
+            "1": page([30, 20]),   # newest first
+            "2": page([10]),
+            "3": "",
+        }
+
+        class FakeResp:
+            status_code = 200
+            def __init__(self, text): self.text = text
+
+        class FakeSession:
+            def post(self, url, data=None, headers=None, timeout=None):
+                return FakeResp(pages.get(data["pagenum"], ""))
+
+        sc = ScribbleHubScraper()
+        monkeypatch.setattr(sc, "_session", lambda: FakeSession())
+        monkeypatch.setattr(sc, "_delay", lambda *a, **k: None)
+        chapters = sc._fetch_full_toc(1, BeautifulSoup("<html></html>", "lxml"))
+        # All three chapters, oldest-first.
+        assert [c["id"] for c in chapters] == [10, 20, 30]
+
+    def test_full_toc_falls_back_to_embedded_when_ajax_empty(self, monkeypatch):
+        from bs4 import BeautifulSoup
+        embedded = BeautifulSoup(
+            '<a class="toc_a" href="https://www.scribblehub.com/read/1-x/'
+            'chapter/5/">Chapter 5</a>', "lxml",
+        )
+
+        class FakeResp:
+            status_code = 200
+            text = ""
+
+        class FakeSession:
+            def post(self, *a, **k): return FakeResp()
+
+        sc = ScribbleHubScraper()
+        monkeypatch.setattr(sc, "_session", lambda: FakeSession())
+        monkeypatch.setattr(sc, "_delay", lambda *a, **k: None)
+        chapters = sc._fetch_full_toc(1, embedded)
+        assert [c["id"] for c in chapters] == [5]
+
+
 class TestChapterBody:
     def test_extracts_chapter_prose(self):
         soup = BeautifulSoup(CHAPTER, "lxml")

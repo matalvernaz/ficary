@@ -107,13 +107,10 @@ class ScribbleHubScraper(CookieAuthMixin, BaseScraper):
         }
 
     @staticmethod
-    def _parse_toc_anchors(soup) -> list[dict]:
-        """Return ``[{id, title, url, unixtime}]`` from a block of
-        ``a.toc_a`` chapter links, oldest chapter first.
-
-        ScribbleHub lists chapters newest-first both on the series page
-        and in the AJAX fragment, so the list is reversed to reading
-        order before returning."""
+    def _toc_anchors_raw(soup) -> list[dict]:
+        """Return ``[{id, title, url, unixtime}]`` in document order
+        (newest chapter first — how ScribbleHub renders both the series
+        page and the AJAX fragment), de-duplicated by chapter id."""
         chapters = []
         seen = set()
         for a in soup.select("a.toc_a"):
@@ -131,47 +128,70 @@ class ScribbleHubScraper(CookieAuthMixin, BaseScraper):
                 "url": href if href.startswith("http") else SH_BASE + href,
                 "unixtime": None,
             })
-        chapters.reverse()
         return chapters
+
+    @classmethod
+    def _parse_toc_anchors(cls, soup) -> list[dict]:
+        """Chapter anchors in reading order (oldest first)."""
+        return list(reversed(cls._toc_anchors_raw(soup)))
+
+    # Safety cap on TOC AJAX paging — far above any real serial's length
+    # (a 100-page series at even 50 chapters/page is 5000 chapters).
+    _MAX_TOC_PAGES = 100
 
     def _fetch_full_toc(self, story_id, series_soup) -> list[dict]:
         """Fetch the complete chapter list.
 
-        The series page only embeds the latest chapters, so ask the
-        AJAX endpoint for the whole table of contents. The GET of the
-        series page (already done by the caller) has primed the session
-        with any Cloudflare-clearance cookies, so the POST rides the
-        same session. Falls back to whatever chapters the series page
-        did embed if the AJAX call fails or returns nothing.
+        The series page only embeds the latest chapters, so ask the AJAX
+        endpoint (``wi_getreleases_pagination``) for the rest. Walk its
+        pages until one adds no new chapters — a single request usually
+        returns the whole TOC, but paging guards long serials in case the
+        endpoint caps a response. The series-page GET (already done by the
+        caller) primed the session with any Cloudflare cookies, so the
+        POSTs ride the same session. Falls back to the chapters embedded
+        in the series page if the AJAX yields fewer (challenge page,
+        markup change).
         """
         page_chapters = self._parse_toc_anchors(series_soup)
+        collected: dict[int, dict] = {}   # id -> anchor, newest-first
+        order: list[dict] = []
         try:
-            self._delay()
             sess = self._session()
-            resp = sess.post(
-                SH_AJAX,
-                data={
-                    "action": "wi_getreleases_pagination",
-                    "pagenum": "1",
-                    "mypostid": str(story_id),
-                },
-                headers={
-                    "X-Requested-With": "XMLHttpRequest",
-                    "Referer": self._series_url(story_id),
-                },
-                timeout=30,
-            )
-            if resp.status_code == 200 and resp.text.strip():
-                ajax_chapters = self._parse_toc_anchors(
-                    BeautifulSoup(resp.text, "lxml")
+            for pagenum in range(1, self._MAX_TOC_PAGES + 1):
+                self._delay()
+                resp = sess.post(
+                    SH_AJAX,
+                    data={
+                        "action": "wi_getreleases_pagination",
+                        "pagenum": str(pagenum),
+                        "mypostid": str(story_id),
+                    },
+                    headers={
+                        "X-Requested-With": "XMLHttpRequest",
+                        "Referer": self._series_url(story_id),
+                    },
+                    timeout=30,
                 )
-                # The AJAX list is authoritative when it's at least as
-                # complete as the embedded one; only fall back when it
-                # came back short (challenge page, markup change).
-                if len(ajax_chapters) >= len(page_chapters):
-                    return ajax_chapters
+                if resp.status_code != 200 or not resp.text.strip():
+                    break
+                new = [
+                    a for a in self._toc_anchors_raw(
+                        BeautifulSoup(resp.text, "lxml"))
+                    if a["id"] not in collected
+                ]
+                if not new:
+                    break
+                for a in new:
+                    collected[a["id"]] = a
+                    order.append(a)
         except Exception as exc:
             logger.debug("ScribbleHub TOC AJAX failed: %s", exc, exc_info=True)
+        if order:
+            ajax_chapters = list(reversed(order))   # -> reading order
+            # The AJAX list is authoritative when it's at least as
+            # complete as the embedded one.
+            if len(ajax_chapters) >= len(page_chapters):
+                return ajax_chapters
         return page_chapters
 
     @staticmethod

@@ -96,6 +96,47 @@ class TestPostParsing:
         nxt = SubscribeStarScraper._next_page_url(BeautifulSoup(CREATOR, "lxml"))
         assert nxt and "/posts?" in nxt and "slug=fibaro" in nxt
 
+    def test_doc_link_post_has_no_inline_body(self):
+        # Fibaro's posts are a title + a bare doc link; the inline-body
+        # extractor must NOT treat the URL text as prose.
+        from bs4 import BeautifulSoup
+        posts = SubscribeStarScraper._parse_posts(BeautifulSoup(CREATOR, "lxml"))
+        doc_posts = [p for p in posts if p["doc_url"]]
+        assert doc_posts
+        assert all(p["body_html"] == "" for p in doc_posts)
+
+    def test_inline_prose_post_captured_as_body(self):
+        # The common pattern: prose written straight into the post, no
+        # Google Doc. Must be captured as body_html (regression guard for
+        # the Fibaro-only bug where inline stories were silently dropped).
+        from bs4 import BeautifulSoup
+        html = """
+        <div class="post" data-id="9">
+          <div class="trix-content">
+            <h1>Inline Tale Pt.1</h1>
+            <p>The first paragraph of real prose, long enough to count.</p>
+            <p>A second paragraph so this is unmistakably a chapter body.</p>
+          </div>
+        </div>
+        """
+        [post] = SubscribeStarScraper._parse_posts(BeautifulSoup(html, "lxml"))
+        assert post["doc_url"] is None
+        assert "first paragraph of real prose" in post["body_html"]
+        assert "<h1>" not in post["body_html"]  # title heading stripped
+
+    def test_post_without_heading_has_empty_title(self):
+        from bs4 import BeautifulSoup
+        html = ('<div class="post" data-id="1"><div class="trix-content">'
+                '<p>Just an announcement, no heading.</p></div></div>')
+        [post] = SubscribeStarScraper._parse_posts(BeautifulSoup(html, "lxml"))
+        assert post["title"] == ""
+
+    def test_locked_post_without_trix_is_skipped(self):
+        from bs4 import BeautifulSoup
+        html = ('<div class="post" data-id="1">'
+                '<div class="post-locked">Subscribe to see this</div></div>')
+        assert SubscribeStarScraper._parse_posts(BeautifulSoup(html, "lxml")) == []
+
 
 class TestGoogleDocFetch:
     def test_fetch_gdoc_html_cleans_export(self, monkeypatch):
@@ -145,3 +186,37 @@ class TestStoryMerge:
         monkeypatch.setattr(sc, "_enumerate_posts", lambda handle: [])
         with pytest.raises(StoryNotFoundError):
             sc.download_creator_story("https://subscribestar.adult/x", "Nope")
+
+    def test_download_creator_story_uses_inline_when_no_doc(self, monkeypatch):
+        # A creator who writes inline (no Google Docs) must still merge —
+        # this is the pattern Fibaro-only code silently dropped.
+        sc = SubscribeStarScraper()
+        fake_posts = [
+            {"id": "2", "title": "Inline Tale Pt.2", "doc_url": None,
+             "body_html": "<p>part two prose</p>"},
+            {"id": "1", "title": "Inline Tale Pt.1", "doc_url": None,
+             "body_html": "<p>part one prose</p>"},
+        ]
+        monkeypatch.setattr(sc, "_enumerate_posts", lambda h: fake_posts)
+        story = sc.download_creator_story(
+            "https://subscribestar.adult/someone", "Inline Tale",
+        )
+        assert [c.number for c in story.chapters] == [1, 2]
+        assert "part one prose" in story.chapters[0].html
+
+    def test_resolve_body_prefers_doc_over_inline(self, monkeypatch):
+        sc = SubscribeStarScraper()
+        monkeypatch.setattr(sc, "_fetch_gdoc_html", lambda u: "<p>from doc</p>")
+        # doc present → doc wins
+        assert sc._resolve_body(
+            {"doc_url": "https://docs.google.com/document/d/X/edit",
+             "body_html": "<p>inline</p>"}
+        ) == "<p>from doc</p>"
+        # doc fetch fails → fall back to inline
+        monkeypatch.setattr(sc, "_fetch_gdoc_html", lambda u: None)
+        assert sc._resolve_body(
+            {"doc_url": "https://docs.google.com/document/d/X/edit",
+             "body_html": "<p>inline</p>"}
+        ) == "<p>inline</p>"
+        # neither → None
+        assert sc._resolve_body({"doc_url": None, "body_html": ""}) is None
