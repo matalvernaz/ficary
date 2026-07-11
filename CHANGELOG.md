@@ -1,5 +1,20 @@
 # Changelog
 
+## 2.13.11 — 2026-07-11
+
+**Bug fixes**
+
+* **Pasting a series or author link while the app is busy now says
+  so instead of doing nothing.** If a search or batch download was
+  running (series, author-page, and multi-pick downloads share one
+  "busy" slot), clicking Download on another series link was silently
+  ignored — no message, no log line — which read as "series links
+  don't work." All of those spots now log a clear "busy with another
+  search or batch" message, as does the Update button. Verified the
+  Literotica `/series/se/<id>` paste path end to end (recognition,
+  series listing, per-part download, merge into one book, export) and
+  added a regression test covering the whole route.
+
 ## 2.13.10 — 2026-07-11
 
 **Bug fixes**

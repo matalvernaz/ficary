@@ -221,6 +221,63 @@ def test_preferences_msaa_label_association(wx_app):
         frame.Destroy()
 
 
+def test_pasted_literotica_series_url_merge_downloads(wx_app, monkeypatch, tmp_path):
+    """A pasted /series/se/<id> Literotica URL must route through the
+    series-merge path end to end: batch detection, series listing,
+    per-part download, merge, export. Network layers are stubbed with
+    shapes verified live; everything from _run_download down is real."""
+    import wx
+    from ficary.gui import MainFrame
+    from ficary import prefs as _p
+    from ficary.models import Story, Chapter
+    from ficary.erotica.literotica import LiteroticaScraper
+
+    url = "https://www.literotica.com/series/se/216601253"
+
+    def fake_series(self, u):
+        return "You Stupid Slut", [
+            f"https://www.literotica.com/s/you-stupid-slut-pt-{i:02d}"
+            for i in (1, 2, 3)
+        ]
+
+    def fake_download(self, u, progress_callback=None, **kw):
+        n = u.rsplit("-", 1)[-1]
+        return Story(
+            id=int(n), title=f"You Stupid Slut Pt. {n}", author="a",
+            summary="", url=u,
+            chapters=[Chapter(number=1, title=f"Pt {n}", html="<p>x</p>")],
+        )
+
+    monkeypatch.setattr(
+        LiteroticaScraper, "scrape_series_works", fake_series)
+    monkeypatch.setattr(LiteroticaScraper, "download", fake_download)
+
+    frame = MainFrame()
+    logs = []
+    try:
+        monkeypatch.setattr(frame, "_log", lambda m: logs.append(str(m)))
+        frame.output_ctrl.SetValue(str(tmp_path))
+        real_get_bool = frame.prefs.get_bool
+        monkeypatch.setattr(
+            frame.prefs, "get_bool",
+            lambda k, d=False: True if k == _p.KEY_MERGE_SERIES
+            else real_get_bool(k, d),
+        )
+        assert frame._is_batch_url(url) is True
+        params = frame._snapshot_download_params()
+        assert params.merge_series is True
+        frame._run_download(url, params=params)
+    finally:
+        frame.Destroy()
+
+    joined = "\n".join(logs)
+    assert "Series: You Stupid Slut" in joined, joined
+    saved = [ln for ln in logs if ln.startswith("Saved:")]
+    assert saved, f"series merge never saved a file; log was:\n{joined}"
+    exports = list(tmp_path.rglob("*.epub")) + list(tmp_path.rglob("*.html"))
+    assert exports, "no exported file on disk"
+
+
 def test_no_default_save_location(wx_app):
     """Save-to starts empty — no hardcoded ~/Downloads default (which on
     frozen builds landed inside the portable app folder)."""

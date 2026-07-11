@@ -1157,6 +1157,10 @@ class SearchFrame(wx.Frame):
                 # and the per-site queue can't steer one job across
                 # several workers yet.
                 if self.main_frame._global_busy:
+                    self._log(
+                        "Busy with another search or batch — wait for it "
+                        "to finish, then try again."
+                    )
                     return
                 self._download_batch([self.results[i] for i in ticked])
                 return
@@ -1178,6 +1182,10 @@ class SearchFrame(wx.Frame):
             # Series runs fan out to many works and still go through
             # the raw-thread global-busy path.
             if self.main_frame._global_busy:
+                self._log(
+                    "Busy with another search or batch — wait for it to "
+                    "finish, then try again."
+                )
                 return
             self.main_frame._set_busy(True, kind="download")
             self._log(f"Starting series download: {url}")

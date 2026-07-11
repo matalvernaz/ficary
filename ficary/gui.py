@@ -2034,6 +2034,13 @@ class MainFrame(wx.Frame):
             # dialog and then fan out to many downloads, which the
             # single-job queue model doesn't cover yet.
             if self._global_busy:
+                # Never swallow the click silently: a muted return here
+                # reads as "series/author links just don't work" when a
+                # search or batch is (or is stuck) running.
+                self._log(
+                    "Busy with another search or batch — wait for it to "
+                    "finish, then try this link again."
+                )
                 return
             self._set_busy(True, kind="download")
             self._log(f"Starting download: {url}")
@@ -2177,6 +2184,10 @@ class MainFrame(wx.Frame):
             # against the shared progress pane controls. Per-site
             # queue activity doesn't block Update — same-site updates
             # just queue behind the running job on that site.
+            self._log(
+                "Busy with another search or batch — wait for it to "
+                "finish, then run Update again."
+            )
             return
         dlg = wx.FileDialog(
             self, "Select file to update",
