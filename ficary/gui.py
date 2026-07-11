@@ -374,14 +374,30 @@ class MainFrame(wx.Frame):
         root_sizer = wx.BoxSizer(wx.VERTICAL)
         pad = 6
 
-        # ── Download controls (top of frame) ─────────────────
-        self._build_download_controls(root, root_sizer, pad)
+        # ── Add Story window ──────────────────────────────────
+        # The whole download form lives in a persistent, hidden child
+        # window (File → Add Story, Ctrl+D) so the main window stays a
+        # clean library view. Built ONCE here and only ever
+        # shown/hidden, never destroyed: dozens of code paths hold
+        # references to these controls (_snapshot_download_params,
+        # _load_prefs, apply_preferences, the clipboard watcher), and
+        # they all keep working because the widgets outlive the window
+        # being dismissed.
+        self.add_story_frame = wx.Frame(
+            self, title="Add Story",
+            style=wx.DEFAULT_FRAME_STYLE & ~(wx.MINIMIZE_BOX | wx.MAXIMIZE_BOX),
+        )
+        form = wx.Panel(self.add_story_frame)
+        self._add_story_panel = form
+        form_sizer = wx.BoxSizer(wx.VERTICAL)
+
+        self._build_download_controls(form, form_sizer, pad)
 
         # ── Shared options (format / filename / output folder) ─
         opts = wx.BoxSizer(wx.HORIZONTAL)
 
-        opts.Add(wx.StaticText(root, label="&Format:"), 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 4)
-        self.format_ctrl = wx.Choice(root, choices=["epub", "html", "txt", "audio"])
+        opts.Add(wx.StaticText(form, label="&Format:"), 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 4)
+        self.format_ctrl = wx.Choice(form, choices=["epub", "html", "txt", "audio"])
         self.format_ctrl.SetSelection(0)
         self.format_ctrl.SetName("Format")
         set_help(
@@ -391,8 +407,8 @@ class MainFrame(wx.Frame):
         )
         opts.Add(self.format_ctrl, 0, wx.RIGHT, 16)
 
-        opts.Add(wx.StaticText(root, label="File&name template:"), 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 4)
-        self.name_ctrl = wx.TextCtrl(root, value="{title} - {author}", size=(200, -1))
+        opts.Add(wx.StaticText(form, label="File&name template:"), 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 4)
+        self.name_ctrl = wx.TextCtrl(form, value="{title} - {author}", size=(200, -1))
         self.name_ctrl.SetName("Filename template")
         set_help(
             self.name_ctrl,
@@ -401,12 +417,12 @@ class MainFrame(wx.Frame):
         )
         opts.Add(self.name_ctrl, 1)
 
-        root_sizer.Add(opts, 0, wx.EXPAND | wx.ALL, pad)
+        form_sizer.Add(opts, 0, wx.EXPAND | wx.ALL, pad)
 
         # Extra export options row
         opts2 = wx.BoxSizer(wx.HORIZONTAL)
         self.hr_stars_ctrl = wx.CheckBox(
-            root,
+            form,
             label=(
                 "Mark scene &breaks clearly "
                 "(* * * in text, a silence pause in audiobooks)"
@@ -423,7 +439,7 @@ class MainFrame(wx.Frame):
         )
         opts2.Add(self.hr_stars_ctrl, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 16)
         self.strip_notes_ctrl = wx.CheckBox(
-            root, label="Strip &author's notes (A/N paragraphs)"
+            form, label="Strip &author's notes (A/N paragraphs)"
         )
         self.strip_notes_ctrl.SetName("Strip author's notes")
         set_help(
@@ -438,7 +454,7 @@ class MainFrame(wx.Frame):
         # user can run a paid-API LLM on HTML/EPUB exports without
         # inheriting the audiobook narrator path.
         self.llm_strip_notes_ctrl = wx.CheckBox(
-            root, label="Use &LLM to catch missed A/N (slower)"
+            form, label="Use &LLM to catch missed A/N (slower)"
         )
         self.llm_strip_notes_ctrl.SetName("Use LLM to catch missed author's notes")
         self.llm_strip_notes_ctrl.SetToolTip(
@@ -462,7 +478,7 @@ class MainFrame(wx.Frame):
         # works for every export format — the user has to be able
         # to reach the dialog from HTML/EPUB/TXT mode too.
         self.llm_settings_main_btn = wx.Button(
-            root, label="LLM settings&…", size=(120, -1),
+            form, label="LLM settings&…", size=(120, -1),
         )
         self.llm_settings_main_btn.SetName("Open LLM settings")
         self.llm_settings_main_btn.SetToolTip(
@@ -475,12 +491,12 @@ class MainFrame(wx.Frame):
             self.llm_settings_main_btn, 0,
             wx.ALIGN_CENTER_VERTICAL | wx.LEFT, 8,
         )
-        root_sizer.Add(opts2, 0, wx.EXPAND | wx.LEFT | wx.RIGHT, pad)
+        form_sizer.Add(opts2, 0, wx.EXPAND | wx.LEFT | wx.RIGHT, pad)
 
         # ── Audiobook settings (visible only when Format = audio) ────
         from . import attribution as _attribution_module
         self._attribution_module = _attribution_module
-        self.audio_panel = wx.Panel(root)
+        self.audio_panel = wx.Panel(form)
         audio_sizer = wx.BoxSizer(wx.HORIZONTAL)
 
         audio_sizer.Add(
@@ -614,21 +630,21 @@ class MainFrame(wx.Frame):
         self._size_keys_shown = []
 
         self.audio_panel.SetSizer(audio_sizer)
-        root_sizer.Add(self.audio_panel, 0, wx.EXPAND | wx.LEFT | wx.RIGHT, pad)
+        form_sizer.Add(self.audio_panel, 0, wx.EXPAND | wx.LEFT | wx.RIGHT, pad)
 
         self.format_ctrl.Bind(wx.EVT_CHOICE, self._on_format_change)
         self._update_audio_panel_visibility()
         self._refresh_attribution_status()
 
         out_sizer = wx.BoxSizer(wx.HORIZONTAL)
-        out_sizer.Add(wx.StaticText(root, label="&Save to:"), 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 4)
+        out_sizer.Add(wx.StaticText(form, label="&Save to:"), 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 4)
         # No hardcoded default: an empty Save-to plus no configured
         # library forces the "choose your library folder" prompt on the
         # first download (see _require_save_target). The old
         # ``~/Downloads`` default silently sent downloads into the
         # portable app folder on frozen Windows builds, where
         # ``portable.setup_env`` redirects HOME to the exe dir.
-        self.output_ctrl = wx.TextCtrl(root)
+        self.output_ctrl = wx.TextCtrl(form)
         self.output_ctrl.SetName("Save to folder")
         set_help(
             self.output_ctrl,
@@ -637,19 +653,41 @@ class MainFrame(wx.Frame):
         )
         out_sizer.Add(self.output_ctrl, 1, wx.RIGHT, 4)
 
-        browse_btn = wx.Button(root, label="&Browse...")
+        browse_btn = wx.Button(form, label="&Browse...")
         set_help(browse_btn, "Pick the save-to folder with a folder chooser.")
         browse_btn.Bind(wx.EVT_BUTTON, self._on_browse)
         out_sizer.Add(browse_btn, 0)
 
-        root_sizer.Add(out_sizer, 0, wx.EXPAND | wx.ALL, pad)
+        form_sizer.Add(out_sizer, 0, wx.EXPAND | wx.ALL, pad)
+
+        # Finalise the Add Story window: size to its content, keep it
+        # hidden until asked for, and make its close button hide it
+        # rather than destroy it (the controls must survive to be read
+        # by the download snapshot / prefs sync). Escape hides it too.
+        form.SetSizer(form_sizer)
+        # Size the window with the audio panel visible so switching
+        # Format to "audio" later never clips the voice controls; then
+        # restore its real visibility for the default (non-audio) format.
+        self.audio_panel.Show(True)
+        form.Layout()
+        self.add_story_frame.SetClientSize(form.GetBestSize())
+        self._update_audio_panel_visibility()
+        self.add_story_frame.Bind(
+            wx.EVT_CLOSE, lambda e: self.add_story_frame.Hide(),
+        )
+        _hide_id = wx.NewIdRef()
+        self.add_story_frame.Bind(
+            wx.EVT_MENU, lambda e: self.add_story_frame.Hide(), id=int(_hide_id),
+        )
+        self.add_story_frame.SetAcceleratorTable(wx.AcceleratorTable([
+            (wx.ACCEL_NORMAL, wx.WXK_ESCAPE, int(_hide_id)),
+        ]))
 
         # ── Library (the main view) ──────────────────────────
-        # The indexed library is the centre of the window: the controls
-        # above add to it, the status pane below reports on it. This is
-        # the library-first pivot — the list, not the download form, is
-        # what fills the window. A download refreshes it via
-        # _refresh_library_panel once the file is auto-indexed.
+        # With the download form moved to its own window, the main
+        # window is just the library list plus the status strip. The
+        # list owns all the vertical stretch. A download refreshes it
+        # via _refresh_library_panel once the file is auto-indexed.
         from .library.browser import LibraryPanel
         root_sizer.Add(
             wx.StaticText(root, label="&Library:"),
@@ -699,16 +737,13 @@ class MainFrame(wx.Frame):
         self.Bind(wx.EVT_TIMER, self._on_log_flush, self._log_timer)
         self._log_timer.Start(_LOG_FLUSH_INTERVAL_MS)
 
-        # Accelerators
-        accel = wx.AcceleratorTable([
-            (wx.ACCEL_CTRL, ord("D"), self.dl_btn.GetId()),
-            (wx.ACCEL_CTRL, ord("U"), self.update_btn.GetId()),
-            (wx.ACCEL_CTRL, ord("W"), self.watch_btn.GetId()),
-        ])
-        self.SetAcceleratorTable(accel)
-
-        # Menu bar — search sites, log controls, help. Must be built
-        # after the log handlers exist (the View menu toggles them).
+        # No frame-level accelerator table: the download/update/watch
+        # buttons moved into the Add Story window, taking their old
+        # Ctrl+D/U/W with them. Ctrl+D now opens Add Story via a File
+        # menu item; Update File keeps its own menu accelerator.
+        #
+        # Menu bar — built after the log handlers exist (the View menu
+        # toggles them).
         self._build_menu_bar()
 
         # Timer for clipboard polling (2 second interval)
@@ -1125,8 +1160,9 @@ class MainFrame(wx.Frame):
             self.format_ctrl.GetString(self.format_ctrl.GetSelection()) == "audio"
         )
         self.audio_panel.Show(is_audio)
-        self.audio_panel.GetContainingSizer().Layout()
-        self.Layout()
+        # The audio panel lives in the Add Story window now, so relayout
+        # that form — not the main frame, which no longer contains it.
+        self._add_story_panel.Layout()
 
     def _selected_attribution_backend(self):
         idx = self.attribution_ctrl.GetSelection()
@@ -2034,6 +2070,19 @@ class MainFrame(wx.Frame):
         self._log(f"Library folder set: {chosen}")
         return True
 
+    def _on_add_story(self, event=None):
+        """Show the Add Story window (download form) and focus its URL
+        box. The window is persistent and hidden — Show/Raise/focus,
+        never re-create — so every reference into its controls stays
+        valid across open/close cycles."""
+        frame = self.add_story_frame
+        if not frame.IsShown():
+            # Re-anchor near the main window each time it's summoned.
+            frame.CentreOnParent()
+        frame.Show()
+        frame.Raise()
+        self.url_ctrl.SetFocus()
+
     def _on_download(self, event):
         url = self.url_ctrl.GetValue().strip()
         if not url:
@@ -2067,11 +2116,22 @@ class MainFrame(wx.Frame):
                 target=self._run_download, args=(url,),
                 kwargs={"params": params}, daemon=True,
             ).start()
+            self._dismiss_add_story()
             return
         self._log(f"Starting download: {url}")
         self._enqueue_site_job(
             url, lambda u=url, p=params: self._run_download(u, params=p),
         )
+        self._dismiss_add_story()
+
+    def _dismiss_add_story(self):
+        """Once a download has started, hide the Add Story window and put
+        focus back on the library list — that's where the status strip
+        reports progress and where the new story appears. No-op if the
+        window is already hidden (e.g. a clipboard-watch auto-download)."""
+        if self.add_story_frame.IsShown():
+            self.add_story_frame.Hide()
+        self.library_panel.list_ctrl.SetFocus()
 
     def _on_add_from_url_list(self, event):
         """Open the bulk URL-list picker; enqueue every fic the user
@@ -3413,6 +3473,12 @@ class MainFrame(wx.Frame):
         bar = wx.MenuBar()
 
         file_menu = wx.Menu()
+        add_story_item = file_menu.Append(
+            wx.ID_ANY, "&Add Story...\tCtrl+D",
+            "Open the Add Story window to download a story into the library.",
+        )
+        self.Bind(wx.EVT_MENU, self._on_add_story, add_story_item)
+        file_menu.AppendSeparator()
         # Ctrl+U / Ctrl+Shift+U now belong to the two "check for
         # updates" actions (library bulk check + app self-update).
         # The manual single-file update moves to Ctrl+Shift+F, and the

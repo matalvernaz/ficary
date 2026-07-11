@@ -1,5 +1,22 @@
 # Changelog
 
+## 2.14.1 — 2026-07-11
+
+**Add Story window (library-first, stage 2)**
+
+* The download form — the URL box, format and export options, the
+  Save-to folder, and the Download / Update / Watch Clipboard / Preview
+  Voices buttons — moved out of the main window into its own **Add
+  Story** window, opened from **File → Add Story** (Ctrl+D). The main
+  window is now just your library list and a status strip, with nothing
+  crowding the top.
+* Start a download and the Add Story window steps aside, returning you
+  to the library — where the status strip shows progress and the new
+  story appears once it's saved. Press Escape or close the window to
+  dismiss it any time; it keeps your entries, so reopening is instant.
+* Update File is still on the File menu (Ctrl+Shift+F); clipboard
+  watching now lives in the Add Story window.
+
 ## 2.14.0 — 2026-07-11
 
 **Library-first main window (stage 1)**

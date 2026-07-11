@@ -278,6 +278,37 @@ def test_pasted_literotica_series_url_merge_downloads(wx_app, monkeypatch, tmp_p
     assert exports, "no exported file on disk"
 
 
+def test_add_story_window_hosts_download_form(wx_app):
+    """The download form lives in a persistent, hidden Add Story window
+    so the main window is just the library. Opening shows it; closing
+    hides (never destroys) it, so every reference into its controls —
+    _snapshot_download_params, prefs sync — stays valid."""
+    from ficary.gui import MainFrame
+    frame = MainFrame()
+    try:
+        asf = frame.add_story_frame
+        assert not asf.IsShown()  # hidden at startup
+        # Form controls are parented to the Add Story panel, not the
+        # main window's root panel.
+        assert frame.url_ctrl.GetParent() is frame._add_story_panel
+        assert frame.output_ctrl.GetParent() is frame._add_story_panel
+        assert frame.format_ctrl.GetParent() is frame._add_story_panel
+
+        frame._on_add_story()
+        assert asf.IsShown()  # opens on demand
+        # The snapshot still reads the relocated controls.
+        params = frame._snapshot_download_params()
+        assert params.fmt in ("epub", "html", "txt", "audio")
+
+        asf.Close()
+        assert not asf.IsShown()       # close hides...
+        assert bool(frame.url_ctrl)    # ...but the controls survive
+        frame._on_add_story()          # and it reopens fine
+        assert asf.IsShown()
+    finally:
+        frame.Destroy()
+
+
 def test_no_default_save_location(wx_app):
     """Save-to starts empty — no hardcoded ~/Downloads default (which on
     frozen builds landed inside the portable app folder)."""
