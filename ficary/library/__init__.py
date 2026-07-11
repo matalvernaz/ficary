@@ -12,6 +12,7 @@ from .abandoned import (
     ReviveReport,
     list_abandoned,
     mark_abandoned,
+    mark_abandoned_urls,
     revive_abandoned,
 )
 from .candidate import Confidence, StoryCandidate
@@ -65,6 +66,7 @@ __all__ = [
     "MarkReport",
     "ReviveReport",
     "mark_abandoned",
+    "mark_abandoned_urls",
     "revive_abandoned",
     "list_abandoned",
     # ``backup`` is intentionally NOT re-exported. Callers should

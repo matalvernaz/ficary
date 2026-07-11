@@ -24,6 +24,7 @@ import pytest
 from ficary.library import (
     list_abandoned,
     mark_abandoned,
+    mark_abandoned_urls,
     revive_abandoned,
 )
 from ficary.library.index import LibraryIndex
@@ -154,6 +155,80 @@ def test_mark_abandoned_rejects_non_positive_days(tmp_path: Path):
         mark_abandoned(idx, lib, days=0)
     with pytest.raises(ValueError):
         mark_abandoned(idx, lib, days=-1)
+
+
+# ── mark_abandoned_urls (manual, per-story) ──────────────────────
+
+
+def test_mark_abandoned_urls_marks_named_story_only(tmp_path: Path):
+    """The manual per-URL mark stamps exactly the named story and
+    leaves the rest of the library untouched — the browser's Mark
+    Abandoned button relies on this.
+
+    Like ``revive_abandoned``, matching is by the index's canonical URL
+    key (the scanner canonicalises ``/s/10/1/`` → ``/s/10``); the GUI
+    always passes keys it read from the index, so that's what the test
+    uses too."""
+    lib = tmp_path / "lib"
+    lib.mkdir()
+    wip = ficary_epub(
+        lib, title="Live WIP", url="https://www.fanfiction.net/s/10/1/",
+        status="In-Progress",
+    )
+    other = ficary_epub(
+        lib, title="Other WIP", url="https://www.fanfiction.net/s/11/1/",
+        status="In-Progress",
+    )
+    # Both fresh on disk — the auto-sweep would mark neither.
+    scan(lib, index_path=_idx_path(tmp_path))
+    idx = LibraryIndex.load(_idx_path(tmp_path))
+    by_title = {e.get("title"): u for u, e in idx.stories_in(lib)}
+    target = by_title["Live WIP"]
+    untouched = by_title["Other WIP"]
+
+    report = mark_abandoned_urls(idx, [target])
+    idx.save()
+
+    assert [u for u, _ in report.newly_marked] == [target]
+    reloaded = LibraryIndex.load(_idx_path(tmp_path))
+    by_url = dict(reloaded.stories_in(lib))
+    assert by_url[target].get("abandoned_at")
+    assert "abandoned_at" not in by_url[untouched]
+    assert wip.exists() and other.exists()  # never touches files
+
+
+def test_mark_abandoned_urls_bypasses_status_and_mtime(tmp_path: Path):
+    """Manual abandon is a deliberate override: unlike the auto-sweep it
+    marks a Complete, freshly-downloaded story if the user asks, since
+    the point is to retire something the heuristics would never catch."""
+    lib = tmp_path / "lib"
+    lib.mkdir()
+    ficary_epub(
+        lib, title="Fresh Complete",
+        url="https://www.fanfiction.net/s/12/1/", status="Complete",
+    )
+    scan(lib, index_path=_idx_path(tmp_path))
+    idx = LibraryIndex.load(_idx_path(tmp_path))
+    [(target, _entry)] = list(idx.stories_in(lib))
+
+    report = mark_abandoned_urls(idx, [target])
+    assert report.newly_marked_count == 1
+
+    # Idempotent: a second manual mark reports already-marked, no restamp.
+    first_stamp = dict(idx.stories_in(lib))[target]["abandoned_at"]
+    report2 = mark_abandoned_urls(idx, [target])
+    assert report2.newly_marked == []
+    assert report2.already_marked == 1
+    assert dict(idx.stories_in(lib))[target]["abandoned_at"] == first_stamp
+
+
+def test_mark_abandoned_urls_empty_is_noop(tmp_path: Path):
+    lib = tmp_path / "lib"
+    lib.mkdir()
+    scan(lib, index_path=_idx_path(tmp_path))
+    idx = LibraryIndex.load(_idx_path(tmp_path))
+    report = mark_abandoned_urls(idx, [])
+    assert report.newly_marked == [] and report.already_marked == 0
 
 
 # ── revive_abandoned ─────────────────────────────────────────────

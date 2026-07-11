@@ -6,7 +6,12 @@ Reads the JSON :class:`~ficary.library.index.LibraryIndex` (populated by Scan
 Library), so the list reflects the last scan; a Rescan button refreshes it.
 Adult rows — a story in the separate adult-library root, or from an adult-site
 adapter — are hidden until the user ticks "Show adult", keeping that content
-off-screen by default.
+off-screen by default. A per-story Mark Adult / Mark Not Adult button writes an
+explicit ``adult`` override onto the index entry that wins over the derived
+guess, so a mis-classified story (a false positive, or an explicit work the
+site-based rule missed) can be corrected. A Mark Abandoned / Revive button
+does the same for the abandoned-WIP flag, so a dead work-in-progress can be
+retired from update checks right from the browser.
 
 Accessibility: the story list is a ``wx.ListCtrl`` in report mode with column
 headers, and a read-only Summary pane below it updates on every arrow-key
@@ -26,6 +31,7 @@ from typing import Optional
 import wx
 
 from .. import prefs as _prefs
+from ..gui_help import set_help
 
 logger = logging.getLogger(__name__)
 
@@ -46,7 +52,12 @@ _REEXPORT_FORMATS = ("epub", "html", "txt")
 class _Row:
     """One story as shown in the browser. ``abs_path`` is the file on disk;
     ``is_adult`` drives the hidden-by-default filter; ``library_label`` is the
-    short per-root column value ("Adult" for the separate adult root)."""
+    short per-root column value ("Adult" for the separate adult root).
+
+    ``adult_overridden`` records whether ``is_adult`` came from an explicit
+    per-story override rather than the site/folder-derived guess, so the
+    details pane can say so. ``is_abandoned`` reflects the ``abandoned_at``
+    index flag that drops a WIP from update probes."""
 
     url: str
     title: str
@@ -57,6 +68,8 @@ class _Row:
     abs_path: str
     is_adult: bool
     library_label: str
+    adult_overridden: bool = False
+    is_abandoned: bool = False
 
 
 class LibraryBrowserFrame(wx.Frame):
@@ -93,12 +106,22 @@ class LibraryBrowserFrame(wx.Frame):
         self.search_ctrl = wx.TextCtrl(panel, style=wx.TE_PROCESS_ENTER)
         self.search_ctrl.SetName("Search stories")
         self.search_ctrl.SetHint("title, author, or fandom")
+        set_help(
+            self.search_ctrl,
+            "Filter the list as you type — matches story title, author, "
+            "or fandom. Clear the box to show everything again.",
+        )
         self.search_ctrl.Bind(wx.EVT_TEXT, self._on_search)
         top.Add(self.search_ctrl, 1, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 12)
 
         self.adult_chk = wx.CheckBox(panel, label="Show &adult")
         self.adult_chk.SetName("Show adult stories")
         self.adult_chk.SetValue(False)
+        set_help(
+            self.adult_chk,
+            "Adult stories are hidden by default. Tick to include them in "
+            "the list; untick to hide them again.",
+        )
         self.adult_chk.Bind(wx.EVT_CHECKBOX, self._on_toggle_adult)
         top.Add(self.adult_chk, 0, wx.ALIGN_CENTER_VERTICAL)
         sizer.Add(top, 0, wx.EXPAND | wx.ALL, 8)
@@ -108,6 +131,12 @@ class LibraryBrowserFrame(wx.Frame):
             panel, style=wx.LC_REPORT | wx.LC_SINGLE_SEL,
         )
         self.list_ctrl.SetName("Library stories")
+        set_help(
+            self.list_ctrl,
+            "Every story the last scan indexed. Arrow through the list to "
+            "hear each story's details below; press Enter to open the "
+            "selected story in the reader.",
+        )
         for col, (heading, width) in enumerate(_COLUMNS):
             self.list_ctrl.InsertColumn(col, heading, width=width)
         self.list_ctrl.Bind(wx.EVT_LIST_ITEM_SELECTED, self._on_select)
@@ -131,36 +160,96 @@ class LibraryBrowserFrame(wx.Frame):
             panel, style=wx.TE_MULTILINE | wx.TE_READONLY, size=(-1, 130),
         )
         self.summary_ctrl.SetName("Story details")
+        set_help(
+            self.summary_ctrl,
+            "Full details of the story highlighted in the list above — "
+            "title, author, fandom, format, adult and abandoned status, "
+            "file path, and source link.",
+        )
         sizer.Add(self.summary_ctrl, 1, wx.EXPAND | wx.LEFT | wx.RIGHT, 8)
 
         # Action buttons.
         btns = wx.BoxSizer(wx.HORIZONTAL)
         self.open_btn = wx.Button(panel, label="&Open in Reader")
         self.open_btn.Bind(wx.EVT_BUTTON, self._on_open)
+        set_help(
+            self.open_btn,
+            "Open the selected story in the built-in reader "
+            "(EPUB and HTML stories).",
+        )
         btns.Add(self.open_btn, 0, wx.RIGHT, 6)
 
         self.update_btn = wx.Button(panel, label="Check for &Updates")
         self.update_btn.Bind(wx.EVT_BUTTON, self._on_update)
+        set_help(
+            self.update_btn,
+            "Check the selected story's source site for new chapters and "
+            "merge any into the existing file.",
+        )
         btns.Add(self.update_btn, 0, wx.RIGHT, 6)
 
         self.reexport_btn = wx.Button(panel, label="Re-&export...")
         self.reexport_btn.Bind(wx.EVT_BUTTON, self._on_reexport)
+        set_help(
+            self.reexport_btn,
+            "Write the selected story out again in another format "
+            "(EPUB, HTML, or plain text).",
+        )
         btns.Add(self.reexport_btn, 0, wx.RIGHT, 6)
 
         self.path_btn = wx.Button(panel, label="Copy &Path")
         self.path_btn.Bind(wx.EVT_BUTTON, self._on_copy_path)
+        set_help(
+            self.path_btn,
+            "Copy the selected story's file path on disk to the clipboard.",
+        )
         btns.Add(self.path_btn, 0, wx.RIGHT, 6)
+
+        # Per-story management: adult classification and abandoned flag.
+        # Labels are set per selection in _update_summary so the button
+        # states the exact action it will take on the current story.
+        self.adult_btn = wx.Button(panel, label="Mark Ad&ult")
+        self.adult_btn.Bind(wx.EVT_BUTTON, self._on_toggle_adult_flag)
+        set_help(
+            self.adult_btn,
+            "Mark the selected story as adult, or clear that mark. This "
+            "override wins over ficary's automatic guess, so you can fix a "
+            "story that was filed wrong. Adult stories are hidden until "
+            "Show adult is ticked.",
+        )
+        btns.Add(self.adult_btn, 0, wx.RIGHT, 6)
+
+        self.abandon_btn = wx.Button(panel, label="Mark A&bandoned")
+        self.abandon_btn.Bind(wx.EVT_BUTTON, self._on_toggle_abandoned)
+        set_help(
+            self.abandon_btn,
+            "Mark the selected work-in-progress as abandoned so update "
+            "checks skip it, or revive it so it's checked again. Use this "
+            "for a WIP you know the author has walked away from.",
+        )
+        btns.Add(self.abandon_btn, 0, wx.RIGHT, 6)
 
         self.delete_btn = wx.Button(panel, label="&Delete...")
         self.delete_btn.Bind(wx.EVT_BUTTON, self._on_delete)
+        set_help(
+            self.delete_btn,
+            "Delete the selected story's file from disk and drop it from "
+            "the library index. Cannot be undone.",
+        )
         btns.Add(self.delete_btn, 0, wx.RIGHT, 6)
 
         self.rescan_btn = wx.Button(panel, label="Re&scan")
         self.rescan_btn.Bind(wx.EVT_BUTTON, self._on_rescan)
+        set_help(
+            self.rescan_btn,
+            "Re-read every configured library folder from disk and refresh "
+            "this list.",
+        )
         btns.Add(self.rescan_btn, 0, wx.RIGHT, 6)
 
         close_btn = wx.Button(panel, id=wx.ID_CLOSE, label="&Close")
         close_btn.Bind(wx.EVT_BUTTON, lambda e: self.Close())
+        set_help(close_btn, "Close the library browser (Escape).")
         btns.Add(close_btn, 0)
         sizer.Add(btns, 0, wx.ALL, 8)
 
@@ -204,6 +293,16 @@ class LibraryBrowserFrame(wx.Frame):
                 adapter = entry.get("adapter") or ""
                 fandoms = entry.get("fandoms") or []
                 rel = entry.get("relpath") or ""
+                # An explicit per-story ``adult`` override (True/False)
+                # wins over the site/folder-derived guess; only fall back
+                # to the guess when no override has been set.
+                override = entry.get("adult")
+                derived_adult = (
+                    root_is_adult or adapter in ADULT_FICTION_ADAPTERS
+                )
+                is_adult = (
+                    bool(override) if override is not None else derived_adult
+                )
                 self._rows.append(_Row(
                     url=url,
                     title=entry.get("title") or "(untitled)",
@@ -212,8 +311,10 @@ class LibraryBrowserFrame(wx.Frame):
                     fmt=entry.get("format") or "",
                     root=root,
                     abs_path=str(root / rel) if rel else "",
-                    is_adult=root_is_adult or adapter in ADULT_FICTION_ADAPTERS,
+                    is_adult=is_adult,
                     library_label="Adult" if root_is_adult else (root.name or root_str),
+                    adult_overridden=override is not None,
+                    is_abandoned=bool(entry.get("abandoned_at")),
                 ))
         self._rows.sort(key=lambda r: (r.title.lower(), r.author.lower()))
         self._apply_filter()
@@ -304,16 +405,34 @@ class LibraryBrowserFrame(wx.Frame):
         self._on_open(event)
 
     def _update_summary(self, row: _Row) -> None:
+        if row.is_adult:
+            adult_state = (
+                "yes (you set this)" if row.adult_overridden
+                else "yes (detected)"
+            )
+        else:
+            adult_state = (
+                "no (you set this)" if row.adult_overridden
+                else "no"
+            )
         self._set_summary("\n".join([
             f"Title: {row.title}",
             f"Author: {row.author or '(unknown)'}",
             f"Fandom: {row.fandom or '(none)'}",
             f"Format: {row.fmt or '(unknown)'}",
-            f"Library: {row.library_label}"
-            + ("  [adult]" if row.is_adult else ""),
+            f"Library: {row.library_label}",
+            f"Adult: {adult_state}",
+            f"Abandoned: {'yes' if row.is_abandoned else 'no'}",
             f"File: {row.abs_path or '(missing path)'}",
             f"Source: {row.url}",
         ]))
+        # Each toggle button states the action it will take on this story.
+        self.adult_btn.SetLabel(
+            "Mark Not Ad&ult" if row.is_adult else "Mark Ad&ult"
+        )
+        self.abandon_btn.SetLabel(
+            "&Revive Story" if row.is_abandoned else "Mark A&bandoned"
+        )
 
     def _set_summary(self, text: str) -> None:
         self.summary_ctrl.SetValue(text)
@@ -321,7 +440,7 @@ class LibraryBrowserFrame(wx.Frame):
     def _enable_actions(self, enabled: bool) -> None:
         for btn in (
             self.open_btn, self.update_btn, self.reexport_btn,
-            self.path_btn, self.delete_btn,
+            self.path_btn, self.adult_btn, self.abandon_btn, self.delete_btn,
         ):
             btn.Enable(enabled)
 
@@ -406,6 +525,103 @@ class LibraryBrowserFrame(wx.Frame):
             finally:
                 wx.TheClipboard.Close()
             self.count_ctrl.SetLabel(f"Copied path: {row.abs_path}")
+
+    def _entry_for_row(self, idx, row: _Row):
+        """Return the mutable index entry dict for ``row``, or None.
+
+        ``row.url`` is whatever key ``stories_in`` yielded. Try the
+        canonicalising lookup first (the normal path), then fall back to
+        an exact stored-key match so a row whose key isn't canonical —
+        the same case ``LibraryIndex.remove`` guards against — can still
+        be mutated instead of silently missed."""
+        entry = idx.lookup_by_url(row.root, row.url)
+        if entry is not None:
+            return entry
+        for url, candidate in idx.stories_in(row.root):
+            if url == row.url:
+                return candidate
+        return None
+
+    def _reselect_by_url(self, url: str) -> bool:
+        """After a reload, reselect the row for ``url`` if it's still in
+        the filtered view (a story hidden by the adult filter won't be),
+        so the user's cursor doesn't jump. Returns whether it was found."""
+        for i, row in enumerate(self._visible):
+            if row.url == url:
+                self.list_ctrl.Select(i)
+                self.list_ctrl.Focus(i)
+                self._update_summary(row)
+                self._enable_actions(True)
+                return True
+        return False
+
+    def _on_toggle_adult_flag(self, event: wx.Event) -> None:
+        row = self._selected_row()
+        if row is None:
+            return
+        new_adult = not row.is_adult
+        try:
+            from .index import LibraryIndex
+            idx = LibraryIndex.load()
+            entry = self._entry_for_row(idx, row)
+            if entry is None:
+                wx.MessageBox(
+                    "This story is no longer in the index. Rescan and try "
+                    "again.",
+                    "Library Browser", wx.OK | wx.ICON_WARNING, self,
+                )
+                return
+            entry["adult"] = new_adult
+            idx.save()
+        except Exception as exc:
+            wx.MessageBox(
+                f"Could not update the story:\n\n{exc}",
+                "Library Browser", wx.OK | wx.ICON_ERROR, self,
+            )
+            return
+        self._reload()
+        found = self._reselect_by_url(row.url)
+        msg = (
+            f"Marked “{row.title}” as adult."
+            if new_adult else
+            f"Marked “{row.title}” as not adult."
+        )
+        if new_adult and not found and not self.adult_chk.GetValue():
+            msg += " It's now hidden — tick Show adult to see it."
+        self.count_ctrl.SetLabel(msg)
+
+    def _on_toggle_abandoned(self, event: wx.Event) -> None:
+        row = self._selected_row()
+        if row is None:
+            return
+        reviving = row.is_abandoned
+        try:
+            from .index import LibraryIndex
+            from .abandoned import mark_abandoned_urls, revive_abandoned
+            idx = LibraryIndex.load()
+            if reviving:
+                report = revive_abandoned(idx, urls=[row.url], roots=[row.root])
+                changed = bool(report.revived)
+            else:
+                report = mark_abandoned_urls(idx, [row.url], roots=[row.root])
+                changed = bool(report.newly_marked)
+            if changed:
+                idx.save()
+        except Exception as exc:
+            wx.MessageBox(
+                f"Could not update the story:\n\n{exc}",
+                "Library Browser", wx.OK | wx.ICON_ERROR, self,
+            )
+            return
+        self._reload()
+        self._reselect_by_url(row.url)
+        self.count_ctrl.SetLabel(
+            f"Revived “{row.title}” — it will be checked for "
+            "updates again."
+            if reviving else
+            f"Marked “{row.title}” abandoned — update checks "
+            "will skip it until you revive it."
+        )
 
     def _on_delete(self, event: wx.Event) -> None:
         row = self._selected_row()

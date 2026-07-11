@@ -165,6 +165,7 @@ from .download_queue import (
     WORKER_THREAD_PREFIX,
     site_from_thread_name,
 )
+from .gui_help import set_help
 from .gui_dialogs import (
     OptionalFeaturesDialog,
     StoryPickerDialog,
@@ -379,11 +380,21 @@ class MainFrame(wx.Frame):
         self.format_ctrl = wx.Choice(root, choices=["epub", "html", "txt", "audio"])
         self.format_ctrl.SetSelection(0)
         self.format_ctrl.SetName("Format")
+        set_help(
+            self.format_ctrl,
+            "Output format: EPUB or HTML e-book, plain text, or a chaptered "
+            "M4B audiobook. Choosing audio reveals the voice options.",
+        )
         opts.Add(self.format_ctrl, 0, wx.RIGHT, 16)
 
         opts.Add(wx.StaticText(root, label="File&name template:"), 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 4)
         self.name_ctrl = wx.TextCtrl(root, value="{title} - {author}", size=(200, -1))
         self.name_ctrl.SetName("Filename template")
+        set_help(
+            self.name_ctrl,
+            "How the saved file is named, using fields like {title} and "
+            "{author}. The format's extension is added automatically.",
+        )
         opts.Add(self.name_ctrl, 1)
 
         root_sizer.Add(opts, 0, wx.EXPAND | wx.ALL, pad)
@@ -401,11 +412,21 @@ class MainFrame(wx.Frame):
             "Mark scene breaks clearly — asterisks in text output, "
             "silence pause in audiobook output"
         )
+        set_help(
+            self.hr_stars_ctrl,
+            "Make scene breaks obvious: a * * * line in text and e-book "
+            "output, and a short silence in audiobooks.",
+        )
         opts2.Add(self.hr_stars_ctrl, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 16)
         self.strip_notes_ctrl = wx.CheckBox(
             root, label="Strip &author's notes (A/N paragraphs)"
         )
         self.strip_notes_ctrl.SetName("Strip author's notes")
+        set_help(
+            self.strip_notes_ctrl,
+            "Remove author's-note paragraphs (A/N, beta thanks, review "
+            "shout-outs) from the story text before saving.",
+        )
         opts2.Add(self.strip_notes_ctrl, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 16)
 
         # LLM backstop: paired with the regex strip. Enabled
@@ -490,6 +511,13 @@ class MainFrame(wx.Frame):
         self.attribution_ctrl = wx.Choice(self.audio_panel, choices=display_labels)
         self.attribution_ctrl.SetSelection(0)
         self.attribution_ctrl.SetName("Attribution backend")
+        set_help(
+            self.attribution_ctrl,
+            "How ficary decides who's speaking each line, to give "
+            "characters their own voices: Built-in (fast, no download), "
+            "fastcoref or BookNLP (neural models), or LLM (most accurate, "
+            "needs a local or remote model).",
+        )
         self.attribution_ctrl.Bind(wx.EVT_CHOICE, self._on_attribution_change)
         audio_sizer.Add(self.attribution_ctrl, 0, wx.RIGHT, 4)
 
@@ -499,6 +527,12 @@ class MainFrame(wx.Frame):
         audio_sizer.Add(self.size_label, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 4)
         self.attribution_size_ctrl = wx.Choice(self.audio_panel, choices=[])
         self.attribution_size_ctrl.SetName("Attribution model size")
+        set_help(
+            self.attribution_size_ctrl,
+            "Model size for backends that offer variants (BookNLP): the "
+            "small model is faster and lighter, the big model is more "
+            "accurate but a larger download.",
+        )
         self.attribution_size_ctrl.Bind(wx.EVT_CHOICE, self._on_size_change)
         audio_sizer.Add(self.attribution_size_ctrl, 0, wx.RIGHT, 8)
 
@@ -508,6 +542,12 @@ class MainFrame(wx.Frame):
 
         self.attribution_install_btn = wx.Button(
             self.audio_panel, label="&Install...", size=(90, -1),
+        )
+        self.attribution_install_btn.SetName("Install attribution model")
+        set_help(
+            self.attribution_install_btn,
+            "Download and install the model files the selected attribution "
+            "backend needs. Enabled when the backend isn't installed yet.",
         )
         self.attribution_install_btn.Bind(wx.EVT_BUTTON, self._on_install_attribution)
         audio_sizer.Add(self.attribution_install_btn, 0, wx.RIGHT, 4)
@@ -520,6 +560,11 @@ class MainFrame(wx.Frame):
             self.audio_panel, label="LLM &settings...", size=(140, -1),
         )
         self.llm_settings_btn.SetName("LLM settings")
+        set_help(
+            self.llm_settings_btn,
+            "Set the LLM provider, model, API key, and endpoint used by the "
+            "LLM attribution backend.",
+        )
         self.llm_settings_btn.Bind(wx.EVT_BUTTON, self._on_llm_settings)
         audio_sizer.Add(self.llm_settings_btn, 0, wx.RIGHT, 4)
         self.llm_settings_btn.Hide()
@@ -531,6 +576,12 @@ class MainFrame(wx.Frame):
             self.audio_panel, label="&TTS providers...", size=(150, -1),
         )
         self.tts_providers_btn.SetName("Manage TTS providers")
+        set_help(
+            self.tts_providers_btn,
+            "Choose which text-to-speech providers supply narrator and "
+            "character voices (Microsoft Edge online voices, offline "
+            "Piper voices), and install Piper.",
+        )
         self.tts_providers_btn.Bind(wx.EVT_BUTTON, self._on_tts_providers)
         audio_sizer.Add(self.tts_providers_btn, 0, wx.RIGHT, 4)
 
@@ -541,6 +592,11 @@ class MainFrame(wx.Frame):
         self.abs_send_ctrl = wx.CheckBox(
             self.audio_panel, label="Send to &Audiobookshelf")
         self.abs_send_ctrl.SetName("Upload finished audiobook to Audiobookshelf")
+        set_help(
+            self.abs_send_ctrl,
+            "After the audiobook is built, upload it to the Audiobookshelf "
+            "server configured in Preferences → Audiobookshelf.",
+        )
         self.abs_send_ctrl.SetValue(self.prefs.get_bool(KEY_ABS_AUTO_SEND))
         self.abs_send_ctrl.Bind(
             wx.EVT_CHECKBOX,
@@ -565,9 +621,15 @@ class MainFrame(wx.Frame):
         default_dir = str(Path.home() / "Downloads")
         self.output_ctrl = wx.TextCtrl(root, value=default_dir)
         self.output_ctrl.SetName("Save to folder")
+        set_help(
+            self.output_ctrl,
+            "Folder the finished file is saved to. If you've set a library "
+            "folder, downloads are sorted into it automatically instead.",
+        )
         out_sizer.Add(self.output_ctrl, 1, wx.RIGHT, 4)
 
         browse_btn = wx.Button(root, label="&Browse...")
+        set_help(browse_btn, "Pick the save-to folder with a folder chooser.")
         browse_btn.Bind(wx.EVT_BUTTON, self._on_browse)
         out_sizer.Add(browse_btn, 0)
 
@@ -591,6 +653,11 @@ class MainFrame(wx.Frame):
             style=wx.TE_MULTILINE | wx.TE_READONLY | wx.TE_DONTWRAP,
         )
         self.log_ctrl.SetName("Status log")
+        set_help(
+            self.log_ctrl,
+            "Live progress and messages for the current job — download "
+            "progress, chapter counts, and any errors. Read-only.",
+        )
         root_sizer.Add(self.log_ctrl, 1, wx.EXPAND | wx.ALL, pad)
 
         # Logging plumbing: bridge Python's root logger to _log() so
@@ -629,6 +696,12 @@ class MainFrame(wx.Frame):
         )
         self.url_ctrl = wx.TextCtrl(panel, style=wx.TE_PROCESS_ENTER)
         self.url_ctrl.SetName("Story URL or ID")
+        set_help(
+            self.url_ctrl,
+            "Paste a story link from any supported site, or a bare "
+            "FanFiction.net story id. Press Enter to download. ficary works "
+            "out which site the link belongs to.",
+        )
         self.url_ctrl.Bind(wx.EVT_TEXT_ENTER, self._on_download)
         sizer.Add(self.url_ctrl, 0, wx.EXPAND | wx.ALL, pad)
 
@@ -636,20 +709,40 @@ class MainFrame(wx.Frame):
 
         self.dl_btn = wx.Button(panel, label="&Download")
         self.dl_btn.SetDefault()
+        set_help(
+            self.dl_btn,
+            "Download the story in the URL box using the format and options "
+            "above (Ctrl+D).",
+        )
         self.dl_btn.Bind(wx.EVT_BUTTON, self._on_download)
         btn_sizer.Add(self.dl_btn, 0, wx.RIGHT, 8)
 
         self.update_btn = wx.Button(panel, label="U&pdate Existing File...")
+        set_help(
+            self.update_btn,
+            "Pick a story file you've already downloaded and fetch any new "
+            "chapters into it.",
+        )
         self.update_btn.Bind(wx.EVT_BUTTON, self._on_update)
         btn_sizer.Add(self.update_btn, 0, wx.RIGHT, 8)
 
         self.watch_btn = wx.ToggleButton(panel, label="&Watch Clipboard")
         self.watch_btn.SetName("Watch Clipboard toggle")
+        set_help(
+            self.watch_btn,
+            "When on, ficary watches the clipboard and offers to download "
+            "any supported story link you copy (Ctrl+W).",
+        )
         self.watch_btn.Bind(wx.EVT_TOGGLEBUTTON, self._on_watch_toggle)
         btn_sizer.Add(self.watch_btn, 0, wx.RIGHT, 8)
 
         self.voices_btn = wx.Button(panel, label="Preview &Voices...")
         self.voices_btn.SetName("Preview character voices")
+        set_help(
+            self.voices_btn,
+            "Hear a sample of the narrator and character voices before "
+            "rendering a full audiobook.",
+        )
         self.voices_btn.Bind(wx.EVT_BUTTON, self._on_preview_voices)
         btn_sizer.Add(self.voices_btn, 0, wx.RIGHT, 8)
 
@@ -660,6 +753,12 @@ class MainFrame(wx.Frame):
         self.cancel_render_btn = wx.Button(panel, label="Cancel &render")
         self.cancel_render_btn.SetName(
             "Cancel the running audiobook render after the current segment"
+        )
+        set_help(
+            self.cancel_render_btn,
+            "Stop the audiobook render in progress; it finishes the current "
+            "segment first so no half-written files are left behind. "
+            "Enabled only while a render is running.",
         )
         self.cancel_render_btn.Bind(wx.EVT_BUTTON, self._on_cancel_render)
         self.cancel_render_btn.Disable()
@@ -3222,17 +3321,30 @@ class MainFrame(wx.Frame):
         library_menu = wx.Menu()
         library_item = library_menu.Append(
             wx.ID_ANY, "&Library...\tCtrl+L",
+            "Open the library window: set the folder, scan, reorganise, "
+            "and check for updates.",
         )
         self.Bind(wx.EVT_MENU, self._on_library_menu, library_item)
         browse_item = library_menu.Append(
             wx.ID_ANY, "&Browse Library...\tCtrl+B",
+            "Browse every downloaded story and open, update, re-export, "
+            "mark adult, abandon, or delete one.",
         )
         self.Bind(wx.EVT_MENU, self._open_library_browser, browse_item)
         check_updates_item = library_menu.Append(
             wx.ID_ANY, "Check for Story &Updates\tCtrl+U",
+            "Check every story in the library for new chapters.",
         )
         self.Bind(
             wx.EVT_MENU, self._on_check_library_updates, check_updates_item,
+        )
+        manage_abandoned_item = library_menu.Append(
+            wx.ID_ANY, "Manage &Abandoned Stories...\tCtrl+Shift+A",
+            "Review, revive, or bulk-clear stories marked as abandoned "
+            "work-in-progress.",
+        )
+        self.Bind(
+            wx.EVT_MENU, self._on_manage_abandoned_menu, manage_abandoned_item,
         )
         bar.Append(library_menu, "&Library")
 
@@ -3431,6 +3543,26 @@ class MainFrame(wx.Frame):
         """Ctrl+U — open the library window (if needed) and start a
         bulk update check on the current root."""
         self._on_library_menu(event, check_updates=True)
+
+    def _on_manage_abandoned_menu(self, event):
+        """Open the abandoned-stories review dialog straight from the
+        Library menu, so managing abandoned WIPs doesn't require first
+        opening the Library window and hunting for the button.
+
+        Scoped to the configured library folder when there is one, else
+        the dialog audits every indexed library.
+        """
+        from . import prefs as _p
+        from .library.gui import AbandonedStoriesDialog
+        raw = (self.prefs.get(_p.KEY_LIBRARY_PATH, "") or "").strip()
+        root = Path(raw).expanduser() if raw else None
+        if root is not None and not root.is_dir():
+            root = None
+        dlg = AbandonedStoriesDialog(self, root)
+        try:
+            dlg.ShowModal()
+        finally:
+            dlg.Destroy()
 
     def _notify_library_frame_closed(self):
         """Called by LibraryFrame._on_close so the menu reopens cleanly."""

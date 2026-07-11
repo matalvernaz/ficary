@@ -176,6 +176,48 @@ def mark_abandoned(
     return report
 
 
+def mark_abandoned_urls(
+    index: LibraryIndex,
+    urls: Iterable[str],
+    *,
+    roots: Iterable[Path] | None = None,
+) -> MarkReport:
+    """Manually stamp ``abandoned_at`` on specific stories by URL.
+
+    Unlike :func:`mark_abandoned`, this bypasses the status/mtime
+    heuristics entirely — it's the "I know this WIP is dead, retire it
+    now" action behind the GUI's per-story Mark Abandoned button, so a
+    user doesn't have to wait for the day threshold or drop the file's
+    mtime. Already-abandoned entries are counted and left as-is; the
+    mark stays sticky until :func:`revive_abandoned` clears it.
+
+    ``roots`` scopes the search (defaults to every indexed library).
+    Only ``newly_marked`` and ``already_marked`` are populated — the
+    kept_* WIP/complete/mtime counters don't apply to a manual mark.
+    The caller is responsible for :meth:`LibraryIndex.save`.
+    """
+    url_set = {u for u in urls if u}
+    report = MarkReport()
+    if not url_set:
+        return report
+    stamp = _now_iso()
+    root_list = (
+        [Path(r) for r in roots]
+        if roots is not None
+        else [Path(r) for r in index.library_roots()]
+    )
+    for root in root_list:
+        for url, entry in index.stories_in(root):
+            if url not in url_set:
+                continue
+            if entry.get("abandoned_at"):
+                report.already_marked += 1
+                continue
+            entry["abandoned_at"] = stamp
+            report.newly_marked.append((url, entry.get("relpath") or ""))
+    return report
+
+
 @dataclass
 class ReviveReport:
     """Summary of a :func:`revive_abandoned` call. Split from

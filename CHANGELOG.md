@@ -1,5 +1,34 @@
 # Changelog
 
+## 2.13.1 — 2026-07-10
+
+**New features**
+
+* **Adult and abandoned stories can be managed per story from the
+  library browser.** Every story's details now state whether it's
+  filed as adult and whether it's marked abandoned. A Mark Adult /
+  Mark Not Adult button sets an explicit per-story override that wins
+  over the automatic site-and-folder guess — so a mainstream story
+  that landed in the adult bucket (or an explicit one the rules
+  missed) can be corrected in one click. A Mark Abandoned / Revive
+  Story button retires a dead work-in-progress from update checks
+  immediately — no waiting for the age-threshold sweep — or brings a
+  revived story back into the probe queue. Both act on the library
+  index only; no files are moved or deleted.
+* **Abandoned-story review is a menu item.** Library → Manage
+  Abandoned Stories... (Ctrl+Shift+A) opens the review/revive dialog
+  directly; previously it was only reachable through a button inside
+  the Library window.
+
+**Improvements**
+
+* **Help text across the desktop app.** The download form, library
+  window, library browser, and abandoned-stories dialog now describe
+  what each field, checkbox, and button does — shown as hover
+  tooltips, and exposed as accessible help text so NVDA and JAWS can
+  read the description on request. The Library menu items carry
+  status-bar descriptions too.
+
 ## 2.13.0 — 2026-07-10
 
 **Search results now show each story's summary and word count wherever

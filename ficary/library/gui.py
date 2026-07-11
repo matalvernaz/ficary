@@ -26,6 +26,7 @@ import wx
 logger = logging.getLogger(__name__)
 
 from .. import prefs as _prefs
+from ..gui_help import set_help
 from .gui_logic import format_move_label
 from .index import LibraryIndex
 from .refresh import build_refresh_queue, default_refresh_args
@@ -99,8 +100,14 @@ class LibraryFrame(wx.Frame):
         )
         self.path_ctrl = wx.TextCtrl(panel)
         self.path_ctrl.SetName("Library folder")
+        set_help(
+            self.path_ctrl,
+            "The main folder ficary scans and keeps sorted. New downloads "
+            "are filed into fandom subfolders here.",
+        )
         path_row.Add(self.path_ctrl, 1, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 6)
         browse_btn = wx.Button(panel, label="&Browse...")
+        set_help(browse_btn, "Pick the library folder with a folder chooser.")
         browse_btn.Bind(wx.EVT_BUTTON, self._on_browse)
         path_row.Add(browse_btn, 0, wx.ALIGN_CENTER_VERTICAL)
         sizer.Add(path_row, 0, wx.EXPAND | wx.ALL, 8)
@@ -113,17 +120,22 @@ class LibraryFrame(wx.Frame):
         )
         self.adult_path_ctrl = wx.TextCtrl(panel)
         self.adult_path_ctrl.SetName("Adult library folder")
-        self.adult_path_ctrl.SetToolTip(
+        set_help(
+            self.adult_path_ctrl,
             "Optional separate location for adult-only downloads "
             "(Literotica, AFF, etc.). When set, those stories are saved "
             "here instead of an Adult subfolder inside your main library, "
             "and the browser lists and hides them independently. Leave "
-            "blank to keep them under <library>/Adult."
+            "blank to keep them under <library>/Adult.",
         )
         adult_row.Add(
             self.adult_path_ctrl, 1, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 6,
         )
         adult_browse_btn = wx.Button(panel, label="Bro&wse...")
+        set_help(
+            adult_browse_btn,
+            "Pick the separate adult-library folder with a folder chooser.",
+        )
         adult_browse_btn.Bind(wx.EVT_BUTTON, self._on_browse_adult)
         adult_row.Add(adult_browse_btn, 0, wx.ALIGN_CENTER_VERTICAL)
         sizer.Add(adult_row, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 8)
@@ -136,8 +148,15 @@ class LibraryFrame(wx.Frame):
         )
         self.template_ctrl = wx.TextCtrl(panel)
         self.template_ctrl.SetName("Path template")
+        set_help(
+            self.template_ctrl,
+            "How files are named and foldered inside the library, using "
+            "fields like {fandom}, {title}, {author}, and {ext}. Use "
+            "Reset to restore the default.",
+        )
         tmpl_row.Add(self.template_ctrl, 1, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 6)
         reset_btn = wx.Button(panel, label="&Reset")
+        set_help(reset_btn, "Restore the default path template.")
         reset_btn.Bind(
             wx.EVT_BUTTON,
             lambda e: self.template_ctrl.SetValue(DEFAULT_TEMPLATE),
@@ -158,6 +177,11 @@ class LibraryFrame(wx.Frame):
         )
         self.misc_ctrl = wx.TextCtrl(panel)
         self.misc_ctrl.SetName("Miscellaneous folder name")
+        set_help(
+            self.misc_ctrl,
+            "Folder name for stories whose fandom can't be determined, or "
+            "crossovers that span several fandoms. Defaults to Misc.",
+        )
         misc_row.Add(self.misc_ctrl, 1, wx.ALIGN_CENTER_VERTICAL)
         sizer.Add(misc_row, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 8)
 
@@ -179,17 +203,22 @@ class LibraryFrame(wx.Frame):
             panel, min=0, max=9999, initial=0,
         )
         self.abandoned_after_ctrl.SetName("Abandoned-after threshold in days")
-        self.abandoned_after_ctrl.SetToolTip(
-            "When --scan-library (or Scan Library) runs, WIP stories "
-            "whose file mtime is older than this many days are marked "
-            "abandoned and skipped in subsequent update checks. 0 "
-            "disables the sweep. Matt's library used ~730 (2 years) "
-            "as a reasonable starting point during development."
+        set_help(
+            self.abandoned_after_ctrl,
+            "When Scan Library runs, unfinished stories whose file hasn't "
+            "changed in this many days are marked abandoned and skipped in "
+            "later update checks. Set 0 to turn this off. Around 730 "
+            "(two years) is a reasonable starting point.",
         )
         abandoned_row.Add(self.abandoned_after_ctrl, 0, wx.RIGHT, 6)
 
         self.manage_abandoned_btn = wx.Button(
             panel, label="Manage A&bandoned...",
+        )
+        set_help(
+            self.manage_abandoned_btn,
+            "Review the list of stories marked abandoned and revive any "
+            "you want checked for updates again.",
         )
         self.manage_abandoned_btn.Bind(
             wx.EVT_BUTTON, self._on_manage_abandoned,
@@ -211,19 +240,39 @@ class LibraryFrame(wx.Frame):
             size=(-1, 120),
         )
         self.status_ctrl.SetName("Library status")
+        set_help(
+            self.status_ctrl,
+            "Progress and results of scans and update checks appear here.",
+        )
         sizer.Add(self.status_ctrl, 1, wx.EXPAND | wx.LEFT | wx.RIGHT, 8)
 
         # ── Action buttons ──────────────────────────────
         btn_row = wx.BoxSizer(wx.HORIZONTAL)
         self.scan_btn = wx.Button(panel, label="&Scan Library")
+        set_help(
+            self.scan_btn,
+            "Read every story file in the library folder, record its "
+            "details, and build the index the browser and update checks "
+            "use. Run this once, and again after adding files by hand.",
+        )
         self.scan_btn.Bind(wx.EVT_BUTTON, self._on_scan)
         btn_row.Add(self.scan_btn, 0, wx.RIGHT, 6)
 
         self.reorg_btn = wx.Button(panel, label="&Reorganize...")
+        set_help(
+            self.reorg_btn,
+            "Move existing files to match the current path template and "
+            "sorting rules. Shows the planned moves first before applying.",
+        )
         self.reorg_btn.Bind(wx.EVT_BUTTON, self._on_reorganize)
         btn_row.Add(self.reorg_btn, 0, wx.RIGHT, 6)
 
         self.update_btn = wx.Button(panel, label="Check for &Updates")
+        set_help(
+            self.update_btn,
+            "Check every indexed story for new chapters and merge any it "
+            "finds. Finished and abandoned stories are skipped.",
+        )
         self.update_btn.Bind(wx.EVT_BUTTON, self._on_check_updates)
         btn_row.Add(self.update_btn, 0, wx.RIGHT, 6)
 
@@ -236,10 +285,11 @@ class LibraryFrame(wx.Frame):
             panel, label="&Force recheck (bypass TTL)",
         )
         self.force_recheck_chk.SetName("Force recheck — bypass TTL")
-        self.force_recheck_chk.SetToolTip(
-            "Ignore the recent-check TTL and the Complete/Abandoned "
-            "skip — probe every indexed story against upstream even "
-            "if it was just checked or marked finished."
+        set_help(
+            self.force_recheck_chk,
+            "Ignore the recent-check timer and the finished/abandoned "
+            "skip — check every indexed story against its site even if it "
+            "was just checked or marked finished.",
         )
         btn_row.Add(
             self.force_recheck_chk, 0,
@@ -252,10 +302,11 @@ class LibraryFrame(wx.Frame):
         self.refetch_all_chk.SetName(
             "Fresh copies — re-download every chapter"
         )
-        self.refetch_all_chk.SetToolTip(
-            "Re-download every chapter from upstream instead of merging "
-            "new chapters with the ones already on disk. Slower, but "
-            "catches silent author edits to old chapters."
+        set_help(
+            self.refetch_all_chk,
+            "Re-download every chapter from the site instead of merging "
+            "only new ones with what's on disk. Slower, but catches silent "
+            "author edits to old chapters.",
         )
         btn_row.Add(
             self.refetch_all_chk, 0,
@@ -263,10 +314,20 @@ class LibraryFrame(wx.Frame):
         )
 
         self.review_btn = wx.Button(panel, label="Review &Ambiguous...")
+        set_help(
+            self.review_btn,
+            "Review stories the scanner couldn't confidently identify and "
+            "correct their details by hand.",
+        )
         self.review_btn.Bind(wx.EVT_BUTTON, self._on_review)
         btn_row.Add(self.review_btn, 0, wx.RIGHT, 6)
 
         self.browse_stories_btn = wx.Button(panel, label="&Open Story Browser...")
+        set_help(
+            self.browse_stories_btn,
+            "Open the library browser: a searchable list of every story "
+            "you can read, update, mark adult, abandon, or delete.",
+        )
         self.browse_stories_btn.Bind(wx.EVT_BUTTON, self._on_open_browser)
         btn_row.Add(self.browse_stories_btn, 0, wx.RIGHT, 6)
 
@@ -274,6 +335,11 @@ class LibraryFrame(wx.Frame):
         # action is adjacent to the start action. Disabled unless a
         # run is in flight.
         self.cancel_btn = wx.Button(panel, label="Ca&ncel Update")
+        set_help(
+            self.cancel_btn,
+            "Stop the update check that's currently running. Enabled only "
+            "while a run is in progress.",
+        )
         self.cancel_btn.Bind(wx.EVT_BUTTON, self._on_cancel_update)
         self.cancel_btn.Disable()
         btn_row.Add(self.cancel_btn, 0, wx.RIGHT, 6)
@@ -281,6 +347,7 @@ class LibraryFrame(wx.Frame):
         btn_row.AddStretchSpacer(1)
 
         close_btn = wx.Button(panel, id=wx.ID_CLOSE, label="&Close")
+        set_help(close_btn, "Close the library window.")
         close_btn.Bind(wx.EVT_BUTTON, lambda e: self.Close())
         btn_row.Add(close_btn, 0)
         sizer.Add(btn_row, 0, wx.EXPAND | wx.ALL, 8)
@@ -1157,6 +1224,12 @@ class AbandonedStoriesDialog(wx.Dialog):
             style=wx.LC_REPORT | wx.BORDER_SUNKEN,
         )
         self.list_ctrl.SetName("Abandoned stories")
+        set_help(
+            self.list_ctrl,
+            "Stories currently marked as abandoned work-in-progress and "
+            "skipped by update checks. Select one or more, then Revive to "
+            "start checking them again.",
+        )
         for i, (label, width) in enumerate([
             ("Title", 260), ("Author", 150),
             ("Marked", 110), ("Path", 400),
@@ -1166,15 +1239,26 @@ class AbandonedStoriesDialog(wx.Dialog):
 
         btn_row = wx.BoxSizer(wx.HORIZONTAL)
         self.revive_btn = wx.Button(panel, label="&Revive selected")
+        set_help(
+            self.revive_btn,
+            "Clear the abandoned mark on the selected stor(y/ies) so they "
+            "are checked for updates again.",
+        )
         self.revive_btn.Bind(wx.EVT_BUTTON, self._on_revive_selected)
         btn_row.Add(self.revive_btn, 0, wx.RIGHT, 6)
 
         self.revive_all_btn = wx.Button(panel, label="Revive &all")
+        set_help(
+            self.revive_all_btn,
+            "Clear the abandoned mark on every story in the current scope "
+            "(asks for confirmation first).",
+        )
         self.revive_all_btn.Bind(wx.EVT_BUTTON, self._on_revive_all)
         btn_row.Add(self.revive_all_btn, 0, wx.RIGHT, 6)
 
         btn_row.AddStretchSpacer(1)
         close_btn = wx.Button(panel, id=wx.ID_CLOSE, label="&Close")
+        set_help(close_btn, "Close this dialog.")
         close_btn.Bind(wx.EVT_BUTTON, lambda e: self.EndModal(wx.ID_CLOSE))
         btn_row.Add(close_btn, 0)
         sizer.Add(btn_row, 0, wx.EXPAND | wx.ALL, 8)
