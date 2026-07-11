@@ -155,6 +155,72 @@ def test_library_frame_roundtrip(wx_app):
         frame.Destroy()
 
 
+_PREFS_LABELED_FIELDS = [
+    ("name_template_ctrl", "Default filename template:"),
+    ("format_ctrl", "Default format:"),
+    ("html_style_ctrl", "Default HTML layout:"),
+    ("webnovel_cookie_ctrl", "Webnovel.com cookie:"),
+    ("ao3_cookie_ctrl", "AO3 cookie:"),
+    ("scribblehub_cookie_ctrl", "ScribbleHub cookie:"),
+    ("subscribestar_cookie_ctrl", "SubscribeStar cookie:"),
+    ("speech_rate_ctrl", "Default speech rate (%):"),
+    ("attribution_ctrl", "Default attribution backend:"),
+    ("attribution_size_ctrl", "Default model size (BookNLP only):"),
+    ("abs_url_ctrl", "Server URL:"),
+    ("abs_token_ctrl", "API token:"),
+    ("abs_library_ctrl", "Library:"),
+    ("abs_folder_ctrl", "Folder:"),
+    ("pushover_token_ctrl", "Pushover API token:"),
+    ("pushover_user_ctrl", "Pushover user key:"),
+    ("discord_webhook_ctrl", "Discord webhook URL:"),
+    ("notify_email_ctrl", "Notification email address:"),
+    ("watch_interval_ctrl", "Poll interval:"),
+    ("log_level_ctrl", "Log level:"),
+]
+
+
+def test_preferences_msaa_label_association(wx_app):
+    """Every labeled Preferences field must have ITS OWN StaticText as
+    the nearest preceding sibling in creation order, with no focusable
+    control in between.
+
+    This models how MSAA on Windows infers an edit/combo's accessible
+    name: walk backward through the parent's children for the nearest
+    StaticText, giving up if another interactive control intervenes.
+    The old row helper created each control BEFORE its label, so NVDA
+    read every field with the previous row's label (or a help
+    paragraph) and the first field of each tab as unlabeled — exactly
+    what the user's speech-viewer capture showed."""
+    import wx
+    from ficary.gui import MainFrame
+    from ficary.preferences import PreferencesDialog
+
+    interactive = (wx.TextCtrl, wx.Choice, wx.Button, wx.CheckBox, wx.SpinCtrl)
+    frame = MainFrame()
+    dlg = PreferencesDialog(frame, frame.prefs)
+    try:
+        for attr, expected in _PREFS_LABELED_FIELDS:
+            ctrl = getattr(dlg, attr)
+            siblings = list(ctrl.GetParent().GetChildren())
+            idx = next(
+                i for i, w in enumerate(siblings) if w is ctrl
+            )
+            label = None
+            for w in reversed(siblings[:idx]):
+                if isinstance(w, wx.StaticText):
+                    label = w.GetLabelText()
+                    break
+                if isinstance(w, interactive):
+                    break
+            assert label == expected, (
+                f"{attr}: MSAA would read label {label!r}, "
+                f"expected {expected!r}"
+            )
+    finally:
+        dlg.Destroy()
+        frame.Destroy()
+
+
 def test_no_default_save_location(wx_app):
     """Save-to starts empty — no hardcoded ~/Downloads default (which on
     frozen builds landed inside the portable app folder)."""

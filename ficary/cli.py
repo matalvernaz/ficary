@@ -1873,8 +1873,24 @@ def _run_update_queue(
             # Re-raise so the outer wait loop sees the cancel.
             raise
         except Exception as exc:
-            logger.debug("Phase 3 download raised", exc_info=True)
-            progress(f"  Download failed: {exc}")
+            if isinstance(exc, OSError):
+                # Raw OSErrors here have been Windows handle races we
+                # couldn't localise from user reports ("[WinError 6]
+                # The handle is invalid"). Log the traceback at WARNING
+                # so it reaches the log file at the default level, and
+                # name the raise site in the visible status line so the
+                # report itself pinpoints it.
+                import traceback
+                logger.warning("Phase 3 download raised", exc_info=True)
+                frames = traceback.extract_tb(exc.__traceback__)
+                site = (
+                    f" (at {frames[-1].filename}:{frames[-1].lineno}"
+                    f" in {frames[-1].name})" if frames else ""
+                )
+                progress(f"  Download failed: {exc}{site}")
+            else:
+                logger.debug("Phase 3 download raised", exc_info=True)
+                progress(f"  Download failed: {exc}")
             failure_reason = f"{type(exc).__name__}: {exc}"
         with result_lock:
             if ok:

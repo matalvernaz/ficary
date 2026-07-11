@@ -133,25 +133,29 @@ class PreferencesDialog(wx.Dialog):
         panel.SetSizer(sizer)
         self.Bind(wx.EVT_BUTTON, self._on_ok, id=wx.ID_OK)
 
-    def _make_labeled_row(self, parent, label, ctrl, *, help_text=None):
-        """Label + control on one row; optional help text under it.
+    def _labeled_row(self, parent, label, factory, *, help_text=None):
+        """Create ``label`` and then the control, returning
+        ``(row_sizer, ctrl)``.
 
-        MSAA on Windows resolves a control's implicit label by walking
-        backward through the parent's child list for the nearest
-        StaticText. Call sites create the ``ctrl`` before invoking this
-        helper, so the StaticText we make here would land *after* the
-        ctrl in Z-order — and MSAA would then attach whatever
-        StaticText happens to precede the ctrl (usually a section
-        header or the preceding field's help text) as the label.
-        ``MoveAfterInTabOrder`` fixes the Z-order so the actual label
-        is what screen readers read, not the nearest neighbour.
+        The StaticText MUST be constructed before the control: MSAA on
+        Windows infers a control's accessible name from the nearest
+        *preceding* StaticText sibling in creation order. The previous
+        helper took an already-created control and made its label
+        afterwards, so NVDA read every field with the prior row's
+        label (or a help paragraph), and the first field on each tab
+        with no label at all. ``MoveAfterInTabOrder`` only rewires the
+        tab chain, not the sibling order MSAA walks, so it never fixed
+        this. ``factory`` is called with ``parent`` and returns the
+        control; ``help_text`` becomes the control's SetHelpText.
         """
         static = wx.StaticText(parent, label=label)
-        ctrl.MoveAfterInTabOrder(static)
+        ctrl = factory(parent)
+        if help_text:
+            ctrl.SetHelpText(help_text)
         row = wx.BoxSizer(wx.HORIZONTAL)
         row.Add(static, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 6)
         row.Add(ctrl, 1, wx.ALIGN_CENTER_VERTICAL)
-        return row
+        return row, ctrl
 
     def _add_help_text(self, sizer, parent, text):
         """Wrapped small-print explanatory text below a field group."""
@@ -183,14 +187,11 @@ class PreferencesDialog(wx.Dialog):
         sizer.Add(dir_row, 0, wx.EXPAND | wx.ALL, 6)
 
         # Filename template
-        self.name_template_ctrl = wx.TextCtrl(panel)
-        self.name_template_ctrl.SetName("Default filename template")
-        sizer.Add(
-            self._make_labeled_row(
-                panel, "Default &filename template:", self.name_template_ctrl,
-            ),
-            0, wx.EXPAND | wx.ALL, 6,
+        row, self.name_template_ctrl = self._labeled_row(
+            panel, "Default &filename template:", wx.TextCtrl,
         )
+        self.name_template_ctrl.SetName("Default filename template")
+        sizer.Add(row, 0, wx.EXPAND | wx.ALL, 6)
         self._add_help_text(
             sizer, panel,
             "Placeholders: {title}, {author}, {fandom}. Extension is "
@@ -222,26 +223,24 @@ class PreferencesDialog(wx.Dialog):
         panel = wx.Panel(self.notebook)
         sizer = wx.BoxSizer(wx.VERTICAL)
 
-        self.format_ctrl = wx.Choice(panel, choices=_FORMAT_CHOICES)
+        row, self.format_ctrl = self._labeled_row(
+            panel, "Default &format:",
+            lambda p: wx.Choice(p, choices=_FORMAT_CHOICES),
+        )
         self.format_ctrl.SetName("Default format")
-        sizer.Add(
-            self._make_labeled_row(panel, "Default &format:", self.format_ctrl),
-            0, wx.EXPAND | wx.ALL, 6,
-        )
+        sizer.Add(row, 0, wx.EXPAND | wx.ALL, 6)
 
-        self.html_style_ctrl = wx.Choice(panel, choices=_HTML_STYLE_LABELS)
-        self.html_style_ctrl.SetName("Default HTML layout")
-        sizer.Add(
-            self._make_labeled_row(
-                panel, "Default &HTML layout:", self.html_style_ctrl,
-                help_text=(
-                    "Applies to HTML output only. 'Classic' reproduces the "
-                    "plain title page and bare page title of legacy fanfic "
-                    "downloaders; chapter text is identical either way."
-                ),
+        row, self.html_style_ctrl = self._labeled_row(
+            panel, "Default &HTML layout:",
+            lambda p: wx.Choice(p, choices=_HTML_STYLE_LABELS),
+            help_text=(
+                "Applies to HTML output only. 'Classic' reproduces the "
+                "plain title page and bare page title of legacy fanfic "
+                "downloaders; chapter text is identical either way."
             ),
-            0, wx.EXPAND | wx.ALL, 6,
         )
+        self.html_style_ctrl.SetName("Default HTML layout")
+        sizer.Add(row, 0, wx.EXPAND | wx.ALL, 6)
 
         sizer.AddSpacer(8)
 
@@ -294,65 +293,56 @@ class PreferencesDialog(wx.Dialog):
         # Optional per-site session cookies — set-once secrets, so they
         # live here rather than cluttering the main window. Password-
         # styled; stored plain-text in prefs like the other secrets.
-        # Each cookie field gets a SHORT accessible name (matching its
-        # visible label) plus the long explanation as help text. A
-        # sentence-long SetName made NVDA read a whole paragraph as the
-        # field's name instead of a clean label.
-        self.webnovel_cookie_ctrl = wx.TextCtrl(panel, style=wx.TE_PASSWORD)
+        # Short accessible name matching the visible label; the long
+        # explanation goes in SetHelpText, never the name.
+        def _cookie(p):
+            return wx.TextCtrl(p, style=wx.TE_PASSWORD)
+
+        row, self.webnovel_cookie_ctrl = self._labeled_row(
+            panel, "Webno&vel.com cookie:", _cookie,
+            help_text=(
+                "Paste a logged-in browser Cookie header to download "
+                "chapters you have unlocked; leave blank for free chapters "
+                "only. Stored locally; coins are never spent."
+            ),
+        )
         self.webnovel_cookie_ctrl.SetName("Webnovel.com cookie")
-        self.webnovel_cookie_ctrl.SetHelpText(
-            "Paste a logged-in browser Cookie header to download chapters "
-            "you have unlocked; leave blank for free chapters only. Stored "
-            "locally; coins are never spent."
-        )
-        sizer.Add(
-            self._make_labeled_row(
-                panel, "Webno&vel.com cookie:", self.webnovel_cookie_ctrl,
-            ),
-            0, wx.EXPAND | wx.ALL, 6,
-        )
+        sizer.Add(row, 0, wx.EXPAND | wx.ALL, 6)
 
-        self.ao3_cookie_ctrl = wx.TextCtrl(panel, style=wx.TE_PASSWORD)
+        row, self.ao3_cookie_ctrl = self._labeled_row(
+            panel, "A&O3 cookie:", _cookie,
+            help_text=(
+                "Paste a logged-in browser Cookie header to download "
+                "restricted works and your private bookmarks / "
+                "marked-for-later; leave blank for anonymous access. "
+                "Stored locally."
+            ),
+        )
         self.ao3_cookie_ctrl.SetName("AO3 cookie")
-        self.ao3_cookie_ctrl.SetHelpText(
-            "Paste a logged-in browser Cookie header to download restricted "
-            "works and your private bookmarks / marked-for-later; leave "
-            "blank for anonymous access. Stored locally."
-        )
-        sizer.Add(
-            self._make_labeled_row(
-                panel, "A&O3 cookie:", self.ao3_cookie_ctrl,
-            ),
-            0, wx.EXPAND | wx.ALL, 6,
-        )
+        sizer.Add(row, 0, wx.EXPAND | wx.ALL, 6)
 
-        self.scribblehub_cookie_ctrl = wx.TextCtrl(panel, style=wx.TE_PASSWORD)
+        row, self.scribblehub_cookie_ctrl = self._labeled_row(
+            panel, "Scr&ibbleHub cookie:", _cookie,
+            help_text=(
+                "Paste a browser Cookie header to get past Cloudflare and, "
+                "when logged in, download members-only and mature chapters; "
+                "leave blank to rely on the Cloudflare solver. Stored "
+                "locally."
+            ),
+        )
         self.scribblehub_cookie_ctrl.SetName("ScribbleHub cookie")
-        self.scribblehub_cookie_ctrl.SetHelpText(
-            "Paste a browser Cookie header to get past Cloudflare and, when "
-            "logged in, download members-only and mature chapters; leave "
-            "blank to rely on the Cloudflare solver. Stored locally."
-        )
-        sizer.Add(
-            self._make_labeled_row(
-                panel, "Scr&ibbleHub cookie:", self.scribblehub_cookie_ctrl,
-            ),
-            0, wx.EXPAND | wx.ALL, 6,
-        )
+        sizer.Add(row, 0, wx.EXPAND | wx.ALL, 6)
 
-        self.subscribestar_cookie_ctrl = wx.TextCtrl(panel, style=wx.TE_PASSWORD)
-        self.subscribestar_cookie_ctrl.SetName("SubscribeStar cookie")
-        self.subscribestar_cookie_ctrl.SetHelpText(
-            "Paste a logged-in browser Cookie header to download a creator's "
-            "posts (the feed is subscriber-only, so this is required). "
-            "Stored locally."
-        )
-        sizer.Add(
-            self._make_labeled_row(
-                panel, "S&ubscribeStar cookie:", self.subscribestar_cookie_ctrl,
+        row, self.subscribestar_cookie_ctrl = self._labeled_row(
+            panel, "S&ubscribeStar cookie:", _cookie,
+            help_text=(
+                "Paste a logged-in browser Cookie header to download a "
+                "creator's posts (the feed is subscriber-only, so this is "
+                "required). Stored locally."
             ),
-            0, wx.EXPAND | wx.ALL, 6,
         )
+        self.subscribestar_cookie_ctrl.SetName("SubscribeStar cookie")
+        sizer.Add(row, 0, wx.EXPAND | wx.ALL, 6)
 
         self._add_help_text(
             sizer, panel,
@@ -369,16 +359,16 @@ class PreferencesDialog(wx.Dialog):
         panel = wx.Panel(self.notebook)
         sizer = wx.BoxSizer(wx.VERTICAL)
 
-        self.speech_rate_ctrl = wx.SpinCtrl(
-            panel, min=-50, max=100, initial=0, size=(90, -1),
+        row, self.speech_rate_ctrl = self._labeled_row(
+            panel, "Default speech &rate (%):",
+            lambda p: wx.SpinCtrl(p, min=-50, max=100, initial=0, size=(90, -1)),
+            help_text=(
+                "Integer percent delta applied to every TTS call. "
+                "-20 is 20% slower, +30 is 30% faster."
+            ),
         )
         self.speech_rate_ctrl.SetName("Default speech rate percent")
-        sizer.Add(
-            self._make_labeled_row(
-                panel, "Default speech &rate (%):", self.speech_rate_ctrl,
-            ),
-            0, wx.EXPAND | wx.ALL, 6,
-        )
+        sizer.Add(row, 0, wx.EXPAND | wx.ALL, 6)
         self._add_help_text(
             sizer, panel,
             "Integer percent delta applied to every TTS call. "
@@ -392,26 +382,20 @@ class PreferencesDialog(wx.Dialog):
             _attribution_module.BACKENDS[b]["display"]
             for b in self._attribution_choices
         ]
-        self.attribution_ctrl = wx.Choice(panel, choices=display_labels)
-        self.attribution_ctrl.SetName("Default attribution backend")
-        sizer.Add(
-            self._make_labeled_row(
-                panel, "Default &attribution backend:", self.attribution_ctrl,
-            ),
-            0, wx.EXPAND | wx.ALL, 6,
+        row, self.attribution_ctrl = self._labeled_row(
+            panel, "Default &attribution backend:",
+            lambda p: wx.Choice(p, choices=display_labels),
         )
+        self.attribution_ctrl.SetName("Default attribution backend")
+        sizer.Add(row, 0, wx.EXPAND | wx.ALL, 6)
 
-        self.attribution_size_ctrl = wx.TextCtrl(panel)
+        row, self.attribution_size_ctrl = self._labeled_row(
+            panel, "Default model &size (BookNLP only):", wx.TextCtrl,
+        )
         self.attribution_size_ctrl.SetName(
             "Default attribution model size (blank = default)"
         )
-        sizer.Add(
-            self._make_labeled_row(
-                panel, "Default model &size (BookNLP only):",
-                self.attribution_size_ctrl,
-            ),
-            0, wx.EXPAND | wx.ALL, 6,
-        )
+        sizer.Add(row, 0, wx.EXPAND | wx.ALL, 6)
         self._add_help_text(
             sizer, panel,
             "Leave blank to use the backend's default. BookNLP accepts "
@@ -436,23 +420,18 @@ class PreferencesDialog(wx.Dialog):
             "a target.",
         )
 
-        self.abs_url_ctrl = wx.TextCtrl(panel)
+        row, self.abs_url_ctrl = self._labeled_row(
+            panel, "Server &URL:", wx.TextCtrl,
+        )
         self.abs_url_ctrl.SetName("Audiobookshelf server URL")
-        sizer.Add(
-            self._make_labeled_row(
-                panel, "Server &URL:", self.abs_url_ctrl,
-            ),
-            0, wx.EXPAND | wx.ALL, 6,
-        )
+        sizer.Add(row, 0, wx.EXPAND | wx.ALL, 6)
 
-        self.abs_token_ctrl = wx.TextCtrl(panel, style=wx.TE_PASSWORD)
-        self.abs_token_ctrl.SetName("Audiobookshelf API token")
-        sizer.Add(
-            self._make_labeled_row(
-                panel, "API &token:", self.abs_token_ctrl,
-            ),
-            0, wx.EXPAND | wx.ALL, 6,
+        row, self.abs_token_ctrl = self._labeled_row(
+            panel, "API &token:",
+            lambda p: wx.TextCtrl(p, style=wx.TE_PASSWORD),
         )
+        self.abs_token_ctrl.SetName("Audiobookshelf API token")
+        sizer.Add(row, 0, wx.EXPAND | wx.ALL, 6)
 
         self.abs_fetch_btn = wx.Button(panel, label="&Fetch libraries")
         self.abs_fetch_btn.SetName("Fetch Audiobookshelf libraries")
@@ -460,25 +439,19 @@ class PreferencesDialog(wx.Dialog):
         sizer.Add(self.abs_fetch_btn, 0, wx.ALL, 6)
 
         self._abs_library_ids: list[str] = []
-        self.abs_library_ctrl = wx.Choice(panel, choices=[])
+        row, self.abs_library_ctrl = self._labeled_row(
+            panel, "&Library:", lambda p: wx.Choice(p, choices=[]),
+        )
         self.abs_library_ctrl.SetName("Audiobookshelf library")
         self.abs_library_ctrl.Bind(wx.EVT_CHOICE, self._on_abs_library_pick)
-        sizer.Add(
-            self._make_labeled_row(
-                panel, "&Library:", self.abs_library_ctrl,
-            ),
-            0, wx.EXPAND | wx.ALL, 6,
-        )
+        sizer.Add(row, 0, wx.EXPAND | wx.ALL, 6)
 
         self._abs_folder_ids: list[str] = []
-        self.abs_folder_ctrl = wx.Choice(panel, choices=[])
-        self.abs_folder_ctrl.SetName("Audiobookshelf folder")
-        sizer.Add(
-            self._make_labeled_row(
-                panel, "F&older:", self.abs_folder_ctrl,
-            ),
-            0, wx.EXPAND | wx.ALL, 6,
+        row, self.abs_folder_ctrl = self._labeled_row(
+            panel, "F&older:", lambda p: wx.Choice(p, choices=[]),
         )
+        self.abs_folder_ctrl.SetName("Audiobookshelf folder")
+        sizer.Add(row, 0, wx.EXPAND | wx.ALL, 6)
         # Cache of the last fetch so a library pick can repopulate folders
         # without another network call.
         self._abs_libraries: list[dict] = []
@@ -545,46 +518,37 @@ class PreferencesDialog(wx.Dialog):
         # first following edit, which hijacked the real label.
         sizer.AddSpacer(6)
 
-        self.pushover_token_ctrl = wx.TextCtrl(panel)
+        row, self.pushover_token_ctrl = self._labeled_row(
+            panel, "Pushover API &token:", wx.TextCtrl,
+            help_text=_PUSHOVER_HELP,
+        )
         self.pushover_token_ctrl.SetName("Pushover API token")
-        sizer.Add(
-            self._make_labeled_row(
-                panel, "Pushover API &token:", self.pushover_token_ctrl,
-            ),
-            0, wx.EXPAND | wx.ALL, 6,
-        )
+        sizer.Add(row, 0, wx.EXPAND | wx.ALL, 6)
 
-        self.pushover_user_ctrl = wx.TextCtrl(panel)
-        self.pushover_user_ctrl.SetName("Pushover user key")
-        sizer.Add(
-            self._make_labeled_row(
-                panel, "Pushover user &key:", self.pushover_user_ctrl,
-            ),
-            0, wx.EXPAND | wx.ALL, 6,
+        row, self.pushover_user_ctrl = self._labeled_row(
+            panel, "Pushover user &key:", wx.TextCtrl,
+            help_text=_PUSHOVER_HELP,
         )
+        self.pushover_user_ctrl.SetName("Pushover user key")
+        sizer.Add(row, 0, wx.EXPAND | wx.ALL, 6)
         self._add_help_text(sizer, panel, _PUSHOVER_HELP)
 
         sizer.AddSpacer(8)
-        self.discord_webhook_ctrl = wx.TextCtrl(panel)
-        self.discord_webhook_ctrl.SetName("Discord webhook URL")
-        sizer.Add(
-            self._make_labeled_row(
-                panel, "Discord &webhook URL:", self.discord_webhook_ctrl,
-            ),
-            0, wx.EXPAND | wx.ALL, 6,
+        row, self.discord_webhook_ctrl = self._labeled_row(
+            panel, "Discord &webhook URL:", wx.TextCtrl,
+            help_text=_DISCORD_HELP,
         )
+        self.discord_webhook_ctrl.SetName("Discord webhook URL")
+        sizer.Add(row, 0, wx.EXPAND | wx.ALL, 6)
         self._add_help_text(sizer, panel, _DISCORD_HELP)
 
         sizer.AddSpacer(8)
-        self.notify_email_ctrl = wx.TextCtrl(panel)
-        self.notify_email_ctrl.SetName("Notification email address")
-        sizer.Add(
-            self._make_labeled_row(
-                panel, "Notification &email address:",
-                self.notify_email_ctrl,
-            ),
-            0, wx.EXPAND | wx.ALL, 6,
+        row, self.notify_email_ctrl = self._labeled_row(
+            panel, "Notification &email address:", wx.TextCtrl,
+            help_text=_EMAIL_HELP,
         )
+        self.notify_email_ctrl.SetName("Notification email address")
+        sizer.Add(row, 0, wx.EXPAND | wx.ALL, 6)
         self._add_help_text(sizer, panel, _EMAIL_HELP)
 
         panel.SetSizer(sizer)
@@ -613,14 +577,12 @@ class PreferencesDialog(wx.Dialog):
         sizer.Add(self.watch_autopoll_ctrl, 0, wx.ALL, 6)
 
         interval_labels = [label for _secs, label in _WATCH_INTERVAL_PRESETS]
-        self.watch_interval_ctrl = wx.Choice(panel, choices=interval_labels)
-        self.watch_interval_ctrl.SetName("Poll interval")
-        sizer.Add(
-            self._make_labeled_row(
-                panel, "Poll &interval:", self.watch_interval_ctrl,
-            ),
-            0, wx.EXPAND | wx.ALL, 6,
+        row, self.watch_interval_ctrl = self._labeled_row(
+            panel, "Poll &interval:",
+            lambda p: wx.Choice(p, choices=interval_labels),
         )
+        self.watch_interval_ctrl.SetName("Poll interval")
+        sizer.Add(row, 0, wx.EXPAND | wx.ALL, 6)
         self._add_help_text(
             sizer, panel,
             "The interval is also capped internally at 5 minutes — "
@@ -635,12 +597,12 @@ class PreferencesDialog(wx.Dialog):
         panel = wx.Panel(self.notebook)
         sizer = wx.BoxSizer(wx.VERTICAL)
 
-        self.log_level_ctrl = wx.Choice(panel, choices=_LOG_LEVELS)
-        self.log_level_ctrl.SetName("Log level")
-        sizer.Add(
-            self._make_labeled_row(panel, "&Log level:", self.log_level_ctrl),
-            0, wx.EXPAND | wx.ALL, 6,
+        row, self.log_level_ctrl = self._labeled_row(
+            panel, "&Log level:",
+            lambda p: wx.Choice(p, choices=_LOG_LEVELS),
         )
+        self.log_level_ctrl.SetName("Log level")
+        sizer.Add(row, 0, wx.EXPAND | wx.ALL, 6)
 
         self.log_to_file_ctrl = wx.CheckBox(
             panel, label="&Save log to file",

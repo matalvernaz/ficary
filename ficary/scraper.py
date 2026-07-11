@@ -1095,25 +1095,45 @@ class BaseScraper:
         if not self.use_cache:
             return None
         d = self.cache_dir / f"{self.site_name}_{story_id}"
-        d.mkdir(parents=True, exist_ok=True)
+        try:
+            d.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            # The cache is an optimisation; if the directory can't be
+            # created (locked portable folder, sync client holding a
+            # handle, permissions) the download must proceed uncached
+            # rather than die.
+            logger.warning("Chapter cache unavailable at %s: %s", d, exc)
+            return None
         return d
 
     def _save_meta_cache(self, story_id, meta: dict) -> None:
         if not self.use_cache:
             return
         from .atomic import atomic_write_text
-        path = self._story_cache_dir(story_id) / "meta.json"
+        cache_dir = self._story_cache_dir(story_id)
+        if cache_dir is None:
+            return
+        path = cache_dir / "meta.json"
         # Atomic write prevents a half-written meta.json from looking
         # valid to ``_load_meta_cache`` — the corruption path below
         # would still catch it, but we'd lose the cached metadata
         # (and force an extra upstream request) on every subsequent
         # run until someone noticed.
-        atomic_write_text(path, json.dumps(meta, ensure_ascii=False))
+        try:
+            atomic_write_text(path, json.dumps(meta, ensure_ascii=False))
+        except OSError as exc:
+            logger.warning(
+                "Meta cache write failed for %s (%s); download continues, "
+                "metadata will refetch next run", path, exc,
+            )
 
     def _load_meta_cache(self, story_id) -> Optional[dict]:
         if not self.use_cache:
             return None
-        path = self._story_cache_dir(story_id) / "meta.json"
+        cache_dir = self._story_cache_dir(story_id)
+        if cache_dir is None:
+            return None
+        path = cache_dir / "meta.json"
         if not path.exists():
             return None
         try:
@@ -1155,21 +1175,36 @@ class BaseScraper:
         # the cache by extension. Old caches with the ``.html`` name
         # are still picked up by ``_load_chapter_cache`` until a fresh
         # download replaces them.
+        cache_dir = self._story_cache_dir(story_id)
+        if cache_dir is None:
+            return
         stem = cache_key or f"ch_{chapter.number:04d}"
-        path = self._story_cache_dir(story_id) / f"{stem}.json"
-        # Chapters are the expensive thing to refetch (rate-limits,
-        # Cloudflare challenges on FFN, etc.). A partial write here
-        # costs a full chapter re-download on the next run.
-        atomic_write_text(
-            path,
-            json.dumps({"title": chapter.title, "html": chapter.html}),
-        )
+        path = cache_dir / f"{stem}.json"
+        # A failed cache write must never fail the download: the chapter
+        # is already fetched and in memory, so the worst case of losing
+        # the write is one re-download next run — versus losing the whole
+        # story now. Observed in the wild as intermittent Windows
+        # "[WinError 6] The handle is invalid" mid-update (a sync client
+        # or AV invalidating handles under the cache dir), which killed
+        # each affected story after all its chapters had downloaded.
+        try:
+            atomic_write_text(
+                path,
+                json.dumps({"title": chapter.title, "html": chapter.html}),
+            )
+        except OSError as exc:
+            logger.warning(
+                "Chapter cache write failed for %s (%s); download "
+                "continues, chapter will refetch next run", path, exc,
+            )
 
     def _load_chapter_cache(self, story_id, chap_num: int, *,
                             cache_key: Optional[str] = None) -> Optional[Chapter]:
         if not self.use_cache:
             return None
         cache_dir = self._story_cache_dir(story_id)
+        if cache_dir is None:
+            return None
         if cache_key is not None:
             # Id-keyed caches never had a legacy .html variant; a missing
             # file (including old ordinal-keyed leftovers) is simply a

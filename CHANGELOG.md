@@ -1,5 +1,30 @@
 # Changelog
 
+## 2.13.10 — 2026-07-11
+
+**Bug fixes**
+
+* **Screen readers now announce the correct label on every Preferences
+  field.** Labels were associated with the wrong control at the
+  Windows accessibility layer: each field announced the *previous*
+  row's label (or a nearby help paragraph), and the first field on
+  each tab announced no label at all — so, for example, the
+  SubscribeStar cookie box read as "ScribbleHub cookie" and the
+  Audiobookshelf token box read as "Server URL". Every labelled row in
+  Preferences is now built so the label genuinely belongs to its
+  field, and a regression test walks all twenty fields the same way a
+  screen reader does.
+* **A failed chapter-cache write no longer kills the whole story.**
+  During library updates on Windows, an intermittent "[WinError 6]
+  The handle is invalid" from the chapter-cache folder (typically a
+  sync client or antivirus briefly invalidating file handles) failed
+  stories *after* all their chapters had already downloaded. Cache
+  reads and writes are now best-effort: on failure the download
+  carries on and at worst one chapter is re-fetched next run. If a
+  download does still fail with a low-level OS error, the status line
+  now names the exact file and line that raised it, so reports are
+  diagnosable on sight.
+
 ## 2.13.9 — 2026-07-11
 
 **Bug fixes**

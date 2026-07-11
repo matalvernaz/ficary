@@ -521,6 +521,44 @@ class TestFetchExceptionHandling:
         assert len(bad.urls) == 1   # failed once on the bad handle
         assert len(good.urls) == 1  # succeeded after rotation
 
+    def test_cache_write_failure_does_not_raise(self, tmp_path, monkeypatch):
+        """A failed chapter-cache write is a warning, never a story
+        failure — the chapter is already in memory and the worst case
+        is a refetch next run. Regression for the Windows
+        '[WinError 6] The handle is invalid' reports where a handle
+        race under the cache dir killed fully-downloaded stories."""
+        from ficary import atomic
+        from ficary.models import Chapter
+        from ficary.scraper import BaseScraper
+
+        scraper = BaseScraper(use_cache=True, cache_dir=tmp_path)
+
+        def broken_write(path, content, **kwargs):
+            raise OSError(6, "The handle is invalid")
+
+        monkeypatch.setattr(atomic, "atomic_write_text", broken_write)
+        chapter = Chapter(number=1, title="One", html="<p>x</p>")
+        scraper._save_chapter_cache("123", chapter)  # must not raise
+        scraper._save_meta_cache("123", {"title": "t"})  # must not raise
+        assert scraper._load_chapter_cache("123", 1) is None  # clean miss
+
+    def test_cache_dir_creation_failure_disables_cache(self, tmp_path):
+        """If the cache directory can't be created, saves and loads
+        degrade to no-ops instead of raising."""
+        from ficary.models import Chapter
+        from ficary.scraper import BaseScraper
+
+        blocker = tmp_path / "blocker"
+        blocker.write_text("a file where the cache dir should go")
+        scraper = BaseScraper(use_cache=True, cache_dir=blocker)
+
+        assert scraper._story_cache_dir("123") is None
+        chapter = Chapter(number=1, title="One", html="<p>x</p>")
+        scraper._save_chapter_cache("123", chapter)  # must not raise
+        scraper._save_meta_cache("123", {"title": "t"})  # must not raise
+        assert scraper._load_chapter_cache("123", 1) is None
+        assert scraper._load_meta_cache("123") is None
+
     def test_persistent_os_error_exhausts_to_ratelimit(self, scraper, monkeypatch):
         """If every attempt hits the OS error, the loop ends with the
         clean retries-exhausted error, not a raw OSError bubbling out."""
