@@ -1,5 +1,21 @@
 # Changelog
 
+## 2.14.5 — 2026-07-11
+
+**Bug fix**
+
+* **Downloading an author page no longer makes the Add Story window
+  vanish before the story list appears.** The window closed itself the
+  moment Download was clicked; with the story picker about to open,
+  keyboard focus could be left stranded on the library list behind the
+  dialog, so a screen-reader user heard the window disappear and never
+  found the list of stories to choose from. For author pages, AO3
+  bookmarks, and Marked-for-Later links the Add Story window now stays
+  open until the picker is answered: choosing stories starts the batch
+  (and then closes the window), while cancelling returns to the window
+  with the address still in place. Plain story and series links close
+  it immediately, as before.
+
 ## 2.14.4 — 2026-07-11
 
 **Bug fix**

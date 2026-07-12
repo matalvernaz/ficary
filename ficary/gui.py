@@ -1139,6 +1139,20 @@ class MainFrame(wx.Frame):
             return True
         return False
 
+    def _url_opens_picker(self, url) -> bool:
+        """True when ``url`` is answered with a story-picker dialog
+        (author page, AO3 bookmarks, AO3 marked-for-later) rather than
+        an immediate fan-out. Mirrors the routing order in
+        ``_run_download``; series URLs are batch but never picker."""
+        from .ao3 import AO3Scraper
+        from .sites import detect_scraper
+
+        if AO3Scraper.is_bookmarks_url(url):
+            return True
+        if AO3Scraper.is_reading_list_url(url):
+            return True
+        return detect_scraper(url)().is_author_url(url)
+
     def _on_browse(self, event):
         dlg = wx.DirDialog(
             self, "Choose output folder",
@@ -2114,7 +2128,16 @@ class MainFrame(wx.Frame):
                 target=self._run_download, args=(url,),
                 kwargs={"params": params}, daemon=True,
             ).start()
-            self._dismiss_add_story()
+            if not self._url_opens_picker(url):
+                # Series links fan out with no further questions, so the
+                # Add Story window can go now. Picker links must NOT be
+                # dismissed here: hiding the focused window while the
+                # picker was opening could leave keyboard focus stranded
+                # on the library list behind the modal — a screen-reader
+                # user heard the form vanish and never found the story
+                # list. The picker's selection handler dismisses it once
+                # the batch is actually running.
+                self._dismiss_add_story()
             return
         self._log(f"Starting download: {url}")
         self._enqueue_site_job(
@@ -3326,6 +3349,15 @@ class MainFrame(wx.Frame):
             try:
                 if not selected_urls:
                     self._log("(No selections — nothing downloaded.)")
+                    # The Add Story window stays open through the picker
+                    # for this flow, so cancelling returns the user to it
+                    # (URL intact) rather than dumping them on the
+                    # library. Clipboard-watch picks never opened it —
+                    # land those on the library list as before.
+                    if self.add_story_frame.IsShown():
+                        self.url_ctrl.SetFocus()
+                    else:
+                        self.library_panel.list_ctrl.SetFocus()
                     return
                 self._log(f"Downloading {len(selected_urls)} selected...")
                 # Stay global-busy through the batch — the worker
@@ -3343,6 +3375,11 @@ class MainFrame(wx.Frame):
                     daemon=True,
                 ).start()
                 spawned = True
+                # The batch is running now; dismissing here (not at
+                # Download-click time) keeps the form on screen until
+                # the picker resolves and lands focus on the library
+                # list, where the status strip narrates progress.
+                self._dismiss_add_story()
             finally:
                 # Signal the outer ``_run_download`` finally to leave
                 # ``_global_busy`` alone when a batch follow-up is now

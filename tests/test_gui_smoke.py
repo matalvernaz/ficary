@@ -309,6 +309,46 @@ def test_add_story_window_hosts_download_form(wx_app):
         frame.Destroy()
 
 
+def test_add_story_stays_open_for_picker_urls(wx_app, monkeypatch, tmp_path):
+    """Author/bookmark URLs answer the Download click with a picker
+    dialog. Dismissing the Add Story window at click time hid the
+    focused window while the picker was opening, which could strand
+    keyboard focus on the library list behind the modal — a
+    screen-reader user heard the form vanish and never found the story
+    list. The window must stay up until the picker resolves; plain
+    story URLs and series URLs (no picker) still dismiss immediately."""
+    from ficary.gui import MainFrame
+
+    frame = MainFrame()
+    try:
+        frame.output_ctrl.SetValue(str(tmp_path))
+        # Neutralise the flows behind the decision point: no network,
+        # no busy-state bookkeeping between the three calls.
+        monkeypatch.setattr(frame, "_run_download", lambda *a, **k: None)
+        monkeypatch.setattr(frame, "_enqueue_site_job", lambda *a, **k: None)
+        monkeypatch.setattr(frame, "_set_busy", lambda *a, **k: None)
+
+        # Plain story URL: enqueued, window dismissed at click.
+        frame._on_add_story()
+        frame.url_ctrl.SetValue("https://www.fanfiction.net/s/1234/1/Some-Story")
+        frame._on_download(None)
+        assert not frame.add_story_frame.IsShown()
+
+        # Series URL: batch fan-out with no picker, dismissed at click.
+        frame._on_add_story()
+        frame.url_ctrl.SetValue("https://archiveofourown.org/series/123456")
+        frame._on_download(None)
+        assert not frame.add_story_frame.IsShown()
+
+        # Author page: picker flow — the window must survive the click.
+        frame._on_add_story()
+        frame.url_ctrl.SetValue("https://www.fanfiction.net/u/1234567/Some-Author")
+        frame._on_download(None)
+        assert frame.add_story_frame.IsShown()
+    finally:
+        frame.Destroy()
+
+
 def test_scraper_for_use_cache_false(wx_app):
     """Audit #1 (GUI path): a fresh-copy re-pull threads use_cache=False
     through _scraper_for so cached chapters aren't served stale."""
