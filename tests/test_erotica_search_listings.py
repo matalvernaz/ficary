@@ -225,6 +225,32 @@ def test_mcstories_tag_rows_keep_codes_as_summary(monkeypatch):
     assert all(r["summary"] for r in rows)
 
 
+def test_mcstories_keyword_scans_title_index(monkeypatch):
+    # Free-text search walks the cached A-Z title index, not WhatsNew.
+    # Reset the module-level cache so the build runs against the fixture
+    # (the stubbed _fetch returns it for every letter page; dedupe by
+    # slug collapses the 26 identical fetches to the 3 unique stories).
+    monkeypatch.setattr(S, "_mcs_title_index", {"built_at": 0.0, "rows": []})
+    _patch_fetch(monkeypatch, EROTICA / "mcstories_titles.html")
+
+    rows = S.search_mcstories("mc")  # every fixture story carries code "mc"
+    assert len(rows) == 3
+    assert all(r["author"] for r in rows)
+    assert all(r["summary"] for r in rows)
+    assert all(r["fandom"] for r in rows)  # codes land in the fandom column
+    assert all(ISO_DATE.match(r["updated"]) for r in rows)
+    assert all(r["url"].startswith("https://mcstories.com/") for r in rows)
+
+    # AND-of-terms: a multi-word query whose words are split across the
+    # title and synopsis still matches. The shared contiguous-substring
+    # matcher returned nothing for this shape.
+    assert [r["title"] for r in S.search_mcstories("college sorority")] == [
+        "The College Dean",
+    ]
+    # A single distinctive term still narrows correctly.
+    assert [r["title"] for r in S.search_mcstories("robot")] == ["Robot Maid"]
+
+
 def test_bdsmlibrary_dead_listing_raises(monkeypatch):
     _patch_fetch(monkeypatch, EROTICA / "bdsmlib_list.html")
     with pytest.raises(S.SearchFetchError):

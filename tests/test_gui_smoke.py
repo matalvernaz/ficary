@@ -128,6 +128,40 @@ def test_search_frame_roundtrip(wx_app):
         frame.Destroy()
 
 
+def test_erotica_site_change_scopes_tag_picker(wx_app):
+    """Selecting a specific site re-scopes the tag picker to that site's
+    searchable tags and drops picked tags it can't search."""
+    from ficary.gui import MainFrame
+    from ficary.gui_search import SearchFrame, _erotica_search_spec
+    from ficary.erotica.search import tags_for_site
+
+    frame = MainFrame()
+    try:
+        sf = SearchFrame(frame, "erotica", _erotica_search_spec())
+        master = sf._erotica_tags_master
+        femdom = next(lbl for lbl in master if lbl.startswith("femdom "))
+        feet = next(lbl for lbl in master if lbl.startswith("feet "))
+        # feet is not an MCStories tag; femdom is.
+        sf.text_ctrls["tags"].SetValue(f"{femdom}, {feet}")
+        sf.filter_ctrls["sites_choice"].SetStringSelection(
+            "MCStories (mcstories)",
+        )
+
+        class _Evt:
+            def Skip(self):
+                pass
+
+        sf._on_erotica_site_change(_Evt())
+
+        assert len(sf.multi_options["tags"]) == len(tags_for_site("mcstories"))
+        box = sf.text_ctrls["tags"].GetValue()
+        assert "femdom" in box and "feet" not in box
+        assert "MCStories" in sf.erotica_tag_status.GetLabel()
+        sf.Destroy()
+    finally:
+        frame.Destroy()
+
+
 def test_watchlist_frame_roundtrip(wx_app):
     """WatchlistFrame opens and closes without firing the poller."""
     from ficary.gui import MainFrame

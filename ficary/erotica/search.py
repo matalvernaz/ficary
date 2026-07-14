@@ -35,6 +35,9 @@ import concurrent.futures
 import html as html_module
 import logging
 import re
+import string
+import threading
+import time
 from typing import Callable, Optional
 
 from bs4 import BeautifulSoup
@@ -876,6 +879,156 @@ def search_sol(query: str, *, page: int = 1, tags: Optional[list] = None,
     return out
 
 
+# ── MCStories whole-archive title index (keyword search) ─────────
+#
+# MCStories has no search endpoint (verified: the homepage carries no
+# search form). Its only whole-archive surface is the A-Z title index
+# at /Titles/<L>.html — 26 letter pages, each a list of div.story
+# blocks with title, author, synopsis, tag codes, and an "Added" date.
+# Free-text search walks that index once, caches the parsed rows
+# module-level, and filters them client-side. The previous target,
+# WhatsNew.html, only carried ~a week of recent additions, so a keyword
+# search matched a handful of stories out of the whole archive.
+
+_MCS_TITLE_PAGE_URL = "https://mcstories.com/Titles/{letter}.html"
+# The archive only gains stories weekly; a multi-hour TTL keeps the
+# cached index fresh without re-crawling ~26 multi-MB pages per search.
+_MCS_TITLE_INDEX_TTL_S = 6 * 3600
+_MCS_TITLE_ANCHOR_RE = re.compile(
+    r"^(?:\.\./)?([A-Z][A-Za-z0-9_-]+)/(?:index\.html)?$",
+)
+_MCS_CODE_LINE_RE = re.compile(r"^[a-z]{2}(?: [a-z]{2})*$")
+
+_mcs_title_index: dict = {"built_at": 0.0, "rows": []}
+_mcs_title_index_lock = threading.Lock()
+
+
+def _mcs_parse_title_row(div) -> Optional[dict]:
+    """Parse one ``div.story`` block from a ``/Titles/<L>.html`` letter
+    page. Returns ``None`` for blocks with no story-link anchor (page
+    chrome). Letter-page blocks differ from WhatsNew's: hrefs carry a
+    ``../`` prefix and the tag codes sit on their own bare line
+    (``mc mf fd``) rather than parenthesised in the byline."""
+    anchor = next(
+        (a for a in div.find_all("a", href=True)
+         if _MCS_TITLE_ANCHOR_RE.match(a["href"])),
+        None,
+    )
+    if anchor is None:
+        return None
+    slug = _MCS_TITLE_ANCHOR_RE.match(anchor["href"]).group(1)
+
+    author = ""
+    author_a = div.find("a", href=re.compile(r"(?:\.\./)?Authors/"))
+    if author_a is not None:
+        author = author_a.get_text(" ", strip=True)
+
+    codes = ""
+    for d in div.find_all("div"):
+        text = d.get_text(" ", strip=True)
+        if _MCS_CODE_LINE_RE.match(text):
+            codes = text
+            break
+
+    summary = ""
+    synopsis = div.find("div", class_="synopsis")
+    if synopsis is not None:
+        summary = synopsis.get_text(" ", strip=True)
+
+    updated = ""
+    ctime = div.find("div", class_="ctime")
+    if ctime is not None:
+        # "Added 07 February 2015" — drop the label, parse the date.
+        updated = _iso_date(
+            re.sub(r"^\s*Added\s+", "", ctime.get_text(" ", strip=True)),
+        )
+
+    return {
+        "slug": slug,
+        "title": anchor.get_text(" ", strip=True),
+        "author": author,
+        "codes": codes,
+        "summary": summary,
+        "updated": updated,
+    }
+
+
+_MCS_INDEX_FETCH_WORKERS = 8
+
+
+def _mcs_build_title_index() -> list[dict]:
+    """Fetch and parse all 26 A-Z title pages into a deduped row list.
+    A letter page that fails to fetch is skipped so one dead page
+    doesn't sink the whole index."""
+    letters = list(string.ascii_uppercase)
+
+    def _fetch_letter(letter: str) -> Optional[str]:
+        url = _MCS_TITLE_PAGE_URL.format(letter=letter)
+        try:
+            return _fetch(url)
+        except SearchFetchError:
+            logger.warning("mcstories title index: %s unreachable", url)
+            return None
+
+    # The letter pages are static CDN HTML, so fetch them concurrently:
+    # a sequential crawl of 26 multi-MB pages is a ~12s one-time stall,
+    # and the fan-out blocks on its slowest site. Bounded worker count,
+    # and ``map`` preserves A-Z order so the deduped window is stable
+    # across Load More pages.
+    with concurrent.futures.ThreadPoolExecutor(
+        max_workers=_MCS_INDEX_FETCH_WORKERS,
+    ) as ex:
+        pages = list(ex.map(_fetch_letter, letters))
+
+    rows: list[dict] = []
+    seen: set[str] = set()
+    for html in pages:
+        if not html:
+            continue
+        soup = BeautifulSoup(html, "lxml")
+        for div in soup.find_all("div", class_="story"):
+            row = _mcs_parse_title_row(div)
+            if row is not None and row["slug"] not in seen:
+                seen.add(row["slug"])
+                rows.append(row)
+    return rows
+
+
+def _mcs_title_index_rows() -> list[dict]:
+    """Return the cached whole-archive title index, rebuilding when it's
+    empty or older than :data:`_MCS_TITLE_INDEX_TTL_S`. Serialised on a
+    lock so two concurrent MCStories searches build the index once, not
+    twice; a rebuild that comes back empty (transient site failure)
+    keeps the previous good rows rather than clearing them."""
+    now = time.time()
+    with _mcs_title_index_lock:
+        cache = _mcs_title_index
+        if cache["rows"] and (now - cache["built_at"]) < _MCS_TITLE_INDEX_TTL_S:
+            return cache["rows"]
+        rows = _mcs_build_title_index()
+        if rows or not cache["rows"]:
+            cache["rows"] = rows
+            cache["built_at"] = now
+        return cache["rows"]
+
+
+def _mcs_keyword_match(query: str, haystack: str) -> bool:
+    """AND-of-terms: every whitespace-separated term in ``query`` must
+    appear (case-insensitive substring) somewhere in ``haystack``.
+
+    The shared :func:`_matches_query` demands the query as one
+    contiguous substring, so a topical multi-word search like
+    ``college sorority`` — whose words are real but never adjacent —
+    returned nothing. Matching each term independently against the
+    row's combined text (title + author + codes + synopsis) is what
+    users mean by a keyword search."""
+    terms = query.lower().split()
+    if not terms:
+        return True
+    hay = haystack.lower()
+    return all(term in hay for term in terms)
+
+
 def search_mcstories(query: str, *, page: int = 1,
                      tags: Optional[list] = None, **_: object) -> list[dict]:
     """MCStories indexes every story by Dublin Core tag codes at
@@ -887,6 +1040,10 @@ def search_mcstories(query: str, *, page: int = 1,
     Titles index — the dispatcher's tag-capability filter already
     drops MCS from a fan-out for unsupported tags, but defending the
     adapter keeps direct callers honest too.
+
+    A free-text ``query`` (no tag) filters the cached whole-archive
+    title index (:func:`_mcs_title_index_rows`); a bare browse with
+    neither query nor tag falls back to the recent-additions page.
     """
     # MCStories serves one un-paginated listing; window it per page.
     window_start, window_end = _single_listing_window(page)
@@ -896,10 +1053,28 @@ def search_mcstories(query: str, *, page: int = 1,
         url = f"https://mcstories.com/Tags/{code}.html"
     elif first_tag and not query:
         return []
+    elif query:
+        # Free-text search: filter the cached whole-archive title index.
+        # MCStories has no search endpoint and WhatsNew only lists the
+        # last ~week, so anything but the most recent stories was
+        # unfindable by keyword before.
+        out = []
+        for r in _mcs_title_index_rows():
+            haystack = f"{r['title']} {r['author']} {r['codes']} {r['summary']}"
+            if not _mcs_keyword_match(query, haystack):
+                continue
+            out.append({
+                "title": r["title"], "author": r["author"],
+                "url": f"https://mcstories.com/{r['slug']}/",
+                "summary": r["summary"], "words": "?", "chapters": "?",
+                "rating": "M", "fandom": r["codes"], "status": "",
+                "site": "mcstories", "updated": r["updated"],
+            })
+            if len(out) >= window_end:
+                break
+        return out[window_start:]
     else:
-        # Bare browse AND free-text queries walk the recent-additions
-        # page. The old ``Titles/index.html`` target is just an A-Z
-        # hub of letter links — it made query searches return nothing.
+        # Bare browse (no query, no tag): recent additions.
         url = "https://mcstories.com/WhatsNew.html"
     html = _fetch(url)
     if not html:
@@ -2905,6 +3080,20 @@ def _site_handles_any_tag(site: str, tags: list[str]) -> bool:
 _site_supports_all_tags = _site_handles_any_tag
 
 
+def tags_for_site(site: str) -> list[str]:
+    """Vocab tags the given site can actually search, in vocabulary
+    order. ``"all"`` (or empty/unknown) returns the full vocabulary.
+
+    Source of truth is :func:`_site_handles_any_tag`, so the GUI tag
+    picker offers exactly the tags the fan-out will run for that site —
+    no drift between what the user can pick and what the search does.
+    """
+    slug = (site or "").strip().lower()
+    if not slug or slug == "all":
+        return list(EROTICA_TAG_VOCABULARY)
+    return [t for t in EROTICA_TAG_VOCABULARY if _site_handles_any_tag(slug, [t])]
+
+
 _SITE_LABEL_SLUG_RE = re.compile(r"\(([a-z][a-z0-9_-]*)\)\s*$")
 
 
@@ -3085,6 +3274,14 @@ def search_erotica(
         normalised_query = query.strip().lower()
         if normalised_query in EROTICA_TAG_VOCABULARY:
             tag_list = [normalised_query]
+            # Clear the query: the word is now represented by the tag,
+            # so tag-capable adapters take their native tag-URL path.
+            # Leaving it set would ALSO apply it as a client-side
+            # substring filter over those tag-page rows — whose text is
+            # site codes/slugs (MCStories ``fd mc``, SOL ``femaledom``),
+            # not the English vocab word — decimating the results
+            # (MCStories 200 -> 7, SOL 10 -> 0 for ``femdom``).
+            query = ""
             logger.info(
                 "erotica: promoting bare query %r to tag-search",
                 normalised_query,

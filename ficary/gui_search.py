@@ -321,6 +321,14 @@ class SearchFrame(wx.Frame):
         self.filter_ctrls = {}
         self.text_ctrls = {}
         self.checkbox_ctrls = {}
+        # Multi-picker option lists, keyed by field. Held mutably so the
+        # erotica frame can re-scope the tag picker to the selected site
+        # (see ``_on_erotica_site_change``); the picker button reads the
+        # current list at click time rather than a value captured at
+        # build. ``_erotica_tags_master`` is the unfiltered annotated
+        # tag list to filter back from when the site widens to "all".
+        self.multi_options = {}
+        self._erotica_tags_master = None
         self.results = []
         self._raw_results = []
         self.next_page = 1
@@ -422,15 +430,30 @@ class SearchFrame(wx.Frame):
                 ctrl = wx.TextCtrl(panel, size=(320, -1))
                 ctrl.SetName(mp_label.replace("&", "").rstrip(":"))
                 row.Add(ctrl, 1, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 4)
+                self.multi_options[mp_key] = list(mp_options)
                 btn = wx.Button(panel, label="Pic&k...")
                 btn.Bind(
                     wx.EVT_BUTTON,
-                    lambda evt, c=ctrl, t=mp_title, o=mp_options:
-                        self._open_multi_picker(c, t, o),
+                    lambda evt, c=ctrl, t=mp_title, k=mp_key:
+                        self._open_multi_picker(c, t, self.multi_options[k]),
                 )
                 row.Add(btn, 0)
                 sizer.Add(row, 0, wx.EXPAND | wx.ALL, pad)
                 self.text_ctrls[mp_key] = ctrl
+                if self.site_key == "erotica" and mp_key == "tags":
+                    self._erotica_tags_master = list(mp_options)
+
+        # Erotica: re-scope the tag picker to whichever site is selected
+        # so users only see (and keep) tags that site actually searches.
+        # A status line carries the change to screen readers, which
+        # otherwise can't tell the picker's contents shifted.
+        if self.site_key == "erotica" and "sites_choice" in self.filter_ctrls:
+            self.erotica_tag_status = wx.StaticText(panel, label="")
+            self.erotica_tag_status.SetName("Tag filter status")
+            sizer.Add(self.erotica_tag_status, 0, wx.EXPAND | wx.LEFT | wx.RIGHT, pad)
+            self.filter_ctrls["sites_choice"].Bind(
+                wx.EVT_CHOICE, self._on_erotica_site_change,
+            )
 
         # Checkboxes. ``SetName`` is required for NVDA to read the
         # widget reliably — wx exposes the visible ``label=`` as the
@@ -639,6 +662,52 @@ class SearchFrame(wx.Frame):
                 ctrl.SetValue(", ".join(dlg.picked_labels()))
         finally:
             dlg.Destroy()
+
+    @staticmethod
+    def _tag_base(label: str) -> str:
+        """Bare vocab tag from an annotated picker label (``"femdom
+        [5 sites]"`` -> ``"femdom"``)."""
+        return label.split(" [", 1)[0].strip()
+
+    def _on_erotica_site_change(self, evt):
+        """Re-scope the tag picker to the newly selected site: show only
+        that site's searchable tags, drop any picked tags it can't
+        search, and announce both to the screen reader."""
+        evt.Skip()
+        from .erotica.search import (
+            EROTICA_SITE_LABELS, _extract_slug, tags_for_site,
+        )
+        from .gui import _announce_label
+        if self._erotica_tags_master is None:
+            return
+        slug = _extract_slug(
+            self.filter_ctrls["sites_choice"].GetStringSelection(),
+        )
+        allowed = set(tags_for_site(slug))
+        self.multi_options["tags"] = [
+            lbl for lbl in self._erotica_tags_master
+            if self._tag_base(lbl) in allowed
+        ]
+
+        # Prune already-picked tags the new site can't search.
+        tags_ctrl = self.text_ctrls["tags"]
+        picked = [s.strip() for s in tags_ctrl.GetValue().split(",") if s.strip()]
+        dropped = [p for p in picked if self._tag_base(p) not in allowed]
+        if dropped:
+            tags_ctrl.SetValue(
+                ", ".join(p for p in picked if p not in dropped),
+            )
+
+        label = EROTICA_SITE_LABELS.get(slug, slug)
+        n = len(self.multi_options["tags"])
+        if n:
+            msg = f"Tags: {n} available on {label}."
+        else:
+            msg = f"{label} has no tag categories; tag filter cleared."
+        if dropped:
+            bare = ", ".join(self._tag_base(d) for d in dropped)
+            msg += f" Removed {len(dropped)} not on this site: {bare}."
+        _announce_label(self.erotica_tag_status, msg)
 
     # ── Search ────────────────────────────────────────────────
 
