@@ -1522,6 +1522,15 @@ class MainFrame(wx.Frame):
             self._log_level_idx = _LOG_LEVELS.index(level)
         self._log_to_file_enabled = self.prefs.get_bool(_p.KEY_LOG_TO_FILE)
         self._apply_logging_config()
+        # One-time startup banner so a shared log always states which
+        # build (and Python) produced it — version/Python ambiguity has
+        # turned remote debugging into guesswork more than once.
+        from . import __version__ as _ver
+        logger.info(
+            "ficary %s starting (Python %s, %s)",
+            _ver, sys.version.split()[0],
+            "frozen" if getattr(sys, "frozen", False) else "source",
+        )
         # Sync the View-menu radio/check items to match the restored state.
         for lvl_name, item in getattr(self, "_log_level_items", {}).items():
             item.Check(lvl_name == _LOG_LEVELS[self._log_level_idx])

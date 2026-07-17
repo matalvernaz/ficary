@@ -1,5 +1,24 @@
 # Changelog
 
+## 2.15.3 — 2026-07-16
+
+**Bug fix**
+
+* **The Cloudflare solver now waits for you to finish the "verify you
+  are human" step.** Cloudflare shows an automated browser the
+  interactive checkbox, but the solver only gave it 30 seconds before
+  grabbing cookies and giving up — nowhere near enough to find and click
+  it with a screen reader, so it captured a cookie jar with no clearance
+  token and the download stayed blocked even after you'd clicked
+  through. It now waits up to 3 minutes and watches for the actual
+  `cf_clearance` cookie (instead of a network-idle guess), so a
+  challenge you solve by hand is picked up. Close the browser window to
+  abort early; `FICARY_CF_SOLVE_TIMEOUT_S` overrides the wait length.
+
+* **Logs open with a version banner** — "ficary X.Y.Z starting
+  (Python …, frozen)" — so a shared log always says which build and
+  Python produced it.
+
 ## 2.15.2 — 2026-07-16
 
 **Bug fix**

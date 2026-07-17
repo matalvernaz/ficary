@@ -39,12 +39,14 @@ from .atomic import atomic_path
 
 logger = logging.getLogger(__name__)
 
-CF_CHALLENGE_TIMEOUT_S = 30
-"""How long to wait for the Cloudflare challenge to resolve. Real
-challenges take 3-8s; the rest of the window absorbs Turnstile widget
-renders and occasional slow network. Anything beyond this and we're
-probably being served a solvable-only-by-human captcha — bail rather
-than hang the download."""
+CF_CHALLENGE_TIMEOUT_S = 180
+"""How long to wait for the Cloudflare challenge to clear. A passive
+challenge resolves in a few seconds, but Cloudflare serves an automated
+browser the *interactive* Turnstile ("verify you are human") which the
+user has to click by hand — and finding that checkbox with a screen
+reader takes far longer than the old 30s. Wait generously (3 min);
+``FICARY_CF_SOLVE_TIMEOUT_S`` overrides it. The window is visible, so a
+user who isn't going to finish can just close it to abort early."""
 
 COOKIE_CACHE_TTL_S = 24 * 60 * 60
 """How long a persisted cookie set stays authoritative before we
@@ -315,7 +317,14 @@ def _default_launcher(url: str, timeout_s: float) -> tuple[list[dict], str]:
             "fully restart ficary."
         ) from exc
 
-    timeout_ms = int(timeout_s * 1000)
+    # Allow a longer (or shorter) manual-solve window via env without a
+    # rebuild — how long the interactive Turnstile takes varies by user.
+    env_timeout = os.environ.get("FICARY_CF_SOLVE_TIMEOUT_S", "").strip()
+    if env_timeout:
+        try:
+            timeout_s = max(10.0, float(env_timeout))
+        except ValueError:
+            pass
     with sync_playwright() as pw:
         browser = pw.chromium.launch(**_launch_kwargs())
         try:
@@ -328,14 +337,32 @@ def _default_launcher(url: str, timeout_s: float) -> tuple[list[dict], str]:
                 "{get: () => undefined})"
             )
             page = context.new_page()
-            page.goto(url, timeout=timeout_ms)
-            # Wait until the DOM is stable — Cloudflare's challenge
-            # script replaces the body with the real page content
-            # once solved, so ``networkidle`` is a reliable "challenge
-            # cleared" signal without us having to detect specific
-            # DOM markers.
-            page.wait_for_load_state("networkidle", timeout=timeout_ms)
+            page.goto(url, timeout=60_000)
+            # Cloudflare serves an automated browser the INTERACTIVE
+            # Turnstile, so the challenge is cleared by hand in this
+            # visible window. The definitive "solved" signal is the
+            # cf_clearance cookie appearing — ``networkidle`` fires
+            # unreliably around a Turnstile widget and doesn't mean the
+            # challenge actually passed (the old code grabbed cookies at
+            # networkidle and returned a jar with no cf_clearance, so the
+            # retry stayed 403 even though the user had clicked through).
+            # Poll for cf_clearance until it shows up or the generous
+            # timeout elapses, giving a screen-reader user time to find
+            # and click the checkbox.
+            deadline = time.monotonic() + timeout_s
+            while time.monotonic() < deadline:
+                if any(c.get("name") == "cf_clearance"
+                       for c in context.cookies()):
+                    break
+                page.wait_for_timeout(1000)
             raw_cookies = context.cookies()
+            if not any(c.get("name") == "cf_clearance" for c in raw_cookies):
+                raise RuntimeError(
+                    "Cloudflare challenge not cleared within "
+                    f"{int(timeout_s)}s — the 'verify you are human' step "
+                    "wasn't finished in the browser window. Try again and "
+                    "click it as soon as the window opens."
+                )
             ua = page.evaluate("() => navigator.userAgent")
             cookies: list[dict] = []
             for c in raw_cookies:
