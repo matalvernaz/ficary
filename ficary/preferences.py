@@ -296,8 +296,8 @@ class PreferencesDialog(wx.Dialog):
             "When a site serves a Cloudflare challenge that blocks the "
             "download (such as AO3 'shields up'), open a real Chromium "
             "window to clear it, then reuse the result for 24 hours. "
-            "Requires the 'Cloudflare challenge solver' optional feature "
-            "to be installed first."
+            "First install it from the Edit menu → Optional Features "
+            "('Cloudflare challenge solver'), then fully restart ficary."
         )
         sizer.Add(self.cf_solve_ctrl, 0, wx.ALL, 6)
 
@@ -642,9 +642,28 @@ class PreferencesDialog(wx.Dialog):
         sizer.Add(self.log_to_file_ctrl, 0, wx.ALL, 6)
         self._add_help_text(
             sizer, panel,
-            "Rotating file at <portable>/logs/ficary.log (1 MB × 3 "
-            "backups). Use 'Open log folder' from the View menu to "
-            "reveal it.",
+            "Rotating file (1 MB × 3 backups). Use 'Open log folder' "
+            "from the View menu to reveal it.",
+        )
+
+        log_dir_row = wx.BoxSizer(wx.HORIZONTAL)
+        log_dir_row.Add(
+            wx.StaticText(panel, label="Log &folder:"),
+            0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 6,
+        )
+        self.log_dir_ctrl = wx.TextCtrl(panel)
+        self.log_dir_ctrl.SetName("Log folder")
+        log_dir_row.Add(self.log_dir_ctrl, 1, wx.RIGHT, 4)
+        log_browse_btn = wx.Button(panel, label="Br&owse...")
+        log_browse_btn.Bind(wx.EVT_BUTTON, self._on_browse_log_dir)
+        log_dir_row.Add(log_browse_btn, 0)
+        sizer.Add(log_dir_row, 0, wx.EXPAND | wx.ALL, 6)
+        self._add_help_text(
+            sizer, panel,
+            "Where to write the log file. Leave blank for the default "
+            "(<portable>/logs). Point it at a synced or shared folder to "
+            "make logs easy to hand off. Applied when you click OK; a bad "
+            "or unwritable path falls back to the default.",
         )
 
         panel.SetSizer(sizer)
@@ -765,6 +784,7 @@ class PreferencesDialog(wx.Dialog):
             self.log_level_ctrl.SetSelection(_LOG_LEVELS.index(level))
         else:
             self.log_level_ctrl.SetSelection(_LOG_LEVELS.index("INFO"))
+        self.log_dir_ctrl.SetValue(self.prefs.get(_p.KEY_LOG_DIR) or "")
         self.log_to_file_ctrl.SetValue(
             self.prefs.get_bool(_p.KEY_LOG_TO_FILE)
         )
@@ -776,6 +796,15 @@ class PreferencesDialog(wx.Dialog):
         )
         if dlg.ShowModal() == wx.ID_OK:
             self.output_dir_ctrl.SetValue(dlg.GetPath())
+        dlg.Destroy()
+
+    def _on_browse_log_dir(self, event):
+        dlg = wx.DirDialog(
+            self, "Choose log folder",
+            defaultPath=self.log_dir_ctrl.GetValue() or "",
+        )
+        if dlg.ShowModal() == wx.ID_OK:
+            self.log_dir_ctrl.SetValue(dlg.GetPath())
         dlg.Destroy()
 
     def _on_ok(self, event):
@@ -888,6 +917,7 @@ class PreferencesDialog(wx.Dialog):
         lvl_idx = self.log_level_ctrl.GetSelection()
         if lvl_idx >= 0:
             self.prefs.set(_p.KEY_LOG_LEVEL, _LOG_LEVELS[lvl_idx])
+        self.prefs.set(_p.KEY_LOG_DIR, self.log_dir_ctrl.GetValue().strip())
         self.prefs.set_bool(
             _p.KEY_LOG_TO_FILE, self.log_to_file_ctrl.GetValue(),
         )

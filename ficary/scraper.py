@@ -916,8 +916,8 @@ class BaseScraper:
                 "and pass both (for AO3: --ao3-cookie / --ao3-user-agent, "
                 "or the matching GUI fields under Preferences), or "
                 "(2) run with --cf-solve to clear the challenge with a "
-                "real browser window (install it under Preferences → "
-                "optional features)."
+                "real browser window (install it from the Edit menu → "
+                "Optional Features, then fully restart)."
             )
         raise RateLimitError(f"Failed after {self.max_retries} retries: {url}")
 

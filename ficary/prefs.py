@@ -122,6 +122,9 @@ KEY_LLM_REQUEST_TIMEOUT_S = "llm_request_timeout_s"
 KEY_TTS_PROVIDERS = "tts_providers"
 KEY_LOG_LEVEL = "log_level"
 KEY_LOG_TO_FILE = "log_to_file"
+# Custom folder for the log file. Blank = the default <portable>/logs.
+# Lets the user point logs at a synced/shared folder for easy hand-off.
+KEY_LOG_DIR = "log_dir"
 # Prompt before closing the main window while a long-running job
 # (download, audiobook build, search, etc.) is still active. The
 # prompt's "Don't ask again" checkbox flips this pref off.
@@ -234,6 +237,7 @@ DEFAULTS = {
     KEY_TTS_PROVIDERS: "",
     KEY_LOG_LEVEL: "INFO",
     KEY_LOG_TO_FILE: False,
+    KEY_LOG_DIR: "",
     KEY_CONFIRM_CANCEL_ON_CLOSE: True,
     KEY_LIBRARY_PATH_TEMPLATE: "{fandom}/{title} - {author}.{ext}",
     KEY_LIBRARY_MISC_FOLDER: "Misc",

@@ -854,10 +854,29 @@ class MainFrame(wx.Frame):
     # ── Logging controls ─────────────────────────────────────
 
     def _log_dir(self) -> Path:
-        """Directory for log files. Portable build keeps logs next to
-        the exe so they travel with the install; dev/pip uses the
-        same dotfile root as other ficary state."""
+        """Directory for log files.
+
+        A custom folder set in Preferences (``KEY_LOG_DIR``) wins when
+        it's usable — handy for pointing logs at a synced/shared folder.
+        Falls back silently to the default (``<portable>/logs``) when the
+        pref is blank or the folder can't be created / isn't writable:
+        logging must never fail to start over a bad path. Portable build
+        keeps the default next to the exe so logs travel with the
+        install; dev/pip uses the same dotfile root as other state.
+        """
         from . import portable
+        prefs = getattr(self, "prefs", None)
+        if prefs is not None:
+            from . import prefs as _p
+            custom = (prefs.get(_p.KEY_LOG_DIR) or "").strip()
+            if custom:
+                try:
+                    d = Path(custom).expanduser()
+                    d.mkdir(parents=True, exist_ok=True)
+                    if os.access(d, os.W_OK):
+                        return d
+                except OSError:
+                    pass  # unusable custom dir → fall through to default
         d = portable.portable_root() / "logs"
         d.mkdir(parents=True, exist_ok=True)
         return d
@@ -3787,6 +3806,24 @@ class MainFrame(wx.Frame):
         # Logging: level and file-output may have changed — route through
         # the existing setters so menu check items re-sync and the live
         # handlers get rebuilt.
+        # A changed log folder only takes effect when the file handler is
+        # rebuilt — _apply_logging_config reuses an existing one in place.
+        # If the configured folder no longer matches the open handler,
+        # drop it so the _set_log_to_file call below reopens it there.
+        fh = getattr(self, "_file_log_handler", None)
+        if fh is not None:
+            try:
+                same_dir = Path(fh.baseFilename).parent == self._log_dir()
+            except Exception:
+                same_dir = False
+            if not same_dir:
+                logging.getLogger().removeHandler(fh)
+                try:
+                    fh.close()
+                except Exception:
+                    pass
+                self._file_log_handler = None
+
         level = (self.prefs.get(_p.KEY_LOG_LEVEL) or "INFO").upper()
         if level in _LOG_LEVELS:
             self._set_log_level_idx(_LOG_LEVELS.index(level))

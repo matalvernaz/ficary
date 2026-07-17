@@ -303,9 +303,16 @@ def _default_launcher(url: str, timeout_s: float) -> tuple[list[dict], str]:
     try:
         from playwright.sync_api import sync_playwright
     except ImportError as exc:
+        # Surface the *actual* import failure (``exc``) rather than a
+        # canned "install the extra" line — in a frozen build the extra
+        # can be installed yet still fail to import (deps/ not on sys.path
+        # until a restart, or a missing transitive dep like greenlet), and
+        # the real message is what tells the two apart in the log.
         raise ImportError(
-            "cf-solve requires the 'cf-solve' extra: "
-            "pip install 'ficary[cf-solve]' then 'playwright install chromium'"
+            f"Playwright isn't importable ({exc}). Install it via Optional "
+            "Features → Cloudflare challenge solver (or pip install "
+            "'ficary[cf-solve]' then 'playwright install chromium'), then "
+            "fully restart ficary."
         ) from exc
 
     timeout_ms = int(timeout_s * 1000)

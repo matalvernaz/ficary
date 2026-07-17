@@ -1,5 +1,23 @@
 # Changelog
 
+## 2.15.1 — 2026-07-16
+
+**Logging + cf-solve diagnostics**
+
+* **New "Log folder" setting (Preferences → Logging).** Point the log
+  file at any folder — a synced or shared folder, say — instead of the
+  default next to the app, so logs are easy to hand off. Leave it blank
+  for the default; a bad or unwritable path falls back to it. Takes
+  effect when you click OK.
+
+* **Clearer Cloudflare-solver failures.** When `--cf-solve` can't start,
+  the log now names the actual reason (e.g. a missing module) instead of
+  a generic "install the extra" line, and points at the right place to
+  install it — the **Edit menu → Optional Features** — noting that a
+  frozen build needs a full restart after installing before the solver
+  can load. (The old messages pointed at "Preferences", which was
+  wrong.)
+
 ## 2.15.0 — 2026-07-16
 
 **AO3 Cloudflare "shields up" handling**
