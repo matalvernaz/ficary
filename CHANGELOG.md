@@ -31,8 +31,11 @@
   blocks — so the solver often couldn't get through the very challenge
   it exists for. It now launches a real, on-screen Chromium with the
   automation give-aways stripped, which clears the challenge far more
-  reliably; the window closes itself once it's done. Install it the same
-  way as before (Preferences → optional features → "Cloudflare challenge
+  reliably; the window closes itself once it's done. There's now a
+  Preferences checkbox — "Use the Cloudflare solver when a download is
+  blocked" — so it can be turned on from the GUI, not just the
+  `--cf-solve` command-line flag. Install the solver itself the same way
+  as before (Preferences → optional features → "Cloudflare challenge
   solver", or `pip install 'ficary[cf-solve]'`). Set
   `FICARY_CF_SOLVE_HEADLESS=1` to keep it hidden on a machine with no
   screen.

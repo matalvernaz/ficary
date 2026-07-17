@@ -288,6 +288,19 @@ class PreferencesDialog(wx.Dialog):
         )
         sizer.Add(self.merge_series_ctrl, 0, wx.ALL, 6)
 
+        self.cf_solve_ctrl = wx.CheckBox(
+            panel,
+            label="Use the Cloudflare so&lver when a download is blocked (opens a browser)",
+        )
+        self.cf_solve_ctrl.SetName(
+            "When a site serves a Cloudflare challenge that blocks the "
+            "download (such as AO3 'shields up'), open a real Chromium "
+            "window to clear it, then reuse the result for 24 hours. "
+            "Requires the 'Cloudflare challenge solver' optional feature "
+            "to be installed first."
+        )
+        sizer.Add(self.cf_solve_ctrl, 0, wx.ALL, 6)
+
         sizer.AddSpacer(8)
 
         # Optional per-site session cookies — set-once secrets, so they
@@ -667,6 +680,7 @@ class PreferencesDialog(wx.Dialog):
         self.hr_stars_ctrl.SetValue(self.prefs.get_bool(_p.KEY_HR_AS_STARS))
         self.strip_notes_ctrl.SetValue(self.prefs.get_bool(_p.KEY_STRIP_NOTES))
         self.fichub_ctrl.SetValue(self.prefs.get_bool(_p.KEY_FICHUB))
+        self.cf_solve_ctrl.SetValue(self.prefs.get_bool(_p.KEY_CF_SOLVE))
         self.merge_series_ctrl.SetValue(
             self.prefs.get_bool(_p.KEY_MERGE_SERIES))
         self.webnovel_cookie_ctrl.SetValue(
@@ -796,6 +810,7 @@ class PreferencesDialog(wx.Dialog):
             _p.KEY_STRIP_NOTES, self.strip_notes_ctrl.GetValue(),
         )
         self.prefs.set_bool(_p.KEY_FICHUB, self.fichub_ctrl.GetValue())
+        self.prefs.set_bool(_p.KEY_CF_SOLVE, self.cf_solve_ctrl.GetValue())
         self.prefs.set_bool(
             _p.KEY_MERGE_SERIES, self.merge_series_ctrl.GetValue(),
         )

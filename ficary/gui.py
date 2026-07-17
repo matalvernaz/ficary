@@ -53,6 +53,7 @@ class _DownloadParams:
     enabled_tts_providers: tuple = ()
     use_fichub: bool = False
     merge_series: bool = False
+    cf_solve: bool = False
     webnovel_cookie: str = ""
     ao3_cookie: str = ""
     ao3_user_agent: str = ""
@@ -2245,6 +2246,7 @@ class MainFrame(wx.Frame):
                     webnovel_cookie=params.webnovel_cookie,
                     ao3_cookie=params.ao3_cookie,
                     ao3_user_agent=params.ao3_user_agent,
+                    cf_solve=params.cf_solve,
                     scribblehub_cookie=params.scribblehub_cookie,
                     subscribestar_cookie=params.subscribestar_cookie,
                 )
@@ -2444,6 +2446,7 @@ class MainFrame(wx.Frame):
                     webnovel_cookie=params.webnovel_cookie,
                     ao3_cookie=params.ao3_cookie,
                     ao3_user_agent=params.ao3_user_agent,
+                    cf_solve=params.cf_solve,
                     scribblehub_cookie=params.scribblehub_cookie,
                     subscribestar_cookie=params.subscribestar_cookie,
                 )
@@ -2476,6 +2479,7 @@ class MainFrame(wx.Frame):
                         webnovel_cookie=params.webnovel_cookie,
                         ao3_cookie=params.ao3_cookie,
                         ao3_user_agent=params.ao3_user_agent,
+                        cf_solve=params.cf_solve,
                         scribblehub_cookie=params.scribblehub_cookie,
                         subscribestar_cookie=params.subscribestar_cookie,
                     )
@@ -2599,7 +2603,7 @@ class MainFrame(wx.Frame):
 
     def _scraper_for(self, url, *, use_fichub=False, webnovel_cookie="",
                      ao3_cookie="", ao3_user_agent="", scribblehub_cookie="",
-                     subscribestar_cookie="", use_cache=True):
+                     subscribestar_cookie="", cf_solve=False, use_cache=True):
         from .sites import detect_scraper
         cls = detect_scraper(url)
         # ``use_cache=False`` threads through every branch: a fresh-copy
@@ -2607,6 +2611,11 @@ class MainFrame(wx.Frame):
         # chapters come back stale (_materialise_chapters serves any
         # cached chapter regardless of skip_chapters).
         base = {} if use_cache else {"use_cache": False}
+        # cf_solve is a generic BaseScraper kwarg (every scraper accepts
+        # it), so it rides in ``base`` and reaches whichever site class we
+        # end up constructing — unlike the per-site cookie kwargs below.
+        if cf_solve:
+            base["cf_solve"] = True
         # use_fichub / *_cookie are per-site constructor kwargs; only forward
         # each to the scraper that accepts it so other site scrapers don't
         # choke on an unexpected kwarg.
@@ -2681,6 +2690,7 @@ class MainFrame(wx.Frame):
             # click so a queued batch keeps the values it started with.
             use_fichub=self.prefs.get_bool(_p.KEY_FICHUB),
             merge_series=self.prefs.get_bool(_p.KEY_MERGE_SERIES),
+            cf_solve=self.prefs.get_bool(_p.KEY_CF_SOLVE),
             webnovel_cookie=(self.prefs.get(_p.KEY_WEBNOVEL_COOKIE) or "").strip(),
             ao3_cookie=(self.prefs.get(_p.KEY_AO3_COOKIE) or "").strip(),
             ao3_user_agent=(
@@ -3118,6 +3128,7 @@ class MainFrame(wx.Frame):
                 webnovel_cookie=params.webnovel_cookie,
                 ao3_cookie=params.ao3_cookie,
                 ao3_user_agent=params.ao3_user_agent,
+                cf_solve=params.cf_solve,
                 scribblehub_cookie=params.scribblehub_cookie,
                 subscribestar_cookie=params.subscribestar_cookie,
                 # Fresh-copy re-pull ignores the chapter cache so edited
@@ -3462,6 +3473,7 @@ class MainFrame(wx.Frame):
                     webnovel_cookie=params.webnovel_cookie,
                     ao3_cookie=params.ao3_cookie,
                     ao3_user_agent=params.ao3_user_agent,
+                    cf_solve=params.cf_solve,
                     scribblehub_cookie=params.scribblehub_cookie,
                     subscribestar_cookie=params.subscribestar_cookie,
                 )
