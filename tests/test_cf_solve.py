@@ -204,46 +204,67 @@ def test_load_rejects_non_mapping_cookie_entries(cache_dir):
     assert [c["name"] for c in result.cookies] == ["ok"]
 
 
-def test_inject_forwards_persistent_expiry():
-    """A real CF clearance cookie carries an expiry timestamp; without
-    it, curl_cffi treats every injected cookie as session-scoped and
-    discards them when the scraper session is reconstructed, forcing
-    another Playwright run. The inject path must forward a finite
-    positive expiry to the jar."""
-    sess = MagicMock()
-    sess.headers = {}
-    future = time.time() + 3600
+class _RealSigSession:
+    """Session whose ``cookies.set`` mirrors curl_cffi 0.15's ACTUAL
+    signature — (name, value, domain, path, secure), no ``expires``. The
+    old tests used MagicMock, which swallowed an ``expires`` kwarg and so
+    hid the TypeError the real jar raises — that's how the bug (every
+    persistent cookie dropped as "rejected by jar") shipped."""
+
+    def __init__(self):
+        self.headers = {}
+        self.set_calls = []
+        self.cookies = self
+
+    def set(self, name, value, domain="", path="/", secure=False):
+        self.set_calls.append(dict(
+            name=name, value=value, domain=domain, path=path, secure=secure,
+        ))
+
+
+def test_inject_applies_clearance_cookie_that_carries_expiry():
+    """A solved cf_clearance carries an ``expires`` timestamp, but
+    curl_cffi's Cookies.set() has no ``expires`` param — inject must not
+    pass it, or set() raises and the cleared challenge never reaches the
+    session (the shipped 403-forever bug)."""
+    sess = _RealSigSession()
     result = cf_solve.SolveResult(
         cookies=[{
-            "name": "cf_clearance", "value": "x", "domain": ".example",
-            "path": "/", "secure": True, "expires": future,
+            "name": "cf_clearance", "value": "tok", "domain": ".example",
+            "path": "/", "secure": True, "expires": time.time() + 3600,
         }],
         user_agent="UA",
         fetched_at=time.time(),
     )
-    cf_solve.inject_into_session(sess, result)
-    call = sess.cookies.set.call_args
-    assert call.kwargs["expires"] == future
+    cf_solve.inject_into_session(sess, result)  # must not raise
+    assert len(sess.set_calls) == 1
+    call = sess.set_calls[0]
+    assert call["name"] == "cf_clearance"
+    assert call["value"] == "tok"
+    assert call["domain"] == ".example"
+    assert call["secure"] is True
+    assert sess.headers["User-Agent"] == "UA"
 
 
-def test_inject_skips_sentinel_expiry():
-    """Playwright reports ``-1`` for session cookies. That value must
-    not reach the jar as a real expiry — it would make the cookie
-    appear instantly expired and the next request would behave as if
-    the solve never happened."""
-    sess = MagicMock()
-    sess.headers = {}
+def test_inject_into_real_curl_cffi_session_lands_in_jar():
+    """End-to-end against the actual curl_cffi jar — the check the
+    MagicMock-based test skipped: a cf_clearance with an expiry must
+    actually be present in the session's cookie jar after injection."""
+    from curl_cffi import requests as _cr
+    sess = _cr.Session(impersonate="chrome")
     result = cf_solve.SolveResult(
         cookies=[{
-            "name": "cf_clearance", "value": "x", "domain": ".example",
-            "path": "/", "secure": True, "expires": -1,
+            "name": "cf_clearance", "value": "tok",
+            "domain": ".archiveofourown.org",
+            "path": "/", "secure": True, "expires": time.time() + 3600,
         }],
-        user_agent="UA",
+        user_agent="UA/1",
         fetched_at=time.time(),
     )
     cf_solve.inject_into_session(sess, result)
-    call = sess.cookies.set.call_args
-    assert "expires" not in call.kwargs
+    jar_names = {c.name for c in sess.cookies.jar}
+    assert "cf_clearance" in jar_names
+    assert sess.headers["User-Agent"] == "UA/1"
 
 
 # ── solve() ─────────────────────────────────────────────────────

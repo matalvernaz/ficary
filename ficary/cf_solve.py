@@ -402,29 +402,26 @@ def inject_into_session(session, result: SolveResult) -> None:
         domain = c.get("domain") or ""
         if not name or value is None:
             continue
-        kwargs = {
-            "name": name,
-            "value": value,
-            "domain": domain,
-            "path": c.get("path") or "/",
-            "secure": bool(c.get("secure", False)),
-        }
-        # Playwright reports the expiry as a Unix timestamp (or -1
-        # for session cookies). Forward a real expiry so curl_cffi
-        # treats the cookie as persistent through to its real
-        # lifetime; a missing or sentinel ``expires`` is left
-        # alone so the jar applies its session-cookie default.
-        raw_expires = c.get("expires")
-        if isinstance(raw_expires, (int, float)) and not isinstance(raw_expires, bool):
-            expires_f = float(raw_expires)
-            if math.isfinite(expires_f) and expires_f > 0:
-                kwargs["expires"] = expires_f
+        # curl_cffi 0.15's Cookies.set() takes ONLY
+        # (name, value, domain, path, secure). Do NOT pass Playwright's
+        # ``expires`` — it raises TypeError, and the broad except below
+        # then dropped EVERY persistent cookie (cf_clearance, __cf_bm) as
+        # "rejected by jar", so a solved challenge never actually reached
+        # the session and the retry stayed 403. The cookie is
+        # session-scoped in the jar, which covers the download; cross-run
+        # reuse comes from the on-disk cache (persist / load_cached), not
+        # the jar's own expiry.
         try:
-            session.cookies.set(**kwargs)
-        except Exception:  # pragma: no cover — curl_cffi internal
+            session.cookies.set(
+                name=name,
+                value=value,
+                domain=domain,
+                path=c.get("path") or "/",
+                secure=bool(c.get("secure", False)),
+            )
+        except Exception as exc:  # pragma: no cover — curl_cffi internal
             logger.debug(
-                "cf-solve: skipped cookie %s@%s (rejected by jar)",
-                name, domain,
+                "cf-solve: skipped cookie %s@%s (%s)", name, domain, exc,
             )
     if result.user_agent:
         session.headers.update({"User-Agent": result.user_agent})

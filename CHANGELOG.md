@@ -1,5 +1,21 @@
 # Changelog
 
+## 2.15.4 — 2026-07-16
+
+**Bug fix**
+
+* **A solved Cloudflare challenge is no longer thrown away.** When the
+  solver cleared a challenge, it tried to copy the resulting cookies
+  into the download session with an `expires` field — but the HTTP
+  library's cookie call doesn't accept one, so it raised and *every*
+  clearance cookie was silently dropped ("rejected by jar"). The
+  challenge was being solved and then discarded, so downloads stayed
+  blocked even after you clicked through. The cookies are now applied
+  correctly, so a cleared challenge actually takes effect (and cached
+  clearance from a previous solve is reused without relaunching the
+  browser). Regression tests now run against the real cookie jar instead
+  of a mock that hid the mismatch.
+
 ## 2.15.3 — 2026-07-16
 
 **Bug fix**
