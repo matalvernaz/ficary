@@ -293,6 +293,7 @@ def _prepare_chapter_html(
     ``chapter_number`` are forwarded into the LLM helper's per-story
     disk cache so re-exports don't re-spend tokens.
     """
+    html = _normalize_chapter_markup(html)
     if strip_notes:
         html = strip_note_paragraphs(html)
         if llm_config:
@@ -862,6 +863,59 @@ _SCENE_BREAK_DECO_CHARS = set(
 
 _ELLIPSIS_ONLY_RE = re.compile(r"^[\.…\s]+$")
 
+# The tiny label allowed between the ornament runs of a part-marker
+# divider: an optional part word (``P`` / ``pt.`` / ``Part`` / ``#``)
+# plus optional digits. Deliberately excludes ``Chapter``/``Ch`` — an
+# ornament-wrapped chapter banner is a heading, not a scene break, and
+# the banner passes own that case.
+_PART_MARKER_CORE_RE = re.compile(
+    r"^(?:part|pt\.?|p\.?|#)?\s*\d{0,4}$",
+    re.IGNORECASE,
+)
+
+# Longest core we accept ("Part 9999" is 9 chars); anything longer is
+# a real label, not a counter.
+_PART_MARKER_CORE_MAX_LEN = 10
+
+# Minimum ornament run on each side of the core. One deco char could
+# be normal punctuation hugging a short word; two or more is styling.
+_PART_MARKER_MIN_FLANK = 2
+
+
+def _is_part_marker_divider(s: str) -> bool:
+    """Detect ornament-wrapped part counters used as scene breaks:
+    ``oooP1ooo``, ``oooPooo``, ``~*~ Part 2 ~*~``, ``--- 3 ---``.
+
+    These fail :func:`_is_divider_text`'s all-deco rule because of the
+    ``P``/digit core, but they're unambiguous dividers: prose never
+    wraps a bare part token in symmetric ornament runs. Also used by
+    ``tts._is_scene_break_line``.
+    """
+    i = 0
+    while i < len(s) and s[i] in _SCENE_BREAK_DECO_CHARS:
+        i += 1
+    j = len(s)
+    while j > i and s[j - 1] in _SCENE_BREAK_DECO_CHARS:
+        j -= 1
+    left, core, right = s[:i].strip(), s[i:j].strip(), s[j:].strip()
+    if len(left) < _PART_MARKER_MIN_FLANK or len(right) < _PART_MARKER_MIN_FLANK:
+        return False
+    if not core or len(core) > _PART_MARKER_CORE_MAX_LEN:
+        return False
+    if not _PART_MARKER_CORE_RE.match(core):
+        return False
+    # Guard the one ambiguous corner: an all-lowercase letter core
+    # inside letter-only lowercase ornaments ("ooopooo") could be a
+    # prose exclamation. Require a digit, an uppercase letter, or a
+    # non-letter symbol somewhere in the ornaments.
+    if not (
+        any(c.isdigit() for c in core)
+        or any(c.isupper() for c in core)
+        or any(c not in "oOxX0 \t" for c in left + right)
+    ):
+        return False
+    return True
+
 
 def _is_divider_text(text: str) -> bool:
     """Detect a paragraph whose visible text is purely a scene-break
@@ -869,7 +923,8 @@ def _is_divider_text(text: str) -> bool:
 
     Accepts both short classic forms (``---``, ``***``, ``* * *``,
     ``oOo``) and the long run forms common on FFN (``-x-x-x-x-...``
-    of 30, 60, 80+ chars). Conservative on ornamental-letter lines
+    of 30, 60, 80+ chars), plus ornament-wrapped part counters
+    (``oooP1ooo``). Conservative on ornamental-letter lines
     (``oOo`` / ``xXx``) so short words like ``ox`` don't trip it.
     """
     s = (text or "").strip()
@@ -877,6 +932,8 @@ def _is_divider_text(text: str) -> bool:
         return False
     if _ELLIPSIS_ONLY_RE.match(s):
         return False
+    if _is_part_marker_divider(s):
+        return True
     if not all(c in _SCENE_BREAK_DECO_CHARS for c in s):
         return False
     # Line contains at least one non-letter deco char (``-``, ``=``, ``*``,
@@ -933,6 +990,53 @@ def _apply_hr_as_stars(html: str) -> str:
         tag.replace_with(new)
         replaced = True
     return str(soup) if replaced else html
+
+
+_HEADING_TAGS = ("h1", "h2", "h3", "h4", "h5", "h6")
+_HEADING_PROBE_RE = re.compile(r"<h[1-6][\s>]", re.IGNORECASE)
+_BARE_SPAN_PROBE_RE = re.compile(r"<span>", re.IGNORECASE)
+
+
+def _normalize_chapter_markup(html: str) -> str:
+    """Always-on chapter markup normalisation, applied before the
+    optional transforms so every site's output shares one shape.
+
+    Two rewrites, one parse:
+
+    * Headings whose visible text is a scene-break divider
+      (``oooP1ooo``, ``***``) become ``<hr>``. Authors mark dividers
+      up as h3/h4 for the centred styling, but as headings they flood
+      a screen reader's heading list with noise — there is no reading
+      where a divider is legitimately a heading, so unlike
+      ``--hr-as-stars`` this isn't optional. The ``<hr>`` then takes
+      the normal divider path (``--hr-as-stars``, TTS pauses).
+    * Attribute-less ``<span>`` wrappers are unwrapped. AO3 works
+      pasted from Google Docs wrap every paragraph's text in bare
+      spans; other sites' chapters are plain ``<p>`` text.
+    """
+    has_headings = bool(_HEADING_PROBE_RE.search(html))
+    has_bare_spans = bool(_BARE_SPAN_PROBE_RE.search(html))
+    if not has_headings and not has_bare_spans:
+        return html
+    from bs4 import BeautifulSoup
+
+    soup = BeautifulSoup(html, "html.parser")
+    changed = False
+    if has_headings:
+        for tag in soup.find_all(list(_HEADING_TAGS)):
+            text = tag.get_text(" ", strip=True)
+            if text and _is_divider_text(text):
+                tag.replace_with(soup.new_tag("hr"))
+                changed = True
+    if has_bare_spans:
+        for tag in soup.find_all("span"):
+            if not tag.attrs:
+                tag.unwrap()
+                changed = True
+    if not changed:
+        return html
+    soup.smooth()
+    return str(soup)
 
 
 # Phrases that start an author's note paragraph on FFN (where notes are

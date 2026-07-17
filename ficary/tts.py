@@ -66,7 +66,7 @@ def _run_silent(cmd, **kwargs):
     kwargs.setdefault("stdin", subprocess.DEVNULL)
     return subprocess.run(cmd, **kwargs)
 
-from .exporters import strip_note_paragraphs
+from .exporters import _is_part_marker_divider, strip_note_paragraphs
 
 logger = logging.getLogger(__name__)
 
@@ -1852,9 +1852,10 @@ def _is_scene_break_line(text):
     """Detect a line composed entirely of decorative/divider characters.
 
     Matches ``---``, ``===``, ``* * *``, ``~~~``, ``###``, ``oOo``,
-    ``xXx``, ``o0o``, em-dash runs, and long runs like
+    ``xXx``, ``o0o``, em-dash runs, long runs like
     ``-x-x-x-x-x-...`` that some FFN authors stretch to 60-80
-    characters as a visual barrier.
+    characters as a visual barrier, and ornament-wrapped part
+    counters (``oooP1ooo`` — see ``exporters._is_part_marker_divider``).
 
     Length handling splits by character class:
 
@@ -1871,6 +1872,8 @@ def _is_scene_break_line(text):
         return False
     if _ELLIPSIS_ONLY_RE.match(s):
         return False
+    if _is_part_marker_divider(s):
+        return True
     if not all(c in _SCENE_BREAK_DECO_CHARS for c in s):
         return False
     # Line contains a non-letter symbol (``---``, ``* * *``, ``###``,

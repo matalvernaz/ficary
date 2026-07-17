@@ -70,6 +70,15 @@ def test_pure_uppercase_x_run_matches():
         assert _is_scene_break_line(line), line
 
 
+def test_part_marker_dividers_match():
+    # Ornament-wrapped part counters (AO3 work 20913215 style) — the
+    # TTS must pause, not read "oooP1ooo" aloud.
+    for line in ["oooP1ooo", "oooPooo", "~*~ Part 2 ~*~", "--- 3 ---"]:
+        assert _is_scene_break_line(line), line
+    for line in ["ooopooo", "P1", "--- Chapter 3 ---"]:
+        assert not _is_scene_break_line(line), line
+
+
 # ── HTML → audiobook text pipeline ───────────────────────────────────
 
 

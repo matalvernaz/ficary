@@ -244,7 +244,12 @@ def fetch(
                 logger.debug("cf-solve worker: %s", line)
                 continue
             st = msg.get("status")
-            if st == "opening" and log_callback:
+            if st == "probe":
+                # Quiet headless pass against the saved profile — no
+                # window opens, so nothing user-facing to announce.
+                logger.debug("cf-solve: probing %s with the saved "
+                             "browser profile", url)
+            elif st == "opening" and log_callback:
                 log_callback("Opening a browser to clear the site's challenge...")
             elif st == "await_human" and log_callback:
                 log_callback(msg.get("message") or

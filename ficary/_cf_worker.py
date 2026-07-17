@@ -5,11 +5,17 @@ Run as a SEPARATE process — never imported into the frozen GUI app:
     <python> _cf_worker.py --url <URL> --out <FILE> [--profile DIR]
                            [--timeout SECONDS] [--headless]
 
-It opens a real (headed) Chromium via Playwright, lets the user clear
-Cloudflare's interactive "verify you are human" challenge in that window,
-then — in the SAME browser context that earned the clearance — reads the
-page HTML and writes it to ``--out`` (UTF-8). Progress and the final
-outcome are emitted as one-line JSON objects on stdout.
+It opens Chromium via Playwright, lets the user clear Cloudflare's
+interactive "verify you are human" challenge in that window, then — in
+the SAME browser context that earned the clearance — reads the page HTML
+and writes it to ``--out`` (UTF-8). Progress and the final outcome are
+emitted as one-line JSON objects on stdout.
+
+When a persistent ``--profile`` is given, a quiet headless pass runs
+first: a still-valid clearance in the profile satisfies the challenge
+with no window at all, so repeat downloads don't open (and steal focus
+to) a browser. Only when the page stays challenged does the worker
+escalate to a headed window for the human step.
 
 Why a separate process: Playwright's sync API spawns a Node driver via
 ``asyncio.create_subprocess_exec``. Inside the frozen PyInstaller GUI app
@@ -73,8 +79,21 @@ def _looks_cleared(page) -> bool:
     return not any(m in title for m in _CHALLENGE_TITLE_MARKERS)
 
 
-def run(url: str, out_path: str, profile_dir, timeout_s: float,
-        headless: bool) -> int:
+_PROBE_TIMEOUT_S = 12.0
+"""How long the quiet headless pass polls for the profile's stored
+clearance to satisfy the challenge before escalating to a headed
+window. Passive challenges resolve in a few seconds; the interactive
+one never resolves headless, so waiting longer only delays the human."""
+
+
+def _attempt(url: str, out_path: str, profile_dir, timeout_s: float,
+             headless: bool, interactive: bool) -> int:
+    """One browser pass.
+
+    Returns 0 when the HTML was captured, 3 on interactive timeout
+    (already emitted), 4 when a non-interactive (probe) pass found the
+    challenge still up — the caller escalates to a headed pass.
+    """
     from playwright.sync_api import sync_playwright
 
     launch_kwargs = dict(
@@ -102,28 +121,31 @@ def run(url: str, out_path: str, profile_dir, timeout_s: float,
                 "Object.defineProperty(navigator,'webdriver',"
                 "{get:()=>undefined})"
             )
-            _emit({"status": "opening", "url": url})
+            _emit({"status": "opening" if interactive else "probe",
+                   "url": url})
             page.goto(url, timeout=60_000, wait_until="domcontentloaded")
 
-            if _looks_cleared(page):
-                # Profile already carries a live clearance — no interaction.
-                pass
-            else:
-                _emit({
-                    "status": "await_human",
-                    "message": (
-                        "A browser window opened. Complete the 'verify you "
-                        "are human' step; the download continues on its own."
-                    ),
-                })
-                deadline = time.monotonic() + timeout_s
+            if not _looks_cleared(page):
+                if interactive:
+                    _emit({
+                        "status": "await_human",
+                        "message": (
+                            "A browser window opened. Complete the 'verify "
+                            "you are human' step; the download continues on "
+                            "its own."
+                        ),
+                    })
+                wait_s = timeout_s if interactive else _PROBE_TIMEOUT_S
+                deadline = time.monotonic() + wait_s
                 while time.monotonic() < deadline:
                     if _looks_cleared(page):
                         break
-                    page.wait_for_timeout(1000)
+                    page.wait_for_timeout(1000 if interactive else 500)
                 else:
-                    _emit({"status": "timeout"})
-                    return 3
+                    if interactive:
+                        _emit({"status": "timeout"})
+                        return 3
+                    return 4
 
             # Challenge passed. Let the redirect to the real document
             # settle, then capture what the browser now sees.
@@ -141,6 +163,20 @@ def run(url: str, out_path: str, profile_dir, timeout_s: float,
                 closer.close()
             except Exception:
                 pass
+
+
+def run(url: str, out_path: str, profile_dir, timeout_s: float,
+        headless: bool) -> int:
+    if profile_dir and not headless:
+        # Quiet pass: no window unless a human is actually needed. The
+        # persistent context is fully closed (profile lock released)
+        # before any headed escalation launches.
+        rc = _attempt(url, out_path, profile_dir, timeout_s,
+                      headless=True, interactive=False)
+        if rc == 0:
+            return 0
+    return _attempt(url, out_path, profile_dir, timeout_s,
+                    headless=headless, interactive=True)
 
 
 def main(argv=None) -> int:

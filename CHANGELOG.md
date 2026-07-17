@@ -1,5 +1,35 @@
 # Changelog
 
+## 2.16.1 — 2026-07-17
+
+**Cleaner chapters from AO3 (and everywhere else)**
+
+* **Scene-break dividers dressed up as headings are now demoted to real
+  dividers.** Some authors mark their scene breaks up as h3/h4 headings
+  for the centred styling (`oooP1ooo`-style part counters, `* * *`
+  lines). As headings they flood a screen reader's heading list — one
+  affected AO3 work had 373 of them against 48 real chapter headings.
+  Every export format now rewrites them to a horizontal rule
+  (`--hr-as-stars` then renders them as `* * *` as usual), so heading
+  navigation is chapters-only. Real headings are untouched.
+
+* **Ornament-wrapped part counters count as scene breaks everywhere.**
+  `oooP1ooo`, `~*~ Part 2 ~*~`, `--- 3 ---` and friends are now
+  recognised by the divider detector, including in audiobook narration —
+  the TTS pauses instead of reading "ooo P one ooo" aloud. Bare `ooo` /
+  `xxx` rating labels stay excluded, as before.
+
+* **Google-Docs span clutter is unwrapped.** AO3 works pasted from
+  Google Docs wrap every paragraph in bare `<span>` tags; exports now
+  strip the wrappers so the output matches what every other site
+  produces (and shrinks a little).
+
+* **`--cf-solve` no longer opens a browser window when it doesn't need
+  one.** With a saved browser profile, a quiet headless pass runs first —
+  a still-valid clearance clears the challenge with no window at all (and
+  no focus steal mid-task). The visible window only opens when the
+  "verify you are human" step genuinely needs you.
+
 ## 2.16.0 — 2026-07-17
 
 **Cloudflare "shields up" downloads that actually work (`--cf-solve` rebuilt)**

@@ -674,3 +674,171 @@ def test_fetch_missing_worker_script_raises_unavailable(monkeypatch, tmp_path):
 
 def test_real_worker_script_ships_on_disk():
     assert cf_solve._worker_script().exists()
+
+
+# ── Worker probe/escalation logic (fake playwright) ──────────────
+
+
+class _FakeSite:
+    """Scripted challenge state shared across worker attempts."""
+
+    def __init__(self, clears_headless: bool, clears_headed: bool = True):
+        self.clears_headless = clears_headless
+        self.clears_headed = clears_headed
+        self.launches: list[bool] = []  # headless flag per launch
+
+
+class _FakePage:
+    def __init__(self, context):
+        self.context = context
+
+    def goto(self, url, **kw):
+        pass
+
+    def title(self):
+        return "Ouroboros" if self.context._cleared() else "Just a moment..."
+
+    def wait_for_timeout(self, ms):
+        time.sleep(min(ms, 20) / 1000)
+
+    def wait_for_load_state(self, *a, **kw):
+        pass
+
+    def content(self):
+        return "<html>REAL PAGE</html>"
+
+
+class _FakeContext:
+    def __init__(self, site, headless):
+        self._site = site
+        self._headless = headless
+        self.pages = []
+
+    def _cleared(self):
+        return (self._site.clears_headless if self._headless
+                else self._site.clears_headed)
+
+    def cookies(self):
+        if self._cleared():
+            return [{"name": "cf_clearance", "value": "tok"}]
+        return []
+
+    def new_page(self):
+        return _FakePage(self)
+
+    def add_init_script(self, script):
+        pass
+
+    def close(self):
+        pass
+
+
+class _FakeBrowser:
+    def __init__(self, site, headless):
+        self._site = site
+        self._headless = headless
+
+    def new_context(self):
+        return _FakeContext(self._site, self._headless)
+
+    def close(self):
+        pass
+
+
+class _FakeChromium:
+    def __init__(self, site):
+        self._site = site
+
+    def launch_persistent_context(self, profile, **kw):
+        self._site.launches.append(kw["headless"])
+        return _FakeContext(self._site, kw["headless"])
+
+    def launch(self, **kw):
+        self._site.launches.append(kw["headless"])
+        return _FakeBrowser(self._site, kw["headless"])
+
+
+class _FakePlaywrightCM:
+    def __init__(self, site):
+        self.chromium = _FakeChromium(site)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
+def _install_fake_playwright(monkeypatch, site):
+    import types
+
+    sync_api = types.ModuleType("playwright.sync_api")
+    sync_api.sync_playwright = lambda: _FakePlaywrightCM(site)
+    pw_mod = types.ModuleType("playwright")
+    pw_mod.sync_api = sync_api
+    monkeypatch.setitem(sys.modules, "playwright", pw_mod)
+    monkeypatch.setitem(sys.modules, "playwright.sync_api", sync_api)
+
+
+@pytest.fixture
+def worker_env(monkeypatch, tmp_path):
+    from ficary import _cf_worker
+
+    emissions = []
+    monkeypatch.setattr(_cf_worker, "_emit", emissions.append)
+    monkeypatch.setattr(_cf_worker, "_PROBE_TIMEOUT_S", 0.05)
+    out = tmp_path / "page.html"
+    return _cf_worker, emissions, str(out)
+
+
+def test_probe_clears_without_window(worker_env, monkeypatch):
+    worker, emissions, out = worker_env
+    site = _FakeSite(clears_headless=True)
+    _install_fake_playwright(monkeypatch, site)
+    rc = worker.run("https://a.example/w", out, "/prof", 5.0, headless=False)
+    assert rc == 0
+    assert site.launches == [True]  # single quiet headless pass
+    statuses = [m["status"] for m in emissions]
+    assert "opening" not in statuses and "await_human" not in statuses
+    assert Path(out).read_text() == "<html>REAL PAGE</html>"
+
+
+def test_probe_escalates_to_headed_window(worker_env, monkeypatch):
+    worker, emissions, out = worker_env
+    site = _FakeSite(clears_headless=False, clears_headed=True)
+    _install_fake_playwright(monkeypatch, site)
+    rc = worker.run("https://a.example/w", out, "/prof", 5.0, headless=False)
+    assert rc == 0
+    assert site.launches == [True, False]  # probe, then headed escalation
+    statuses = [m["status"] for m in emissions]
+    assert statuses.index("probe") < statuses.index("opening")
+    assert Path(out).read_text() == "<html>REAL PAGE</html>"
+
+
+def test_interactive_timeout_after_failed_probe(worker_env, monkeypatch):
+    worker, emissions, out = worker_env
+    site = _FakeSite(clears_headless=False, clears_headed=False)
+    _install_fake_playwright(monkeypatch, site)
+    rc = worker.run("https://a.example/w", out, "/prof", 0.05, headless=False)
+    assert rc == 3
+    assert [m["status"] for m in emissions][-1] == "timeout"
+
+
+def test_forced_headless_skips_probe(worker_env, monkeypatch):
+    worker, emissions, out = worker_env
+    site = _FakeSite(clears_headless=True)
+    _install_fake_playwright(monkeypatch, site)
+    rc = worker.run("https://a.example/w", out, "/prof", 5.0, headless=True)
+    assert rc == 0
+    assert site.launches == [True]
+    # Forced-headless is the interactive attempt, not a probe.
+    assert [m["status"] for m in emissions][0] == "opening"
+
+
+def test_no_profile_goes_straight_to_headed(worker_env, monkeypatch):
+    worker, emissions, out = worker_env
+    site = _FakeSite(clears_headless=False, clears_headed=True)
+    _install_fake_playwright(monkeypatch, site)
+    rc = worker.run("https://a.example/w", out, None, 5.0, headless=False)
+    assert rc == 0
+    assert site.launches == [False]  # no probe without a stored profile

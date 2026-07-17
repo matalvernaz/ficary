@@ -5,6 +5,9 @@ from pathlib import Path
 
 from ficary.exporters import (
     _apply_hr_as_stars,
+    _is_divider_text,
+    _normalize_chapter_markup,
+    _prepare_chapter_html,
     _site_info,
     export_html,
     export_txt,
@@ -717,6 +720,85 @@ class TestDividerAsStars:
         out = _apply_hr_as_stars(html)
         assert out.count("scenebreak") == 1  # XXX converted, OOO kept
         assert "OOO" in out
+
+
+class TestPartMarkerDividers:
+    """Ornament-wrapped part counters (``oooP1ooo``) count as dividers;
+    the neighbouring prose/label shapes don't."""
+
+    def test_part_marker_forms_detected(self):
+        for line in ["oooP1ooo", "oooPooo", "oooP10ooo", " oooP2ooo",
+                     "~*~ Part 2 ~*~", "--- 3 ---", "*** pt. 4 ***",
+                     "xXx P7 xXx"]:
+            assert _is_divider_text(line), line
+
+    def test_labels_and_prose_still_excluded(self):
+        for line in ["ooo", "OOO", "xxx",          # rating labels / moans
+                     "ooopooo",                     # lowercase prose corner
+                     "P1", "Part 2", "1000",        # no ornament flanks
+                     "--- Notes ---",               # real label between deco
+                     "--- Chapter 3 ---",           # banner, not scene break
+                     "(Harry)"]:                    # POV marker
+            assert not _is_divider_text(line), line
+
+
+# Chapter 1 opening of AO3 work 20913215 ("Ouroboros") — the markup
+# shape that motivated heading normalisation: Google-Docs span soup and
+# an ``oooP1ooo`` part marker wrapped in an ``<h4>``.
+_AO3_SPAN_SOUP = (
+    '<h4 align="center">\n  <span>oooP1ooo</span>\n</h4><p>\n'
+    "  <span>Nothing was the same. The world had changed beyond his "
+    "imagining. </span>\n</p><p>\n  <span>“Stop moping. Just when "
+    "I was </span>\n<em>\n<span>eight</span>\n</em>\n<span>.”</span>\n</p>"
+    '<h3><em><span>_Rituals. Parseltongue. Possession._</span></em></h3>'
+)
+
+
+class TestNormalizeChapterMarkup:
+    def test_divider_heading_becomes_hr(self):
+        out = _normalize_chapter_markup(_AO3_SPAN_SOUP)
+        assert "oooP1ooo" not in out
+        assert "<hr" in out
+        assert "<h4" not in out
+
+    def test_real_heading_survives(self):
+        out = _normalize_chapter_markup(_AO3_SPAN_SOUP)
+        assert "<h3>" in out
+        assert "_Rituals. Parseltongue. Possession._" in out
+
+    def test_bare_spans_unwrapped_attributed_spans_kept(self):
+        html = '<p><span>plain</span> and <span class="k">kept</span></p>'
+        out = _normalize_chapter_markup(html)
+        assert "<span>" not in out
+        assert '<span class="k">kept</span>' in out
+        assert "plain" in out
+
+    def test_untouched_html_returned_as_is(self):
+        html = "<p>Just prose.</p><p>More prose.</p>"
+        assert _normalize_chapter_markup(html) is html
+
+    def test_all_heading_levels_checked(self):
+        html = "<h2>* * *</h2><h6>-x-x-x-</h6><h2>Real Title</h2>"
+        out = _normalize_chapter_markup(html)
+        assert out.count("<hr") == 2
+        assert "Real Title" in out
+
+    def test_prepare_pipeline_stars_a_divider_heading(self):
+        # End to end: heading divider → <hr> → ``* * *`` scenebreak.
+        out = _prepare_chapter_html(
+            _AO3_SPAN_SOUP, hr_as_stars=True, strip_notes=False,
+        )
+        assert "oooP1ooo" not in out
+        assert "scenebreak" in out
+        assert "* * *" in out
+
+    def test_prepare_pipeline_default_flags(self):
+        out = _prepare_chapter_html(
+            _AO3_SPAN_SOUP, hr_as_stars=False, strip_notes=False,
+        )
+        assert "oooP1ooo" not in out
+        assert "<hr" in out
+        assert "Nothing was the same." in out
 
 
 class TestHrAsStars:
