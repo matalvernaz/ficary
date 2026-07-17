@@ -40,6 +40,15 @@
   `FICARY_CF_SOLVE_HEADLESS=1` to keep it hidden on a machine with no
   screen.
 
+* **Updating no longer makes you click "OK" after the download.** Once
+  you chose "Update Now", the app still popped an "Update Complete" box
+  and waited for a click before closing — even though the first prompt
+  already said it would close and reopen on its own. That second click
+  is gone: the update downloads, the app closes, and it relaunches
+  without another prompt. (One prompt still appears if a download or
+  audiobook render started *while* the update was downloading, since
+  quitting would interrupt it.)
+
 ## 2.14.5 — 2026-07-11
 
 **Bug fix**

@@ -1999,13 +1999,13 @@ class MainFrame(wx.Frame):
             )
             if choice != wx.YES:
                 return
-        wx.MessageBox(
-            f"Updated to {tag}. The app will now close and reopen "
-            f"automatically once the new files are in place.",
-            "Update Complete",
-            wx.OK,
-            parent=self,
-        )
+        # No "Update Complete" confirmation here. The user already agreed
+        # at the "Update Now" prompt — which spelled out that the app
+        # closes and reopens by itself — so a second OK click was pure
+        # friction. Go straight to the swap-and-relaunch; the window
+        # closing and the fresh one opening is feedback enough (and a
+        # screen reader announces both).
+        logger.info("Update to %s downloaded; closing to install.", tag)
         # Prefs snapshot at _perform_update is stale by now — the user
         # may have toggled filters or edited fields while the download
         # ran. Save again so the post-restart app sees the latest state.
