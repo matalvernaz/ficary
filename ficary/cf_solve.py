@@ -266,6 +266,30 @@ def solve(
     )
 
 
+def _launch_kwargs() -> dict:
+    """Chromium launch options for the challenge solver.
+
+    Visible (headed) by default: a headless Chromium is fingerprinted
+    and rejected by Cloudflare's "under attack" challenges — the AO3
+    shields-up case — so a real, on-screen window clears the interactive
+    challenge far more reliably. ``FICARY_CF_SOLVE_HEADLESS=1`` forces
+    headless for a display-less environment (a server run), accepting the
+    much lower success rate.
+
+    The automation tells Cloudflare's bot probe looks for are stripped:
+    the ``AutomationControlled`` blink feature and the
+    ``--enable-automation`` switch (which sets ``navigator.webdriver`` and
+    shows an infobar). Without this the challenge flags the browser as a
+    bot even when it's visible.
+    """
+    import os
+    return {
+        "headless": os.environ.get("FICARY_CF_SOLVE_HEADLESS", "") == "1",
+        "args": ["--disable-blink-features=AutomationControlled"],
+        "ignore_default_args": ["--enable-automation"],
+    }
+
+
 def _default_launcher(url: str, timeout_s: float) -> tuple[list[dict], str]:
     """Production launcher: opens a real Chromium, waits for the
     challenge to clear, returns (cookies, user_agent).
@@ -286,9 +310,16 @@ def _default_launcher(url: str, timeout_s: float) -> tuple[list[dict], str]:
 
     timeout_ms = int(timeout_s * 1000)
     with sync_playwright() as pw:
-        browser = pw.chromium.launch(headless=True)
+        browser = pw.chromium.launch(**_launch_kwargs())
         try:
             context = browser.new_context()
+            # navigator.webdriver defaults to true under Playwright;
+            # delete it before any page script runs so the challenge's
+            # bot probe doesn't trip on it.
+            context.add_init_script(
+                "Object.defineProperty(navigator, 'webdriver', "
+                "{get: () => undefined})"
+            )
             page = context.new_page()
             page.goto(url, timeout=timeout_ms)
             # Wait until the DOM is stable — Cloudflare's challenge

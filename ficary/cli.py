@@ -4093,12 +4093,13 @@ def _build_parser() -> argparse.ArgumentParser:
         "--cf-solve",
         action="store_true",
         help=(
-            "On persistent HTTP 403, launch a headless Chromium via "
-            "Playwright to solve the Cloudflare challenge and inject "
-            "the resulting cookies into the scraper session. Solved "
-            "cookies are cached on disk for 24h so subsequent runs "
-            "reuse them without re-invoking the browser. Requires "
-            "the 'cf-solve' extra: "
+            "On a stubborn Cloudflare challenge (e.g. AO3 'shields up'), "
+            "open a real Chromium window via Playwright to clear the "
+            "challenge and inject the resulting cookies into the scraper "
+            "session. Solved cookies are cached on disk for 24h so "
+            "subsequent runs reuse them without re-invoking the browser. "
+            "Set FICARY_CF_SOLVE_HEADLESS=1 to run it hidden (less "
+            "reliable). Requires the 'cf-solve' extra: "
             "pip install 'ficary[cf-solve]' && playwright install chromium."
         ),
     )

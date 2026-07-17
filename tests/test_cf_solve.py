@@ -561,3 +561,26 @@ def test_fetch_403_then_solver_success_produces_body(
     body = scr._fetch("https://www.fanfiction.net/s/1")
     assert body == "<html>hello</html>"
     assert solved["n"] == 1
+
+
+class TestLaunchKwargs:
+    """The solver must launch a *visible* browser by default (headless is
+    fingerprinted and blocked by Cloudflare's under-attack challenges) and
+    strip the automation tells the challenge's bot probe looks for."""
+
+    def test_visible_by_default(self, monkeypatch):
+        monkeypatch.delenv("FICARY_CF_SOLVE_HEADLESS", raising=False)
+        kw = cf_solve._launch_kwargs()
+        assert kw["headless"] is False
+        assert "--disable-blink-features=AutomationControlled" in kw["args"]
+        assert "--enable-automation" in kw["ignore_default_args"]
+
+    def test_env_forces_headless(self, monkeypatch):
+        monkeypatch.setenv("FICARY_CF_SOLVE_HEADLESS", "1")
+        assert cf_solve._launch_kwargs()["headless"] is True
+
+    def test_non_one_value_stays_visible(self, monkeypatch):
+        # Only the exact sentinel "1" opts into headless; anything else
+        # (e.g. "0", "false") keeps the reliable visible default.
+        monkeypatch.setenv("FICARY_CF_SOLVE_HEADLESS", "0")
+        assert cf_solve._launch_kwargs()["headless"] is False

@@ -25,6 +25,18 @@
   `$FICARY_AO3_COOKIE` / `$FICARY_AO3_USER_AGENT` environment
   variables).
 
+* **`--cf-solve` now opens a *visible* browser instead of a hidden
+  one.** The Cloudflare solver used a headless Chromium, which
+  Cloudflare's "under attack" mode (AO3 shields-up) fingerprints and
+  blocks — so the solver often couldn't get through the very challenge
+  it exists for. It now launches a real, on-screen Chromium with the
+  automation give-aways stripped, which clears the challenge far more
+  reliably; the window closes itself once it's done. Install it the same
+  way as before (Preferences → optional features → "Cloudflare challenge
+  solver", or `pip install 'ficary[cf-solve]'`). Set
+  `FICARY_CF_SOLVE_HEADLESS=1` to keep it hidden on a machine with no
+  screen.
+
 ## 2.14.5 — 2026-07-11
 
 **Bug fix**
