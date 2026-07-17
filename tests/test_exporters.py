@@ -801,6 +801,89 @@ class TestNormalizeChapterMarkup:
         assert "Nothing was the same." in out
 
 
+_AO3_NOTED_CHAPTER = (
+    '<aside class="ao3-chapter-notes"><h4>Notes</h4>'
+    "<p>See the end of the chapter for more notes.</p></aside>"
+    "<p>Story text with a footnote marker"
+    '<sup><a href="#ch1.1back">1</a></sup>.</p>'
+    '<aside class="ao3-chapter-end-notes"><h4>End Notes</h4>'
+    '<p><a id="ch1.1" name="ch1.1"></a>1. A translation note.</p></aside>'
+)
+
+
+class TestChapterNotesMode:
+    def test_keep_is_a_no_op(self):
+        from ficary.exporters import _apply_chapter_notes_mode
+        assert _apply_chapter_notes_mode(_AO3_NOTED_CHAPTER, "keep") \
+            is _AO3_NOTED_CHAPTER
+
+    def test_omit_drops_all_note_asides(self):
+        from ficary.exporters import _apply_chapter_notes_mode
+        out = _apply_chapter_notes_mode(_AO3_NOTED_CHAPTER, "omit")
+        assert "<aside" not in out
+        assert "End Notes" not in out
+        assert "Story text with a footnote marker" in out
+
+    def test_collapse_wraps_in_details_with_label_summary(self):
+        from ficary.exporters import _apply_chapter_notes_mode
+        out = _apply_chapter_notes_mode(_AO3_NOTED_CHAPTER, "collapse")
+        assert out.count("<details>") == 2
+        assert "<summary>End Notes</summary>" in out
+        assert "<summary>Notes</summary>" in out
+        # Label moved into <summary>; no leftover heading in the aside.
+        assert "<h4>" not in out
+        assert "A translation note." in out
+
+    def test_non_ao3_html_untouched(self):
+        from ficary.exporters import _apply_chapter_notes_mode
+        html = "<p>Plain chapter.</p><aside><p>authorial aside</p></aside>"
+        assert _apply_chapter_notes_mode(html, "omit") is html
+
+    def test_format_resolution(self):
+        from ficary.exporters import _chapter_notes_for_format
+        assert _chapter_notes_for_format(
+            "collapse", supports_collapse=True) == "collapse"
+        assert _chapter_notes_for_format(
+            "collapse", supports_collapse=False) == "keep"
+        assert _chapter_notes_for_format(
+            "omit", supports_collapse=False) == "omit"
+        assert _chapter_notes_for_format(
+            "banana", supports_collapse=True) == "keep"
+
+    def test_export_html_collapse_end_to_end(self):
+        story = _make_story()
+        story.chapters[0] = Chapter(
+            number=1, title="Ch 1", html=_AO3_NOTED_CHAPTER,
+        )
+        with tempfile.TemporaryDirectory() as td:
+            path = export_html(story, td, chapter_notes="collapse")
+            out = path.read_text(encoding="utf-8")
+        assert "<summary>End Notes</summary>" in out
+        assert "A translation note." in out
+
+    def test_export_txt_treats_collapse_as_keep(self):
+        story = _make_story()
+        story.chapters[0] = Chapter(
+            number=1, title="Ch 1", html=_AO3_NOTED_CHAPTER,
+        )
+        with tempfile.TemporaryDirectory() as td:
+            path = export_txt(story, td, chapter_notes="collapse")
+            out = path.read_text(encoding="utf-8")
+        assert "End Notes" in out
+        assert "A translation note." in out
+
+    def test_export_txt_omit(self):
+        story = _make_story()
+        story.chapters[0] = Chapter(
+            number=1, title="Ch 1", html=_AO3_NOTED_CHAPTER,
+        )
+        with tempfile.TemporaryDirectory() as td:
+            path = export_txt(story, td, chapter_notes="omit")
+            out = path.read_text(encoding="utf-8")
+        assert "End Notes" not in out
+        assert "Story text with a footnote marker" in out
+
+
 class TestHrAsStars:
     def test_substitutes_hr_tags(self):
         out = _apply_hr_as_stars("before<hr/>middle<hr>after")

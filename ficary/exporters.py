@@ -33,6 +33,18 @@ HTML_STYLE_CLASSIC = "classic"
 HTML_STYLES = (HTML_STYLE_MODERN, HTML_STYLE_CLASSIC)
 DEFAULT_HTML_STYLE = HTML_STYLE_MODERN
 
+# What happens to a site's structured per-chapter note blocks (AO3's
+# Chapter Summary / Notes / End Notes asides). ``collapse`` is honoured
+# by the HTML exporter only — <details> support in EPUB readers is too
+# inconsistent to ship, so EPUB/TXT/audio treat it as ``keep``.
+CHAPTER_NOTES_KEEP = "keep"
+CHAPTER_NOTES_COLLAPSE = "collapse"
+CHAPTER_NOTES_OMIT = "omit"
+CHAPTER_NOTES_MODES = (
+    CHAPTER_NOTES_KEEP, CHAPTER_NOTES_COLLAPSE, CHAPTER_NOTES_OMIT,
+)
+DEFAULT_CHAPTER_NOTES = CHAPTER_NOTES_KEEP
+
 
 def _emit(progress: Callable[[str], None] | None, line: str) -> None:
     """Send a status line both to the GUI / CLI ``progress`` callback
@@ -278,6 +290,7 @@ def _prepare_chapter_html(
     hr_as_stars: bool,
     strip_notes: bool,
     *,
+    chapter_notes: str = DEFAULT_CHAPTER_NOTES,
     llm_config: dict | None = None,
     site_name: str | None = None,
     story_id=None,
@@ -286,13 +299,16 @@ def _prepare_chapter_html(
 ) -> str:
     """Apply optional chapter-level transformations in the right order.
 
-    ``llm_config`` enables a second-pass A/N strip via
-    :func:`strip_an_via_llm`. Only runs when ``strip_notes`` is also
-    on — the LLM is a backstop for cases the regex misses, not a
-    replacement for it. ``site_name`` / ``story_id`` /
+    ``chapter_notes`` handles the structured per-chapter note asides
+    (see :func:`_apply_chapter_notes_mode`); callers pass ``collapse``
+    only for HTML output. ``llm_config`` enables a second-pass A/N
+    strip via :func:`strip_an_via_llm`. Only runs when ``strip_notes``
+    is also on — the LLM is a backstop for cases the regex misses, not
+    a replacement for it. ``site_name`` / ``story_id`` /
     ``chapter_number`` are forwarded into the LLM helper's per-story
     disk cache so re-exports don't re-spend tokens.
     """
+    html = _apply_chapter_notes_mode(html, chapter_notes)
     html = _normalize_chapter_markup(html)
     if strip_notes:
         html = strip_note_paragraphs(html)
@@ -328,6 +344,7 @@ def _prepare_chapter_html_with_llm_fallback(
     hr_as_stars: bool,
     strip_notes: bool,
     *,
+    chapter_notes: str = DEFAULT_CHAPTER_NOTES,
     llm_config: dict | None,
     site_name: str | None,
     story_id,
@@ -365,6 +382,7 @@ def _prepare_chapter_html_with_llm_fallback(
     try:
         prepared = _prepare_chapter_html(
             html, hr_as_stars, strip_notes,
+            chapter_notes=chapter_notes,
             llm_config=llm_config,
             site_name=site_name,
             story_id=story_id,
@@ -386,6 +404,7 @@ def _prepare_chapter_html_with_llm_fallback(
         # regex-stripped content still lands in the export.
         fallback = _prepare_chapter_html(
             html, hr_as_stars, strip_notes,
+            chapter_notes=chapter_notes,
             llm_config=None,
             site_name=site_name,
             story_id=story_id,
@@ -438,6 +457,7 @@ def _prepare_chapter_html_with_llm_fallback(
         return (
             _prepare_chapter_html(
                 html, hr_as_stars, strip_notes,
+                chapter_notes=chapter_notes,
                 llm_config=None,
                 site_name=site_name,
                 story_id=story_id,
@@ -458,7 +478,11 @@ def export_txt(
     llm_config: dict | None = None,
     progress: Callable[[str], None] | None = None,
     html_style: str = DEFAULT_HTML_STYLE,  # accepted for signature parity; HTML-only
+    chapter_notes: str = DEFAULT_CHAPTER_NOTES,
 ) -> Path:
+    chapter_notes = _chapter_notes_for_format(
+        chapter_notes, supports_collapse=False,
+    )
     filename = format_filename(story, template) + ".txt"
     path = Path(output_dir) / filename
 
@@ -478,6 +502,7 @@ def export_txt(
         html, llm_disabled, consecutive_timeouts = (
             _prepare_chapter_html_with_llm_fallback(
                 ch.html, hr_as_stars=False, strip_notes=strip_notes,
+                chapter_notes=chapter_notes,
                 llm_config=llm_config,
                 site_name=site_name, story_id=story.id,
                 chapter_number=ch.number, progress=progress,
@@ -554,7 +579,11 @@ def export_html(
     llm_config: dict | None = None,
     progress: Callable[[str], None] | None = None,
     html_style: str = DEFAULT_HTML_STYLE,
+    chapter_notes: str = DEFAULT_CHAPTER_NOTES,
 ) -> Path:
+    chapter_notes = _chapter_notes_for_format(
+        chapter_notes, supports_collapse=True,
+    )
     filename = format_filename(story, template) + ".html"
     path = Path(output_dir) / filename
 
@@ -622,6 +651,7 @@ def export_html(
         chapter_html, llm_disabled, consecutive_timeouts = (
             _prepare_chapter_html_with_llm_fallback(
                 ch.html, hr_as_stars, strip_notes,
+                chapter_notes=chapter_notes,
                 llm_config=llm_config,
                 site_name=site_name,
                 story_id=story.id,
@@ -990,6 +1020,65 @@ def _apply_hr_as_stars(html: str) -> str:
         tag.replace_with(new)
         replaced = True
     return str(soup) if replaced else html
+
+
+_CHAPTER_NOTES_ASIDE_CLASS_RE = re.compile(
+    r"\bao3-chapter-(?:summary|notes|end-notes)\b"
+)
+
+
+def _chapter_notes_for_format(mode: str, *, supports_collapse: bool) -> str:
+    """Resolve the chapter-notes preference for one output format.
+
+    ``collapse`` needs ``<details>`` rendering, which only the HTML
+    exporter provides — everywhere else it degrades to ``keep``.
+    Unknown values (a hand-edited prefs file) also degrade to ``keep``
+    so an export never fails over a display preference.
+    """
+    if mode not in CHAPTER_NOTES_MODES:
+        return CHAPTER_NOTES_KEEP
+    if mode == CHAPTER_NOTES_COLLAPSE and not supports_collapse:
+        return CHAPTER_NOTES_KEEP
+    return mode
+
+
+def _apply_chapter_notes_mode(html: str, mode: str) -> str:
+    """Apply the chapter-notes preference to a chapter's structured
+    note asides (``ao3-chapter-summary`` / ``-notes`` / ``-end-notes``).
+
+    ``omit`` drops the asides (in-text footnote links that pointed into
+    an end-notes block go dead — the reference marker stays, its target
+    doesn't). ``collapse`` wraps each aside's content in a
+    ``<details>`` whose ``<summary>`` is the block label, so the notes
+    read as one collapsed disclosure instead of inline text; the HTML
+    exporter is the only caller that passes it.
+    """
+    if mode not in (CHAPTER_NOTES_COLLAPSE, CHAPTER_NOTES_OMIT):
+        return html
+    if "ao3-chapter-" not in html:
+        return html
+    from bs4 import BeautifulSoup
+
+    soup = BeautifulSoup(html, "html.parser")
+    changed = False
+    for aside in soup.find_all("aside", class_=_CHAPTER_NOTES_ASIDE_CLASS_RE):
+        if mode == CHAPTER_NOTES_OMIT:
+            aside.decompose()
+            changed = True
+            continue
+        label_tag = aside.find("h4")
+        label = label_tag.get_text(strip=True) if label_tag else "Notes"
+        if label_tag:
+            label_tag.decompose()
+        details = soup.new_tag("details")
+        summary = soup.new_tag("summary")
+        summary.string = label
+        details.append(summary)
+        for child in list(aside.children):
+            details.append(child.extract())
+        aside.append(details)
+        changed = True
+    return str(soup) if changed else html
 
 
 _HEADING_TAGS = ("h1", "h2", "h3", "h4", "h5", "h6")
@@ -2075,7 +2164,11 @@ def export_epub(
     llm_config: dict | None = None,
     progress: Callable[[str], None] | None = None,
     html_style: str = DEFAULT_HTML_STYLE,  # accepted for signature parity; HTML-only
+    chapter_notes: str = DEFAULT_CHAPTER_NOTES,
 ) -> Path:
+    chapter_notes = _chapter_notes_for_format(
+        chapter_notes, supports_collapse=False,
+    )
     try:
         from ebooklib import epub
     except ImportError:
@@ -2240,6 +2333,7 @@ def export_epub(
         chapter_html, llm_disabled, consecutive_timeouts = (
             _prepare_chapter_html_with_llm_fallback(
                 ch.html, hr_as_stars, strip_notes,
+                chapter_notes=chapter_notes,
                 llm_config=llm_config,
                 site_name=site_prefix,
                 story_id=story.id,

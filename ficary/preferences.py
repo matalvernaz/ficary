@@ -46,6 +46,16 @@ _HTML_STYLE_LABELS = [
     "Modern — heading and metadata table",
     "Classic — plain legacy-downloader layout",
 ]
+
+# Per-chapter note blocks (AO3 Chapter Summary / Notes / End Notes).
+# Values mirror exporters.CHAPTER_NOTES_MODES; same value/label scheme
+# as the HTML-layout choice above.
+_CHAPTER_NOTES_VALUES = ["keep", "collapse", "omit"]
+_CHAPTER_NOTES_LABELS = [
+    "Keep them in the chapter",
+    "Collapse them (HTML output only)",
+    "Leave them out entirely",
+]
 _LOG_LEVELS = ["DEBUG", "INFO", "WARNING", "ERROR"]
 
 # (seconds, display label) pairs for the watchlist poll-interval
@@ -240,6 +250,21 @@ class PreferencesDialog(wx.Dialog):
             ),
         )
         self.html_style_ctrl.SetName("Default HTML layout")
+        sizer.Add(row, 0, wx.EXPAND | wx.ALL, 6)
+
+        row, self.chapter_notes_ctrl = self._labeled_row(
+            panel, "Chapter &notes (summaries, notes, end notes):",
+            lambda p: wx.Choice(p, choices=_CHAPTER_NOTES_LABELS),
+            help_text=(
+                "AO3 attaches structured note blocks to chapters — authors "
+                "use them for warnings, glossaries, and footnotes, but also "
+                "for chatter. 'Collapse' tucks each block behind a collapsed "
+                "disclosure in HTML output (EPUB/TXT/audio keep them "
+                "inline). 'Leave them out' removes them everywhere, "
+                "including audiobook narration."
+            ),
+        )
+        self.chapter_notes_ctrl.SetName("Chapter notes handling")
         sizer.Add(row, 0, wx.EXPAND | wx.ALL, 6)
 
         sizer.AddSpacer(8)
@@ -704,6 +729,13 @@ class PreferencesDialog(wx.Dialog):
             self.html_style_ctrl.SetSelection(_HTML_STYLE_VALUES.index(html_style))
         else:
             self.html_style_ctrl.SetSelection(0)
+        chapter_notes = (self.prefs.get(_p.KEY_CHAPTER_NOTES) or "keep").lower()
+        if chapter_notes in _CHAPTER_NOTES_VALUES:
+            self.chapter_notes_ctrl.SetSelection(
+                _CHAPTER_NOTES_VALUES.index(chapter_notes)
+            )
+        else:
+            self.chapter_notes_ctrl.SetSelection(0)
         self.hr_stars_ctrl.SetValue(self.prefs.get_bool(_p.KEY_HR_AS_STARS))
         self.strip_notes_ctrl.SetValue(self.prefs.get_bool(_p.KEY_STRIP_NOTES))
         self.fichub_ctrl.SetValue(self.prefs.get_bool(_p.KEY_FICHUB))
@@ -853,6 +885,11 @@ class PreferencesDialog(wx.Dialog):
         html_style_idx = self.html_style_ctrl.GetSelection()
         if html_style_idx >= 0:
             self.prefs.set(_p.KEY_HTML_STYLE, _HTML_STYLE_VALUES[html_style_idx])
+        chapter_notes_idx = self.chapter_notes_ctrl.GetSelection()
+        if chapter_notes_idx >= 0:
+            self.prefs.set(
+                _p.KEY_CHAPTER_NOTES, _CHAPTER_NOTES_VALUES[chapter_notes_idx],
+            )
         self.prefs.set_bool(_p.KEY_HR_AS_STARS, self.hr_stars_ctrl.GetValue())
         self.prefs.set_bool(
             _p.KEY_STRIP_NOTES, self.strip_notes_ctrl.GetValue(),

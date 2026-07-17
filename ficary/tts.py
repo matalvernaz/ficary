@@ -1979,7 +1979,8 @@ def _llm_strip_an_paragraphs(text: str, llm_config: dict | None) -> str:
     return "\n\n".join(kept)
 
 
-def _html_to_audiobook_text(html, strip_notes=False, hr_as_stars=False):
+def _html_to_audiobook_text(html, strip_notes=False, hr_as_stars=False,
+                            chapter_notes="keep"):
     """HTML → plain text tuned for TTS, gated on the user-facing flags.
 
     When ``strip_notes`` is set, paragraph-level author's notes are
@@ -1987,16 +1988,25 @@ def _html_to_audiobook_text(html, strip_notes=False, hr_as_stars=False):
     divider — real ``<hr/>`` tags plus text-based dividers (``---``,
     ``* * *``, ``oOo``, etc.) — is replaced with a scene-break sentinel
     so the chapter stitcher can insert a silence pause instead of
-    synthesising the divider as literal speech.
+    synthesising the divider as literal speech. ``chapter_notes="omit"``
+    drops a site's structured per-chapter note asides (AO3 Chapter
+    Summary / Notes / End Notes) so they aren't narrated; ``collapse``
+    is HTML-display-only and reads as ``keep`` here.
 
-    With both flags off, this degrades to the legacy ``html_to_text``
+    With everything off, this degrades to the legacy ``html_to_text``
     behaviour: A/Ns are read aloud and ``<hr/>`` becomes "* * *" (which
     edge-tts reads as "asterisk asterisk asterisk"). Listeners who
     actually want that can opt in by leaving both checkboxes clear.
     """
     from bs4 import BeautifulSoup, NavigableString, Tag
 
-    cleaned = strip_note_paragraphs(html) if strip_notes else html
+    from .exporters import _apply_chapter_notes_mode
+
+    cleaned = html
+    if chapter_notes == "omit":
+        cleaned = _apply_chapter_notes_mode(cleaned, "omit")
+    if strip_notes:
+        cleaned = strip_note_paragraphs(cleaned)
     soup = BeautifulSoup(cleaned, "html.parser")
 
     for br in soup.find_all("br"):
@@ -2828,7 +2838,8 @@ FFPLAY = _find_tool("ffplay")
 
 # ── Voice preview ─────────────────────────────────────────────────
 
-def detect_voices(story, map_path=None, strip_notes=False, hr_as_stars=False):
+def detect_voices(story, map_path=None, strip_notes=False, hr_as_stars=False,
+                  chapter_notes="keep"):
     """Run the character + voice pipeline on a Story without synthesising.
 
     Returns a list of {"name", "gender", "voice"} dicts in frequency order
@@ -2842,7 +2853,10 @@ def detect_voices(story, map_path=None, strip_notes=False, hr_as_stars=False):
     full_text = ""
     all_segments = []
     for ch in story.chapters:
-        text = _html_to_audiobook_text(ch.html, strip_notes=strip_notes, hr_as_stars=hr_as_stars)
+        text = _html_to_audiobook_text(
+            ch.html, strip_notes=strip_notes, hr_as_stars=hr_as_stars,
+            chapter_notes=chapter_notes,
+        )
         full_text += text + "\n"
         all_segments.append(_segment_chapter_text(text))
 
@@ -3168,6 +3182,7 @@ def generate_audiobook(
     enabled_tts_providers=None,
     strip_notes=False,
     hr_as_stars=False,
+    chapter_notes="keep",
     cancel_event=None,
 ):
     """Generate an M4B audiobook from a Story with character voice mapping.
@@ -3278,6 +3293,7 @@ def generate_audiobook(
     for ch in story.chapters:
         text = _html_to_audiobook_text(
             ch.html, strip_notes=strip_notes, hr_as_stars=hr_as_stars,
+            chapter_notes=chapter_notes,
         )
         if use_llm_an:
             # Backstop: regex-based strip_note_paragraphs may have left

@@ -13,6 +13,8 @@ from . import legacy as _legacy
 from .ao3 import AO3LockedError
 from .download_queue import DownloadQueues
 from .exporters import (
+    CHAPTER_NOTES_MODES,
+    DEFAULT_CHAPTER_NOTES,
     DEFAULT_HTML_STYLE,
     DEFAULT_TEMPLATE,
     EXPORTERS,
@@ -354,6 +356,7 @@ def _handle_merge_series(
                 enabled_tts_providers=_tts_providers_from_args(args),
                 strip_notes=args.strip_notes,
                 hr_as_stars=args.hr_as_stars,
+                chapter_notes=args.chapter_notes,
             )
         else:
             exporter = EXPORTERS[args.format]
@@ -362,6 +365,7 @@ def _handle_merge_series(
                 hr_as_stars=args.hr_as_stars,
                 strip_notes=args.strip_notes,
                 html_style=args.html_style,
+                chapter_notes=args.chapter_notes,
                 llm_config=_llm_strip_notes_config(args),
                 progress=print,
             )
@@ -453,6 +457,7 @@ def _handle_merge_parts(
             enabled_tts_providers=_tts_providers_from_args(args),
             strip_notes=args.strip_notes,
             hr_as_stars=args.hr_as_stars,
+            chapter_notes=args.chapter_notes,
         )
     else:
         exporter = EXPORTERS[args.format]
@@ -461,6 +466,7 @@ def _handle_merge_parts(
             hr_as_stars=args.hr_as_stars,
             strip_notes=args.strip_notes,
             html_style=args.html_style,
+            chapter_notes=args.chapter_notes,
             llm_config=_llm_strip_notes_config(args),
             progress=print,
         )
@@ -545,6 +551,7 @@ def _handle_subscribestar_story(
             enabled_tts_providers=_tts_providers_from_args(args),
             strip_notes=args.strip_notes,
             hr_as_stars=args.hr_as_stars,
+            chapter_notes=args.chapter_notes,
         )
     else:
         exporter = EXPORTERS[args.format]
@@ -553,6 +560,7 @@ def _handle_subscribestar_story(
             hr_as_stars=args.hr_as_stars,
             strip_notes=args.strip_notes,
             html_style=args.html_style,
+            chapter_notes=args.chapter_notes,
             llm_config=_llm_strip_notes_config(args),
             progress=print,
         )
@@ -1088,6 +1096,7 @@ def _download_one(
                 enabled_tts_providers=_tts_providers_from_args(args),
                 strip_notes=args.strip_notes,
                 hr_as_stars=args.hr_as_stars,
+                chapter_notes=getattr(args, "chapter_notes", DEFAULT_CHAPTER_NOTES),
             )
         else:
             exporter = EXPORTERS[args.format]
@@ -1100,6 +1109,7 @@ def _download_one(
                 # getattr: this shared path is also reached from tests
                 # with hand-built namespaces that predate this option.
                 html_style=getattr(args, "html_style", DEFAULT_HTML_STYLE),
+                chapter_notes=getattr(args, "chapter_notes", DEFAULT_CHAPTER_NOTES),
                 llm_config=_llm_strip_notes_config(args),
                 progress=status,
             )
@@ -4234,6 +4244,20 @@ def _build_parser() -> argparse.ArgumentParser:
             "the flat 'Label: value' paragraph layout and bare page title "
             "of legacy browser fanfic downloaders. Chapter text is identical "
             "either way."
+        ),
+    )
+    parser.add_argument(
+        "--chapter-notes",
+        choices=CHAPTER_NOTES_MODES,
+        default=DEFAULT_CHAPTER_NOTES,
+        help=(
+            "What to do with a site's structured per-chapter note blocks "
+            "(AO3's Chapter Summary / Notes / End Notes). 'keep' (default) "
+            "leaves them inline; 'collapse' tucks each behind a collapsed "
+            "disclosure in HTML output (other formats keep them); 'omit' "
+            "drops them everywhere, including audiobook narration — note "
+            "that in-text footnote links pointing into a removed End Notes "
+            "block will have no target."
         ),
     )
     parser.add_argument(

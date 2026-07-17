@@ -64,6 +64,9 @@ class _DownloadParams:
     # "Default HTML layout" preference — there's no per-download control
     # in the main form, keeping that tab-stop chain short.
     html_style: str = "modern"
+    # Structured per-chapter notes handling (exporters.CHAPTER_NOTES_*).
+    # Prefs-only, same rationale as html_style.
+    chapter_notes: str = "keep"
 
 
 logger = logging.getLogger(__name__)
@@ -2731,6 +2734,7 @@ class MainFrame(wx.Frame):
                 self.prefs.get(_p.KEY_SUBSCRIBESTAR_COOKIE) or ""
             ).strip(),
             html_style=(self.prefs.get(_p.KEY_HTML_STYLE) or "modern"),
+            chapter_notes=(self.prefs.get(_p.KEY_CHAPTER_NOTES) or "keep"),
             send_to_abs=(
                 self.abs_send_ctrl.GetValue() if fmt == "audio" else False
             ),
@@ -3040,6 +3044,7 @@ class MainFrame(wx.Frame):
                     enabled_tts_providers=list(params.enabled_tts_providers),
                     strip_notes=params.strip_notes,
                     hr_as_stars=params.hr_as_stars,
+                    chapter_notes=params.chapter_notes,
                     cancel_event=cancel,
                 )
             finally:
@@ -3063,6 +3068,7 @@ class MainFrame(wx.Frame):
             story, output_dir, template=params.filename_template,
             hr_as_stars=params.hr_as_stars, strip_notes=params.strip_notes,
             html_style=params.html_style,
+            chapter_notes=params.chapter_notes,
             llm_config=an_llm_config,
             progress=self._log,
         )

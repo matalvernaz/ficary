@@ -1,5 +1,24 @@
 # Changelog
 
+## 2.16.2 — 2026-07-17
+
+**Chapter notes are now your call**
+
+* **New "Chapter notes" preference (and `--chapter-notes` CLI flag).**
+  AO3 attaches structured note blocks to chapters — Chapter Summary,
+  Notes, End Notes — and some authors use them on nearly every chapter.
+  They're often worth keeping (warnings, glossaries, translation
+  footnotes), so the default stays **Keep them in the chapter**. But now
+  you can choose **Collapse them** — HTML output tucks each block behind
+  a collapsed disclosure you can expand in place (EPUB/TXT/audio keep
+  them inline; e-reader support for collapsible sections is too spotty) —
+  or **Leave them out entirely**, which removes them from every format
+  including audiobook narration. One caveat on leaving them out: if the
+  author used numbered in-text footnotes, the little reference markers
+  remain but point at nothing.
+  Preferences → Downloads → "Chapter notes", next to the HTML layout
+  choice.
+
 ## 2.16.1 — 2026-07-17
 
 **Cleaner chapters from AO3 (and everywhere else)**

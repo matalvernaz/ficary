@@ -68,6 +68,7 @@ class DownloadJob:
     hr_as_stars: bool = False
     strip_notes: bool = False
     html_style: str = "modern"  # exporters.HTML_STYLE_MODERN; HTML export only
+    chapter_notes: str = "keep"  # exporters.CHAPTER_NOTES_KEEP
     llm_strip_notes: bool = False
     speech_rate: int = 0
     attribution: str = "builtin"
@@ -90,6 +91,7 @@ class DownloadJob:
             KEY_AO3_USER_AGENT,
             KEY_ATTRIBUTION_BACKEND,
             KEY_ATTRIBUTION_MODEL_SIZE,
+            KEY_CHAPTER_NOTES,
             KEY_FICHUB,
             KEY_HR_AS_STARS,
             KEY_HTML_STYLE,
@@ -107,6 +109,7 @@ class DownloadJob:
             hr_as_stars=prefs.get_bool(KEY_HR_AS_STARS),
             strip_notes=prefs.get_bool(KEY_STRIP_NOTES),
             html_style=(prefs.get(KEY_HTML_STYLE) or "modern"),
+            chapter_notes=(prefs.get(KEY_CHAPTER_NOTES) or "keep"),
             llm_strip_notes=prefs.get_bool(KEY_LLM_STRIP_NOTES),
             # The manual GUI download path already honours these (gui.py);
             # the update / watchlist-auto-download paths funnel through

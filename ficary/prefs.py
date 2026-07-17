@@ -59,6 +59,11 @@ KEY_STRIP_NOTES = "strip_notes"
 # exporters.HTML_STYLE_MODERN / HTML_STYLE_CLASSIC; kept as a literal so
 # this lightweight module needn't import the heavy exporters package.
 KEY_HTML_STYLE = "html_style"
+# Structured per-chapter note blocks (AO3's Chapter Summary / Notes /
+# End Notes): "keep" inline, "collapse" behind a <details> disclosure
+# (HTML export only; others read it as keep), or "omit" entirely.
+# Mirrors exporters.CHAPTER_NOTES_MODES; literal for the same reason.
+KEY_CHAPTER_NOTES = "chapter_notes"
 # Pair with KEY_STRIP_NOTES: when on, ``strip_an_via_llm`` runs after
 # the regex pass to catch author's notes that the heuristic missed.
 # Off by default; the LLM round-trip costs latency (and tokens on
@@ -219,6 +224,7 @@ DEFAULTS = {
     KEY_HR_AS_STARS: False,
     KEY_STRIP_NOTES: False,
     KEY_HTML_STYLE: "modern",  # exporters.HTML_STYLE_MODERN
+    KEY_CHAPTER_NOTES: "keep",  # exporters.CHAPTER_NOTES_KEEP
     KEY_LLM_STRIP_NOTES: False,
     KEY_FICHUB: False,
     KEY_MERGE_SERIES: False,
