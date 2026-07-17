@@ -697,3 +697,25 @@ class TestAO3UserAgentPinning:
         s = self._ao3(session_cookie="userid=1")
         first = s._session()
         assert s._rotate_browser() is not first
+
+
+class TestBrowserFetchFastFail:
+    """A scraper that clears the challenge in a real browser
+    (_browser_fetch_challenge=True) must bail from the curl retry loop on
+    the FIRST interactive challenge instead of burning all retries — the
+    caller hands off to the browser immediately."""
+
+    def test_bails_on_first_challenge(self, monkeypatch):
+        from ficary.scraper import BaseScraper, CloudflareChallengeError
+
+        monkeypatch.setattr("ficary.scraper.time.sleep", lambda s: None)
+
+        class _BrowserFetchScraper(BaseScraper):
+            _browser_fetch_challenge = True
+
+        scraper = _BrowserFetchScraper(use_cache=False, max_retries=5, cf_solve=True)
+        sess = _StubSession([_ChallengeResponse() for _ in range(5)])
+        with pytest.raises(CloudflareChallengeError):
+            scraper._fetch("https://archiveofourown.org/works/1", session=sess)
+        # Fast-fail: exactly one request, not the full retry budget.
+        assert len(sess.urls) == 1

@@ -9,6 +9,7 @@ when to skip it).
 
 from __future__ import annotations
 
+import sys
 import time
 from pathlib import Path
 from unittest.mock import MagicMock
@@ -605,3 +606,71 @@ class TestLaunchKwargs:
         # (e.g. "0", "false") keeps the reliable visible default.
         monkeypatch.setenv("FICARY_CF_SOLVE_HEADLESS", "0")
         assert cf_solve._launch_kwargs()["headless"] is False
+
+
+
+
+# ── browser-fetch (the robust path) ─────────────────────────────────
+
+_FAKE_WORKER_OK = (
+    "import argparse, json, sys" + chr(10) +
+    "ap = argparse.ArgumentParser()" + chr(10) +
+    "ap.add_argument('--url'); ap.add_argument('--out')" + chr(10) +
+    "ap.add_argument('--profile', default=''); ap.add_argument('--timeout')" + chr(10) +
+    "ap.add_argument('--headless', action='store_true')" + chr(10) +
+    "a = ap.parse_args()" + chr(10) +
+    "open(a.out, 'w', encoding='utf-8').write('<html>WORK ' + a.url + '</html>')" + chr(10) +
+    "sys.stdout.write(json.dumps({'status': 'await_human', 'message': 'click'}) + chr(10))" + chr(10) +
+    "sys.stdout.write(json.dumps({'status': 'ok', 'bytes': 10}) + chr(10))" + chr(10)
+)
+
+_FAKE_WORKER_TIMEOUT = (
+    "import json, sys" + chr(10) +
+    "sys.stdout.write(json.dumps({'status': 'timeout'}) + chr(10))" + chr(10) +
+    "sys.exit(3)" + chr(10)
+)
+
+_FAKE_WORKER_NO_PW = (
+    "import json, sys" + chr(10) +
+    "sys.stdout.write(json.dumps({'status': 'error', 'error': "
+    "'ModuleNotFoundError: No module named playwright'}) + chr(10))" + chr(10) +
+    "sys.exit(1)" + chr(10)
+)
+
+
+def _install_fake_worker(monkeypatch, tmp_path, source):
+    script = tmp_path / "fake_worker.py"
+    script.write_text(source, encoding="utf-8")
+    monkeypatch.setattr(cf_solve, "_worker_script", lambda: script)
+    monkeypatch.setattr(cf_solve, "_worker_python", lambda: sys.executable)
+    monkeypatch.setattr(cf_solve, "_browser_profile_dir", lambda: None)
+
+
+def test_fetch_spawns_worker_and_returns_html(monkeypatch, tmp_path):
+    _install_fake_worker(monkeypatch, tmp_path, _FAKE_WORKER_OK)
+    seen = []
+    html = cf_solve.fetch("https://example.invalid/x", log_callback=seen.append)
+    assert html == "<html>WORK https://example.invalid/x</html>"
+    assert any("click" in m for m in seen)
+
+
+def test_fetch_timeout_raises_runtimeerror(monkeypatch, tmp_path):
+    _install_fake_worker(monkeypatch, tmp_path, _FAKE_WORKER_TIMEOUT)
+    with pytest.raises(RuntimeError, match="completed in time"):
+        cf_solve.fetch("https://example.invalid/x")
+
+
+def test_fetch_missing_playwright_raises_unavailable(monkeypatch, tmp_path):
+    _install_fake_worker(monkeypatch, tmp_path, _FAKE_WORKER_NO_PW)
+    with pytest.raises(cf_solve.SolverUnavailable):
+        cf_solve.fetch("https://example.invalid/x")
+
+
+def test_fetch_missing_worker_script_raises_unavailable(monkeypatch, tmp_path):
+    monkeypatch.setattr(cf_solve, "_worker_script", lambda: tmp_path / "nope.py")
+    with pytest.raises(cf_solve.SolverUnavailable, match="worker script missing"):
+        cf_solve.fetch("https://example.invalid/x")
+
+
+def test_real_worker_script_ships_on_disk():
+    assert cf_solve._worker_script().exists()

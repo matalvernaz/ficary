@@ -94,6 +94,7 @@ jobs:
             --add-binary "ffmpeg_bin/ffmpeg:." \
             --add-binary "ffmpeg_bin/ffprobe:." \
             --collect-submodules ficary \
+            --add-data "ficary/_cf_worker.py:ficary" \
             --hidden-import edge_tts \
             --hidden-import ebooklib \
             --hidden-import curl_cffi \

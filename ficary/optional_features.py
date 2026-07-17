@@ -97,13 +97,13 @@ FEATURES: dict[str, dict] = {
         "display": "Cloudflare challenge solver (Playwright)",
         "size_hint": "~40 MB pip + ~400 MB browser binary",
         "description": (
-            "Enables --cf-solve: on a stubborn Cloudflare challenge "
-            "(such as AO3's 'shields up'), open a real Chromium window "
-            "via Playwright, let the challenge clear, and inject the "
-            "cookies into the scraper session. Solved cookies persist "
-            "for 24h so later runs reuse them. Install pulls the pip "
-            "package first, then automatically runs 'playwright install "
-            "chromium' to download the browser binary itself."
+            "Enables --cf-solve: on a site's Cloudflare 'verify you are "
+            "human' challenge (such as AO3's 'shields up'), open a real "
+            "browser window via Playwright; you clear the challenge once, "
+            "and that same browser fetches the page for ficary to import. "
+            "A persistent profile means you're not re-challenged every "
+            "time. Install pulls the pip package first, then automatically "
+            "runs 'playwright install chromium' to download the browser."
         ),
         "post_install": ["-m", "playwright", "install", "chromium"],
     },

@@ -30,10 +30,13 @@ import logging
 import math
 import os
 import re
+import subprocess
+import sys
+import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
 from .atomic import atomic_path
 
@@ -86,6 +89,191 @@ def is_available() -> bool:
     except ImportError:
         return False
     return True
+
+
+# ── Browser-fetch (the robust path) ─────────────────────────────────
+#
+# Rather than solve in a browser and replay the cookie in curl_cffi
+# (doomed — Cloudflare binds cf_clearance to the browser's fingerprint),
+# run a real browser in a SEPARATE process, let the user clear the
+# interactive challenge once, and have THAT browser fetch the page HTML.
+# See _cf_worker.py for the child side.
+
+
+def _worker_script() -> Path:
+    """Absolute path to the standalone worker script.
+
+    Frozen builds ship it as a data file next to the package (added via
+    the build workflow's ``--add-data``); a source/pip install has it
+    right beside this module.
+    """
+    if getattr(sys, "frozen", False):
+        base = Path(getattr(sys, "_MEIPASS", "") or Path(sys.executable).parent)
+        cand = base / "ficary" / "_cf_worker.py"
+        if cand.exists():
+            return cand
+    return Path(__file__).with_name("_cf_worker.py")
+
+
+def _worker_python() -> str:
+    """Interpreter that runs the worker.
+
+    On a frozen Windows build that's the neural_env embeddable Python —
+    that's where the ``cf-solve`` extra (playwright) is pip-installed, and
+    it's a plain console interpreter whose subprocess spawn works (unlike
+    the frozen GUI process). Everywhere else it's the current interpreter,
+    which shares the venv playwright lives in.
+    """
+    try:
+        from . import neural_env
+        if neural_env.is_supported():
+            if not neural_env.ensure_embed_python():
+                raise SolverUnavailable(
+                    "the embedded Python for optional features isn't ready"
+                )
+            return str(neural_env.python_exe())
+    except SolverUnavailable:
+        raise
+    except Exception:
+        pass
+    return sys.executable
+
+
+def _browser_profile_dir() -> Optional[str]:
+    """Persistent Chromium profile dir so a still-valid clearance is
+    reused across runs without re-prompting. Under the scraper cache
+    root, so uninstall stays 'delete the folder'."""
+    try:
+        from .scraper import _default_cache_dir
+        base = _default_cache_dir()
+        if base is None:
+            return None
+        path = base / "cf-browser-profile"
+        path.mkdir(parents=True, exist_ok=True)
+        return str(path)
+    except Exception:
+        return None
+
+
+def fetch(
+    url: str,
+    *,
+    timeout_s: float = CF_CHALLENGE_TIMEOUT_S,
+    log_callback: Optional[Callable[[str], None]] = None,
+) -> str:
+    """Open ``url`` in a real browser (separate process), let the user
+    clear the Cloudflare challenge, and return the page HTML the browser
+    then sees.
+
+    Raises :class:`SolverUnavailable` when the browser environment isn't
+    usable (caller falls back to normal handling), and ``RuntimeError`` on
+    timeout / user-cancel / worker error. The HTML travels via a temp file,
+    not stdout, so a large work doesn't stream through a pipe.
+    """
+    script = _worker_script()
+    if not script.exists():
+        raise SolverUnavailable(f"cf-solve worker script missing at {script}")
+    python = _worker_python()
+
+    env_timeout = os.environ.get("FICARY_CF_SOLVE_TIMEOUT_S", "").strip()
+    if env_timeout:
+        try:
+            timeout_s = max(30.0, float(env_timeout))
+        except ValueError:
+            pass
+    headless = os.environ.get("FICARY_CF_SOLVE_HEADLESS", "") == "1"
+
+    out_fd, out_path = tempfile.mkstemp(suffix=".html", prefix="ficary-cf-")
+    os.close(out_fd)
+    try:
+        cmd = [
+            python, str(script),
+            "--url", url,
+            "--out", out_path,
+            "--timeout", str(timeout_s),
+        ]
+        profile = _browser_profile_dir()
+        if profile:
+            cmd += ["--profile", profile]
+        if headless:
+            cmd.append("--headless")
+
+        env = os.environ.copy()
+        # Make deps/ importable for the embeddable interpreter (the ._pth
+        # already does this; belt-and-suspenders). Harmless for source runs.
+        try:
+            from . import neural_env
+            if neural_env.is_supported():
+                existing = env.get("PYTHONPATH", "")
+                env["PYTHONPATH"] = str(neural_env.DEPS_DIR) + (
+                    os.pathsep + existing if existing else ""
+                )
+        except Exception:
+            pass
+
+        # Valid pipe/DEVNULL std handles are the fix for the frozen-app
+        # [WinError 6]: the child (and the Node driver it spawns) must not
+        # inherit the GUI process's invalid handles. CREATE_NO_WINDOW keeps
+        # a console from flashing; it doesn't affect the visible browser.
+        creationflags = 0
+        if sys.platform == "win32":
+            creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+        try:
+            proc = subprocess.Popen(
+                cmd,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=1,
+                env=env,
+                creationflags=creationflags,
+            )
+        except OSError as exc:
+            raise SolverUnavailable(f"could not launch cf-solve worker: {exc}")
+
+        final = None
+        assert proc.stdout is not None
+        for line in proc.stdout:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                msg = json.loads(line)
+            except ValueError:
+                logger.debug("cf-solve worker: %s", line)
+                continue
+            st = msg.get("status")
+            if st == "opening" and log_callback:
+                log_callback("Opening a browser to clear the site's challenge...")
+            elif st == "await_human" and log_callback:
+                log_callback(msg.get("message") or
+                             "Complete the verification in the browser window.")
+            final = msg
+        proc.wait()
+
+        st = (final or {}).get("status")
+        if st == "ok":
+            with open(out_path, "r", encoding="utf-8") as fh:
+                return fh.read()
+        if st == "timeout":
+            raise RuntimeError(
+                "the verification wasn't completed in time — try again and "
+                "click 'verify you are human' when the window opens"
+            )
+        if st == "error":
+            err = (final or {}).get("error", "")
+            if "ModuleNotFoundError" in err or "playwright" in err.lower():
+                raise SolverUnavailable(err)
+            raise RuntimeError(f"cf-solve browser failed: {err}")
+        raise RuntimeError(
+            f"cf-solve worker exited without a result (code {proc.returncode})"
+        )
+    finally:
+        try:
+            os.unlink(out_path)
+        except OSError:
+            pass
 
 
 def _cookie_cache_dir() -> Path:

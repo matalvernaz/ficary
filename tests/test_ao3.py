@@ -322,3 +322,50 @@ class TestV2413RegressionFixes:
         # acceptance, so do the same regex check the method does:
         assert re.search(r"(?:archiveofourown\.org|ao3\.org)/series/(\d+)",
                           "https://ao3.org/series/123") is not None
+
+
+class TestBrowserFetchFallback:
+    """AO3 clears the interactive Cloudflare challenge in a real browser
+    (BaseScraper._browser_fetch) instead of the doomed cookie-replay
+    solver. _fetch_html routes to it on a challenge when --cf-solve is on."""
+
+    def test_uses_browser_on_challenge_when_cf_solve(self, monkeypatch):
+        from ficary.scraper import CloudflareChallengeError
+        s = AO3Scraper(use_cache=False, cf_solve=True)
+
+        def boom(url, *a, **k):
+            raise CloudflareChallengeError("shields up")
+
+        monkeypatch.setattr(s, "_fetch", boom)
+        monkeypatch.setattr(s, "_browser_fetch", lambda url: "<html>VIA BROWSER</html>")
+        assert s._fetch_html("https://archiveofourown.org/works/1") == "<html>VIA BROWSER</html>"
+
+    def test_reraises_challenge_without_cf_solve(self, monkeypatch):
+        from ficary.scraper import CloudflareChallengeError
+        s = AO3Scraper(use_cache=False, cf_solve=False)
+
+        def boom(url, *a, **k):
+            raise CloudflareChallengeError("shields up")
+
+        monkeypatch.setattr(s, "_fetch", boom)
+        called = []
+        monkeypatch.setattr(s, "_browser_fetch",
+                            lambda url: called.append(url) or "x")
+        with pytest.raises(CloudflareChallengeError):
+            s._fetch_html("https://archiveofourown.org/works/1")
+        assert called == []  # browser never invoked without the solver
+
+    def test_passthrough_when_no_challenge(self, monkeypatch):
+        s = AO3Scraper(use_cache=False, cf_solve=True)
+        monkeypatch.setattr(s, "_fetch", lambda url, *a, **k: "<html>NORMAL</html>")
+        monkeypatch.setattr(s, "_browser_fetch",
+                            lambda url: pytest.fail("should not browser-fetch"))
+        assert s._fetch_html("https://archiveofourown.org/works/1") == "<html>NORMAL</html>"
+
+    def test_flag_disables_in_process_cookie_solver(self):
+        """_browser_fetch_challenge must switch off the old cookie-solver
+        path so the two don't both launch a browser for one download."""
+        s = AO3Scraper(use_cache=False, cf_solve=True)
+        assert s._browser_fetch_challenge is True
+        assert s._maybe_seed_cf_cookies(s.session, "https://archiveofourown.org/x") is False
+        assert s._invoke_cf_solver(s.session, "https://archiveofourown.org/x") is False

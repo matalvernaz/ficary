@@ -1,5 +1,30 @@
 # Changelog
 
+## 2.16.0 — 2026-07-17
+
+**Cloudflare "shields up" downloads that actually work (`--cf-solve` rebuilt)**
+
+* **AO3 and other Cloudflare interactive-challenge sites now download by
+  fetching the page in the browser you clear the challenge in.** The old
+  approach — solve in a browser, then hand the cookie to ficary's
+  downloader — could never work: Cloudflare ties the clearance to the
+  exact browser (its TLS fingerprint), so a copied cookie is always
+  re-challenged. Now, when `--cf-solve` is on and a site throws its
+  "verify you are human" wall, ficary opens a real browser window; you
+  clear it once; and *that same browser* hands the page straight to
+  ficary to import. Nothing is copied or replayed. A persistent browser
+  profile means a still-valid clearance is reused, so you're not
+  re-challenged on every download.
+
+* **Fixes the "[WinError 6] The handle is invalid" crash** that stopped
+  the solver's browser from opening at all in the packaged Windows build:
+  the browser now runs as a separate helper process (the optional-feature
+  Python), which spawns cleanly, instead of inside the GUI app.
+
+* On a challenge, ficary hands off to the browser **immediately** rather
+  than grinding through ~75 seconds of retries that can't pass it first.
+  The wait for you to click the checkbox is now up to 3 minutes.
+
 ## 2.15.4 — 2026-07-16
 
 **Bug fix**

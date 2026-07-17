@@ -256,6 +256,14 @@ class BaseScraper:
 
     site_name = "unknown"
 
+    _browser_fetch_challenge = False
+    """When True, this scraper clears a Cloudflare interactive challenge by
+    fetching the page in a real browser (see ``_browser_fetch`` /
+    ``cf_solve.fetch``) rather than the in-process cookie-solver. Set on
+    scrapers whose sites use the interactive challenge (AO3). It disables
+    the old ``_invoke_cf_solver`` / ``_maybe_seed_cf_cookies`` path so the
+    two don't both launch a browser for the same download."""
+
     response_encoding: Optional[str] = None
     """Force ``resp.text`` decoding to this codec instead of trusting
     the server's Content-Type header. Set on subclasses where the
@@ -518,7 +526,7 @@ class BaseScraper:
         per 403, which is negligible against the retry-loop cost
         the seed avoids.
         """
-        if not self.cf_solve:
+        if not self.cf_solve or self._browser_fetch_challenge:
             return False
         host = self._host_for_url(url)
         if not host:
@@ -546,7 +554,7 @@ class BaseScraper:
         a solver failure never crashes the fetch loop — the caller
         falls back to the normal 403 retry behaviour.
         """
-        if not self.cf_solve:
+        if not self.cf_solve or self._browser_fetch_challenge:
             return False
         host = self._host_for_url(url)
         if not host:
@@ -592,6 +600,33 @@ class BaseScraper:
             "cookies persisted for next run.", host,
         )
         return True
+
+    def _browser_fetch(self, url: str) -> str:
+        """Fetch ``url`` through a real browser that the user uses to clear
+        a Cloudflare interactive challenge, returning the page HTML.
+
+        This is the robust path for sites behind the interactive
+        ("verify you are human") challenge: the browser that passes the
+        challenge fetches the bytes itself, so no cookie is handed to
+        curl_cffi (Cloudflare binds cf_clearance to the browser's TLS
+        fingerprint, which curl_cffi can't reproduce). Requires the
+        ``cf-solve`` extra; raises :class:`CloudflareChallengeError` when
+        it isn't available or the user doesn't complete the challenge, so
+        callers can surface one clear message.
+        """
+        from . import cf_solve
+        try:
+            return cf_solve.fetch(url, log_callback=logger.info)
+        except cf_solve.SolverUnavailable as exc:
+            raise CloudflareChallengeError(
+                f"{url} needs the Cloudflare challenge solver, which isn't "
+                f"ready ({exc}). Install it from the Edit menu → Optional "
+                "Features and fully restart ficary."
+            ) from exc
+        except Exception as exc:
+            raise CloudflareChallengeError(
+                f"Could not clear the Cloudflare challenge for {url}: {exc}"
+            ) from exc
 
     def _try_wayback(self, url: str) -> Optional[str]:
         """Ask archive.org for the latest snapshot of `url` and return its
@@ -742,6 +777,12 @@ class BaseScraper:
                         "solve this; see the final error for options.",
                         self._host_for_url(url),
                     )
+                # Scrapers that clear the challenge in a real browser
+                # (``_browser_fetch``) shouldn't burn the retry budget on
+                # curl attempts that can't pass it — bail now so the caller
+                # hands off to the browser immediately.
+                if self._browser_fetch_challenge:
+                    break
 
             if resp.status_code == 200:
                 # Force a non-default decoding codec on sites whose

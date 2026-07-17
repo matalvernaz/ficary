@@ -13,7 +13,7 @@ import re
 from bs4 import BeautifulSoup
 
 from .models import Chapter, Story
-from .scraper import BaseScraper, CookieAuthMixin
+from .scraper import BaseScraper, CloudflareChallengeError, CookieAuthMixin
 
 logger = logging.getLogger(__name__)
 
@@ -53,6 +53,22 @@ class AO3Scraper(CookieAuthMixin, BaseScraper):
 
     site_name = "ao3"
     _auth_cookie_domain = ".archiveofourown.org"
+    # AO3 uses Cloudflare's interactive challenge; clear it in a real
+    # browser and fetch the page there (see BaseScraper._browser_fetch)
+    # rather than the doomed cookie-replay solver.
+    _browser_fetch_challenge = True
+
+    def _fetch_html(self, url):
+        """Fetch an AO3 page, falling back to the browser solver when
+        Cloudflare serves the interactive challenge and ``--cf-solve`` is
+        on. Without the solver the clear ``CloudflareChallengeError`` from
+        ``_fetch`` propagates unchanged."""
+        try:
+            return self._fetch(url)
+        except CloudflareChallengeError:
+            if self.cf_solve:
+                return self._browser_fetch(url)
+            raise
 
     def __init__(self, session_cookie: str = "", session_user_agent: str = "",
                  **kwargs):
@@ -394,7 +410,7 @@ class AO3Scraper(CookieAuthMixin, BaseScraper):
         work_id = self.parse_story_id(url_or_id)
         # Bare work URL (no view_full_work) loads only chapter 1 + stats —
         # much cheaper than pulling the whole fic to check whether it grew.
-        html = self._fetch(f"{AO3_BASE}/works/{work_id}?view_adult=true")
+        html = self._fetch_html(f"{AO3_BASE}/works/{work_id}?view_adult=true")
         soup = BeautifulSoup(html, "lxml")
         count = self._parse_chapter_count_from_stats(soup)
         if count is None:
@@ -753,7 +769,7 @@ class AO3Scraper(CookieAuthMixin, BaseScraper):
 
         # Cheap probe in update mode
         if skip_chapters > 0 and cached_meta is not None:
-            bare_html = self._fetch(f"{work_url}?view_adult=true")
+            bare_html = self._fetch_html(f"{work_url}?view_adult=true")
             bare_soup = BeautifulSoup(bare_html, "lxml")
             current_count = self._parse_chapter_count_from_stats(bare_soup)
             if current_count is not None and current_count <= skip_chapters:
@@ -772,7 +788,7 @@ class AO3Scraper(CookieAuthMixin, BaseScraper):
                 )
 
         logger.info("Fetching AO3 work %s...", work_id)
-        html = self._fetch(full_url)
+        html = self._fetch_html(full_url)
         fetched_soup = BeautifulSoup(html, "lxml")
         meta = self._parse_metadata(fetched_soup)
         self._save_meta_cache(work_id, meta)
