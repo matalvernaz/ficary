@@ -253,7 +253,7 @@ class PreferencesDialog(wx.Dialog):
         sizer.Add(row, 0, wx.EXPAND | wx.ALL, 6)
 
         row, self.chapter_notes_ctrl = self._labeled_row(
-            panel, "Chapter &notes (summaries, notes, end notes):",
+            panel, "AO3 chapter &notes (summaries, notes, end notes):",
             lambda p: wx.Choice(p, choices=_CHAPTER_NOTES_LABELS),
             help_text=(
                 "AO3 attaches structured note blocks to chapters — authors "
@@ -264,7 +264,7 @@ class PreferencesDialog(wx.Dialog):
                 "including audiobook narration."
             ),
         )
-        self.chapter_notes_ctrl.SetName("Chapter notes handling")
+        self.chapter_notes_ctrl.SetName("AO3 chapter notes handling")
         sizer.Add(row, 0, wx.EXPAND | wx.ALL, 6)
 
         sizer.AddSpacer(8)

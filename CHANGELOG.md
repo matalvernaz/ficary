@@ -1,5 +1,13 @@
 # Changelog
 
+## 2.16.3 — 2026-07-17
+
+* The new chapter-notes preference is labelled **"AO3 chapter notes"** —
+  AO3 is the only site with structured per-chapter note fields, so the
+  setting's name now says which downloads it affects. (Every other
+  site's exports were never touched by it; the label just makes that
+  visible.)
+
 ## 2.16.2 — 2026-07-17
 
 **Chapter notes are now your call**
