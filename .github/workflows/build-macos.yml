@@ -31,7 +31,9 @@ jobs:
 
       - uses: actions/setup-python@v6
         with:
-          python-version: "3.13"
+          # Keep in sync with neural_env.PYTHON_EMBED_VERSION (ABI match
+          # for optional-feature wheels installed into deps/).
+          python-version: "3.12"
 
       - name: Install ffmpeg and ffprobe
         # Evermeet ships static-built macOS binaries of ffmpeg and

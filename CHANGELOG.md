@@ -1,5 +1,19 @@
 # Changelog
 
+## 2.15.2 — 2026-07-16
+
+**Bug fix**
+
+* **The Cloudflare solver (`--cf-solve`) can load again.** The app builds
+  had drifted to Python 3.13 while the optional-feature installer still
+  sets up a Python 3.12 environment, so the solver's compiled dependency
+  (greenlet, pulled in by Playwright) couldn't load — cf-solve reported
+  "Playwright unavailable" no matter how you installed it, because the
+  3.12 `.pyd` can't be imported by a 3.13 app. The builds are back on
+  3.12 to match the installer, so a solver you've already installed works
+  after this update — no need to reinstall it. (The three build workflows
+  now carry a note to keep the two Python versions in lock-step.)
+
 ## 2.15.1 — 2026-07-16
 
 **Logging + cf-solve diagnostics**

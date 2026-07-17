@@ -17,7 +17,11 @@ jobs:
 
       - uses: actions/setup-python@v6
         with:
-          python-version: "3.13"
+          # Must match neural_env.PYTHON_EMBED_VERSION's minor: optional
+          # features pip-install into the embeddable Python's deps/, and
+          # compiled wheels (greenlet, via Playwright) only load under a
+          # matching ABI. Bump both together or cf-solve breaks.
+          python-version: "3.12"
 
       - name: Install dependencies
         run: |
