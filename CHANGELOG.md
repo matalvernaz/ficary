@@ -10,6 +10,12 @@
   for the default; a bad or unwritable path falls back to it. Takes
   effect when you click OK.
 
+* **"Optional Features…" button in Preferences.** The Downloads tab now
+  has a button that opens the same installer as the Edit menu, right next
+  to the Cloudflare-solver checkbox that depends on it — so you can
+  install add-ons from where the setting actually lives instead of
+  hunting through the menus.
+
 * **Clearer Cloudflare-solver failures.** When `--cf-solve` can't start,
   the log now names the actual reason (e.g. a missing module) instead of
   a generic "install the extra" line, and points at the right place to

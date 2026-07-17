@@ -296,10 +296,18 @@ class PreferencesDialog(wx.Dialog):
             "When a site serves a Cloudflare challenge that blocks the "
             "download (such as AO3 'shields up'), open a real Chromium "
             "window to clear it, then reuse the result for 24 hours. "
-            "First install it from the Edit menu → Optional Features "
+            "First install it with the Optional Features button below "
             "('Cloudflare challenge solver'), then fully restart ficary."
         )
         sizer.Add(self.cf_solve_ctrl, 0, wx.ALL, 6)
+
+        feat_btn = wx.Button(panel, label="O&ptional Features...")
+        feat_btn.SetName(
+            "Optional Features — install the Cloudflare solver, EPUB, "
+            "audiobook, and other add-ons"
+        )
+        feat_btn.Bind(wx.EVT_BUTTON, self._on_open_optional_features)
+        sizer.Add(feat_btn, 0, wx.LEFT | wx.BOTTOM, 6)
 
         sizer.AddSpacer(8)
 
@@ -806,6 +814,17 @@ class PreferencesDialog(wx.Dialog):
         if dlg.ShowModal() == wx.ID_OK:
             self.log_dir_ctrl.SetValue(dlg.GetPath())
         dlg.Destroy()
+
+    def _on_open_optional_features(self, event):
+        # Same installer as the Edit-menu item, surfaced here too: the
+        # cf-solve toggle above depends on it, so users look for it in
+        # Preferences (and kept being told it was here).
+        from .gui_dialogs import OptionalFeaturesDialog
+        dlg = OptionalFeaturesDialog(self)
+        try:
+            dlg.ShowModal()
+        finally:
+            dlg.Destroy()
 
     def _on_ok(self, event):
         self._save()
