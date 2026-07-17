@@ -47,6 +47,7 @@ class DownloadJob:
     cf_solve: bool = False
     fichub: bool = False
     ao3_cookie: Optional[str] = None
+    ao3_user_agent: Optional[str] = None
     webnovel_cookie: Optional[str] = None
     chyoa_max_depth: Optional[int] = None
 
@@ -86,6 +87,7 @@ class DownloadJob:
         from .exporters import DEFAULT_TEMPLATE
         from .prefs import (
             KEY_AO3_COOKIE,
+            KEY_AO3_USER_AGENT,
             KEY_ATTRIBUTION_BACKEND,
             KEY_ATTRIBUTION_MODEL_SIZE,
             KEY_FICHUB,
@@ -115,6 +117,7 @@ class DownloadJob:
             # user's voice settings. Empty cookie pref -> None so
             # _build_scraper's FICARY_*_COOKIE env fallback still applies.
             ao3_cookie=(prefs.get(KEY_AO3_COOKIE) or None),
+            ao3_user_agent=(prefs.get(KEY_AO3_USER_AGENT) or None),
             webnovel_cookie=(prefs.get(KEY_WEBNOVEL_COOKIE) or None),
             fichub=prefs.get_bool(KEY_FICHUB),
             attribution=(prefs.get(KEY_ATTRIBUTION_BACKEND) or "builtin"),

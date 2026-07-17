@@ -43,16 +43,27 @@ class AO3Scraper(CookieAuthMixin, BaseScraper):
     handled by :class:`CookieAuthMixin`) unlocks restricted / Archive-locked
     works and your own private bookmarks / marked-for-later; anonymous
     otherwise.
+
+    Optional ``session_user_agent`` pins the browser User-Agent to match
+    the cookie. When AO3 has Cloudflare "shields up" (an interactive
+    ``cf-mitigated: challenge``), a ``cf_clearance`` cookie copied from a
+    browser only validates if the UA travelling with it matches the one
+    that solved the challenge — so pass both together.
     """
 
     site_name = "ao3"
     _auth_cookie_domain = ".archiveofourown.org"
 
-    def __init__(self, session_cookie: str = "", **kwargs):
+    def __init__(self, session_cookie: str = "", session_user_agent: str = "",
+                 **kwargs):
         # AO3 fetches the whole work in a single request, so the inter-
         # chapter delay barely matters. AIMD defaults (floor 0) let us
         # back off only if AO3 ever actually pushes back.
-        super().__init__(session_cookie=session_cookie, **kwargs)
+        super().__init__(
+            session_cookie=session_cookie,
+            session_user_agent=session_user_agent,
+            **kwargs,
+        )
 
     @staticmethod
     def parse_story_id(url_or_id):

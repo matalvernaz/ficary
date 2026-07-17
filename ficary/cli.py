@@ -778,6 +778,14 @@ def _build_scraper(url: str, args: argparse.Namespace):
         )
         if cookie:
             kwargs["session_cookie"] = cookie
+        # UA to pin with the cookie so a cf_clearance survives AO3's
+        # Cloudflare challenge (bound to UA + IP + TLS fingerprint).
+        user_agent = (
+            getattr(args, "ao3_user_agent", None)
+            or _legacy.getenv_compat("FICARY_AO3_USER_AGENT")
+        )
+        if user_agent:
+            kwargs["session_user_agent"] = user_agent
     # ScribbleHub optional auth: a browser cookie both clears Cloudflare
     # (cf_clearance) and unlocks members-only / mature chapters.
     from .scribblehub import ScribbleHubScraper
@@ -4147,8 +4155,23 @@ def _build_parser() -> argparse.ArgumentParser:
         help=(
             "For AO3, a logged-in browser 'Cookie:' header string. Lets you "
             "download restricted / Archive-locked works and your own private "
-            "bookmarks and marked-for-later. Reads $FICARY_AO3_COOKIE if the "
-            "flag is omitted."
+            "bookmarks and marked-for-later. Also carries a cf_clearance "
+            "cookie past Cloudflare's 'shields up' challenge (pair it with "
+            "--ao3-user-agent). Reads $FICARY_AO3_COOKIE if the flag is "
+            "omitted."
+        ),
+    )
+    parser.add_argument(
+        "--ao3-user-agent",
+        type=str,
+        default=None,
+        metavar="UA",
+        help=(
+            "For AO3, the browser User-Agent to pin alongside --ao3-cookie. "
+            "When AO3 has Cloudflare shields up, a cf_clearance cookie only "
+            "validates if the User-Agent matches the browser that solved the "
+            "challenge, so copy both from the same browser session. Reads "
+            "$FICARY_AO3_USER_AGENT if the flag is omitted."
         ),
     )
     parser.add_argument(

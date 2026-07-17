@@ -596,3 +596,104 @@ class TestFFNApexRewrite:
         sess = _StubSession([_StubResponse()])
         self._ffn()._fetch("https://www.fanfiction.net/s/1", session=sess)
         assert sess.urls == ["https://www.fanfiction.net/s/1"]
+
+
+class _ChallengeResponse:
+    """403 carrying Cloudflare's interactive-challenge header."""
+
+    status_code = 403
+    text = "<title>Shields are up! | Archive of Our Own</title>"
+    encoding = None
+    headers = {"cf-mitigated": "challenge"}
+
+
+class TestCloudflareInteractiveChallenge:
+    """A ``cf-mitigated: challenge`` response is an interactive Cloudflare
+    challenge that impersonation can't clear — the retry loop must fail
+    fast with the actionable CloudflareChallengeError and skip the futile
+    slow-retry / rotation tier."""
+
+    def _scraper(self, **kw):
+        return BaseScraper(use_cache=False, max_retries=3, **kw)
+
+    def test_challenge_raises_challenge_error(self, monkeypatch):
+        from ficary.scraper import CloudflareChallengeError, CloudflareBlockError
+
+        monkeypatch.setattr("ficary.scraper.time.sleep", lambda s: None)
+        scraper = self._scraper()
+        sess = _StubSession([_ChallengeResponse() for _ in range(3)])
+        with pytest.raises(CloudflareChallengeError) as exc:
+            scraper._fetch("https://archiveofourown.org/works/1", session=sess)
+        # Subclasses CloudflareBlockError so existing handlers catch it.
+        assert isinstance(exc.value, CloudflareBlockError)
+        # Message points the user at the real levers.
+        assert "cf-mitigated" in str(exc.value)
+        assert "--ao3-user-agent" in str(exc.value) or "cf_clearance" in str(exc.value)
+
+    def test_challenge_skips_slow_retry_rotation(self, monkeypatch):
+        """Without a solver, an interactive challenge must not escalate to
+        the browser-rotation slow tier — rotation can't help and just
+        burns 30s waits."""
+        monkeypatch.setattr("ficary.scraper.time.sleep", lambda s: None)
+        scraper = self._scraper(cf_solve=False)
+        rotated = []
+        monkeypatch.setattr(scraper, "_rotate_browser",
+                            lambda: rotated.append(1) or scraper._session())
+        sess = _StubSession([_ChallengeResponse() for _ in range(3)])
+        from ficary.scraper import CloudflareChallengeError
+        with pytest.raises(CloudflareChallengeError):
+            scraper._fetch("https://archiveofourown.org/works/1", session=sess)
+        assert rotated == [], "slow-tier rotation should be skipped for an unsolvable challenge"
+
+    def test_plain_403_without_challenge_header_still_rate_limit_errors(self, monkeypatch):
+        """A 403 that is NOT an interactive challenge keeps the old
+        RateLimitError terminal path (no false CloudflareChallengeError)."""
+        from ficary.scraper import RateLimitError
+
+        monkeypatch.setattr("ficary.scraper.time.sleep", lambda s: None)
+        scraper = self._scraper()
+        plain = type("R", (), {"status_code": 403, "text": "nope", "headers": {}})
+        sess = _StubSession([plain() for _ in range(3)])
+        with pytest.raises(RateLimitError):
+            scraper._fetch("https://example.invalid/x", session=sess)
+
+
+class TestAO3UserAgentPinning:
+    """cf_clearance is bound to the UA that solved the challenge, so a
+    pinned browser User-Agent must ride on every session and profile
+    rotation must be suppressed (it would change the JA3 and break the
+    clearance)."""
+
+    def _ao3(self, **kw):
+        from ficary.ao3 import AO3Scraper
+        return AO3Scraper(use_cache=False, **kw)
+
+    def test_ua_pinned_on_session_and_hints_dropped(self):
+        from ficary.scraper import _CHROMIUM_CLIENT_HINTS
+
+        ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) TestBrowser/9"
+        s = self._ao3(session_cookie="cf_clearance=abc", session_user_agent=ua)
+        assert s.session.headers.get("User-Agent") == ua
+        # The canned macOS Chromium hints would contradict a Windows UA.
+        for hint in _CHROMIUM_CLIENT_HINTS:
+            assert hint not in s.session.headers
+
+    def test_new_worker_session_reapplies_ua(self):
+        ua = "Mozilla/5.0 (X11; Linux x86_64) TestBrowser/9"
+        s = self._ao3(session_cookie="cf_clearance=abc", session_user_agent=ua)
+        worker = s._new_session()
+        assert worker.headers.get("User-Agent") == ua
+
+    def test_rotation_suppressed_when_ua_pinned(self):
+        ua = "Mozilla/5.0 (Windows NT 10.0) TestBrowser/9"
+        s = self._ao3(session_cookie="cf_clearance=abc", session_user_agent=ua)
+        before = s._session()
+        returned = s._rotate_browser()
+        assert returned is before, "rotation must hold the session steady when a UA is pinned"
+        assert returned.headers.get("User-Agent") == ua
+
+    def test_no_ua_still_rotates(self):
+        # Regression guard: the suppression is gated on a pinned UA only.
+        s = self._ao3(session_cookie="userid=1")
+        first = s._session()
+        assert s._rotate_browser() is not first

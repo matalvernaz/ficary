@@ -298,6 +298,11 @@ class PreferencesDialog(wx.Dialog):
         def _cookie(p):
             return wx.TextCtrl(p, style=wx.TE_PASSWORD)
 
+        def _plain(p):
+            # Not a secret (and TE_PASSWORD reads as dots to a screen
+            # reader), so the AO3 User-Agent gets a normal text field.
+            return wx.TextCtrl(p)
+
         row, self.webnovel_cookie_ctrl = self._labeled_row(
             panel, "Webno&vel.com cookie:", _cookie,
             help_text=(
@@ -319,6 +324,19 @@ class PreferencesDialog(wx.Dialog):
             ),
         )
         self.ao3_cookie_ctrl.SetName("AO3 cookie")
+        sizer.Add(row, 0, wx.EXPAND | wx.ALL, 6)
+
+        row, self.ao3_user_agent_ctrl = self._labeled_row(
+            panel, "AO3 User-A&gent:", _plain,
+            help_text=(
+                "The browser User-Agent that goes with the AO3 cookie "
+                "above. Only needed when AO3 has Cloudflare 'shields up' "
+                "and blocks downloads: copy your browser's User-Agent and "
+                "its cf_clearance cookie from the same session so the "
+                "cookie validates. Leave blank otherwise."
+            ),
+        )
+        self.ao3_user_agent_ctrl.SetName("AO3 User-Agent")
         sizer.Add(row, 0, wx.EXPAND | wx.ALL, 6)
 
         row, self.scribblehub_cookie_ctrl = self._labeled_row(
@@ -654,6 +672,8 @@ class PreferencesDialog(wx.Dialog):
         self.webnovel_cookie_ctrl.SetValue(
             self.prefs.get(_p.KEY_WEBNOVEL_COOKIE) or "")
         self.ao3_cookie_ctrl.SetValue(self.prefs.get(_p.KEY_AO3_COOKIE) or "")
+        self.ao3_user_agent_ctrl.SetValue(
+            self.prefs.get(_p.KEY_AO3_USER_AGENT) or "")
         self.scribblehub_cookie_ctrl.SetValue(
             self.prefs.get(_p.KEY_SCRIBBLEHUB_COOKIE) or "")
         self.subscribestar_cookie_ctrl.SetValue(
@@ -785,6 +805,10 @@ class PreferencesDialog(wx.Dialog):
         )
         self.prefs.set(
             _p.KEY_AO3_COOKIE, self.ao3_cookie_ctrl.GetValue().strip(),
+        )
+        self.prefs.set(
+            _p.KEY_AO3_USER_AGENT,
+            self.ao3_user_agent_ctrl.GetValue().strip(),
         )
         self.prefs.set(
             _p.KEY_SCRIBBLEHUB_COOKIE,

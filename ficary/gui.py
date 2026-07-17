@@ -55,6 +55,7 @@ class _DownloadParams:
     merge_series: bool = False
     webnovel_cookie: str = ""
     ao3_cookie: str = ""
+    ao3_user_agent: str = ""
     scribblehub_cookie: str = ""
     subscribestar_cookie: str = ""
     send_to_abs: bool = False
@@ -2243,6 +2244,7 @@ class MainFrame(wx.Frame):
                     url,
                     webnovel_cookie=params.webnovel_cookie,
                     ao3_cookie=params.ao3_cookie,
+                    ao3_user_agent=params.ao3_user_agent,
                     scribblehub_cookie=params.scribblehub_cookie,
                     subscribestar_cookie=params.subscribestar_cookie,
                 )
@@ -2441,6 +2443,7 @@ class MainFrame(wx.Frame):
                     series_url,
                     webnovel_cookie=params.webnovel_cookie,
                     ao3_cookie=params.ao3_cookie,
+                    ao3_user_agent=params.ao3_user_agent,
                     scribblehub_cookie=params.scribblehub_cookie,
                     subscribestar_cookie=params.subscribestar_cookie,
                 )
@@ -2472,6 +2475,7 @@ class MainFrame(wx.Frame):
                         work_url,
                         webnovel_cookie=params.webnovel_cookie,
                         ao3_cookie=params.ao3_cookie,
+                        ao3_user_agent=params.ao3_user_agent,
                         scribblehub_cookie=params.scribblehub_cookie,
                         subscribestar_cookie=params.subscribestar_cookie,
                     )
@@ -2594,8 +2598,8 @@ class MainFrame(wx.Frame):
     # ── Download worker ──────────────────────────────────────
 
     def _scraper_for(self, url, *, use_fichub=False, webnovel_cookie="",
-                     ao3_cookie="", scribblehub_cookie="", subscribestar_cookie="",
-                     use_cache=True):
+                     ao3_cookie="", ao3_user_agent="", scribblehub_cookie="",
+                     subscribestar_cookie="", use_cache=True):
         from .sites import detect_scraper
         cls = detect_scraper(url)
         # ``use_cache=False`` threads through every branch: a fresh-copy
@@ -2614,10 +2618,14 @@ class MainFrame(wx.Frame):
             from .webnovel import WebnovelScraper
             if cls is WebnovelScraper:
                 return cls(session_cookie=webnovel_cookie, **base)
-        if ao3_cookie:
+        if ao3_cookie or ao3_user_agent:
             from .ao3 import AO3Scraper
             if cls is AO3Scraper:
-                return cls(session_cookie=ao3_cookie, **base)
+                return cls(
+                    session_cookie=ao3_cookie,
+                    session_user_agent=ao3_user_agent,
+                    **base,
+                )
         if scribblehub_cookie:
             from .scribblehub import ScribbleHubScraper
             if cls is ScribbleHubScraper:
@@ -2675,6 +2683,9 @@ class MainFrame(wx.Frame):
             merge_series=self.prefs.get_bool(_p.KEY_MERGE_SERIES),
             webnovel_cookie=(self.prefs.get(_p.KEY_WEBNOVEL_COOKIE) or "").strip(),
             ao3_cookie=(self.prefs.get(_p.KEY_AO3_COOKIE) or "").strip(),
+            ao3_user_agent=(
+                self.prefs.get(_p.KEY_AO3_USER_AGENT) or ""
+            ).strip(),
             scribblehub_cookie=(
                 self.prefs.get(_p.KEY_SCRIBBLEHUB_COOKIE) or ""
             ).strip(),
@@ -3106,6 +3117,7 @@ class MainFrame(wx.Frame):
                 url, use_fichub=(params.use_fichub and not is_update),
                 webnovel_cookie=params.webnovel_cookie,
                 ao3_cookie=params.ao3_cookie,
+                ao3_user_agent=params.ao3_user_agent,
                 scribblehub_cookie=params.scribblehub_cookie,
                 subscribestar_cookie=params.subscribestar_cookie,
                 # Fresh-copy re-pull ignores the chapter cache so edited
@@ -3449,6 +3461,7 @@ class MainFrame(wx.Frame):
                     story_url, use_fichub=params.use_fichub,
                     webnovel_cookie=params.webnovel_cookie,
                     ao3_cookie=params.ao3_cookie,
+                    ao3_user_agent=params.ao3_user_agent,
                     scribblehub_cookie=params.scribblehub_cookie,
                     subscribestar_cookie=params.subscribestar_cookie,
                 )

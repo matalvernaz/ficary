@@ -80,6 +80,10 @@ KEY_WEBNOVEL_COOKIE = "webnovel_cookie"
 # AO3 logged-in session cookie (raw "Cookie:" header). Optional — unlocks
 # restricted works and private bookmarks. Plain-text, same as the others.
 KEY_AO3_COOKIE = "ao3_cookie"
+# Browser User-Agent to pin alongside KEY_AO3_COOKIE. Cloudflare binds a
+# cf_clearance cookie to the UA that solved the challenge, so a pasted
+# clearance cookie only validates when this matches. Optional.
+KEY_AO3_USER_AGENT = "ao3_user_agent"
 # ScribbleHub cookie (raw "Cookie:" header). Optional — carries the
 # Cloudflare clearance cookie so fetches get past the challenge, and
 # unlocks members-only / mature chapters when logged in.

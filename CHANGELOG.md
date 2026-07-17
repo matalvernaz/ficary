@@ -1,5 +1,30 @@
 # Changelog
 
+## 2.15.0 — 2026-07-16
+
+**AO3 Cloudflare "shields up" handling**
+
+* **When AO3 turns on Cloudflare's interactive challenge, downloads now
+  fail fast with a plain explanation instead of grinding through retries
+  and ending on a cryptic "Failed after N retries".** AO3 raises this
+  "shields up" challenge under heavy load; it can only be cleared by
+  running a real browser, so retrying with a different disguise never
+  gets past it. Ficary now recognises the challenge (the
+  `cf-mitigated: challenge` response), skips the slow 30-second retry
+  rounds that can't help, and explains what's happening — usually it's
+  temporary and simply trying again later works.
+
+* **New "AO3 User-Agent" option, next to the existing AO3 cookie.** To
+  download while shields are up, open the work in your browser (which
+  passes the challenge), then copy both its `cf_clearance` cookie and
+  its User-Agent into ficary. Cloudflare ties the cookie to the exact
+  browser that solved the challenge, so the cookie only works when the
+  matching User-Agent travels with it — that's why both are needed. Set
+  them under Preferences ("AO3 cookie" and "AO3 User-Agent"), or on the
+  command line with `--ao3-cookie` and `--ao3-user-agent` (or the
+  `$FICARY_AO3_COOKIE` / `$FICARY_AO3_USER_AGENT` environment
+  variables).
+
 ## 2.14.5 — 2026-07-11
 
 **Bug fix**

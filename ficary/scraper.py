@@ -131,6 +131,19 @@ class CloudflareBlockError(Exception):
     """Raised when Cloudflare blocks the request."""
 
 
+class CloudflareChallengeError(CloudflareBlockError):
+    """Raised when Cloudflare served an *interactive* challenge
+    (``cf-mitigated: challenge``) that HTTP/TLS impersonation cannot
+    solve — the challenge is cleared only by executing Cloudflare's
+    JavaScript, which ``curl_cffi`` does not do.
+
+    Subclasses :class:`CloudflareBlockError` so every existing
+    ``except CloudflareBlockError`` handler catches it; the actionable
+    guidance (wait it out / supply a cf_clearance cookie + matching
+    User-Agent / use --cf-solve) rides in the exception message.
+    """
+
+
 def _default_cache_dir() -> Optional[Path]:
     """Return the default chapter-cache dir, creating it if needed, or
     None when it can't be created.
@@ -179,10 +192,19 @@ class CookieAuthMixin:
 
     _auth_cookie_domain = ""
 
-    def __init__(self, *args, session_cookie: str = "", **kwargs):
+    def __init__(self, *args, session_cookie: str = "",
+                 session_user_agent: str = "", **kwargs):
         super().__init__(*args, **kwargs)
         self._auth_cookies = self._parse_cookie_header(session_cookie)
-        if self._auth_cookies:
+        # Optional browser User-Agent to pin alongside the cookies.
+        # Cloudflare binds a cf_clearance cookie to the IP + User-Agent +
+        # TLS fingerprint that solved the challenge, so a pasted clearance
+        # cookie only validates when the UA matches the browser that
+        # minted it. Empty = keep the impersonation profile's own UA,
+        # which is correct for plain login cookies (Webnovel, etc.) that
+        # aren't UA-bound.
+        self._auth_user_agent = (session_user_agent or "").strip()
+        if self._auth_cookies or self._auth_user_agent:
             self._apply_auth_cookies(self.session)
 
     @staticmethod
@@ -202,13 +224,25 @@ class CookieAuthMixin:
                 name=name, value=value,
                 domain=self._auth_cookie_domain, path="/",
             )
+        ua = getattr(self, "_auth_user_agent", "")
+        if ua:
+            sess.headers["User-Agent"] = ua
+            # Drop the canned Chromium client hints: they advertise a
+            # fixed macOS/x86 Chrome build that would contradict a pasted
+            # Windows/Linux UA and re-flag the request as inconsistent.
+            # The cf_clearance cookie is what clears the challenge; the UA
+            # just has to match the one that solved it.
+            for hint in _CHROMIUM_CLIENT_HINTS:
+                sess.headers.pop(hint, None)
 
     def _new_session(self, browser: Optional[str] = None):
         # Re-seed auth cookies onto every session the base class builds.
         # getattr guard: BaseScraper.__init__ builds the first session
         # before this mixin's __init__ has set the attribute.
         sess = super()._new_session(browser)
-        if getattr(self, "_auth_cookies", None):
+        if getattr(self, "_auth_cookies", None) or getattr(
+            self, "_auth_user_agent", "",
+        ):
             self._apply_auth_cookies(sess)
         return sess
 
@@ -397,6 +431,12 @@ class BaseScraper:
         throw away useful HTTP/2 connection reuse on threads that
         weren't rate-limited.
         """
+        if getattr(self, "_auth_user_agent", ""):
+            # A pinned browser UA means we're replaying a cf_clearance
+            # cookie bound to a specific UA + TLS fingerprint. Rotating the
+            # impersonation profile would change the JA3 and invalidate the
+            # clearance, so hold the current session steady.
+            return self._session()
         with self._state_lock:
             browser = random.choice(BROWSERS)
             self._browser = browser
@@ -635,6 +675,13 @@ class BaseScraper:
         # invoking the Playwright solver (audit #7). After the one seed,
         # subsequent challenges fall through to rotation / the solver.
         seeded_cf_cookies = False
+        # Whether any response in this fetch carried ``cf-mitigated:
+        # challenge`` — Cloudflare's signal that it served an interactive
+        # challenge. Impersonation can't clear one, so on exhaustion we
+        # raise the actionable CloudflareChallengeError instead of the
+        # generic RateLimitError, and we skip the futile slow-retry tier.
+        saw_cf_challenge = False
+        logged_cf_challenge = False
         for attempt in range(self.max_retries):
             try:
                 resp = sess.get(url, timeout=self.timeout)
@@ -681,6 +728,20 @@ class BaseScraper:
                 time.sleep(backoff + random.uniform(0, CONNECTION_ERROR_JITTER_S))
                 backoff = min(backoff * 2, MAX_BACKOFF_S)
                 continue
+
+            resp_headers = getattr(resp, "headers", None)
+            if resp_headers is not None and (
+                (resp_headers.get("cf-mitigated") or "").lower() == "challenge"
+            ):
+                saw_cf_challenge = True
+                if not logged_cf_challenge:
+                    logged_cf_challenge = True
+                    logger.warning(
+                        "Cloudflare interactive challenge (cf-mitigated: "
+                        "challenge) on %s — browser impersonation can't "
+                        "solve this; see the final error for options.",
+                        self._host_for_url(url),
+                    )
 
             if resp.status_code == 200:
                 # Force a non-default decoding codec on sites whose
@@ -795,7 +856,17 @@ class BaseScraper:
                 wait = FORBIDDEN_QUICK_RETRY_S + random.uniform(
                     0, FORBIDDEN_QUICK_RETRY_S,
                 )
-                if attempt >= self.max_retries - 2:
+                # An interactive Cloudflare challenge can't be cleared by
+                # rotating the impersonation profile, so the slow-retry
+                # tier's 30s waits + rotation are pure waste against it.
+                # Skip the escalation once we've seen cf-mitigated:
+                # challenge and have no solver to fall back on. FFN's
+                # edge-cache recovery happens on the quick tier (see
+                # FORBIDDEN_QUICK_RETRY_S), so it's unaffected; with
+                # --cf-solve on we keep the escalation so the solver still
+                # fires at the ``max_retries - 2`` gate above.
+                unsolvable_cf = saw_cf_challenge and not self.cf_solve
+                if attempt >= self.max_retries - 2 and not unsolvable_cf:
                     sess = self._rotate_browser()
                     wait = FORBIDDEN_SLOW_RETRY_S
                 # The first 403 is dominated by the "FFN behind Cloudflare
@@ -833,6 +904,20 @@ class BaseScraper:
             if archived:
                 logger.warning("Live site failed; served from Wayback.")
                 return archived
+        if saw_cf_challenge:
+            raise CloudflareChallengeError(
+                f"{url} is behind a Cloudflare interactive challenge "
+                "(cf-mitigated: challenge) that browser impersonation "
+                "cannot solve. This is usually a temporary 'shields up' "
+                "state on the site (AO3 does this under load) — retrying "
+                "later often just works. To download it now, either "
+                "(1) copy a fresh cf_clearance cookie from a browser that "
+                "just loaded the site AND that same browser's User-Agent, "
+                "and pass both (for AO3: --ao3-cookie / --ao3-user-agent, "
+                "or the matching GUI fields under Preferences), or "
+                "(2) run with --cf-solve to clear the challenge with a "
+                "headless browser."
+            )
         raise RateLimitError(f"Failed after {self.max_retries} retries: {url}")
 
     def _delay(self, fetches: int = 1) -> None:
