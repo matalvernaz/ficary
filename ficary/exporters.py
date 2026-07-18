@@ -291,6 +291,7 @@ def _prepare_chapter_html(
     strip_notes: bool,
     *,
     chapter_notes: str = DEFAULT_CHAPTER_NOTES,
+    ornament_tokens: frozenset = frozenset(),
     llm_config: dict | None = None,
     site_name: str | None = None,
     story_id=None,
@@ -301,7 +302,9 @@ def _prepare_chapter_html(
 
     ``chapter_notes`` handles the structured per-chapter note asides
     (see :func:`_apply_chapter_notes_mode`); callers pass ``collapse``
-    only for HTML output. ``llm_config`` enables a second-pass A/N
+    only for HTML output. ``ornament_tokens`` is the story-level set
+    from :func:`_story_ornament_tokens`, consumed by the hr-as-stars
+    pass. ``llm_config`` enables a second-pass A/N
     strip via :func:`strip_an_via_llm`. Only runs when ``strip_notes``
     is also on — the LLM is a backstop for cases the regex misses, not
     a replacement for it. ``site_name`` / ``story_id`` /
@@ -326,7 +329,7 @@ def _prepare_chapter_html(
         # after all note-stripping has run.
         html = _drop_orphan_edge_dividers(html)
     if hr_as_stars:
-        html = _apply_hr_as_stars(html)
+        html = _apply_hr_as_stars(html, ornament_tokens)
     return html
 
 
@@ -345,6 +348,7 @@ def _prepare_chapter_html_with_llm_fallback(
     strip_notes: bool,
     *,
     chapter_notes: str = DEFAULT_CHAPTER_NOTES,
+    ornament_tokens: frozenset = frozenset(),
     llm_config: dict | None,
     site_name: str | None,
     story_id,
@@ -383,6 +387,7 @@ def _prepare_chapter_html_with_llm_fallback(
         prepared = _prepare_chapter_html(
             html, hr_as_stars, strip_notes,
             chapter_notes=chapter_notes,
+            ornament_tokens=ornament_tokens,
             llm_config=llm_config,
             site_name=site_name,
             story_id=story_id,
@@ -405,6 +410,7 @@ def _prepare_chapter_html_with_llm_fallback(
         fallback = _prepare_chapter_html(
             html, hr_as_stars, strip_notes,
             chapter_notes=chapter_notes,
+            ornament_tokens=ornament_tokens,
             llm_config=None,
             site_name=site_name,
             story_id=story_id,
@@ -458,6 +464,7 @@ def _prepare_chapter_html_with_llm_fallback(
             _prepare_chapter_html(
                 html, hr_as_stars, strip_notes,
                 chapter_notes=chapter_notes,
+                ornament_tokens=ornament_tokens,
                 llm_config=None,
                 site_name=site_name,
                 story_id=story_id,
@@ -641,6 +648,9 @@ def export_html(
         )
     buf.write("</ol>\n</nav>\n<hr>\n")
 
+    ornament_tokens = (
+        _story_ornament_tokens(story.chapters) if hr_as_stars else frozenset()
+    )
     consecutive_timeouts = 0
     for i, ch in enumerate(story.chapters, 1):
         ch_title = escape(format_chapter_heading(ch.number, ch.title))
@@ -652,6 +662,7 @@ def export_html(
             _prepare_chapter_html_with_llm_fallback(
                 ch.html, hr_as_stars, strip_notes,
                 chapter_notes=chapter_notes,
+                ornament_tokens=ornament_tokens,
                 llm_config=llm_config,
                 site_name=site_name,
                 story_id=story.id,
@@ -994,12 +1005,56 @@ def _is_divider_text(text: str) -> bool:
     return False
 
 
-def _apply_hr_as_stars(html: str) -> str:
+_BARE_ORNAMENT_TOKEN_RE = re.compile(r"[ox]+|O+")
+"""The ornament shapes :func:`_is_divider_text` deliberately excludes:
+all-lowercase ``o``/``x`` runs and pure-uppercase ``O`` runs. In
+isolation they're ambiguous (``xxx`` rating labels, ``ooo`` moan-lines
+in prose), so they only convert under the story-frequency gate below."""
+
+_ORNAMENT_MIN_COUNT = 3
+"""Standalone-paragraph occurrences of the identical token across the
+story before it counts as an authorial divider convention. A one-off
+rating label or exclamation stays prose; a fence the author types
+around every embedded letter crosses this easily."""
+
+_PARA_INNER_RE = re.compile(r"<p\b[^>]*>(.*?)</p>", re.IGNORECASE | re.DOTALL)
+_TAG_RE = re.compile(r"<[^>]+>")
+
+
+def _story_ornament_tokens(chapters) -> frozenset:
+    """Bare ornament tokens (``ooo``, ``xxx``, ``OOO``) this story's
+    author demonstrably uses as a standalone-paragraph divider
+    convention — the identical token appears as its own paragraph at
+    least :data:`_ORNAMENT_MIN_COUNT` times across all chapters.
+
+    This is the second corroborating signal that lets the divider
+    passes convert an otherwise-excluded ornament class. Tokens are
+    whitespace-stripped for identity (``o o o`` counts as ``ooo``) but
+    not case-folded — ``ooo`` and ``OOO`` are distinct conventions.
+    """
+    from collections import Counter
+
+    counts = Counter()
+    for ch in chapters:
+        html = getattr(ch, "html", None) or ""
+        for m in _PARA_INNER_RE.finditer(html):
+            text = _TAG_RE.sub("", m.group(1)).strip()
+            token = re.sub(r"\s+", "", text)
+            if 3 <= len(token) <= 40 and _BARE_ORNAMENT_TOKEN_RE.fullmatch(token):
+                counts[token] += 1
+    return frozenset(
+        t for t, n in counts.items() if n >= _ORNAMENT_MIN_COUNT
+    )
+
+
+def _apply_hr_as_stars(html: str, ornament_tokens: frozenset = frozenset()) -> str:
     """Replace scene-break dividers with a centred ``* * *`` divider so
     readers whose stylesheet renders rules as a thin line don't miss
     them. Covers both ``<hr>`` tags and paragraph-level text dividers
     like ``-x-x-x-...`` or ``***`` that authors type in lieu of an
-    actual horizontal rule."""
+    actual horizontal rule. ``ornament_tokens`` extends detection to
+    the story's frequency-confirmed bare ornaments (see
+    :func:`_story_ornament_tokens`)."""
     from bs4 import BeautifulSoup
 
     # First pass: plain ``<hr>`` tags via fast regex — bs4 is expensive
@@ -1014,8 +1069,11 @@ def _apply_hr_as_stars(html: str) -> str:
     replaced = False
     for tag in soup.find_all(["p", "div"]):
         text = tag.get_text(" ", strip=True)
-        if not text or not _is_divider_text(text):
+        if not text:
             continue
+        if not _is_divider_text(text):
+            if re.sub(r"\s+", "", text) not in ornament_tokens:
+                continue
         new = BeautifulSoup(_HR_STARS_REPLACEMENT, "html.parser")
         tag.replace_with(new)
         replaced = True
@@ -2321,6 +2379,9 @@ def export_epub(
     book.add_item(title_page)
 
     epub_chapters = []
+    ornament_tokens = (
+        _story_ornament_tokens(story.chapters) if hr_as_stars else frozenset()
+    )
     consecutive_timeouts = 0
     for ch in story.chapters:
         ch_heading = format_chapter_heading(ch.number, ch.title)
@@ -2334,6 +2395,7 @@ def export_epub(
             _prepare_chapter_html_with_llm_fallback(
                 ch.html, hr_as_stars, strip_notes,
                 chapter_notes=chapter_notes,
+                ornament_tokens=ornament_tokens,
                 llm_config=llm_config,
                 site_name=site_prefix,
                 story_id=story.id,

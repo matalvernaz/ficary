@@ -79,6 +79,16 @@ def test_part_marker_dividers_match():
         assert not _is_scene_break_line(line), line
 
 
+def test_story_confirmed_ornament_tokens_match():
+    # ``ooo`` stays excluded by default, but a story-frequency-confirmed
+    # token (the author's letter-fence convention) becomes a pause.
+    tokens = frozenset({"ooo"})
+    assert _is_scene_break_line("ooo", tokens)
+    assert _is_scene_break_line("  ooo  ", tokens)
+    assert not _is_scene_break_line("ooo")          # no confirmation
+    assert not _is_scene_break_line("xxx", tokens)  # different token
+
+
 # ── HTML → audiobook text pipeline ───────────────────────────────────
 
 

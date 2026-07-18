@@ -884,6 +884,70 @@ class TestChapterNotesMode:
         assert "Story text with a footnote marker" in out
 
 
+class TestStoryOrnamentTokens:
+    """Frequency-gated bare ornaments: ``ooo``/``xxx`` paragraphs only
+    convert when the identical token repeats as a standalone paragraph
+    3+ times across the story (an authorial fence convention)."""
+
+    @staticmethod
+    def _chapters(*htmls):
+        return [
+            Chapter(number=i, title=f"Ch {i}", html=h)
+            for i, h in enumerate(htmls, 1)
+        ]
+
+    def test_repeated_fence_token_confirmed(self):
+        from ficary.exporters import _story_ornament_tokens
+        chs = self._chapters(
+            "<p>ooo</p><p><em>Dear X,</em></p><p>ooo</p>",
+            "<p><span>ooo</span></p><p>Prose.</p>",  # span-wrapped counts
+        )
+        assert _story_ornament_tokens(chs) == frozenset({"ooo"})
+
+    def test_two_occurrences_stay_prose(self):
+        from ficary.exporters import _story_ornament_tokens
+        chs = self._chapters("<p>ooo</p><p>Text.</p><p>ooo</p>")
+        assert _story_ornament_tokens(chs) == frozenset()
+
+    def test_rating_label_not_confirmed(self):
+        from ficary.exporters import _story_ornament_tokens
+        chs = self._chapters(
+            "<p>xxx</p><p>Story text.</p>",
+            "<p>More story.</p>",
+        )
+        assert _story_ornament_tokens(chs) == frozenset()
+
+    def test_case_not_folded(self):
+        from ficary.exporters import _story_ornament_tokens
+        chs = self._chapters("<p>ooo</p><p>OOO</p><p>ooo</p><p>ooo</p>")
+        assert _story_ornament_tokens(chs) == frozenset({"ooo"})
+
+    def test_hr_as_stars_honours_tokens(self):
+        html = "<p>Before.</p><p>ooo</p><p>After.</p>"
+        assert "ooo" in _apply_hr_as_stars(html)  # unconfirmed: prose
+        out = _apply_hr_as_stars(html, frozenset({"ooo"}))
+        assert "ooo" not in out
+        assert "scenebreak" in out
+
+    def test_export_html_converts_confirmed_fences(self):
+        story = _make_story()
+        fence = "<p>ooo</p><p><em>Dear You,</em></p><p>ooo</p>"
+        story.chapters[0] = Chapter(number=1, title="Ch 1", html=fence)
+        story.chapters.append(
+            Chapter(number=2, title="Ch 2", html=fence)
+        )
+        with tempfile.TemporaryDirectory() as td:
+            path = export_html(story, td, hr_as_stars=True)
+            out = path.read_text(encoding="utf-8")
+        assert ">ooo<" not in out
+        assert out.count("* * *") >= 4
+        # Without the flag, fences stay authorial text.
+        with tempfile.TemporaryDirectory() as td:
+            path = export_html(story, td, hr_as_stars=False)
+            out = path.read_text(encoding="utf-8")
+        assert ">ooo<" in out
+
+
 class TestHrAsStars:
     def test_substitutes_hr_tags(self):
         out = _apply_hr_as_stars("before<hr/>middle<hr>after")

@@ -1,5 +1,21 @@
 # Changelog
 
+## 2.16.4 — 2026-07-17
+
+**Letter fences (`ooo`) finally read as scene breaks — safely**
+
+* Some authors bracket embedded letters and notes with a bare ``ooo``
+  paragraph on each side. Those were deliberately excluded from scene-
+  break detection — in isolation ``ooo``/``xxx`` can be a rating label
+  or a line of prose — so they read (and were narrated) literally while
+  everything around them was normalized. Now there's a second signal:
+  when the **identical token appears as its own paragraph 3+ times
+  across the story**, it's clearly the author's divider convention, and
+  the "Mark scene breaks" pass converts it — ``* * *`` in text output, a
+  silence pause in audiobooks. A one-off ``xxx`` rating label or a
+  stray exclamation still stays untouched, and nothing changes at all
+  with "Mark scene breaks" off.
+
 ## 2.16.3 — 2026-07-17
 
 * The new chapter-notes preference is labelled **"AO3 chapter notes"** —

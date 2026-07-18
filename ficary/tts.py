@@ -66,7 +66,11 @@ def _run_silent(cmd, **kwargs):
     kwargs.setdefault("stdin", subprocess.DEVNULL)
     return subprocess.run(cmd, **kwargs)
 
-from .exporters import _is_part_marker_divider, strip_note_paragraphs
+from .exporters import (
+    _is_part_marker_divider,
+    _story_ornament_tokens,
+    strip_note_paragraphs,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -1848,7 +1852,7 @@ _SCENE_BREAK_DECO_CHARS = set(
 _ELLIPSIS_ONLY_RE = re.compile(r"^[\.…\s]+$")
 
 
-def _is_scene_break_line(text):
+def _is_scene_break_line(text, ornament_tokens=frozenset()):
     """Detect a line composed entirely of decorative/divider characters.
 
     Matches ``---``, ``===``, ``* * *``, ``~~~``, ``###``, ``oOo``,
@@ -1872,6 +1876,8 @@ def _is_scene_break_line(text):
         return False
     if _ELLIPSIS_ONLY_RE.match(s):
         return False
+    if ornament_tokens and re.sub(r"\s+", "", s) in ornament_tokens:
+        return True
     if _is_part_marker_divider(s):
         return True
     if not all(c in _SCENE_BREAK_DECO_CHARS for c in s):
@@ -1901,7 +1907,7 @@ def _is_scene_break_line(text):
     return False
 
 
-def _normalize_scene_break_lines(text):
+def _normalize_scene_break_lines(text, ornament_tokens=frozenset()):
     """Scan a block of text and replace any line that consists solely of
     decorative scene-break characters with the scene-break marker."""
     if not text:
@@ -1909,7 +1915,7 @@ def _normalize_scene_break_lines(text):
     lines = text.split("\n")
     changed = False
     for i, line in enumerate(lines):
-        if _is_scene_break_line(line):
+        if _is_scene_break_line(line, ornament_tokens):
             lines[i] = _SCENE_BREAK_MARKER
             changed = True
     return "\n".join(lines) if changed else text
@@ -1980,7 +1986,8 @@ def _llm_strip_an_paragraphs(text: str, llm_config: dict | None) -> str:
 
 
 def _html_to_audiobook_text(html, strip_notes=False, hr_as_stars=False,
-                            chapter_notes="keep"):
+                            chapter_notes="keep",
+                            ornament_tokens=frozenset()):
     """HTML → plain text tuned for TTS, gated on the user-facing flags.
 
     When ``strip_notes`` is set, paragraph-level author's notes are
@@ -2019,7 +2026,7 @@ def _html_to_audiobook_text(html, strip_notes=False, hr_as_stars=False,
             if not text:
                 continue
             if hr_as_stars:
-                text = _normalize_scene_break_lines(text)
+                text = _normalize_scene_break_lines(text, ornament_tokens)
             parts.append(text)
         elif isinstance(child, Tag):
             if child.name == "hr":
@@ -2036,7 +2043,7 @@ def _html_to_audiobook_text(html, strip_notes=False, hr_as_stars=False,
             if not text:
                 continue
             if hr_as_stars:
-                text = _normalize_scene_break_lines(text)
+                text = _normalize_scene_break_lines(text, ornament_tokens)
             parts.append(text)
 
     return "\n\n".join(parts)
@@ -2850,12 +2857,16 @@ def detect_voices(story, map_path=None, strip_notes=False, hr_as_stars=False,
     """
     mapper = VoiceMapper(map_path)
 
+    ornament_tokens = (
+        _story_ornament_tokens(story.chapters) if hr_as_stars else frozenset()
+    )
     full_text = ""
     all_segments = []
     for ch in story.chapters:
         text = _html_to_audiobook_text(
             ch.html, strip_notes=strip_notes, hr_as_stars=hr_as_stars,
             chapter_notes=chapter_notes,
+            ornament_tokens=ornament_tokens,
         )
         full_text += text + "\n"
         all_segments.append(_segment_chapter_text(text))
@@ -3288,12 +3299,16 @@ def generate_audiobook(
         and attribution_backend == "llm"
         and bool(attribution_llm_config)
     )
+    ornament_tokens = (
+        _story_ornament_tokens(story.chapters) if hr_as_stars else frozenset()
+    )
     full_text = ""
     chapter_texts = []
     for ch in story.chapters:
         text = _html_to_audiobook_text(
             ch.html, strip_notes=strip_notes, hr_as_stars=hr_as_stars,
             chapter_notes=chapter_notes,
+            ornament_tokens=ornament_tokens,
         )
         if use_llm_an:
             # Backstop: regex-based strip_note_paragraphs may have left
