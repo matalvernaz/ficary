@@ -2,8 +2,8 @@
 
 MCStories is a static-HTML archive running continuously since the 90s.
 Its value to ficary is the tag system: two-letter codes (``mc``, ``mf``,
-``fd`` = female dominant, ``md`` = male dominant, ``ft`` = foot fetish,
-``hu`` = humiliation, ``bd`` = bondage, etc.) indexed at
+``fd`` = female dominant, ``md`` = male dominant, ``ft`` = fetish
+(usually clothing), ``hm`` = humiliation, ``bd`` = bondage, etc.) indexed at
 ``/Tags/<code>.html`` as story lists, with those same codes echoed on
 each story's index page. That makes MCStories a first-class citizen
 for tag-driven search — femdom, MC, hypnosis, spanking, and adjacent

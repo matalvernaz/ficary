@@ -569,14 +569,20 @@ def test_search_erotica_promotes_known_tag_query(monkeypatch):
     tag multi-picker, ``search_erotica`` should promote it to a tag
     search. Tag-capable sites then use their native tag URL instead of
     falling back to title filtering, which is dramatically better for
-    broad discovery queries."""
+    broad discovery queries.
+
+    Promotion must be NON-LOSSY: sites with no native surface for the
+    tag run the typed word as the keyword search it always was. The
+    old behaviour dropped them from the fan-out entirely — a keyword
+    search for any word that happened to be in the tag vocabulary
+    returned nothing at all from those sites."""
     from ficary.erotica import search as erotica_search
 
-    seen_tags: dict = {}
+    seen: dict = {}
 
     def stub_for(site_slug: str):
         def fn(query, **kwargs):
-            seen_tags[site_slug] = list(kwargs.get("tags") or [])
+            seen[site_slug] = (query, list(kwargs.get("tags") or []))
             return []
         return fn
 
@@ -588,15 +594,44 @@ def test_search_erotica_promotes_known_tag_query(monkeypatch):
     # User typed "feet" as the query; no tags picked. Expect promotion.
     search_erotica("feet")
 
-    # GreatFeet is a tag-handler for feet and should now see the tag.
-    assert seen_tags.get("greatfeet") == ["feet"]
+    # GreatFeet is a tag-handler for feet and should now see the tag
+    # (and an empty query — the word must not re-filter tag-page rows).
+    assert seen.get("greatfeet") == ("", ["feet"])
     # Other tag-capable sites also see the promoted tag.
-    assert seen_tags.get("literotica") == ["feet"]
-    # AFF / Fictionmania / DarkWanderer / TGStorytime / Chyoa aren't in
-    # TAG_SITE_COVERAGE["feet"] nor in text-fold/passthrough — they
-    # were dropped from the fan-out.
-    assert "fictionmania" not in seen_tags
-    assert "tgstorytime" not in seen_tags
+    assert seen.get("literotica") == ("", ["feet"])
+    # MCStories has no feet tag (ft = generic fetish, a different
+    # thing) — it must receive the typed KEYWORD, not vanish from the
+    # fan-out. This was the "searching feet returns nothing from
+    # MCStories" bug: promotion cleared the query and the coverage
+    # gate then excluded the site entirely.
+    assert seen.get("mcstories") == ("feet", [])
+    # Same for the other keyword-capable sites outside
+    # TAG_SITE_COVERAGE["feet"] — they search the word as free text.
+    assert seen.get("fictionmania") == ("feet", [])
+    assert seen.get("tgstorytime") == ("feet", [])
+
+
+def test_search_erotica_promoted_query_survives_single_site_scope(monkeypatch):
+    """Scoped to one site, a typed tag word the site can't serve as a
+    tag must run as the keyword search it was — not degrade into the
+    stale-tag bare-browse fallback, which ignores the query entirely
+    (scoped MCStories + ``feet`` used to return the recent-additions
+    page)."""
+    from ficary.erotica import search as erotica_search
+
+    seen: dict = {}
+
+    def mcs_stub(query, **kwargs):
+        seen["mcstories"] = (query, list(kwargs.get("tags") or []))
+        return []
+
+    monkeypatch.setattr(
+        erotica_search, "_SITE_FNS",
+        {**erotica_search._SITE_FNS, "mcstories": mcs_stub},
+    )
+
+    search_erotica("feet", sites=["mcstories"])
+    assert seen.get("mcstories") == ("feet", [])
 
 
 def test_search_erotica_does_not_promote_multiword_query(monkeypatch):
@@ -792,13 +827,15 @@ def test_single_listing_adapters_window_by_page(monkeypatch):
     import ficary.erotica.search as erotica_search
     from ficary.erotica.search import search_mcstories
 
-    listing = "".join(
-        f'<tr><td><a href="../Story{i}/">Story {i}</a></td><td>fd</td></tr>'
+    # Tag searches serve from the whole-archive title index; stub its
+    # rows directly so this tests the windowing, not the parsing.
+    rows = [
+        {"slug": f"Story{i}", "title": f"Story {i}", "author": "A",
+         "codes": "mc fd", "summary": "s", "updated": "2020-01-01"}
         for i in range(3)
-    )
-    fake_html = f"<html><body><table>{listing}</table></body></html>"
+    ]
     monkeypatch.setattr(erotica_search, "PER_SITE_PAGE_MAX", 2)
-    monkeypatch.setattr(erotica_search, "_fetch", lambda url: fake_html)
+    monkeypatch.setattr(erotica_search, "_mcs_title_index_rows", lambda: rows)
 
     page1 = search_mcstories("", tags=["femdom"])
     page2 = search_mcstories("", tags=["femdom"], page=2)

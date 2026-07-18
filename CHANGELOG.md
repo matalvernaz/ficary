@@ -1,5 +1,26 @@
 # Changelog
 
+## 2.16.5 — 2026-07-18
+
+**Typed keywords are no longer lost on sites without a matching tag**
+
+* Typing a single word that is also in the tag vocabulary (``bondage``,
+  ``hypnosis``, ...) promotes the search to a tag search — unchanged,
+  and still what gives tag-capable sites their much richer native tag
+  listings. But promotion used to *clear the typed word*, so any site
+  without that tag was silently dropped from the fan-out, and scoping
+  the search to one such site degraded it to a recent-additions browse
+  that ignored the word completely. Promotion is now non-lossy: sites
+  with no native surface for the tag run the word as the keyword
+  search it always was, so every site answers one way or the other.
+* **MCStories tag searches return full listings.** Tag results now
+  come from the whole-archive title index instead of the site's bare
+  tag pages, so every row carries author, synopsis, and added-date
+  (tag pages list only a title and code string). A tag and a typed
+  keyword can also narrow each other now — the old path could only
+  re-filter tag-page rows by title. The first search builds the index
+  (~10 s); it's cached for six hours after that.
+
 ## 2.16.4 — 2026-07-17
 
 **Letter fences (`ooo`) finally read as scene breaks — safely**

@@ -216,13 +216,30 @@ def test_mcstories_whatsnew_rows(monkeypatch):
     )
 
 
-def test_mcstories_tag_rows_keep_codes_as_summary(monkeypatch):
-    _patch_fetch(monkeypatch, EROTICA / "mcstories_tag.html")
-    rows = S.search_mcstories("", tags=["mind-control"])
-    assert len(rows) >= 50
-    # Tag pages expose nothing beyond the code string — it stands in
-    # for the summary.
-    assert all(r["summary"] for r in rows)
+def test_mcstories_tag_rows_serve_from_title_index(monkeypatch):
+    # Tag searches filter the whole-archive title index by code — the
+    # site's /Tags/<code>.html pages list bare title+code rows, while
+    # the index carries author, synopsis, and added-date for the same
+    # stories.
+    monkeypatch.setattr(S, "_mcs_title_index", {"built_at": 0.0, "rows": []})
+    _patch_fetch(monkeypatch, EROTICA / "mcstories_titles.html")
+
+    rows = S.search_mcstories("", tags=["femdom"])
+    assert [r["title"] for r in rows] == ["Zeb’s Awakening"]  # the fd row
+    assert rows[0]["author"] == "Cy"
+    assert rows[0]["summary"] == "Zeb learns to surrender control."
+    assert rows[0]["fandom"] == "mc fd"
+    assert ISO_DATE.match(rows[0]["updated"])
+
+    # A tag and a keyword narrow each other (the old tag-page path
+    # could only re-filter titles, so this intersection returned
+    # nearly nothing).
+    assert [r["title"] for r in S.search_mcstories("robot", tags=["mind-control"])] == [
+        "Robot Maid",
+    ]
+    # Unsupported tag with no query still returns [] rather than the
+    # whole index.
+    assert S.search_mcstories("", tags=["polyamory"]) == []
 
 
 def test_mcstories_keyword_scans_title_index(monkeypatch):

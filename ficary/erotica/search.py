@@ -1031,38 +1031,41 @@ def _mcs_keyword_match(query: str, haystack: str) -> bool:
 
 def search_mcstories(query: str, *, page: int = 1,
                      tags: Optional[list] = None, **_: object) -> list[dict]:
-    """MCStories indexes every story by Dublin Core tag codes at
-    ``/Tags/<code>.html``. The first query-supplied tag is translated
-    through :data:`_MCS_TAG_CODES` (which mirrors MCStories' 26 real
-    codes — earlier revisions silently mapped to wrong codes like
-    ``cb`` = comic-book instead of cheating). Tag-only searches for
-    tags MCStories doesn't carry return ``[]`` rather than the full
-    Titles index — the dispatcher's tag-capability filter already
-    drops MCS from a fan-out for unsupported tags, but defending the
-    adapter keeps direct callers honest too.
+    """MCStories indexes every story by Dublin Core tag codes; the
+    first query-supplied tag is translated through
+    :data:`_MCS_TAG_CODES` (which mirrors MCStories' 26 real codes —
+    earlier revisions silently mapped to wrong codes like ``cb`` =
+    comic-book instead of cheating). Tag-only searches for tags
+    MCStories doesn't carry return ``[]`` rather than the full Titles
+    index — the dispatcher's tag-capability filter already drops MCS
+    from a fan-out for unsupported tags, but defending the adapter
+    keeps direct callers honest too.
 
-    A free-text ``query`` (no tag) filters the cached whole-archive
-    title index (:func:`_mcs_title_index_rows`); a bare browse with
-    neither query nor tag falls back to the recent-additions page.
+    Tag and keyword searches both serve from the cached whole-archive
+    title index (:func:`_mcs_title_index_rows`): MCStories has no
+    search endpoint, and its ``/Tags/<code>.html`` pages list bare
+    title+code rows — the index carries author, synopsis, and
+    added-date for the same stories, and lets a tag and a keyword
+    narrow each other. A bare browse with neither query nor tag falls
+    back to the recent-additions page.
     """
     # MCStories serves one un-paginated listing; window it per page.
     window_start, window_end = _single_listing_window(page)
     first_tag = next((t for t in (tags or []) if t), "") or ""
     code = _MCS_TAG_CODES.get(first_tag.lower())
-    if code:
-        url = f"https://mcstories.com/Tags/{code}.html"
-    elif first_tag and not query:
+    if first_tag and not code and not query:
         return []
-    elif query:
-        # Free-text search: filter the cached whole-archive title index.
-        # MCStories has no search endpoint and WhatsNew only lists the
-        # last ~week, so anything but the most recent stories was
-        # unfindable by keyword before.
+    if code or query:
         out = []
         for r in _mcs_title_index_rows():
-            haystack = f"{r['title']} {r['author']} {r['codes']} {r['summary']}"
-            if not _mcs_keyword_match(query, haystack):
+            if code and code not in r["codes"].split():
                 continue
+            if query:
+                haystack = (
+                    f"{r['title']} {r['author']} {r['codes']} {r['summary']}"
+                )
+                if not _mcs_keyword_match(query, haystack):
+                    continue
             out.append({
                 "title": r["title"], "author": r["author"],
                 "url": f"https://mcstories.com/{r['slug']}/",
@@ -1073,9 +1076,8 @@ def search_mcstories(query: str, *, page: int = 1,
             if len(out) >= window_end:
                 break
         return out[window_start:]
-    else:
-        # Bare browse (no query, no tag): recent additions.
-        url = "https://mcstories.com/WhatsNew.html"
+    # Bare browse (no query, no tag): recent additions.
+    url = "https://mcstories.com/WhatsNew.html"
     html = _fetch(url)
     if not html:
         return []
@@ -1089,100 +1091,56 @@ def search_mcstories(query: str, *, page: int = 1,
     # (The old anchor-regex walk also matched the page's nav links —
     # Titles/Authors/Tags/ReadersPicks — and emitted them as four
     # bogus rows at the top of every bare browse.)
-    story_divs = soup.find_all("div", class_="story")
-    if story_divs:
-        for div in story_divs:
-            a = div.find(
-                "a", href=re.compile(r"^([A-Z][A-Za-z0-9_-]+)/(?:index\.html)?$"),
-            )
-            if not a:
-                continue
-            m = re.match(r"^([A-Z][A-Za-z0-9_-]+)/", a.get("href", ""))
-            if not m:
-                continue
-            slug = m.group(1)
-            if slug in seen_slugs:
-                # Stories updated in both weekly sections appear twice;
-                # the first (newest) block wins.
-                continue
-            title = a.get_text(" ", strip=True)
-
-            summary = ""
-            syn = div.find("div", class_="synopsis")
-            if syn:
-                summary = syn.get_text(" ", strip=True)
-
-            author = ""
-            author_a = div.find("a", href=re.compile(r"^Authors/"))
-            if author_a:
-                author = author_a.get_text(" ", strip=True)
-
-            codes = ""
-            if author_a is not None and author_a.parent is not None:
-                codes_m = re.search(
-                    r"\(([a-z][a-z ]*)\)\s*$",
-                    author_a.parent.get_text(" ", strip=True),
-                )
-                if codes_m:
-                    codes = codes_m.group(1)
-
-            updated = ""
-            section = div.find_parent("section")
-            if section is not None:
-                dateline = section.find("h3", class_="dateline")
-                if dateline is not None:
-                    updated = _iso_date(dateline.get_text(" ", strip=True))
-
-            if not _matches_query(query, title, codes, summary):
-                continue
-            seen_slugs.add(slug)
-            out.append({
-                "title": title, "author": author,
-                "url": f"https://mcstories.com/{slug}/",
-                "summary": summary, "words": "?", "chapters": "?",
-                "rating": "M", "fandom": codes, "status": "",
-                "site": "mcstories",
-                "updated": updated,
-            })
-            if len(out) >= window_end:
-                break
-        return out[window_start:]
-
-    # Tag pages render bare two-column ``<tr>`` rows — title anchor
-    # (``../Slug/`` href) and the code string. No synopsis, author, or
-    # date columns exist there; the codes are the ceiling, so they
-    # stand in for the summary.
-    for row in soup.find_all("tr"):
-        a = row.find(
-            "a", href=re.compile(r"^\.\./([A-Z][A-Za-z0-9_-]+)/"),
+    for div in soup.find_all("div", class_="story"):
+        a = div.find(
+            "a", href=re.compile(r"^([A-Z][A-Za-z0-9_-]+)/(?:index\.html)?$"),
         )
-        if a is None:
-            a = row.find(
-                "a", href=re.compile(r"^([A-Z][A-Za-z0-9_-]+)/"),
-            )
         if not a:
             continue
-        href = a.get("href", "")
-        m = re.match(r"^(?:\.\./)?([A-Z][A-Za-z0-9_-]+)/", href)
+        m = re.match(r"^([A-Z][A-Za-z0-9_-]+)/", a.get("href", ""))
         if not m:
             continue
         slug = m.group(1)
         if slug in seen_slugs:
+            # Stories updated in both weekly sections appear twice;
+            # the first (newest) block wins.
             continue
         title = a.get_text(" ", strip=True)
+
+        summary = ""
+        syn = div.find("div", class_="synopsis")
+        if syn:
+            summary = syn.get_text(" ", strip=True)
+
+        author = ""
+        author_a = div.find("a", href=re.compile(r"^Authors/"))
+        if author_a:
+            author = author_a.get_text(" ", strip=True)
+
         codes = ""
-        tds = row.find_all("td")
-        if len(tds) >= 2:
-            codes = tds[1].get_text(" ", strip=True)
-        if not _matches_query(query, title, codes):
-            continue
+        if author_a is not None and author_a.parent is not None:
+            codes_m = re.search(
+                r"\(([a-z][a-z ]*)\)\s*$",
+                author_a.parent.get_text(" ", strip=True),
+            )
+            if codes_m:
+                codes = codes_m.group(1)
+
+        updated = ""
+        section = div.find_parent("section")
+        if section is not None:
+            dateline = section.find("h3", class_="dateline")
+            if dateline is not None:
+                updated = _iso_date(dateline.get_text(" ", strip=True))
+
         seen_slugs.add(slug)
         out.append({
-            "title": title, "author": "",
+            "title": title, "author": author,
             "url": f"https://mcstories.com/{slug}/",
-            "summary": codes, "words": "?", "chapters": "?",
-            "rating": "M", "fandom": "", "status": "",
+            "summary": summary, "words": "?", "chapters": "?",
+            "rating": "M", "fandom": codes, "status": "",
             "site": "mcstories",
+            "updated": updated,
         })
         if len(out) >= window_end:
             break
@@ -3265,25 +3223,35 @@ def search_erotica(
     # Query-to-tag promotion: when the user typed a word that *is* a
     # known erotica tag and didn't pick any tags from the multi-picker,
     # promote the query to a tag search. This is exact-match only —
-    # "feet" gets promoted; "feet fetish" does not — so the rule never
-    # surprises a user who genuinely wanted a free-text search. Tag-
-    # capable sites then use their native tag URL instead of falling
+    # "feet" gets promoted; "feet fetish" does not. Sites with a native
+    # surface for the tag then use their tag URL instead of falling
     # back to title filtering, which is dramatically better for broad
     # discovery searches like ``feet`` or ``femdom``.
+    #
+    # Promotion is NON-LOSSY: ``promoted_query`` remembers the typed
+    # word, and sites with no native surface for the tag run it as the
+    # keyword search the user actually asked for (see ``_site_args``)
+    # instead of being dropped from the fan-out. Promotion used to
+    # clear the query outright, which silently excluded those sites —
+    # typing a tag word returned nothing at all from them, and a
+    # single-site scope fell back to a bare browse that ignored the
+    # query completely.
+    promoted_query = ""
     if not tag_list and query:
         normalised_query = query.strip().lower()
         if normalised_query in EROTICA_TAG_VOCABULARY:
             tag_list = [normalised_query]
-            # Clear the query: the word is now represented by the tag,
-            # so tag-capable adapters take their native tag-URL path.
-            # Leaving it set would ALSO apply it as a client-side
-            # substring filter over those tag-page rows — whose text is
-            # site codes/slugs (MCStories ``fd mc``, SOL ``femaledom``),
-            # not the English vocab word — decimating the results
-            # (MCStories 200 -> 7, SOL 10 -> 0 for ``femdom``).
+            promoted_query = query.strip()
+            # Clear the shared query: tag-capable adapters would ALSO
+            # apply it as a client-side substring filter over their
+            # tag-page rows — whose text is site codes/slugs
+            # (MCStories ``fd mc``, SOL ``femaledom``), not the English
+            # vocab word — decimating the results (MCStories 200 -> 7,
+            # SOL 10 -> 0 for ``femdom``).
             query = ""
             logger.info(
-                "erotica: promoting bare query %r to tag-search",
+                "erotica: promoting bare query %r to tag-search "
+                "(keyword kept for sites without the tag)",
                 normalised_query,
             )
 
@@ -3297,10 +3265,20 @@ def search_erotica(
         resolved_sites and len(resolved_sites) == 1 and tag_list
         and not _site_handles_any_tag(resolved_sites[0], tag_list)
     ):
-        logger.info(
-            "erotica: %s doesn't carry %s — browsing the site bare",
-            resolved_sites[0], tag_list,
-        )
+        if promoted_query:
+            # The "tag" was a typed keyword all along — run it as one
+            # rather than degrading to a browse that ignores it.
+            logger.info(
+                "erotica: %s doesn't carry %s — running the typed "
+                "keyword instead", resolved_sites[0], tag_list,
+            )
+            query = promoted_query
+            promoted_query = ""
+        else:
+            logger.info(
+                "erotica: %s doesn't carry %s — browsing the site bare",
+                resolved_sites[0], tag_list,
+            )
         tag_list = []
 
     if resolved_sites is None:
@@ -3326,7 +3304,11 @@ def search_erotica(
     # Only applied when the caller didn't restrict ``sites`` to a
     # specific slug — a user who explicitly picks one site has
     # already opted into whatever that site returns.
-    if tag_list and resolved_sites is None:
+    #
+    # Promoted searches skip the drop entirely: ``_site_args`` reroutes
+    # sites without the tag onto the typed keyword, so every site still
+    # serves the search one way or the other.
+    if tag_list and resolved_sites is None and not promoted_query:
         active = [
             s for s in active
             if _site_handles_any_tag(s, tag_list)
@@ -3350,6 +3332,14 @@ def search_erotica(
         "fandom": fandom,
     }
 
+    def _site_args(site: str) -> tuple:
+        """Per-site ``(query, kwargs)``. A promoted tag search routes
+        sites without a native surface for the tag onto the keyword
+        the user typed; everything else gets the shared arguments."""
+        if promoted_query and not _site_handles_any_tag(site, tag_list):
+            return promoted_query, {**kwargs, "tags": []}
+        return query, kwargs
+
     merged = ErotiCAResults()
     # Per-site stats: count of hits, ok flag, error message (or None).
     # The GUI summary panel reads this to show "MCStories: 8, SOL:
@@ -3366,7 +3356,10 @@ def search_erotica(
     # also catch here to flip the per-site ``ok`` flag so the GUI can
     # surface the failure instead of silently omitting a site.
     with concurrent.futures.ThreadPoolExecutor(max_workers=len(active)) as ex:
-        futures = {ex.submit(_SITE_FNS[s], query, **kwargs): s for s in active}
+        futures = {}
+        for s in active:
+            site_query, site_kwargs = _site_args(s)
+            futures[ex.submit(_SITE_FNS[s], site_query, **site_kwargs)] = s
         for fut in concurrent.futures.as_completed(futures):
             site_slug = futures[fut]
             try:
