@@ -38,6 +38,21 @@ def _descriptor(n):
     return {"url": f"https://example.invalid/ch/{n}", "title": f"Chapter {n}"}
 
 
+class TestProbeChapterCount:
+    def test_probe_paces_before_counting(self, scraper, monkeypatch):
+        """``probe_chapter_count`` must run the pacing gate *before* the
+        request — bulk probe sweeps rely on it; unpaced sweeps are what
+        flip FFN's Cloudflare into interactive-challenge mode."""
+        calls = []
+        monkeypatch.setattr(scraper, "_delay", lambda: calls.append("delay"))
+        monkeypatch.setattr(
+            scraper, "get_chapter_count",
+            lambda url: (calls.append("count"), 7)[1],
+        )
+        assert scraper.probe_chapter_count("https://example.invalid/s/1") == 7
+        assert calls == ["delay", "count"]
+
+
 class TestMaterialiseChapters:
     def test_fetches_all_when_nothing_cached(self, scraper):
         fetched_bodies = [

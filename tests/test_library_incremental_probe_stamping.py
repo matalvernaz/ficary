@@ -42,6 +42,8 @@ def _fake_scraper(results):
             raise value
         return value
     scraper.get_chapter_count = get_chapter_count
+    # The bulk probe loop calls the paced wrapper; fakes skip the pacing.
+    scraper.probe_chapter_count = get_chapter_count
     return scraper
 
 

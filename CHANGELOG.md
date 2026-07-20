@@ -1,5 +1,28 @@
 # Changelog
 
+## 2.16.6 — 2026-07-20
+
+**Bulk update no longer provokes — or grinds against — Cloudflare challenges**
+
+* Library-update probes now run behind the same per-site pacing the
+  chapter downloads already honour. The probe sweep used to fire its
+  requests back-to-back (the pacing gate only lived in the download
+  and listing paths), and on FFN a few dozen unpaced probes were
+  enough to flip Cloudflare into interactive-challenge mode for the
+  rest of the run. FFN probes now pace at the proven-safe ~6 s
+  cadence; sites without a rate-limit floor (AO3, Royal Road) sleep
+  0 s and are unaffected.
+* Per-site circuit breaker for interactive challenges. Once a site
+  serves three consecutive challenged probes, the update stops
+  contacting it: remaining probes and queued downloads for that site
+  are skipped and reported as one aggregate line instead of hundreds
+  of repeats of the same five-line guidance paragraph (previously
+  printed up to three times per story — probe line, phase-3 line,
+  and summary). Each doomed probe also burned 10–15 s of retries, so
+  a 340-story FFN group could waste an hour after going shields-up.
+  Skipped stories keep no ``last_probed`` stamp and retry on the next
+  update.
+
 ## 2.16.5 — 2026-07-18
 
 **Typed keywords are no longer lost on sites without a matching tag**

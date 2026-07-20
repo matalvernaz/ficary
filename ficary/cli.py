@@ -26,6 +26,7 @@ from .erotica import LiteroticaScraper
 from .models import Story, merge_chapter_lists, parse_chapter_spec
 from .scraper import (
     CloudflareBlockError,
+    CloudflareChallengeError,
     RateLimitError,
     StoryNotFoundError,
 )
@@ -1603,6 +1604,15 @@ def _handle_update_all(args: argparse.Namespace) -> None:
 _FMT_MAP = {".epub": "epub", ".html": "html", ".txt": "txt"}
 
 
+# Consecutive Cloudflare interactive-challenge probe failures on one
+# site before its circuit breaker trips. Each failure already stands
+# for a full _fetch retry loop's worth of challenge responses, so three
+# in a row is ~12-15 challenged requests — a shields-up site, not a
+# blip. Kept small because every post-trip probe would cost 10-15 s of
+# retries plus a repeated five-line error paragraph.
+_CF_BREAKER_THRESHOLD = 3
+
+
 def _run_update_queue(
     probe_queue: list[dict],
     args,
@@ -1641,6 +1651,12 @@ def _run_update_queue(
     closing it mid-run stops upstream traffic instead of leaving a
     zombie worker grinding for another hour.
 
+    A site that serves ``_CF_BREAKER_THRESHOLD`` consecutive Cloudflare
+    interactive challenges trips a per-site breaker: its remaining
+    probes and queued downloads are skipped for this run (reported as
+    aggregate lines, not per-entry), stay unstamped, and retry on the
+    next update.
+
     Returns the exit code: 0 on success, 1 if any story failed.
     """
     from concurrent.futures import ThreadPoolExecutor
@@ -1653,6 +1669,10 @@ def _run_update_queue(
     # log and re-correlate names with exceptions by hand.
     failed: list[tuple[str, str]] = []
     would_update: list[tuple[str, int, int]] = []
+    # Cloudflare-challenge circuit-breaker state per site class, filled
+    # in Phase 2 (empty when there's nothing to probe). Phase 3 reads it
+    # to suppress downloads against a site that is challenging us.
+    breakers: dict[type, dict] = {}
 
     # Phase 2 (concurrent): remote chapter-count probes.
     #
@@ -1677,6 +1697,29 @@ def _run_update_queue(
             site_cls = _detect_site(entry["url"])
             by_site.setdefault(site_cls, []).append(entry)
 
+        # Per-site Cloudflare-challenge circuit breakers. An interactive
+        # challenge (cf-mitigated: challenge) is served per-site and per-
+        # client, so once a site starts challenging us it challenges
+        # *every* subsequent request — each further probe just burns its
+        # whole retry budget (~10-15 s) and prints the same five-line
+        # guidance paragraph. On a 340-story FFN group that's an hour of
+        # guaranteed-futile grinding and hundreds of identical error
+        # paragraphs through a screen reader. After
+        # ``_CF_BREAKER_THRESHOLD`` *consecutive* challenge failures
+        # (each already representing a full retry loop's worth of
+        # challenge responses), the group stops contacting the site;
+        # skipped entries stay unstamped so the next update retries
+        # them. The streak resets only on a definitive upstream answer
+        # (a count, or story-gone) — neutral failures like timeouts
+        # neither feed nor clear it.
+        breakers.update({
+            cls: {
+                "site": cls.site_name,
+                "streak": 0, "tripped": False, "skipped": 0,
+            }
+            for cls in by_site
+        })
+
         # Progress output during Phase 2. Without this, a library with
         # 700+ FFN stories goes silent for an hour+ while the serial
         # 6-second-floor probes grind through — the user can't tell
@@ -1687,7 +1730,7 @@ def _run_update_queue(
         probe_progress_lock = threading.Lock()
         completed_count = [0]
 
-        def probe_entry(scraper, entry):
+        def probe_entry(scraper, entry, breaker):
             # Caller-requested abort: drop out before the HTTP call so
             # closing the library window doesn't keep hammering upstream.
             if cancel_event is not None and cancel_event.is_set():
@@ -1715,9 +1758,18 @@ def _run_update_queue(
                         "(from index — probe skipped)"
                     )
                 return
+            # Site breaker tripped: don't contact the site, don't print a
+            # per-entry line (the trip notice + group summary cover it),
+            # don't stamp — the unstamped TTL retries these next update.
+            with probe_progress_lock:
+                if breaker["tripped"]:
+                    entry["cf_skipped"] = True
+                    completed_count[0] += 1
+                    breaker["skipped"] += 1
+                    return
             remote_count: int | None = None
             try:
-                entry["remote"] = scraper.get_chapter_count(entry["url"])
+                entry["remote"] = scraper.probe_chapter_count(entry["url"])
                 remote_count = entry["remote"]
                 outcome = f"{entry['remote']} chapter(s) upstream"
                 probe_answered = True
@@ -1739,6 +1791,23 @@ def _run_update_queue(
                     f"  [probe {completed_count[0]}/{total}] "
                     f"{entry['rel']}: {outcome}"
                 )
+                if probe_answered:
+                    breaker["streak"] = 0
+                elif isinstance(entry.get("error"), CloudflareChallengeError):
+                    breaker["streak"] += 1
+                    if (
+                        breaker["streak"] >= _CF_BREAKER_THRESHOLD
+                        and not breaker["tripped"]
+                    ):
+                        breaker["tripped"] = True
+                        progress(
+                            f"  {breaker['site']}: Cloudflare interactive "
+                            f"challenge on {breaker['streak']} consecutive "
+                            "probes — skipping this site's remaining probes; "
+                            "they'll retry on the next update. (See the "
+                            "first failure above for cookie / --cf-solve "
+                            "options.)"
+                        )
             # Fire the completion callback *outside* the progress lock
             # so the GUI's stamp-flush disk I/O doesn't block other
             # probe workers from reporting their own progress lines.
@@ -1752,6 +1821,7 @@ def _run_update_queue(
 
         def run_site_group(site_cls, entries):
             scraper = _build_scraper(entries[0]["url"], args)
+            breaker = breakers[site_cls]
             site_workers = max(1, min(workers, scraper.concurrency))
             progress(
                 f"  Probing {len(entries)} {site_cls.site_name} "
@@ -1763,9 +1833,14 @@ def _run_update_queue(
                 thread_name_prefix=f"probe-{site_cls.site_name}",
             ) as pool:
                 for _ in pool.map(
-                    lambda e: probe_entry(scraper, e), entries,
+                    lambda e: probe_entry(scraper, e, breaker), entries,
                 ):
                     pass
+            if breaker["skipped"]:
+                progress(
+                    f"  {breaker['site']}: skipped {breaker['skipped']} "
+                    "remaining probe(s) without contacting the site."
+                )
 
         if len(by_site) == 1:
             cls, entries = next(iter(by_site.items()))
@@ -1808,11 +1883,20 @@ def _run_update_queue(
     # summary can surface what actually went wrong instead of just a
     # list of names the user has to re-correlate with the scrollback.
     downloadable: list[dict] = []
+    # Breaker-skipped work, aggregated per site name. One summary line
+    # per site replaces a per-entry line (and a per-entry repeat of the
+    # challenge guidance paragraph) for what can be hundreds of entries.
+    cf_skipped_probes: dict[str, int] = {}
+    cf_skipped_downloads: dict[str, int] = {}
     for i, entry in enumerate(probe_queue, 1):
         rel = entry["rel"]
         if entry.get("cancelled"):
             progress(f"[{i}/{total}] {rel}")
             progress(f"  Cancelled before probe.")
+            continue
+        if entry.get("cf_skipped"):
+            site = _detect_site(entry["url"]).site_name
+            cf_skipped_probes[site] = cf_skipped_probes.get(site, 0) + 1
             continue
         if "error" in entry:
             progress(f"[{i}/{total}] {rel}")
@@ -1846,7 +1930,31 @@ def _run_update_queue(
             would_update.append((rel, local, remote))
             continue
 
+        # A tripped breaker means the site is challenging every request
+        # right now — a download would grind through the same doomed
+        # retry loops per chapter. Skip it; the story stays pending in
+        # the index (or unstamped), so the next update picks it up.
+        site_cls = _detect_site(entry["url"])
+        if breakers[site_cls]["tripped"]:
+            cf_skipped_downloads[site_cls.site_name] = (
+                cf_skipped_downloads.get(site_cls.site_name, 0) + 1
+            )
+            continue
+
         downloadable.append(entry)
+
+    for site in sorted(set(cf_skipped_probes) | set(cf_skipped_downloads)):
+        probes = cf_skipped_probes.get(site, 0)
+        downloads = cf_skipped_downloads.get(site, 0)
+        parts = []
+        if probes:
+            parts.append(f"{probes} probe(s)")
+        if downloads:
+            parts.append(f"{downloads} queued download(s)")
+        progress(
+            f"{site}: skipped {' and '.join(parts)} — site is behind a "
+            "Cloudflare interactive challenge; run the update again later."
+        )
 
     download_total = len(downloadable)
     started_count = [0]
@@ -2007,6 +2115,14 @@ def _run_update_queue(
             f"{label} complete — {len(updated)} updated, "
             f"{len(up_to_date)} up to date, {len(failed)} failed, "
             f"{skipped_count} skipped."
+        )
+    for site in sorted(set(cf_skipped_probes) | set(cf_skipped_downloads)):
+        probes = cf_skipped_probes.get(site, 0)
+        downloads = cf_skipped_downloads.get(site, 0)
+        progress(
+            f"{site}: {probes} probe(s) and {downloads} download(s) "
+            "skipped (Cloudflare challenge) — they'll retry on the "
+            "next update."
         )
     if failed:
         progress("Failed:")

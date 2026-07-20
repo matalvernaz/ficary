@@ -1526,6 +1526,23 @@ class BaseScraper:
         """
         raise NotImplementedError
 
+    def probe_chapter_count(self, url_or_id):
+        """:meth:`get_chapter_count` behind the scraper's pacing gate.
+
+        Bulk probe sweeps (library update Phase 2) issue one request
+        per story off this method, story after story on the same
+        scraper. ``get_chapter_count`` alone bypasses ``_delay()`` —
+        pacing only lives in the chapter/pagination paths — so a big
+        sweep hits the site at connection speed. On FFN a few dozen
+        unpaced probes are enough to flip Cloudflare into serving
+        interactive challenges for the rest of the run, which no
+        retry can pass. Single-story callers (GUI per-story check)
+        keep calling :meth:`get_chapter_count` directly and skip the
+        sleep.
+        """
+        self._delay()
+        return self.get_chapter_count(url_or_id)
+
     def scrape_author_stories(self, url):
         """Return ``(author_name, [story_url, ...])`` for an author page.
 
