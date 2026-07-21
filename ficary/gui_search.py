@@ -738,11 +738,15 @@ class SearchFrame(wx.Frame):
         #   • RR list browse (Rising Stars, Best Rated, …)
         #   • RR filter-only browse (tags, genres, warnings, numeric bounds)
         #   • Literotica category browse — the category slug IS the target.
-        list_browse = (
+        selected_list_browse = (
             self.site_key == "royalroad"
             and filters.get("list")
             and filters["list"].strip().lower() != "search"
         )
+        list_browse = selected_list_browse and not query
+        if selected_list_browse and query:
+            filters.pop("list", None)
+            self.filter_ctrls["list"].SetSelection(0)
         rr_filter_only = (
             self.site_key == "royalroad"
             and any(
@@ -820,6 +824,10 @@ class SearchFrame(wx.Frame):
         )
         site_label = self._SITE_LABELS.get(self.site_key, self.site_key)
         self._log(f"Searching {site_label} for: {query}{filter_str}")
+        if selected_list_browse and query:
+            self._log(
+                "  Browse reset to Search because a title query was entered."
+            )
         # Royal Road browse-list mode (Rising Stars / Best Rated / etc.)
         # uses a different URL shape and the URL builder silently drops
         # most other RR filters. Surface the dropped names so users

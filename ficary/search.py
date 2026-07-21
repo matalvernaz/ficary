@@ -1602,7 +1602,7 @@ def _build_rr_search_url(query, filters, page=1):
     tag_slugs = _collect_rr_tag_slugs(filters)
     warning_slugs = _rr_slug_list(filters.get("warnings"), RR_WARNINGS)
 
-    if list_slug:
+    if list_slug and not query:
         # List endpoints ignore `title=`. Keep tagsAdd / warningsAdd
         # working so users can browse e.g. "Rising Stars tagged
         # progression with gore warnings filtered in".
@@ -1806,10 +1806,11 @@ def search_royalroad(query, *, page=1, **filters):
                   new releases / complete / rising stars
 
     `page` (keyword-only) selects a specific results page. When `list` is
-    set to one of the non-search values, the free-text query is ignored
-    and the corresponding RR discovery page is browsed instead; `tags`
-    and `warnings` still filter, but `status`/`type`/`order_by` and the
-    min/max numeric filters do not apply to list-browse endpoints.
+    set to one of the non-search values and the query is empty, the
+    corresponding RR discovery page is browsed; `tags` and `warnings`
+    still filter, but `status`/`type`/`order_by` and the min/max numeric
+    filters do not apply to list-browse endpoints. A non-empty query always
+    uses title search because Royal Road's discovery endpoints ignore it.
     """
     url = _build_rr_search_url(query, filters, page=page)
     session = curl_requests.Session(impersonate="chrome")

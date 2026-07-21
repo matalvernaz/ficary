@@ -1,5 +1,16 @@
 # Changelog
 
+## 2.16.7 — 2026-07-21
+
+**Royal Road title searches no longer disappear into Browse mode**
+
+* Entering a title now always performs a title search, even when a
+  discovery list such as Best Rated or Rising Stars was left selected from
+  an earlier browse. Ficary previously sent the discovery-list request and
+  silently discarded the typed title, so it returned plausible but unrelated
+  rows and could omit the exact match. The GUI now resets Browse to Search
+  when a title is entered; empty-query discovery browsing is unchanged.
+
 ## 2.16.6 — 2026-07-20
 
 **Bulk update no longer provokes — or grinds against — Cloudflare challenges**

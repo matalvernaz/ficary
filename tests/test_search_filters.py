@@ -270,9 +270,15 @@ class TestCollapseLiteroticaSeries:
         assert collapsed[0].get("is_series") is True
         assert len(collapsed[0]["series_parts"]) == 2
 
-    def test_rr_list_browse_ignores_query(self):
+    def test_rr_query_takes_precedence_over_list_browse(self):
         from ficary.search import _build_rr_search_url
         url = _build_rr_search_url("chickens", {"list": "rising stars"})
+        assert "/fictions/search?" in url
+        assert "title=chickens" in url
+
+    def test_rr_list_browse_with_empty_query_uses_list_endpoint(self):
+        from ficary.search import _build_rr_search_url
+        url = _build_rr_search_url("", {"list": "rising stars"})
         assert url.endswith("/fictions/rising-stars"), url
 
     def test_rr_list_browse_preserves_tags_and_page(self):
