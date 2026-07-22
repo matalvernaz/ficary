@@ -21,7 +21,7 @@ from pathlib import Path
 from typing import Callable, Optional
 
 from ..exporters import html_to_text
-from ..models import Chapter, format_chapter_heading
+from ..models import Chapter, chapter_display_numbers, format_chapter_heading
 from .. import sites
 
 logger = logging.getLogger(__name__)
@@ -49,13 +49,17 @@ class StorySource:
     """
 
     def __init__(self, *, title: str, author: str, story_key: str,
-                 chapter_count: int, loader: Callable[[int], Chapter]):
+                 chapter_count: int, loader: Callable[[int], Chapter],
+                 display_numbers: Optional[dict[int, int]] = None):
         self.title = title
         self.author = author
         self.story_key = story_key
         self._count = chapter_count
         self._loader = loader
         self._cache: dict[int, ReaderChapter] = {}
+        # number → display number (structural chapters don't consume a
+        # slot); missing entries fall back to the stored number.
+        self._display_numbers = display_numbers or {}
 
     def chapter_count(self) -> int:
         return self._count
@@ -67,7 +71,9 @@ class StorySource:
         chapter = self._loader(number)
         rc = ReaderChapter(
             number=number,
-            heading=format_chapter_heading(number, chapter.title),
+            heading=format_chapter_heading(
+                self._display_numbers.get(number, number), chapter.title,
+            ),
             text=html_to_text(chapter.html),
         )
         self._cache[number] = rc
@@ -91,12 +97,22 @@ class StorySource:
                 raise ReaderSourceError(f"Chapter {n} missing from cache {cache_dir}")
             return ch
 
+        # One title-only sweep so display numbering can skip structural
+        # chapters (Prologue, …). Unreadable chapters are left out of the
+        # map; load_chapter falls back to the stored number for them.
+        pairs = []
+        for n in sorted(numbers):
+            ch = _read_cached_chapter(cache_dir, n)
+            if ch is not None:
+                pairs.append((n, ch.title))
+
         return cls(
             title=title or meta.get("title") or "Untitled",
             author=author or meta.get("author") or "Unknown",
             story_key=sites.canonical_url(url) or url,
             chapter_count=count,
             loader=loader,
+            display_numbers=chapter_display_numbers(pairs),
         )
 
     @classmethod
@@ -129,6 +145,9 @@ class StorySource:
             story_key=(sites.canonical_url(url) or url) if url else str(path.resolve()),
             chapter_count=max(by_number),
             loader=loader,
+            display_numbers=chapter_display_numbers(
+                (c.number, c.title) for c in chapters
+            ),
         )
 
 

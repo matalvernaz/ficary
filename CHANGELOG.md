@@ -1,5 +1,22 @@
 # Changelog
 
+## 2.16.8 — 2026-07-22
+
+**Prologues no longer shift chapter numbering**
+
+* A fic that opens with a Prologue (or any structural section —
+  Interlude, Author's Note, …) used to have its first real chapter
+  labelled "Chapter 2": headings were numbered by list position, and
+  the Prologue consumed slot 1. Structural chapters are now unnumbered,
+  so the chapter after a Prologue is labelled "Chapter 1", a chapter
+  after a mid-book Interlude keeps the author's sequence, and exports,
+  EPUBs, audiobook narration, and the reader all agree. Partial-range
+  downloads (`--chapters 5-10`) still label chapters by their real
+  numbers.
+* Exports written before this fix carry the old numbering; their
+  headings heal to the new scheme the next time an update merges new
+  chapters into the file.
+
 ## 2.16.7 — 2026-07-21
 
 **Royal Road title searches no longer disappear into Browse mode**

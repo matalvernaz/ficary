@@ -60,6 +60,42 @@ STRUCTURAL_LABELS = (
 )
 
 
+def is_structural_title(title):
+    """True when the title names a structural section (Prologue, …).
+
+    Matches a bare structural label or one carrying a subtitle
+    ("Prologue: Before the Fall"). Structural chapters render verbatim
+    and don't consume a "Chapter N" slot in display numbering.
+    """
+    low = (title or "").strip().lower()
+    for label in STRUCTURAL_LABELS:
+        if low == label or low.startswith(label + ":") or low.startswith(label + " -"):
+            return True
+    return False
+
+
+def chapter_display_numbers(pairs):
+    """Map stored chapter numbers to the numbers their headings display.
+
+    ``pairs`` is an iterable of ``(number, title)``. Structural chapters
+    (Prologue, Interlude, …) are unnumbered in most authors' schemes, so
+    they don't consume a slot: a fic that opens with a Prologue has its
+    next chapter display as "Chapter 1", not "Chapter 2". Each
+    non-structural chapter displays its stored number minus the count of
+    structural chapters before it, which keeps partial-range downloads
+    (``--chapters 5-10``) anchored to their real numbers instead of
+    restarting at 1. Structural entries get the same offset value; it is
+    never rendered (their headings are verbatim) but keeps the map total.
+    """
+    numbers = {}
+    offset = 0
+    for number, title in sorted(pairs, key=lambda p: p[0]):
+        if is_structural_title(title):
+            offset += 1
+        numbers[number] = number - offset
+    return numbers
+
+
 def format_chapter_heading(n, title):
     """Render a chapter heading from its number and raw title.
 
@@ -67,7 +103,10 @@ def format_chapter_heading(n, title):
     already starts with "Chapter" or names a structural section
     (Prologue, Epilogue, Interlude, …) is preserved verbatim;
     otherwise the number is prepended so the reader always sees a
-    clear chapter marker. Shared between the text/HTML/EPUB exporters
+    clear chapter marker. ``n`` is the *display* number — callers with
+    the full chapter list pass it through
+    :func:`chapter_display_numbers` first so structural chapters don't
+    shift the numbering. Shared between the text/HTML/EPUB exporters
     and the TTS audiobook builder so the spoken and printed forms
     stay in sync.
     """
@@ -76,16 +115,14 @@ def format_chapter_heading(n, title):
         return f"Chapter {n}"
     if re.match(r"^chapter\b", title, re.I):
         return title
-    low = title.lower()
-    for label in STRUCTURAL_LABELS:
-        if low == label or low.startswith(label + ":") or low.startswith(label + " -"):
-            return title
+    if is_structural_title(title):
+        return title
     if re.match(r"^\d+\s*[.\-:)]*\s*$", title):
         return f"Chapter {n}"
     return f"Chapter {n}. {title}"
 
 
-def parse_chapter_heading(n, heading):
+def parse_chapter_heading(n, heading, display_n=None):
     """Inverse of :func:`format_chapter_heading`: recover the raw title.
 
     The merge-in-place updater reads chapter ``<h2>`` text back out of
@@ -94,19 +131,23 @@ def parse_chapter_heading(n, heading):
     the recovered title would survive into a re-export and merged
     stories would mix raw and prefixed titles. We strip exactly the
     "Chapter N. " (or "Chapter N") prefix matching this chapter's
-    number; anything else — including titles that legitimately start
-    with "Chapter " from the author — is returned verbatim so the
-    round-trip is idempotent.
+    display number, falling back to its stored number — exports written
+    before structural chapters (Prologue, …) stopped consuming a slot
+    carry the stored number, and accepting it lets a merge heal their
+    headings to the display scheme. Anything else — including titles
+    that legitimately start with "Chapter " from the author — is
+    returned verbatim.
     """
     heading = (heading or "").strip()
     if not heading:
         return ""
-    bare = re.match(rf"^Chapter\s+{n}\s*$", heading, re.I)
-    if bare:
-        return ""
-    prefixed = re.match(rf"^Chapter\s+{n}\.\s+(?P<rest>.+)$", heading, re.I)
-    if prefixed:
-        return prefixed.group("rest").strip()
+    accepted = [display_n, n] if display_n is not None and display_n != n else [n]
+    for num in accepted:
+        if re.match(rf"^Chapter\s+{num}\s*$", heading, re.I):
+            return ""
+        prefixed = re.match(rf"^Chapter\s+{num}\.\s+(?P<rest>.+)$", heading, re.I)
+        if prefixed:
+            return prefixed.group("rest").strip()
     return heading
 
 

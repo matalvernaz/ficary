@@ -5,8 +5,9 @@ import logging
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Optional
 
-from .models import Chapter, parse_chapter_heading
+from .models import Chapter, chapter_display_numbers, parse_chapter_heading
 
 logger = logging.getLogger(__name__)
 
@@ -1023,6 +1024,38 @@ def _strip_opening_tag(block: str) -> str:
     return block
 
 
+def _entries_to_chapters(
+    entries: list[tuple[int, Optional[str], str]],
+) -> list[Chapter]:
+    """Turn parsed ``(number, heading, body_html)`` entries into Chapters.
+
+    Heading-prefix stripping needs the whole ordered list before any
+    title can be recovered: the exporter numbers headings with
+    structural chapters (Prologue, …) skipped, so the expected
+    "Chapter N. " prefix of one chapter depends on the titles of every
+    chapter before it. ``heading`` is None when the export carried no
+    ``<h2>`` for that chapter.
+    """
+    entries = sorted(entries, key=lambda e: e[0])
+    display_ns = chapter_display_numbers(
+        (number, heading or "") for number, heading, _ in entries
+    )
+    chapters = []
+    for number, heading, body_html in entries:
+        if heading is None:
+            title = _DEFAULT_CHAPTER_TITLE_FMT.format(n=number)
+        else:
+            # Strip the "Chapter N. " prefix that the exporter writes
+            # so the round-trip recovers the *raw* ch.title — otherwise
+            # the prefix piles up on re-export and merged stories mix
+            # raw/prefixed titles.
+            title = parse_chapter_heading(
+                number, heading, display_n=display_ns[number],
+            )
+        chapters.append(Chapter(number=number, title=title, html=body_html))
+    return chapters
+
+
 def _read_html_chapters(path: Path) -> list[Chapter]:
     """Parse an ficary HTML export into ordered Chapter objects.
 
@@ -1034,7 +1067,7 @@ def _read_html_chapters(path: Path) -> list[Chapter]:
     non-ficary HTML that happens to carry our extension.
     """
     text = path.read_text(encoding="utf-8", errors="replace")
-    chapters: list[Chapter] = []
+    entries: list[tuple[int, Optional[str], str]] = []
     seen_numbers: set[int] = set()
 
     for fallback_index, match in enumerate(
@@ -1071,28 +1104,22 @@ def _read_html_chapters(path: Path) -> list[Chapter]:
             # without unescape here the entity round-trips as raw text
             # and the *next* export re-escapes it to ``A &amp;amp; B``.
             heading = _html_module.unescape(heading)
-            # Strip the "Chapter N. " prefix that the exporter writes
-            # so the round-trip recovers the *raw* ch.title — otherwise
-            # the prefix piles up on re-export and merged stories mix
-            # raw/prefixed titles.
-            title = parse_chapter_heading(number, heading)
             # Chapter body used on re-export is everything *after* the
             # h2 — the exporter writes the h2 itself from ch.title, so
             # leaving it in would duplicate the heading.
             body_html = body[title_match.end():].lstrip()
         else:
-            title = _DEFAULT_CHAPTER_TITLE_FMT.format(n=number)
+            heading = None
             body_html = body
 
-        chapters.append(Chapter(number=number, title=title, html=body_html))
+        entries.append((number, heading, body_html))
 
-    if not chapters:
+    if not entries:
         raise ChaptersNotReadableError(
             f"No ficary chapter blocks found in {path.name}"
         )
 
-    chapters.sort(key=lambda c: c.number)
-    return chapters
+    return _entries_to_chapters(entries)
 
 
 def _read_epub_chapters(path: Path) -> list[Chapter]:
@@ -1118,7 +1145,7 @@ def _read_epub_chapters(path: Path) -> list[Chapter]:
             f"Failed to read EPUB {path.name}: {exc}"
         ) from exc
 
-    chapters: list[Chapter] = []
+    entries: list[tuple[int, Optional[str], str]] = []
     filename_number_re = re.compile(r"chapter_(\d+)\.xhtml$", re.IGNORECASE)
 
     # ebooklib returns the full XHTML document for each chapter item
@@ -1149,21 +1176,19 @@ def _read_epub_chapters(path: Path) -> list[Chapter]:
             # without it, ``&amp;`` round-trips and gets double-escaped on
             # re-export.
             heading = _html_module.unescape(heading)
-            title = parse_chapter_heading(number, heading)
             body_html = body[title_match.end():].lstrip()
         else:
-            title = _DEFAULT_CHAPTER_TITLE_FMT.format(n=number)
+            heading = None
             body_html = body
 
-        chapters.append(Chapter(number=number, title=title, html=body_html))
+        entries.append((number, heading, body_html))
 
-    if not chapters:
+    if not entries:
         raise ChaptersNotReadableError(
             f"No chapter_*.xhtml items in {path.name}"
         )
 
-    chapters.sort(key=lambda c: c.number)
-    return chapters
+    return _entries_to_chapters(entries)
 
 
 def read_chapters(filepath: Path | str) -> list[Chapter]:

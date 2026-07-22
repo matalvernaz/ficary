@@ -14,6 +14,7 @@ from collections import Counter
 from pathlib import Path
 
 from . import legacy as _legacy
+from .models import chapter_display_numbers as _chapter_display_numbers
 from .models import format_chapter_heading as _format_chapter_heading
 
 # edge_tts is only required when actually synthesizing audio — importing
@@ -3567,6 +3568,9 @@ def _generate_audiobook_inner(
     cache_hits = 0
     cache_misses = 0
 
+    display_ns = _chapter_display_numbers(
+        (i, c.title) for i, c in enumerate(story.chapters, 1)
+    )
     for i, (ch, segs) in enumerate(zip(story.chapters, all_segments), 1):
         if cancel_event is not None and cancel_event.is_set():
             raise AudiobookCancelled(
@@ -3621,7 +3625,7 @@ def _generate_audiobook_inner(
 
         # Heading synth per run — if it fails we fall back to the body
         # alone so the chapter is still audible, just untitled.
-        heading_text = _format_chapter_heading(i, ch.title)
+        heading_text = _format_chapter_heading(display_ns[i], ch.title)
         heading_path = build_tmp / f"heading_{i:04d}.mp3"
         try:
             heading_ok = asyncio.run(

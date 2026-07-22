@@ -12,7 +12,7 @@ from bs4 import BeautifulSoup, NavigableString, Tag
 
 from . import single_flight
 from .atomic import atomic_path, atomic_write_text
-from .models import Story, format_chapter_heading
+from .models import Story, chapter_display_numbers, format_chapter_heading
 
 logger = logging.getLogger(__name__)
 
@@ -503,9 +503,10 @@ def export_txt(
     for label, value in _meta_fields(story):
         buf.write(f"{label}: {value}\n")
     buf.write("=" * 60 + "\n")
+    display_ns = chapter_display_numbers((c.number, c.title) for c in story.chapters)
     consecutive_timeouts = 0
     for ch in story.chapters:
-        buf.write(f"\n\n--- {format_chapter_heading(ch.number, ch.title)} ---\n\n")
+        buf.write(f"\n\n--- {format_chapter_heading(display_ns[ch.number], ch.title)} ---\n\n")
         html, llm_disabled, consecutive_timeouts = (
             _prepare_chapter_html_with_llm_fallback(
                 ch.html, hr_as_stars=False, strip_notes=strip_notes,
@@ -640,9 +641,10 @@ def export_html(
     # updater's read_html_chapters parses the id back into ``Chapter.number``,
     # and a positional id would silently mis-number chapters on merge.
     buf.write('<nav id="toc">\n<h2>Table of Contents</h2>\n<ol>\n')
+    display_ns = chapter_display_numbers((c.number, c.title) for c in story.chapters)
     for i, ch in enumerate(story.chapters, 1):
         anchor_n = ch.number if ch.number else i
-        heading = format_chapter_heading(ch.number, ch.title)
+        heading = format_chapter_heading(display_ns[ch.number], ch.title)
         buf.write(
             f'<li><a href="#chapter-{anchor_n}">{escape(heading)}</a></li>\n'
         )
@@ -653,7 +655,7 @@ def export_html(
     )
     consecutive_timeouts = 0
     for i, ch in enumerate(story.chapters, 1):
-        ch_title = escape(format_chapter_heading(ch.number, ch.title))
+        ch_title = escape(format_chapter_heading(display_ns[ch.number], ch.title))
         anchor_n = ch.number if ch.number else i
         buf.write(
             f'<div class="chapter" id="chapter-{anchor_n}"><h2>{ch_title}</h2>\n'
@@ -2382,9 +2384,10 @@ def export_epub(
     ornament_tokens = (
         _story_ornament_tokens(story.chapters) if hr_as_stars else frozenset()
     )
+    display_ns = chapter_display_numbers((c.number, c.title) for c in story.chapters)
     consecutive_timeouts = 0
     for ch in story.chapters:
-        ch_heading = format_chapter_heading(ch.number, ch.title)
+        ch_heading = format_chapter_heading(display_ns[ch.number], ch.title)
         ec = epub.EpubHtml(
             title=ch_heading,
             file_name=f"chapter_{ch.number}.xhtml",
