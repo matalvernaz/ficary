@@ -1,5 +1,24 @@
 # Changelog
 
+## 2.16.9 — 2026-07-22
+
+**Royal Road title searches always start at relevance**
+
+* Reopening the Royal Road search dialog restored the sort you last
+  used (say, "Last update"), and a fresh title search under a
+  non-relevance sort could push the exact match hundreds of fuzzy rows
+  down. The dialog no longer restores a stale sort — every fresh
+  Royal Road search starts at relevance, and you can still switch the
+  sort within the open dialog. Companion to 2.16.7's discovery-list
+  fix.
+
+**Library scans see past cover-page boilerplate headings**
+
+* The title fallback for third-party HTML files read only the file's
+  first big heading and gave up when that was boilerplate like
+  "Copyright Information", leaving the story misindexed. It now skips
+  generic cover-page headings and takes the first real title heading.
+
 ## 2.16.8 — 2026-07-22
 
 **Prologues no longer shift chapter numbering**

@@ -372,6 +372,22 @@ def test_fallback_never_overwrites_structured_values(tmp_path):
     assert md.author == "Correct Author"
 
 
+def test_fallback_skips_copyright_information_heading(tmp_path):
+    """Cover-page boilerplate must not become the indexed story title."""
+    html = """
+    <html><body>
+    <h1>Copyright Information</h1>
+    <p>Copyright 2026 by Real Author.</p>
+    <h1>Actual Story by Real Author</h1>
+    <p>Source: <a href="https://www.fanfiction.net/s/123/1/">link</a></p>
+    </body></html>
+    """
+    path = _write(tmp_path, "actual-story.html", html)
+    md = extract_metadata(path)
+    assert md.title == "Actual Story"
+    assert md.author == "Real Author"
+
+
 def test_ficlab_crossover_fandom_extracted_from_tags(tmp_path):
     """FicLab has no dedicated fandom field, but FFN's crossover
     convention gives us a reliable ``"X + Y Crossover"`` entry inside

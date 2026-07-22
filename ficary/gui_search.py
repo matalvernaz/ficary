@@ -585,6 +585,14 @@ class SearchFrame(wx.Frame):
         # Ignore any legacy "query" a previous version wrote — query is
         # intentionally not persisted.
         for key, value in (state.get("filters") or {}).items():
+            # A sort belongs to the query it was chosen for. Restoring
+            # Royal Road's non-relevance sort into a fresh title search can
+            # push the exact match hundreds of fuzzy rows down (for example,
+            # an older stub under "Last update"). The user can still choose
+            # another sort for the current dialog; only stale restoration is
+            # suppressed.
+            if self.site_key == "royalroad" and key == "order_by":
+                continue
             ctrl = self.filter_ctrls.get(key)
             if ctrl and isinstance(value, str) and value:
                 ctrl.SetStringSelection(value)

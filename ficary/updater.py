@@ -713,7 +713,7 @@ _META_AUTHOR_RE = re.compile(
 _META_OG_TITLE_RE = re.compile(
     r'<meta\s+property="og:title"\s+content="([^"]+)"', re.IGNORECASE,
 )
-_FIRST_H1_RE = re.compile(r'<h1[^>]*>(.*?)</h1>', re.IGNORECASE | re.DOTALL)
+_H1_RE = re.compile(r'<h1[^>]*>(.*?)</h1>', re.IGNORECASE | re.DOTALL)
 
 # Titles that show up in these HTML elements often carry site-level
 # branding like "Story — FanFiction" or "Title | Royal Road"; strip
@@ -822,8 +822,8 @@ def _fill_title_author_fallbacks(html: str, md: "FileMetadata") -> None:
                 _merge_metadata_field(md, "author", parts[1])
 
     # Universal fallbacks — run after every format-specific parser so
-    # they only fill in what's still missing. <meta> tags and the first
-    # <h1>/<title> are present in almost every HTML file, so these
+    # they only fill in what's still missing. <meta> tags and cover-page
+    # <h1>/<title> elements are present in almost every HTML file, so these
     # catch unknown downloaders we haven't written explicit parsers for.
     if not md.author:
         author_meta = _META_AUTHOR_RE.search(html)
@@ -838,14 +838,18 @@ def _fill_title_author_fallbacks(html: str, md: "FileMetadata") -> None:
             )
 
     if not md.title:
-        h1_match = _FIRST_H1_RE.search(html)
-        if h1_match:
+        generic = {
+            "copyright", "copyright information", "summary",
+            "table of contents", "cover", "preface",
+        }
+        for h1_match in _H1_RE.finditer(html):
             text = _clean_cell_value(h1_match.group(1))
             # Skip generic boilerplate headings common to downloader
-            # cover pages — we want the story title, not the section.
-            generic = {"copyright", "summary", "table of contents", "cover", "preface"}
-            if text and text.lower().rstrip(":").strip() not in generic:
-                _split_title_by_author(text, md)
+            # cover pages and keep looking for the story title.
+            if not text or text.lower().rstrip(":").strip() in generic:
+                continue
+            _split_title_by_author(text, md)
+            break
 
     if not md.title:
         title_tag = _HTML_TITLE_TAG_RE.search(html)

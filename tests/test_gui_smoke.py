@@ -128,6 +128,38 @@ def test_search_frame_roundtrip(wx_app):
         frame.Destroy()
 
 
+def test_royalroad_search_does_not_restore_stale_sort(wx_app, monkeypatch):
+    """A prior sort must not bury the next query's exact title match."""
+    from ficary import prefs as _p
+    from ficary.gui import MainFrame
+    from ficary.gui_search import SearchFrame, _royalroad_search_spec
+
+    frame = MainFrame()
+    try:
+        real_get = frame.prefs.get
+
+        def fake_get(key, default=None):
+            if key == _p.KEY_SEARCH_STATE_ROYALROAD:
+                return (
+                    '{"filters":{"status":"ongoing",'
+                    '"order_by":"last update"}}'
+                )
+            return real_get(key, default)
+
+        monkeypatch.setattr(frame.prefs, "get", fake_get)
+        sf = SearchFrame(frame, "royalroad", _royalroad_search_spec())
+        try:
+            assert sf.filter_ctrls["status"].GetStringSelection() == "ongoing"
+            assert (
+                sf.filter_ctrls["order_by"].GetStringSelection()
+                == "relevance"
+            )
+        finally:
+            sf.Destroy()
+    finally:
+        frame.Destroy()
+
+
 def test_erotica_site_change_scopes_tag_picker(wx_app):
     """Selecting a specific site re-scopes the tag picker to that site's
     searchable tags and drops picked tags it can't search."""
