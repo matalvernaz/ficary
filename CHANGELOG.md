@@ -1,5 +1,34 @@
 # Changelog
 
+## 2.17.0 — 2026-07-22
+
+**Mac: one-click updates, just like Windows**
+
+* The Mac build now updates itself. When a new version is available,
+  choose Update Now and ficary downloads it, swaps itself out, and
+  reopens — no more trips to the release page. Because ficary fetches
+  the update itself, macOS shows no "downloaded from the internet"
+  warning on the relaunch.
+* Your settings and caches move out of the app itself into
+  Library/Application Support the first time this version runs, so
+  future updates can never touch them. Nothing to do on your end —
+  the move is automatic and keeps everything you had.
+
+**Interrupted updates now repair themselves**
+
+* After every update, ficary checks on the next launch that every
+  installed file matches what the update shipped. If an update was
+  cut short — power loss, a crash mid-install — ficary says so and
+  offers a one-click repair instead of limping along half-updated.
+  The repair reuses the copy it already downloaded when possible and
+  downloads fresh when not.
+
+**Under the hood**
+
+* The Windows update helper (ZipExtractor.exe) is now a pinned,
+  hash-verified binary that includes upstream's fix for the app
+  relaunching with administrator rights after an elevated update.
+
 ## 2.16.9 — 2026-07-22
 
 **Royal Road title searches always start at relevance**
