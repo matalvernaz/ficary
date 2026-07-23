@@ -107,18 +107,27 @@ def check_for_update(allow_equal: bool = False):
     if latest < current or (latest == current and not allow_equal):
         return None
 
-    # Prefer the portable zip (current distribution format); fall back
-    # to a single-file .exe only if one is still attached to an old
-    # release so 1.9.x clients keep working.
+    # Platform-appropriate asset. macOS: the ditto'd .app zip. Windows
+    # (and everything else, so pre-existing Linux behavior — a
+    # release-page prompt — is unchanged): prefer the portable zip,
+    # falling back to a single-file .exe only if one is still attached
+    # to an old release so 1.9.x clients keep working.
     zip_asset = None
     exe_asset = None
-    for asset in data.get("assets") or []:
-        name = asset.get("name", "").lower()
-        if name.endswith(".zip") and "portable" in name:
-            zip_asset = asset
-            break
-        if name.endswith(".exe") and exe_asset is None:
-            exe_asset = asset
+    if sys.platform == "darwin":
+        for asset in data.get("assets") or []:
+            name = asset.get("name", "").lower()
+            if name.endswith(".zip") and "macos" in name:
+                zip_asset = asset
+                break
+    else:
+        for asset in data.get("assets") or []:
+            name = asset.get("name", "").lower()
+            if name.endswith(".zip") and "portable" in name:
+                zip_asset = asset
+                break
+            if name.endswith(".exe") and exe_asset is None:
+                exe_asset = asset
     chosen = zip_asset or exe_asset
     if not chosen:
         return None
@@ -205,16 +214,79 @@ def is_frozen() -> bool:
     return bool(getattr(sys, "frozen", False))
 
 
-def can_self_replace() -> bool:
-    """True only when we're a frozen Windows build with the helper bundled.
+# Gatekeeper runs a quarantined app from a randomized read-only mount
+# containing this path segment. The bundle we'd be replacing isn't the
+# one the user installed, so self-update must refuse.
+_APP_TRANSLOCATION_MARKER = "/AppTranslocation/"
 
-    ``.is_file()`` rather than ``.exists()`` so a directory accidentally
+
+def _macos_bundle_path():
+    """Return the .app bundle the frozen macOS build runs from, or None.
+
+    ``sys.executable`` is ``<bundle>.app/Contents/MacOS/<exe>``; anything
+    that doesn't match that shape (stray onedir run outside a bundle)
+    disqualifies self-update rather than guessing.
+    """
+    if not (is_frozen() and sys.platform == "darwin"):
+        return None
+    exe = Path(sys.executable).resolve()
+    if len(exe.parents) < 3:
+        return None
+    bundle = exe.parents[2]
+    if bundle.suffix != ".app" or not (bundle / "Contents" / "Info.plist").is_file():
+        return None
+    return bundle
+
+
+def _pid_suffix_alive(name: str) -> bool:
+    """True when the trailing ``-<pid>`` of ``name`` is a live process.
+
+    An unparseable suffix reports dead so malformed debris still gets
+    swept. PID reuse can at worst defer one sweep to the next launch.
+    """
+    tail = name.rsplit("-", 1)[-1]
+    if not tail.isdigit():
+        return False
+    try:
+        os.kill(int(tail), 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except (OSError, ValueError):
+        # EPERM etc. — something owns that PID; err on the safe side.
+        return True
+
+
+def _macos_can_self_replace() -> bool:
+    bundle = _macos_bundle_path()
+    if bundle is None:
+        return False
+    if _APP_TRANSLOCATION_MARKER in str(bundle):
+        return False
+    return _is_writable(bundle.parent)
+
+
+def _windows_can_self_replace() -> bool:
+    """``.is_file()`` rather than ``.exists()`` so a directory accidentally
     named ``ZipExtractor.exe`` doesn't fool the GUI into offering an
     in-place update that would fail at the ``shutil.copy2`` step.
     """
     if not (is_frozen() and sys.platform.startswith("win")):
         return False
     return (Path(sys.executable).parent / ZIP_EXTRACTOR_EXE).is_file()
+
+
+def can_self_replace() -> bool:
+    """True when this build can swap itself in place.
+
+    Windows: frozen portable build with ZipExtractor.exe bundled.
+    macOS: frozen .app bundle, not App-Translocated, parent writable —
+    the update replaces the whole bundle atomically, no helper needed.
+    Linux: not supported; the GUI offers the release page instead.
+    """
+    if sys.platform == "darwin":
+        return _macos_can_self_replace()
+    return _windows_can_self_replace()
 
 
 def _sha256_file(path: Path) -> str:
@@ -473,6 +545,24 @@ def cleanup_old_exe() -> None:
     """
     if not is_frozen():
         return
+
+    # macOS: reap the renamed-aside bundle(s) a previous swap left
+    # behind. The ``-<pid>`` suffix is the PID of the instance that
+    # performed the swap; if that process is still alive it is still
+    # executing (and lazy-loading _internal files) from the .old
+    # bundle — a user who declined the post-update restart to let a
+    # download finish. Deleting it underneath them breaks later
+    # imports, so skip live ones; the next launch retries.
+    if sys.platform == "darwin":
+        bundle = _macos_bundle_path()
+        if bundle is not None:
+            for stale in bundle.parent.glob(f"{bundle.stem}.app.old-*"):
+                if _pid_suffix_alive(stale.name):
+                    continue
+                shutil.rmtree(stale, ignore_errors=True)
+            for stale in bundle.parent.glob(".ficary-update-staged-*.app"):
+                shutil.rmtree(stale, ignore_errors=True)
+
     try:
         current = Path(sys.executable)
         old = current.with_name(current.stem + ".exe.old")
@@ -695,18 +785,23 @@ def _spawn_extractor(
 
 
 def download_and_replace(update_info, progress_cb=None) -> Path:
-    """Download the new portable zip and spawn the update helper.
+    """Download the update and put the swap in motion.
 
-    Returns the install directory (for logging). Caller MUST exit
-    shortly after — the helper blocks on our PID before it touches
-    any file in the install.
+    Windows: spawns the ZipExtractor helper; the caller MUST exit
+    shortly after — the helper blocks on our PID before it touches any
+    file in the install. macOS: the whole .app bundle is swapped
+    in-process before this returns; the caller restarts (execv) rather
+    than exits. Returns the install directory (for logging).
     """
     if not can_self_replace():
         raise RuntimeError(
-            "In-place update is only supported for the Windows portable "
-            "build with ZipExtractor.exe bundled. Please download the "
-            "new version manually from the release page."
+            "In-place update isn't supported for this installation. "
+            "Please download the new version manually from the release "
+            "page."
         )
+
+    if sys.platform == "darwin":
+        return _macos_download_and_swap(update_info, progress_cb)
 
     if not update_info.get("is_zip"):
         raise RuntimeError(
@@ -863,6 +958,90 @@ def _stage_and_spawn_extractor(
     _spawn_extractor(
         extractor_tmp, flat_zip, install_dir, current_exe, updated_exe,
     )
+
+
+def _macos_download_and_swap(update_info, progress_cb=None) -> Path:
+    """Download the macOS zip and atomically swap the .app bundle.
+
+    Because ficary downloads the zip itself (not via a browser), the
+    extracted app carries no ``com.apple.quarantine`` attribute, so
+    the relaunch faces no Gatekeeper prompt even unsigned. Extraction
+    goes through ``ditto`` — the same tool CI packed with — because
+    Python's ``zipfile`` drops the exec bits and symlinks a .app needs.
+
+    POSIX renames make the swap atomic per step: the new bundle is
+    staged next to the install (same volume), the old bundle is
+    renamed aside, the staged one renamed into place, and a failure
+    between the two renames restores the original. The old bundle is
+    left as ``<name>.app.old-<pid>`` for the next launch to sweep —
+    the running process still executes from it until the execv.
+    """
+    bundle = _macos_bundle_path()
+    if bundle is None or not _macos_can_self_replace():
+        raise RuntimeError(
+            "In-place update isn't supported for this installation. "
+            "Please download the new version manually from the release "
+            "page."
+        )
+
+    workdir = Path(tempfile.mkdtemp(prefix="ficary-update-"))
+    zip_path = workdir / "ficary-macos.zip"
+    extracted = workdir / "extracted"
+    try:
+        _download(
+            update_info["download_url"],
+            zip_path,
+            progress_cb=progress_cb,
+            expected_size=update_info.get("size", 0),
+        )
+        _verify_digest(zip_path, update_info.get("digest"))
+
+        extracted.mkdir()
+        proc = subprocess.run(
+            ["ditto", "-x", "-k", str(zip_path), str(extracted)],
+            capture_output=True, text=True,
+        )
+        if proc.returncode != 0:
+            raise RuntimeError(
+                f"Update extraction failed (ditto exited "
+                f"{proc.returncode}): {proc.stderr.strip()[:300]}"
+            )
+        zip_path.unlink(missing_ok=True)
+
+        apps = [p for p in extracted.iterdir() if p.suffix == ".app"]
+        if len(apps) != 1:
+            raise RuntimeError(
+                "Downloaded zip doesn't contain exactly one .app bundle. "
+                "Update aborted; install unchanged."
+            )
+        new_bundle = apps[0]
+        new_exe = new_bundle / "Contents" / "MacOS" / Path(sys.executable).name
+        if not new_exe.is_file():
+            raise RuntimeError(
+                f"Downloaded bundle is missing {new_exe.name}. "
+                "Update aborted; install unchanged."
+            )
+
+        # Stage on the install's volume so both swap steps are single
+        # atomic renames (a cross-device rename would raise EXDEV).
+        staged = bundle.parent / f".ficary-update-staged-{os.getpid()}.app"
+        if staged.exists():
+            shutil.rmtree(staged)
+        shutil.move(str(new_bundle), str(staged))
+
+        old = bundle.parent / f"{bundle.stem}.app.old-{os.getpid()}"
+        os.rename(bundle, old)
+        try:
+            os.rename(staged, bundle)
+        except OSError:
+            os.rename(old, bundle)
+            raise
+    except Exception:
+        shutil.rmtree(workdir, ignore_errors=True)
+        raise
+
+    shutil.rmtree(workdir, ignore_errors=True)
+    return bundle
 
 
 def restart() -> None:

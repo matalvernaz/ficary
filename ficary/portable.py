@@ -112,14 +112,29 @@ def _fallback_root() -> Path:
 _cached_root: Path | None = None
 
 
+def _macos_data_root() -> Path:
+    """Data root for the frozen macOS build.
+
+    Unlike Windows, data must NOT live next to the executable: the exe
+    sits inside ficary.app, and the self-updater replaces the whole
+    bundle atomically (see ``self_update``) — anything stored inside
+    it would vanish on the first update. Application Support is the
+    platform-native home for it.
+    """
+    return Path.home() / "Library" / "Application Support" / "ficary"
+
+
 def portable_root() -> Path:
     """Directory that holds all portable data. Cached after first call."""
     global _cached_root
     if _cached_root is not None:
         return _cached_root
     if is_frozen():
-        here = _exe_dir()
-        _cached_root = _fallback_root() if _is_system_protected(here) else here
+        if sys.platform == "darwin":
+            _cached_root = _macos_data_root()
+        else:
+            here = _exe_dir()
+            _cached_root = _fallback_root() if _is_system_protected(here) else here
     else:
         _cached_root = Path.home() / ".ficary"
     _cached_root.mkdir(parents=True, exist_ok=True)
@@ -173,6 +188,7 @@ def setup_env() -> None:
     from . import legacy
     legacy.migrate_data_dirs()
     root = portable_root()
+    _migrate_macos_bundle_data(root)
     # Always ensure the core subdirs exist — cheap and makes the folder
     # self-explanatory when the user browses into it. booknlp_models is
     # omitted: BookNLP creates it itself on first download, and pre-
@@ -216,6 +232,51 @@ def setup_env() -> None:
             str(root / "playwright-browsers"),
         )
     _env_set = True
+
+
+# Data entries earlier macOS builds wrote into Contents/MacOS/ (the old
+# portable_root there). Everything else in that directory is PyInstaller
+# payload and must stay.
+_MACOS_BUNDLE_DATA_ENTRIES = (
+    "settings.ini",
+    "cache",
+    "neural",
+    "soundscapes",
+    "sounds",
+    "booknlp_models",
+    "playwright-browsers",
+    ".cache",
+)
+
+
+def _migrate_macos_bundle_data(root: Path) -> None:
+    """Move data an older macOS build kept inside the .app bundle.
+
+    Earlier frozen builds used the exe dir (Contents/MacOS/) as the
+    portable root on every platform. On macOS the root now lives in
+    Application Support so a whole-bundle update can't destroy it —
+    this carries any existing data across, entry by entry, using the
+    same only-when-target-missing rule as :func:`_migrate_hf_cache`.
+    """
+    if not (is_frozen() and sys.platform == "darwin"):
+        return
+    old_root = Path(sys.executable).resolve().parent
+    if old_root == root:
+        return
+    import shutil
+    for name in _MACOS_BUNDLE_DATA_ENTRIES:
+        old = old_root / name
+        new = root / name
+        try:
+            if not old.exists() or new.exists():
+                continue
+            shutil.move(str(old), str(new))
+            _logger.info("Migrated %s out of the app bundle to %s", name, new)
+        except OSError as exc:
+            _logger.warning(
+                "Could not migrate %s from the app bundle to %s: %s",
+                name, new, exc,
+            )
 
 
 def _migrate_hf_cache(old: Path, new: Path) -> None:

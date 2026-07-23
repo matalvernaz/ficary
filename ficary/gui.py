@@ -1952,7 +1952,7 @@ class MainFrame(wx.Frame):
             primary_result = "open_release"
             body = (
                 f"Version {tag} is available (you have {__version__}).\n\n"
-                f"Automatic update is only supported in the Windows build. "
+                f"Automatic update isn't available for this installation. "
                 f"Open the release page to update manually?"
             )
         else:
@@ -2111,12 +2111,22 @@ class MainFrame(wx.Frame):
         # ZipExtractor is blocked on our PID and simply waits until the
         # app is closed normally.
         if self._has_active_background_work():
+            if sys.platform == "darwin":
+                # The bundle is already swapped on disk; only the
+                # relaunch is pending.
+                consequence = (
+                    "the new version starts the next time ficary opens."
+                )
+            else:
+                consequence = (
+                    "the update is applied automatically the next time "
+                    "ficary closes."
+                )
             choice = wx.MessageBox(
                 f"Updated to {tag}, but a download or render started "
                 "while the update was downloading.\n\nQuit now and "
-                "interrupt it? Choosing No lets the work finish — the "
-                "update is applied automatically the next time ficary "
-                "closes.",
+                f"interrupt it? Choosing No lets the work finish — "
+                f"{consequence}",
                 "Update ready",
                 wx.YES_NO | wx.NO_DEFAULT | wx.ICON_WARNING,
                 self,
@@ -2162,7 +2172,13 @@ class MainFrame(wx.Frame):
         except Exception:
             pass
         self._detach_log_handlers()
-        # ZipExtractor.exe has already been spawned (by
+        if sys.platform == "darwin":
+            # The bundle swap already happened in-process; the original
+            # .app path now holds the new version, so execv-ing our own
+            # (unchanged) sys.executable path starts the new build.
+            from . import self_update
+            self_update.restart()
+        # Windows: ZipExtractor.exe has already been spawned (by
         # download_and_replace or retry_pending_update); it's blocked on
         # our PID. Exiting releases its WaitForExit(), after which it
         # overwrites the install and relaunches ficary.exe itself — do
