@@ -67,6 +67,11 @@ UPDATE_JOURNAL_NAME = "update-journal.json"
 # the old process or mid-extraction.
 _JOURNAL_GRACE_S = 180
 
+# Pause before re-checking files that failed manifest verification,
+# so an AV scan or slow flush on the freshly-extracted install isn't
+# misreported as a torn update.
+_TORN_REVERIFY_DELAY_S = 2
+
 
 def _parse_version(tag: str):
     """Parse 'v1.2.3' → (1, 2, 3). Returns None for unrecognised formats.
@@ -469,11 +474,20 @@ def pending_update_status():
         _delete_update_journal()
         return None
 
-    bad = _verify_manifest(install_dir, journal.get("manifest") or {})
+    manifest = journal.get("manifest") or {}
+    bad = _verify_manifest(install_dir, manifest)
+    if bad:
+        # Freshly-extracted files are exactly what AV scanners grab
+        # first; a transient lock or slow flush must not be reported
+        # as a torn install. Give it a moment and re-check just the
+        # failures before alarming the user.
+        time.sleep(_TORN_REVERIFY_DELAY_S)
+        retry = {k: manifest[k] for k in bad if k in manifest}
+        bad = _verify_manifest(install_dir, retry)
     if not bad:
         logger.info(
             "Update to %s verified: all %d files match the manifest.",
-            journal["target_tag"], len(journal.get("manifest") or {}),
+            journal["target_tag"], len(manifest),
         )
         _delete_update_journal()
         if flat_zip is not None:
@@ -484,8 +498,7 @@ def pending_update_status():
 
     logger.warning(
         "Update to %s is torn: %d of %d files fail verification (first: %s).",
-        journal["target_tag"], len(bad),
-        len(journal.get("manifest") or {}), bad[0],
+        journal["target_tag"], len(bad), len(manifest), bad[0],
     )
     return {
         "state": "torn",
@@ -529,8 +542,11 @@ def retry_pending_update(status) -> None:
     if current_exe.name.lower() == "ffn-dl.exe" and "ficary.exe" in manifest:
         updated_exe = "ficary.exe"
     # Refresh the journal timestamp so the relaunch lands inside the
-    # grace window instead of immediately re-prompting for repair.
-    _write_update_journal(journal.get("target_tag", ""), flat_zip, manifest)
+    # grace window instead of immediately re-prompting for repair. The
+    # tag comes from the status (the journal could have been swept
+    # between the status check and the user's Repair click).
+    tag = status.get("target_tag") or journal.get("target_tag", "")
+    _write_update_journal(tag, flat_zip, manifest)
     _stage_and_spawn_extractor(
         flat_zip, current_exe.parent, current_exe, updated_exe,
     )

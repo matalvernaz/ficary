@@ -58,6 +58,7 @@ def env(monkeypatch, tmp_path):
     monkeypatch.setattr(su.sys, "executable", str(install / "ficary.exe"))
     monkeypatch.setattr(su, "__version__", "2.0.0")
     monkeypatch.setattr(su.tempfile, "gettempdir", lambda: str(tmp_path))
+    monkeypatch.setattr(su, "_TORN_REVERIFY_DELAY_S", 0)
     return install, workdir, flat_zip
 
 
