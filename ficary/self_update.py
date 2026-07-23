@@ -21,6 +21,7 @@ source in CI; see ``.github/workflows/build-windows.yml``.
 
 import ctypes
 import hashlib
+import json
 import logging
 import os
 import re
@@ -35,6 +36,7 @@ from pathlib import Path
 from curl_cffi import requests as curl_requests
 
 from . import __version__
+from .atomic import atomic_write_text
 
 logger = logging.getLogger(__name__)
 
@@ -42,10 +44,28 @@ REPO = "matalvernaz/ficary"
 LATEST_URL = f"https://api.github.com/repos/{REPO}/releases/latest"
 RELEASES_URL = f"https://api.github.com/repos/{REPO}/releases"
 
-# Bundled alongside ficary.exe in the portable zip; built in CI from
-# ravibpatel/AutoUpdater.NET. If it's ever missing we refuse to
-# self-replace and direct the user to the release page instead.
+# Bundled alongside ficary.exe in the portable zip; vendored at
+# tools/vendor/ (see its README for provenance). If it's ever missing
+# we refuse to self-replace and direct the user to the release page
+# instead.
 ZIP_EXTRACTOR_EXE = "ZipExtractor.exe"
+
+# Journal written into the install dir just before ZipExtractor is
+# spawned, holding the target tag and a SHA-256 manifest of every file
+# in the flat update zip. The next launch verifies the install against
+# it: all-match → update confirmed, journal deleted; anything else →
+# the app offers a roll-forward repair from the retained zip (or a
+# fresh download). Modelled on Libation's InstallUpgradeManager, but
+# repairing forward to the already-verified new version instead of
+# restoring a backup — a backup of the ~300 MB install per update
+# isn't worth the disk, and the new zip is the trusted artifact anyway.
+UPDATE_JOURNAL_NAME = "update-journal.json"
+
+# A journal younger than this with a version mismatch is treated as
+# "extractor still working" rather than a failed update — the user may
+# have relaunched ficary manually while ZipExtractor was waiting on
+# the old process or mid-extraction.
+_JOURNAL_GRACE_S = 180
 
 
 def _parse_version(tag: str):
@@ -64,13 +84,17 @@ def _parse_version(tag: str):
     return tuple(int(x) for x in m.groups())
 
 
-def check_for_update():
+def check_for_update(allow_equal: bool = False):
     """Fetch the GitHub latest-release JSON.
 
     Returns a dict {tag, download_url, size, digest} when a newer
     version exists than the currently running one, else None. Network
     errors raise; callers should catch broadly and skip silently so a
     transient failure doesn't bother the user.
+
+    ``allow_equal`` also accepts the currently-running version — used
+    by the torn-update repair path, which needs to re-download the
+    release the install already claims to be.
     """
     resp = curl_requests.get(LATEST_URL, impersonate="chrome", timeout=15)
     resp.raise_for_status()
@@ -78,7 +102,9 @@ def check_for_update():
 
     latest = _parse_version(data.get("tag_name", ""))
     current = _parse_version(__version__)
-    if not latest or not current or latest <= current:
+    if not latest or not current:
+        return None
+    if latest < current or (latest == current and not allow_equal):
         return None
 
     # Prefer the portable zip (current distribution format); fall back
@@ -229,6 +255,215 @@ def _verify_digest(path: Path, digest: str) -> None:
         )
 
 
+def _journal_path() -> Path:
+    return Path(sys.executable).resolve().parent / UPDATE_JOURNAL_NAME
+
+
+def _read_update_journal():
+    """Return the parsed journal dict, or None when absent/corrupt.
+
+    A corrupt journal is deleted on sight: it can't drive a repair, and
+    leaving it would re-log the same parse failure every launch.
+    """
+    path = _journal_path()
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return None
+    except OSError as exc:
+        logger.debug("Could not read update journal: %s", exc)
+        return None
+    try:
+        data = json.loads(raw)
+        if not isinstance(data, dict) or not data.get("target_tag"):
+            raise ValueError("journal missing target_tag")
+        return data
+    except (ValueError, TypeError) as exc:
+        logger.warning("Discarding corrupt update journal: %s", exc)
+        path.unlink(missing_ok=True)
+        return None
+
+
+def _delete_update_journal() -> None:
+    try:
+        _journal_path().unlink(missing_ok=True)
+    except OSError as exc:
+        logger.debug("Could not delete update journal: %s", exc)
+
+
+def _flat_zip_manifest(flat_zip: Path) -> dict:
+    """Map each file member of ``flat_zip`` to its size and SHA-256.
+
+    Keys are the archive paths (forward slashes), exactly what lands
+    relative to the install dir. Streamed member-by-member so the
+    decompressed payload never sits in memory at once.
+    """
+    manifest = {}
+    with zipfile.ZipFile(flat_zip) as zf:
+        for info in zf.infolist():
+            if info.is_dir():
+                continue
+            h = hashlib.sha256()
+            with zf.open(info) as member:
+                for chunk in iter(lambda: member.read(1 << 20), b""):
+                    h.update(chunk)
+            manifest[info.filename] = {
+                "size": info.file_size,
+                "sha256": h.hexdigest(),
+            }
+    return manifest
+
+
+def _write_update_journal(tag: str, flat_zip: Path, manifest: dict) -> None:
+    payload = json.dumps(
+        {
+            "target_tag": tag,
+            "started": time.time(),
+            "flat_zip": str(flat_zip),
+            "manifest": manifest,
+        },
+        indent=1,
+    )
+    atomic_write_text(_journal_path(), payload)
+
+
+def _verify_manifest(install_dir: Path, manifest: dict) -> list:
+    """Return the archive paths whose installed copies don't match.
+
+    Size is checked first so the common all-good case only pays the
+    full hash pass, and a torn file usually fails without hashing.
+    Only files named in the manifest are touched — user data next to
+    the exe (settings.ini, cache/, neural/) is never read.
+    """
+    bad = []
+    for relpath, expected in manifest.items():
+        target = install_dir / Path(*relpath.split("/"))
+        try:
+            if target.stat().st_size != expected["size"]:
+                bad.append(relpath)
+                continue
+            if _sha256_file(target) != expected["sha256"]:
+                bad.append(relpath)
+        except OSError:
+            bad.append(relpath)
+    return bad
+
+
+def pending_update_status():
+    """Check the update journal against the running install.
+
+    Returns None when there's nothing to do (no journal, verified OK,
+    or an update is plausibly still being applied). Otherwise returns
+    ``{"state": "torn"|"stale", "target_tag": str, "flat_zip": Path|None}``
+    for the GUI to offer a repair:
+
+    - ``stale`` — the running version predates the journal's target:
+      ZipExtractor never swapped the install (crashed, was cancelled,
+      or the machine lost power before extraction).
+    - ``torn`` — versions match but some installed files don't match
+      the manifest: extraction was interrupted partway.
+    """
+    journal = _read_update_journal()
+    if journal is None:
+        return None
+
+    target = _parse_version(journal.get("target_tag", ""))
+    current = _parse_version(__version__)
+    if target is None or current is None:
+        logger.warning("Update journal has unparseable versions; discarding.")
+        _delete_update_journal()
+        return None
+
+    flat_zip = Path(journal.get("flat_zip") or "")
+    flat_zip = flat_zip if flat_zip.is_file() else None
+    install_dir = Path(sys.executable).resolve().parent
+
+    if current < target:
+        started = float(journal.get("started") or 0)
+        if started and time.time() - started < _JOURNAL_GRACE_S:
+            # Probably still mid-update: the user relaunched while
+            # ZipExtractor waits on the old process or is extracting.
+            return None
+        return {
+            "state": "stale",
+            "target_tag": journal["target_tag"],
+            "flat_zip": flat_zip,
+        }
+
+    if current > target:
+        # Running something newer than the journal's target — a manual
+        # reinstall or downgrade happened around a failed update. The
+        # journal no longer describes this install; drop it.
+        _delete_update_journal()
+        return None
+
+    bad = _verify_manifest(install_dir, journal.get("manifest") or {})
+    if not bad:
+        logger.info(
+            "Update to %s verified: all %d files match the manifest.",
+            journal["target_tag"], len(journal.get("manifest") or {}),
+        )
+        _delete_update_journal()
+        if flat_zip is not None:
+            workdir = flat_zip.parent
+            if workdir.name.startswith("ficary-update-"):
+                shutil.rmtree(workdir, ignore_errors=True)
+        return None
+
+    logger.warning(
+        "Update to %s is torn: %d of %d files fail verification (first: %s).",
+        journal["target_tag"], len(bad),
+        len(journal.get("manifest") or {}), bad[0],
+    )
+    return {
+        "state": "torn",
+        "target_tag": journal["target_tag"],
+        "flat_zip": flat_zip,
+    }
+
+
+def retry_pending_update(status) -> None:
+    """Re-apply a torn/stale update from the retained flat zip.
+
+    Re-spawns ZipExtractor with the zip the journal points at; the
+    caller must exit shortly after, exactly as with
+    :func:`download_and_replace`. Raises when the zip is missing or
+    unreadable (or the helper can't be staged) — callers fall back to
+    a fresh download via :func:`check_for_update` with
+    ``allow_equal=True``.
+    """
+    flat_zip = status.get("flat_zip")
+    if not flat_zip or not Path(flat_zip).is_file():
+        raise RuntimeError("Retained update zip is gone; a fresh download is needed.")
+    flat_zip = Path(flat_zip)
+    try:
+        with zipfile.ZipFile(flat_zip) as zf:
+            corrupt = zf.testzip()
+    except (OSError, zipfile.BadZipFile) as exc:
+        raise RuntimeError(f"Retained update zip is unreadable: {exc}") from exc
+    if corrupt is not None:
+        raise RuntimeError(f"Retained update zip is corrupt at {corrupt!r}.")
+
+    if not can_self_replace():
+        raise RuntimeError("ZipExtractor.exe is missing; cannot re-apply.")
+
+    current_exe = Path(sys.executable).resolve()
+    journal = _read_update_journal() or {}
+    manifest = journal.get("manifest") or {}
+    # Same crossed-install migration decision download_and_replace
+    # makes: a still-ffn-dl.exe install relaunches the ficary.exe the
+    # zip carries.
+    updated_exe = None
+    if current_exe.name.lower() == "ffn-dl.exe" and "ficary.exe" in manifest:
+        updated_exe = "ficary.exe"
+    # Refresh the journal timestamp so the relaunch lands inside the
+    # grace window instead of immediately re-prompting for repair.
+    _write_update_journal(journal.get("target_tag", ""), flat_zip, manifest)
+    _stage_and_spawn_extractor(
+        flat_zip, current_exe.parent, current_exe, updated_exe,
+    )
+
+
 def cleanup_old_exe() -> None:
     """Remove debris from earlier update flows.
 
@@ -263,12 +498,21 @@ def cleanup_old_exe() -> None:
     try:
         temp = Path(tempfile.gettempdir())
         cutoff = time.time() - 24 * 3600
+        # A live journal's workdir holds the zip a repair would reuse —
+        # never sweep it, even past the cutoff (the user may simply not
+        # have relaunched for a day after a torn update).
+        journal = _read_update_journal()
+        keep = None
+        if journal and journal.get("flat_zip"):
+            keep = Path(journal["flat_zip"]).parent
         # Both prefixes: pre-rename clients left ffn-dl-update-* workdirs
         # (including the ~60 MB one from their failed cross-rename
         # attempt) that the new glob alone would never reclaim.
         for pattern in ("ficary-update-*", "ffn-dl-update-*"):
             for d in temp.glob(pattern):
                 try:
+                    if keep is not None and d.resolve() == keep.resolve():
+                        continue
                     if d.is_dir() and d.stat().st_mtime < cutoff:
                         shutil.rmtree(d, ignore_errors=True)
                 except OSError:
@@ -472,7 +716,6 @@ def download_and_replace(update_info, progress_cb=None) -> Path:
 
     current_exe = Path(sys.executable).resolve()
     install_dir = current_exe.parent
-    extractor_src = install_dir / ZIP_EXTRACTOR_EXE
 
     workdir = Path(tempfile.mkdtemp(prefix="ficary-update-"))
     zip_path = workdir / "ficary-portable.zip"
@@ -561,28 +804,6 @@ def download_and_replace(update_info, progress_cb=None) -> Path:
         _repack_flat(src_for_repack, flat_zip)
         shutil.rmtree(extracted, ignore_errors=True)
 
-        # Copy the extractor out of the install dir so it isn't locked
-        # when it tries to overwrite its own binary inside install_dir.
-        extractor_tmp = workdir / ZIP_EXTRACTOR_EXE
-        shutil.copy2(extractor_src, extractor_tmp)
-
-        # Defence-in-depth against UAC-bypass-via-temp: low-priv
-        # malware on the same account could watch the workdir and
-        # swap the copied ZipExtractor.exe between ``shutil.copy2``
-        # and the elevated ``ShellExecuteW("runas", ...)``, then ride
-        # the user's "Yes" prompt to admin. Hash the source AND the
-        # copy immediately before spawn and refuse to launch on
-        # mismatch. The TOCTOU window is now small enough that a
-        # file-watcher malware would have to win a near-zero
-        # nanosecond race, and we surface tampering instead of
-        # silently elevating untrusted code.
-        if _sha256_file(extractor_src) != _sha256_file(extractor_tmp):
-            raise RuntimeError(
-                "Update aborted — ZipExtractor.exe staging copy did not "
-                "match the source binary's SHA-256. Refusing to launch "
-                "a possibly tampered helper. The install is unchanged."
-            )
-
         # Migrate a crossed-over install onto ficary.exe. Such an install
         # crossed the ffn-dl -> ficary rename via the old compat shim and
         # is still running as ffn-dl.exe. Now that the zip no longer ships
@@ -592,14 +813,56 @@ def download_and_replace(update_info, progress_cb=None) -> Path:
         updated_exe = None
         if current_exe.name.lower() == "ffn-dl.exe" and payload_has_ficary:
             updated_exe = "ficary.exe"
-        _spawn_extractor(
-            extractor_tmp, flat_zip, install_dir, current_exe, updated_exe,
+
+        # Journal before spawn: once ZipExtractor is loose the app is
+        # exiting and nothing else can record what "complete" looks
+        # like. The next launch verifies the install against this
+        # manifest and offers repair from the retained flat zip.
+        _write_update_journal(
+            update_info["tag"], flat_zip, _flat_zip_manifest(flat_zip),
         )
+        try:
+            _stage_and_spawn_extractor(
+                flat_zip, install_dir, current_exe, updated_exe,
+            )
+        except Exception:
+            _delete_update_journal()
+            raise
     except Exception:
         shutil.rmtree(workdir, ignore_errors=True)
         raise
 
     return install_dir
+
+
+def _stage_and_spawn_extractor(
+    flat_zip: Path, install_dir: Path, current_exe: Path, updated_exe=None,
+) -> None:
+    """Copy ZipExtractor out of the install dir and launch it.
+
+    Staged into the flat zip's own workdir so the helper isn't locked
+    inside ``install_dir`` when it overwrites its own binary there.
+
+    The staging copy is hash-compared against the source immediately
+    before spawn — defence-in-depth against UAC-bypass-via-temp:
+    low-priv malware on the same account could otherwise swap the
+    copied helper between ``shutil.copy2`` and an elevated
+    ``ShellExecuteW("runas", ...)`` and ride the user's "Yes" prompt
+    to admin. The TOCTOU window left is near-zero, and tampering
+    surfaces as an error instead of silently elevating untrusted code.
+    """
+    extractor_src = install_dir / ZIP_EXTRACTOR_EXE
+    extractor_tmp = flat_zip.parent / ZIP_EXTRACTOR_EXE
+    shutil.copy2(extractor_src, extractor_tmp)
+    if _sha256_file(extractor_src) != _sha256_file(extractor_tmp):
+        raise RuntimeError(
+            "Update aborted — ZipExtractor.exe staging copy did not "
+            "match the source binary's SHA-256. Refusing to launch "
+            "a possibly tampered helper. The install is unchanged."
+        )
+    _spawn_extractor(
+        extractor_tmp, flat_zip, install_dir, current_exe, updated_exe,
+    )
 
 
 def restart() -> None:

@@ -1805,10 +1805,103 @@ class MainFrame(wx.Frame):
         # Clean up any leftover .exe.old from a previous update
         self_update.cleanup_old_exe()
 
+        # Verify any just-applied update against its journal and offer
+        # repair on a torn install. Deliberately not behind the
+        # check-for-updates preference: this concerns an update the
+        # user already chose to apply, not a new one.
+        if self_update.is_frozen():
+            threading.Thread(
+                target=self._run_pending_repair_check, daemon=True,
+            ).start()
+
         if not self.prefs.get_bool(_p.KEY_CHECK_UPDATES):
             return
 
         threading.Thread(target=self._run_update_check, daemon=True).start()
+
+    def _run_pending_repair_check(self):
+        from . import self_update
+
+        try:
+            status = self_update.pending_update_status()
+        except Exception:
+            # Verification hashes the whole install; treat any surprise
+            # (AV lock, disk hiccup) as "don't know" and stay quiet
+            # rather than scaring the user over a transient read error.
+            logger.warning("Pending-update verification failed", exc_info=True)
+            return
+        if status is None:
+            return
+        wx.CallAfter(self._prompt_repair, status)
+
+    def _prompt_repair(self, status):
+        from . import __version__
+
+        tag = status["target_tag"]
+        if status["state"] == "stale":
+            detail = (
+                f"The update to {tag} didn't finish installing — "
+                f"ficary is still running {__version__}."
+            )
+        else:
+            detail = (
+                f"The update to {tag} didn't finish installing — "
+                f"some program files are incomplete, which can cause "
+                f"crashes or odd behavior."
+            )
+        choice = wx.MessageBox(
+            f"{detail}\n\nRepair now? ficary will close, finish "
+            f"installing the update, and reopen automatically. Your "
+            f"settings and saved files are untouched.",
+            "Finish installing update",
+            wx.YES_NO | wx.YES_DEFAULT | wx.ICON_WARNING,
+            self,
+        )
+        if choice != wx.YES:
+            # Journal stays; the user is asked again next launch. A torn
+            # install isn't safe to silently forget.
+            return
+        threading.Thread(
+            target=self._perform_repair, args=(status,), daemon=True,
+        ).start()
+
+    def _perform_repair(self, status):
+        from . import self_update
+
+        try:
+            self_update.retry_pending_update(status)
+        except Exception as exc:
+            logger.warning("Repair from retained zip failed: %s", exc)
+            wx.CallAfter(self._repair_fallback, status)
+            return
+        wx.CallAfter(self._exit_to_apply, status["target_tag"])
+
+    def _repair_fallback(self, status):
+        """Retained zip unusable — route into a fresh download.
+
+        ``allow_equal`` matters for the torn case: the install already
+        reports the target version, so the normal newer-only check
+        would refuse to re-offer it.
+        """
+        from . import self_update
+
+        def worker():
+            try:
+                info = self_update.check_for_update(allow_equal=True)
+            except Exception as exc:
+                logger.warning("Repair re-download check failed", exc_info=True)
+                wx.CallAfter(self._log, f"(Update repair failed: {exc})")
+                return
+            if info is None:
+                wx.CallAfter(
+                    self._log,
+                    "(Update repair: no matching release found; "
+                    "download the latest version from the release page.)",
+                )
+                return
+            wx.CallAfter(self._perform_update, info)
+
+        threading.Thread(target=worker, daemon=True).start()
 
     def _run_update_check(self):
         from . import prefs as _p, self_update
@@ -2036,7 +2129,14 @@ class MainFrame(wx.Frame):
         # friction. Go straight to the swap-and-relaunch; the window
         # closing and the fresh one opening is feedback enough (and a
         # screen reader announces both).
-        logger.info("Update to %s downloaded; closing to install.", tag)
+        self._exit_to_apply(tag)
+
+    def _exit_to_apply(self, tag):
+        """Flush state and exit so the already-spawned helper can swap files.
+
+        Shared by the normal update flow and the torn-update repair.
+        """
+        logger.info("Update to %s staged; closing to install.", tag)
         # Prefs snapshot at _perform_update is stale by now — the user
         # may have toggled filters or edited fields while the download
         # ran. Save again so the post-restart app sees the latest state.
@@ -2062,11 +2162,12 @@ class MainFrame(wx.Frame):
         except Exception:
             pass
         self._detach_log_handlers()
-        # ZipExtractor.exe has already been spawned by
-        # download_and_replace; it's blocked on our PID. Exiting releases
-        # its WaitForExit(), after which it overwrites the install and
-        # relaunches ficary.exe itself — do NOT call self_update.restart()
-        # here, that would race the helper's relaunch.
+        # ZipExtractor.exe has already been spawned (by
+        # download_and_replace or retry_pending_update); it's blocked on
+        # our PID. Exiting releases its WaitForExit(), after which it
+        # overwrites the install and relaunches ficary.exe itself — do
+        # NOT call self_update.restart() here, that would race the
+        # helper's relaunch.
         sys.exit(0)
 
     # ── Download ─────────────────────────────────────────────
