@@ -1,0 +1,49 @@
+name: Build ZipExtractor (vendored helper)
+
+# Rebuild-only workflow — not part of the release pipeline. The exe it
+# produces is committed to tools/vendor/ZipExtractor.exe and its SHA-256
+# is pinned in build-windows.yml. Re-run only to move the pin to a newer
+# upstream commit; update the vendored binary, tools/vendor/README.md,
+# and the pinned hash together.
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: ravibpatel/AutoUpdater.NET commit to build
+        required: true
+        default: d687b8fb3f604b65238cfd608311638b9603b05c
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      # Fetch the exact commit rather than a branch/tag so the input is
+      # immutable — a moved branch or re-pointed tag can't change what
+      # this workflow builds.
+      - name: Fetch AutoUpdater.NET at pinned commit
+        shell: pwsh
+        run: |
+          git init zipextractor_src
+          cd zipextractor_src
+          git remote add origin https://github.com/ravibpatel/AutoUpdater.NET.git
+          git fetch --depth 1 origin ${{ inputs.ref }}
+          git checkout FETCH_HEAD
+
+      - uses: microsoft/setup-msbuild@v3
+
+      # SignAssembly=false: the repo ships only ZipExtractor.snk.enc
+      # (encrypted), so strong-naming can't run outside upstream's own
+      # CI, and ficary doesn't consume the assembly by strong name.
+      - name: Build ZipExtractor.exe
+        shell: pwsh
+        run: |
+          msbuild zipextractor_src/ZipExtractor/ZipExtractor.csproj /restore /p:Configuration=Release /p:SignAssembly=false /v:minimal
+
+      - name: Print SHA-256
+        shell: pwsh
+        run: Get-FileHash zipextractor_src/AutoUpdater.NET/Resources/ZipExtractor.exe -Algorithm SHA256 | Format-List
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ZipExtractor
+          path: zipextractor_src/AutoUpdater.NET/Resources/ZipExtractor.exe
