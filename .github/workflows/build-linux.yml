@@ -45,30 +45,53 @@ jobs:
             at-spi2-core
 
       - name: Install ffmpeg (static build)
-        # John Van Sickle's static ffmpeg builds have no runtime
-        # dep on system libraries, so the bundle works on any
-        # desktop Linux without requiring the user to apt-get
-        # install ffmpeg separately.
+        # Static build, so the bundle works on any desktop Linux
+        # without the user apt-get installing ffmpeg separately.
         #
-        # The download host is a single small server that
-        # occasionally times out — without retry flags one bad
-        # network minute kills the whole release build. ``curl
-        # --retry 5 --retry-delay 15 --retry-all-errors`` covers
-        # both connection-level and HTTP-level transients;
-        # ``--connect-timeout`` keeps a stuck SYN from burning
-        # the full 130s timeout we hit on 2026-05-10.
+        # Same source as the Windows job. The previous source
+        # (johnvansickle.com) is a single small server that had
+        # frozen at ffmpeg 7.0.2 / August 2024 and served this job a
+        # sustained HTTP 415 on 2026-07-26, taking down the v2.18.0
+        # Linux release; it publishes no versioned URL to pin
+        # instead, so retry flags were the only available defence.
+        #
+        # ``master-latest`` rather than an ``nX.Y-latest`` release
+        # branch on purpose: a branch build stops being rebuilt once
+        # upstream moves on, which is the same silent-staleness trap
+        # we just left. Must stay a ``-gpl`` variant — ficary calls
+        # libx264, which the lgpl builds omit.
+        #
+        # GitHub's "/releases/download/latest/..." redirect is
+        # occasionally rate-limited or serves a small stub instead of
+        # the real tarball, and curl --retry only retries transport
+        # errors — so size-check the payload and loop, matching the
+        # Windows job.
         run: |
           set -e
           mkdir -p ffmpeg_bin
-          curl -L --fail \
-            --retry 5 --retry-delay 15 --retry-all-errors \
-            --connect-timeout 30 --max-time 300 \
-            -o ffmpeg.tar.xz \
-            https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz
+          url=https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-linux64-gpl.tar.xz
+          for attempt in 1 2 3 4 5; do
+            curl -L --fail --retry 3 --retry-delay 5 --retry-all-errors \
+              --connect-timeout 30 --max-time 300 \
+              -o ffmpeg.tar.xz "$url" || true
+            size=$(wc -c < ffmpeg.tar.xz 2>/dev/null || echo 0)
+            echo "Attempt $attempt: ffmpeg.tar.xz is $size bytes"
+            if [ "$size" -gt 1000000 ]; then
+              break
+            fi
+            echo "Too small; retrying in 15s..."
+            sleep 15
+          done
+          if [ "$(wc -c < ffmpeg.tar.xz 2>/dev/null || echo 0)" -le 1000000 ]; then
+            echo "ffmpeg download never returned a full tarball" >&2
+            exit 1
+          fi
           tar -xf ffmpeg.tar.xz
-          dir=$(find . -maxdepth 1 -type d -name "ffmpeg-*-amd64-static" | head -1)
-          cp "$dir/ffmpeg" "$dir/ffprobe" ffmpeg_bin/
+          dir=$(find . -maxdepth 1 -type d \
+            -name "ffmpeg-master-latest-linux64-gpl" | head -1)
+          cp "$dir/bin/ffmpeg" "$dir/bin/ffprobe" ffmpeg_bin/
           chmod +x ffmpeg_bin/ffmpeg ffmpeg_bin/ffprobe
+          ffmpeg_bin/ffmpeg -version | head -1
           ls -la ffmpeg_bin/
 
       - name: Install Python dependencies
