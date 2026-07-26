@@ -16,6 +16,76 @@ from .index import LibraryIndex
 _EXTS = (".epub", ".html", ".txt")
 
 
+def _owning_root(
+    resolved: Path,
+    library_root: str | Path | None,
+    adult_root: str | Path | None,
+) -> Path | None:
+    """Return whichever configured root contains ``resolved``, or None.
+
+    A file sitting *at* a root rather than under it isn't a library
+    story — the roots themselves are folders, so an exact match means
+    the caller handed us a directory.
+    """
+    for raw_root in (library_root, adult_root):
+        if not raw_root or not str(raw_root).strip():
+            continue
+        root = Path(str(raw_root)).expanduser()
+        try:
+            root_resolved = root.resolve(strict=True)
+        except OSError:
+            continue
+        if resolved == root_resolved:
+            continue
+        if root_resolved in resolved.parents:
+            return root_resolved
+    return None
+
+
+def library_skip_reason(
+    path: Path | str,
+    library_root: str | Path | None,
+    adult_root: str | Path | None = None,
+) -> str:
+    """Explain, in one user-facing line, why :func:`record_downloaded_file`
+    declined to index ``path``.
+
+    Success logs "Added to library index." and a decline used to log
+    nothing at all, so a Save-to folder outside the library looked
+    exactly like a successful index in the download log. Callers log
+    this instead of staying silent.
+    """
+    path = Path(path).expanduser()
+    if path.suffix.lower() not in _EXTS:
+        return (
+            f"Not added to library index — {path.suffix or 'this'} files "
+            "aren't indexed."
+        )
+    roots = [
+        str(r).strip() for r in (library_root, adult_root)
+        if r and str(r).strip()
+    ]
+    if not roots:
+        return (
+            "Not added to library index — no library folder is configured "
+            "(Settings → Library)."
+        )
+    try:
+        resolved = path.resolve(strict=True)
+    except OSError:
+        return f"Not added to library index — {path} could not be read."
+    if _owning_root(resolved, library_root, adult_root) is None:
+        return (
+            f"Not added to library index — {path} is outside your library "
+            f"folder ({', '.join(roots)}). Point Save-to inside the library, "
+            "or run Scan Library after moving the file."
+        )
+    return (
+        "Not added to library index — indexing failed; the next Scan "
+        "Library will pick it up."
+    )
+
+
 def _walk_files(root: Path, recursive: bool) -> Iterator[Path]:
     """Yield every file under ``root`` without following symlinks.
 
@@ -246,20 +316,7 @@ def record_downloaded_file(
     except OSError:
         return False
 
-    owning_root: Path | None = None
-    for raw_root in (library_root, adult_root):
-        if not raw_root or not str(raw_root).strip():
-            continue
-        root = Path(str(raw_root)).expanduser()
-        try:
-            root_resolved = root.resolve(strict=True)
-        except OSError:
-            continue
-        if resolved == root_resolved:
-            continue
-        if root_resolved in resolved.parents:
-            owning_root = root_resolved
-            break
+    owning_root = _owning_root(resolved, library_root, adult_root)
     if owning_root is None:
         return False
 

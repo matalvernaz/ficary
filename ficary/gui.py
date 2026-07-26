@@ -3204,23 +3204,93 @@ class MainFrame(wx.Frame):
         """
         try:
             from . import prefs as _p
-            from .library.scanner import record_downloaded_file
+            from .library.scanner import (
+                library_skip_reason, record_downloaded_file,
+            )
+            library_root = (
+                self.prefs.get(_p.KEY_LIBRARY_PATH, "") or ""
+            ).strip() or None
+            adult_root = (
+                self.prefs.get(_p.KEY_LIBRARY_ADULT_PATH, "") or ""
+            ).strip() or None
             recorded = record_downloaded_file(
-                path,
-                library_root=(
-                    self.prefs.get(_p.KEY_LIBRARY_PATH, "") or ""
-                ).strip() or None,
-                adult_root=(
-                    self.prefs.get(_p.KEY_LIBRARY_ADULT_PATH, "") or ""
-                ).strip() or None,
+                path, library_root=library_root, adult_root=adult_root,
             )
             if recorded:
                 self._log("  Added to library index.")
                 # Reflect the new story in the embedded list immediately.
                 # Runs on a worker thread, so hop to the main thread.
                 wx.CallAfter(self._refresh_library_panel)
+            else:
+                self._log(
+                    "  " + library_skip_reason(path, library_root, adult_root),
+                )
         except Exception:
             logger.debug("auto-index after download failed", exc_info=True)
+
+    def _on_mcstories_index(self, event):
+        """Confirm and kick off the MCStories full-text index build."""
+        from .erotica import mcstories_fulltext
+
+        if self._global_busy:
+            self._log("Busy — wait for the current operation to finish.")
+            return
+        stats = mcstories_fulltext.stats()
+        if stats.stories:
+            covered = (
+                f"The index currently covers {stats.stories} stories "
+                f"({stats.bytes_on_disk / 1e6:.0f} MB on disk). Continuing "
+                "indexes the ones it's missing."
+            )
+        else:
+            covered = "No index exists yet."
+        answer = wx.MessageBox(
+            "MCStories has no search endpoint, so keyword search matches "
+            "each story's title, author, tag codes and one-line synopsis "
+            "— well under 1% of its text. Indexing story bodies lets "
+            "keyword search match the prose instead.\n\n"
+            f"{covered}\n\n"
+            "A full build fetches around 17,600 pages and uses roughly "
+            "750 MB of disk. It is safe to interrupt: progress is saved "
+            "as it goes, and running it again resumes where it stopped.\n\n"
+            "Start now?",
+            "Build MCStories Full-Text Index",
+            wx.YES_NO | wx.ICON_QUESTION,
+            self,
+        )
+        if answer != wx.YES:
+            return
+        self._set_busy(True, kind="search")
+        threading.Thread(
+            target=self._mcstories_index_worker, daemon=True,
+        ).start()
+
+    def _mcstories_index_worker(self):
+        """Worker for the MCStories full-text build. Touches no wx
+        widgets — ``_log`` queues lines for the main thread itself."""
+        try:
+            from .erotica import mcstories_fulltext
+            from .erotica.search import _fetch, _mcs_title_index_state
+
+            rows, missing = _mcs_title_index_state()
+            if missing:
+                # Indexing against a short title list would leave those
+                # stories permanently unindexed: resume can't tell
+                # "never seen" from "skipped".
+                self._log(
+                    "Could not read the whole MCStories title index "
+                    f"(missing letters: {'/'.join(missing)}). "
+                    "Try again later.",
+                )
+                return
+            self._log(
+                f"MCStories archive: {len(rows)} stories in the title index.",
+            )
+            mcstories_fulltext.build(rows, fetch=_fetch, progress=self._log)
+        except Exception as exc:
+            self._log(f"MCStories full-text index failed: {exc}")
+        finally:
+            self._set_busy(False)
 
     def _refresh_library_panel(self):
         """Reload the embedded library list from the index. Main-thread
@@ -3773,6 +3843,14 @@ class MainFrame(wx.Frame):
                     self._open_search_frame(k, s()),
                 item,
             )
+        search_menu.AppendSeparator()
+        mcs_index_item = search_menu.Append(
+            wx.ID_ANY, "Build &MCStories Full-Text Index...",
+            "MCStories has no search endpoint, so keyword search matches "
+            "titles and one-line synopses only. Index story bodies so "
+            "keyword search matches the prose.",
+        )
+        self.Bind(wx.EVT_MENU, self._on_mcstories_index, mcs_index_item)
         bar.Append(search_menu, "&Search")
 
         library_menu = wx.Menu()

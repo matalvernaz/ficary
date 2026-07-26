@@ -1152,6 +1152,13 @@ class SearchFrame(wx.Frame):
             else:
                 count = int(info.get("count", 0) or 0)
                 marker = "·exhausted" if info.get("exhausted") else ""
+                # A site that succeeded but knows its result is
+                # incomplete (e.g. MCStories serving a keyword search
+                # from a title index that lost a letter page) reports
+                # the caveat next to its count.
+                notice = info.get("notice")
+                if notice:
+                    marker += f"·{notice}"
                 ok_parts.append(f"{site}: {count}{marker}")
         if ok_parts:
             self._log("  sites — " + ", ".join(ok_parts))

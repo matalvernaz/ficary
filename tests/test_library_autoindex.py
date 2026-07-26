@@ -11,7 +11,9 @@ from __future__ import annotations
 from pathlib import Path
 
 from ficary.library.index import LibraryIndex
-from ficary.library.scanner import record_downloaded_file, scan
+from ficary.library.scanner import (
+    library_skip_reason, record_downloaded_file, scan,
+)
 
 from .library_fixtures import ficary_epub
 
@@ -159,3 +161,54 @@ def test_reindexing_same_download_twice_is_stable(tmp_path: Path):
     entries = list(reloaded.stories_in(lib))
     assert len(entries) == 1
     assert entries[0][1]["added_at"] == stamp
+
+
+# ── why a download wasn't indexed ────────────────────────────────
+#
+# record_downloaded_file returns a bare False for every decline, and the
+# download paths used to log nothing at all in that case — so a Save-to
+# folder outside the library read exactly like a successful index in the
+# log. library_skip_reason is what those paths log instead.
+
+
+def test_skip_reason_names_the_library_when_file_is_outside_it(tmp_path: Path):
+    lib = tmp_path / "lib"
+    lib.mkdir()
+    staging = tmp_path / "ffdl debug"
+    staging.mkdir()
+    story = staging / "Trick or Treat.html"
+    story.write_text("<html></html>", encoding="utf-8")
+
+    assert record_downloaded_file(story, library_root=str(lib)) is False
+    reason = library_skip_reason(story, str(lib))
+    assert "outside your library folder" in reason
+    assert str(lib) in reason
+    assert "Scan Library" in reason  # tells the user how to recover
+
+
+def test_skip_reason_flags_an_unconfigured_library(tmp_path: Path):
+    story = tmp_path / "Story.html"
+    story.write_text("<html></html>", encoding="utf-8")
+    assert "no library folder is configured" in library_skip_reason(story, "")
+
+
+def test_skip_reason_flags_an_unindexable_extension(tmp_path: Path):
+    lib = tmp_path / "lib"
+    lib.mkdir()
+    audio = lib / "Story.m4b"
+    audio.write_bytes(b"")
+    reason = library_skip_reason(audio, str(lib))
+    assert ".m4b" in reason and "aren't indexed" in reason
+
+
+def test_indexed_file_has_no_skip_reason_path(tmp_path: Path):
+    # The inverse guard: a file that really does land in the library
+    # must be recorded, so callers never log a skip for it.
+    lib = tmp_path / "lib"
+    lib.mkdir()
+    story = ficary_epub(
+        lib, title="Inside", url="https://www.fanfiction.net/s/99/1/",
+    )
+    assert record_downloaded_file(
+        story, library_root=str(lib), index_path=_idx(tmp_path),
+    ) is True

@@ -1,5 +1,53 @@
 # Changelog
 
+## 2.18.0 — 2026-07-26
+
+**MCStories keyword search can read the stories**
+
+* MCStories publishes no search box, so ficary has always searched
+  what its index pages list: a title, an author, tag codes and a
+  one-line synopsis per story. That's well under 1% of each story's
+  text, which is why a perfectly reasonable keyword could return two
+  dozen hits from a 17,000-story archive and miss stories the word
+  runs right through.
+* Search → Build MCStories Full-Text Index (or `--mcstories-index`)
+  indexes the story text itself, after which keyword searches match
+  the prose. A full build fetches around 17,600 pages and uses about
+  750 MB of disk. It saves as it goes, so interrupting it costs
+  nothing — run it again and it picks up where it stopped.
+* Body matches are added to the results, not swapped in: stories whose
+  own synopsis uses the word still come first, and the rest follow
+  ordered by how often the word actually appears. That ordering
+  matters, because a common word can occur once in passing in
+  thousands of stories, and those belong at the bottom.
+* `--mcstories-index-status` reports what the index covers. Keyword
+  searches now say which of the two they used, so a small result
+  count is legible instead of looking like the archive came up empty.
+
+**MCStories searches say when their index is short**
+
+* That index is assembled from the site's 26 A–Z letter pages. If one
+  of them failed to load, it was skipped and the incomplete result
+  cached for six hours — every keyword and tag search silently lost
+  roughly a thousand stories while still reporting a clean count, so a
+  story that was plainly on the site appeared not to exist.
+* Letter pages are now tracked individually. A page that fails is
+  retried on the next search instead of poisoning the whole index, the
+  25 that worked aren't re-fetched, and the search reports the gap
+  next to its result count rather than passing a short answer off as a
+  complete one. A page that returns something other than a story list
+  (a challenge page, say) counts as failed too — previously it was
+  trusted, because it arrived with a success code.
+
+**Downloads say when they aren't added to the library**
+
+* A finished download logged "Added to library index" when it was
+  indexed and nothing whatsoever when it wasn't, so saving to a folder
+  outside the library looked exactly like saving into it. Downloads
+  now say why they were skipped — the folder is outside the library,
+  no library is configured, that file type isn't indexed — and how to
+  fix it.
+
 ## 2.17.0 — 2026-07-22
 
 **Mac: one-click updates, just like Windows**

@@ -835,7 +835,9 @@ def test_single_listing_adapters_window_by_page(monkeypatch):
         for i in range(3)
     ]
     monkeypatch.setattr(erotica_search, "PER_SITE_PAGE_MAX", 2)
-    monkeypatch.setattr(erotica_search, "_mcs_title_index_rows", lambda: rows)
+    monkeypatch.setattr(
+        erotica_search, "_mcs_title_index_state", lambda: (rows, []),
+    )
 
     page1 = search_mcstories("", tags=["femdom"])
     page2 = search_mcstories("", tags=["femdom"], page=2)

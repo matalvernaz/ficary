@@ -221,7 +221,7 @@ def test_mcstories_tag_rows_serve_from_title_index(monkeypatch):
     # site's /Tags/<code>.html pages list bare title+code rows, while
     # the index carries author, synopsis, and added-date for the same
     # stories.
-    monkeypatch.setattr(S, "_mcs_title_index", {"built_at": 0.0, "rows": []})
+    monkeypatch.setattr(S, "_mcs_title_index", {})
     _patch_fetch(monkeypatch, EROTICA / "mcstories_titles.html")
 
     rows = S.search_mcstories("", tags=["femdom"])
@@ -247,7 +247,7 @@ def test_mcstories_keyword_scans_title_index(monkeypatch):
     # Reset the module-level cache so the build runs against the fixture
     # (the stubbed _fetch returns it for every letter page; dedupe by
     # slug collapses the 26 identical fetches to the 3 unique stories).
-    monkeypatch.setattr(S, "_mcs_title_index", {"built_at": 0.0, "rows": []})
+    monkeypatch.setattr(S, "_mcs_title_index", {})
     _patch_fetch(monkeypatch, EROTICA / "mcstories_titles.html")
 
     rows = S.search_mcstories("mc")  # every fixture story carries code "mc"
@@ -409,3 +409,118 @@ def test_fictionmania_details_page_parses():
     assert details["title"] == "A Perfect Housewife"
     assert details["author"] == "Pollymeric"
     assert details["synopsis"].startswith("24 year old Hobson Bucknall")
+
+
+# ── MCStories title-index completeness ───────────────────────────
+#
+# The index is built from 26 A-Z letter pages. A page that doesn't come
+# back used to be skipped, and the partial harvest was then cached with
+# the full 6-hour TTL — so one missing letter silently removed on the
+# order of a thousand stories from every keyword and tag search while
+# the search still reported a clean count.
+
+
+def _letter_fetch(monkeypatch, fixture: Path, *, broken: dict):
+    """Serve ``fixture`` for every letter page except the ones in
+    ``broken``, which map a letter to either an exception to raise or a
+    replacement body to return."""
+    def fake_fetch(url):
+        for letter, outcome in broken.items():
+            if url == S._MCS_TITLE_PAGE_URL.format(letter=letter):
+                if isinstance(outcome, Exception):
+                    raise outcome
+                return outcome
+        return _read(fixture)
+
+    monkeypatch.setattr(S, "_fetch", fake_fetch)
+
+
+def test_mcstories_index_reports_a_letter_it_could_not_fetch(monkeypatch):
+    monkeypatch.setattr(S, "_mcs_title_index", {})
+    _letter_fetch(
+        monkeypatch, EROTICA / "mcstories_titles.html",
+        broken={"T": S.SearchFetchError("boom")},
+    )
+
+    rows, missing = S._mcs_title_index_state()
+    assert missing == ["T"]
+    assert rows, "the other 25 letters still contribute rows"
+
+    # The search still returns hits, but says the index is short so a
+    # truncated result isn't reported as a complete one.
+    page = S.search_mcstories("mc")
+    assert page, "a partial index still searches what it has"
+    assert page.partial_note.startswith("index incomplete: no T titles")
+
+
+def test_mcstories_index_treats_a_zero_story_page_as_a_failure(monkeypatch):
+    # A Cloudflare interstitial is HTTP 200 with a body the fetch layer
+    # can't distinguish from a real page — it just has no div.story.
+    # Trusting the status code cached the gap as though it were real.
+    monkeypatch.setattr(S, "_mcs_title_index", {})
+    _letter_fetch(
+        monkeypatch, EROTICA / "mcstories_titles.html",
+        broken={"T": "<html><body>Just a moment...</body></html>"},
+    )
+
+    _rows, missing = S._mcs_title_index_state()
+    assert missing == ["T"]
+
+
+def test_mcstories_index_retries_only_the_failed_letter(monkeypatch):
+    monkeypatch.setattr(S, "_mcs_title_index", {})
+    _letter_fetch(
+        monkeypatch, EROTICA / "mcstories_titles.html",
+        broken={"T": S.SearchFetchError("boom")},
+    )
+    assert S._mcs_title_index_state()[1] == ["T"]
+
+    # Heal the site and step past the short retry window: the index must
+    # repair itself, and must re-fetch T *only* — the 25 good letters
+    # are still inside their full TTL.
+    fetched: list[str] = []
+
+    def counting_fetch(url):
+        fetched.append(url)
+        return _read(EROTICA / "mcstories_titles.html")
+
+    monkeypatch.setattr(S, "_fetch", counting_fetch)
+    base = S.time.time()
+    monkeypatch.setattr(
+        S.time, "time",
+        lambda: base + S._MCS_PARTIAL_INDEX_RETRY_S + 1,
+    )
+
+    rows, missing = S._mcs_title_index_state()
+    assert missing == []
+    assert rows
+    assert fetched == [S._MCS_TITLE_PAGE_URL.format(letter="T")]
+
+
+def test_mcstories_complete_index_is_not_refetched_within_its_ttl(monkeypatch):
+    monkeypatch.setattr(S, "_mcs_title_index", {})
+    _patch_fetch(monkeypatch, EROTICA / "mcstories_titles.html")
+    assert S._mcs_title_index_state()[1] == []
+
+    calls: list[str] = []
+    monkeypatch.setattr(
+        S, "_fetch", lambda url: (calls.append(url), "")[1],
+    )
+    rows, missing = S._mcs_title_index_state()
+    assert calls == [], "a warm complete index must not re-crawl"
+    assert missing == []
+    assert rows
+
+
+def test_mcstories_partial_note_reaches_the_fan_out_site_stats(monkeypatch):
+    monkeypatch.setattr(S, "_mcs_title_index", {})
+    _letter_fetch(
+        monkeypatch, EROTICA / "mcstories_titles.html",
+        broken={"T": S.SearchFetchError("boom")},
+    )
+
+    merged = S.search_erotica("mc", sites=["mcstories"])
+    stats = merged.site_stats["mcstories"]
+    assert stats["ok"] is True, "a partial index is degraded, not failed"
+    assert stats["count"] > 0
+    assert "no T titles" in (stats["notice"] or "")

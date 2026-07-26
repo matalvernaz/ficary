@@ -11,6 +11,23 @@ def _load(name: str) -> str:
     return (FIXTURES / name).read_text(encoding="utf-8")
 
 
+@pytest.fixture(autouse=True)
+def isolate_mcstories_fulltext(tmp_path, monkeypatch):
+    """Point the MCStories full-text index at a per-test temp path.
+
+    The index lives in the portable cache dir, so without this a
+    developer who has actually built it gets different search results
+    from CI — the adapter unions body matches into its output whenever
+    an index exists. Tests that want one build it under ``tmp_path``.
+    """
+    from ficary.erotica import mcstories_fulltext
+
+    monkeypatch.setattr(
+        mcstories_fulltext, "index_path",
+        lambda: tmp_path / "mcstories-fulltext.sqlite3",
+    )
+
+
 @pytest.fixture(scope="session")
 def wx_app():
     """A single ``wx.App`` shared by every GUI test in the session.

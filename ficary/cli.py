@@ -165,19 +165,23 @@ def _auto_index_exported(path) -> None:
     never raises — indexing must not fail an already-good download.
     """
     try:
-        from .library.scanner import record_downloaded_file
+        from .library.scanner import library_skip_reason, record_downloaded_file
         from .prefs import KEY_LIBRARY_ADULT_PATH, KEY_LIBRARY_PATH, Prefs
 
         prefs = Prefs()
+        library_root = (
+            prefs.get(KEY_LIBRARY_PATH, "") or ""
+        ).strip() or None
+        adult_root = (
+            prefs.get(KEY_LIBRARY_ADULT_PATH, "") or ""
+        ).strip() or None
         recorded = record_downloaded_file(
-            path,
-            library_root=(prefs.get(KEY_LIBRARY_PATH, "") or "").strip() or None,
-            adult_root=(
-                prefs.get(KEY_LIBRARY_ADULT_PATH, "") or ""
-            ).strip() or None,
+            path, library_root=library_root, adult_root=adult_root,
         )
         if recorded:
             print("  Added to library index.")
+        else:
+            print("  " + library_skip_reason(path, library_root, adult_root))
     except Exception:
         logger.debug("auto-index after export failed", exc_info=True)
 
@@ -2398,6 +2402,62 @@ def _handle_library_stats(args: argparse.Namespace) -> None:
     sys.exit(0)
 
 
+def _handle_mcstories_index(args: argparse.Namespace) -> None:
+    """Build, resume, or report on the MCStories full-text index."""
+    import time
+
+    from .erotica import mcstories_fulltext
+    from .erotica.search import _fetch, _mcs_title_index_state
+
+    def report_status() -> None:
+        stats = mcstories_fulltext.stats()
+        if not stats.stories:
+            print(
+                "MCStories full-text index: not built. Keyword search "
+                "matches titles, authors, tag codes and one-line "
+                "synopses only. Build it with --mcstories-index.",
+            )
+            return
+        built = time.strftime(
+            "%Y-%m-%d %H:%M", time.localtime(stats.newest_indexed_at),
+        )
+        print(
+            f"MCStories full-text index: {stats.stories} stories, "
+            f"{stats.bytes_on_disk / 1e6:.0f} MB, newest entry {built}",
+        )
+        print(f"  {mcstories_fulltext.index_path()}")
+
+    if args.mcstories_index_status and not args.mcstories_index:
+        report_status()
+        return
+
+    rows, missing = _mcs_title_index_state()
+    if missing:
+        # Indexing against a short title list would leave those stories
+        # permanently unindexed — the resume logic can't tell "never
+        # seen" from "skipped", so stop instead of baking in the gap.
+        print(
+            "Error: could not read the whole MCStories title index "
+            f"(missing letters: {'/'.join(missing)}). Try again later.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    print(f"MCStories archive: {len(rows)} stories in the title index.")
+    try:
+        mcstories_fulltext.build(
+            rows,
+            fetch=_fetch,
+            progress=print,
+            limit=args.mcstories_index_limit,
+        )
+    except RuntimeError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        sys.exit(1)
+    except KeyboardInterrupt:
+        print("\nInterrupted — progress kept; re-run to resume.")
+        return
+
+
 def _handle_library_find(args: argparse.Namespace) -> None:
     """Search the library index for stories matching a query."""
     from .library import search_index
@@ -3647,6 +3707,37 @@ def _build_parser() -> argparse.ArgumentParser:
             "With --library-find / --library-search: limit the "
             "search to this library root instead of searching every "
             "indexed library."
+        ),
+    )
+    parser.add_argument(
+        "--mcstories-index",
+        action="store_true",
+        help=(
+            "Build (or resume) the MCStories full-text search index. "
+            "MCStories has no search endpoint, so keyword search "
+            "normally matches only each story's title, author, tag "
+            "codes and one-line synopsis. This crawls story bodies "
+            "into a local index so keyword search matches the prose. "
+            "One-time cost: about 17,600 page fetches and 0.4 GB on "
+            "disk. Safe to interrupt and re-run — it resumes."
+        ),
+    )
+    parser.add_argument(
+        "--mcstories-index-limit",
+        type=int,
+        metavar="N",
+        help=(
+            "With --mcstories-index: stop after indexing N new "
+            "stories. Useful for trying it out without committing to "
+            "the whole archive."
+        ),
+    )
+    parser.add_argument(
+        "--mcstories-index-status",
+        action="store_true",
+        help=(
+            "Report how many MCStories stories the full-text index "
+            "covers and how much disk it uses. Read-only."
         ),
     )
     parser.add_argument(
@@ -5533,6 +5624,9 @@ def main(argv: list[str] | None = None) -> None:
         return
     if args.library_search:
         _handle_library_search(args)
+        return
+    if args.mcstories_index or args.mcstories_index_status:
+        _handle_mcstories_index(args)
         return
     if args.populate_search:
         _handle_populate_search(args)

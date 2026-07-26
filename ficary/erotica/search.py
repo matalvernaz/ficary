@@ -44,7 +44,7 @@ from bs4 import BeautifulSoup
 
 from ..scraper import BaseScraper
 from ..search import _parse_literotica_results, search_literotica
-from . import tapatalk
+from . import mcstories_fulltext, tapatalk
 
 logger = logging.getLogger(__name__)
 
@@ -894,12 +894,23 @@ _MCS_TITLE_PAGE_URL = "https://mcstories.com/Titles/{letter}.html"
 # The archive only gains stories weekly; a multi-hour TTL keeps the
 # cached index fresh without re-crawling ~26 multi-MB pages per search.
 _MCS_TITLE_INDEX_TTL_S = 6 * 3600
+_MCS_PARTIAL_INDEX_RETRY_S = 60
+"""Cache lifetime for a letter whose page didn't come back. Short
+because a missing letter hides on the order of a thousand stories from
+every keyword search, and re-fetching one page costs about a tenth of
+a second — a user who re-runs the search after seeing the incomplete-
+index warning gets a fresh attempt rather than the same gap."""
+_MCS_TITLE_LETTERS = tuple(string.ascii_uppercase)
 _MCS_TITLE_ANCHOR_RE = re.compile(
     r"^(?:\.\./)?([A-Z][A-Za-z0-9_-]+)/(?:index\.html)?$",
 )
 _MCS_CODE_LINE_RE = re.compile(r"^[a-z]{2}(?: [a-z]{2})*$")
 
-_mcs_title_index: dict = {"built_at": 0.0, "rows": []}
+# Per-letter cache: ``{"A": {"rows": [...], "built_at": float,
+# "ttl": float}}``. Keyed per letter rather than holding one flat row
+# list so a letter page that fails is the only thing retried, and so
+# the concatenated index can report exactly which letters it's missing.
+_mcs_title_index: dict[str, dict] = {}
 _mcs_title_index_lock = threading.Lock()
 
 
@@ -956,60 +967,99 @@ def _mcs_parse_title_row(div) -> Optional[dict]:
 _MCS_INDEX_FETCH_WORKERS = 8
 
 
-def _mcs_build_title_index() -> list[dict]:
-    """Fetch and parse all 26 A-Z title pages into a deduped row list.
-    A letter page that fails to fetch is skipped so one dead page
-    doesn't sink the whole index."""
-    letters = list(string.ascii_uppercase)
+def _mcs_fetch_letter_rows(letter: str) -> Optional[list[dict]]:
+    """Fetch and parse one ``/Titles/<letter>.html`` page.
 
-    def _fetch_letter(letter: str) -> Optional[str]:
-        url = _MCS_TITLE_PAGE_URL.format(letter=letter)
-        try:
-            return _fetch(url)
-        except SearchFetchError:
-            logger.warning("mcstories title index: %s unreachable", url)
-            return None
-
-    # The letter pages are static CDN HTML, so fetch them concurrently:
-    # a sequential crawl of 26 multi-MB pages is a ~12s one-time stall,
-    # and the fan-out blocks on its slowest site. Bounded worker count,
-    # and ``map`` preserves A-Z order so the deduped window is stable
-    # across Load More pages.
-    with concurrent.futures.ThreadPoolExecutor(
-        max_workers=_MCS_INDEX_FETCH_WORKERS,
-    ) as ex:
-        pages = list(ex.map(_fetch_letter, letters))
-
+    Returns ``None`` when the page didn't yield a usable listing —
+    which covers a failed fetch *and* a fetch that succeeded but
+    parsed nothing. The second case matters: a Cloudflare interstitial
+    is served as HTTP 200 with a body the fetch layer can't tell from
+    a real page, and it contains no ``div.story`` at all. Every real
+    letter page lists hundreds of stories, so zero parsed rows means
+    the response wasn't the listing.
+    """
+    url = _MCS_TITLE_PAGE_URL.format(letter=letter)
+    try:
+        html = _fetch(url)
+    except SearchFetchError:
+        logger.warning("mcstories title index: %s unreachable", url)
+        return None
     rows: list[dict] = []
-    seen: set[str] = set()
-    for html in pages:
-        if not html:
-            continue
+    if html:
         soup = BeautifulSoup(html, "lxml")
         for div in soup.find_all("div", class_="story"):
             row = _mcs_parse_title_row(div)
-            if row is not None and row["slug"] not in seen:
-                seen.add(row["slug"])
+            if row is not None:
                 rows.append(row)
+    if not rows:
+        logger.warning("mcstories title index: %s parsed 0 stories", url)
+        return None
     return rows
 
 
-def _mcs_title_index_rows() -> list[dict]:
-    """Return the cached whole-archive title index, rebuilding when it's
-    empty or older than :data:`_MCS_TITLE_INDEX_TTL_S`. Serialised on a
-    lock so two concurrent MCStories searches build the index once, not
-    twice; a rebuild that comes back empty (transient site failure)
-    keeps the previous good rows rather than clearing them."""
+def _mcs_title_index_state() -> tuple[list[dict], list[str]]:
+    """Return ``(rows, missing_letters)`` for the whole-archive index.
+
+    Letters are fetched and cached individually, so a page that fails
+    keeps whatever rows it had last time and is retried on the next
+    search instead of poisoning the whole index for
+    :data:`_MCS_TITLE_INDEX_TTL_S`. ``missing_letters`` lists the
+    letters we have no rows for at all — callers surface that rather
+    than reporting a truncated index as a complete one, because a
+    single absent letter silently removes on the order of a thousand
+    stories from every keyword and tag search.
+
+    Serialised on a lock so two concurrent MCStories searches crawl
+    the stale letters once, not twice.
+    """
     now = time.time()
     with _mcs_title_index_lock:
-        cache = _mcs_title_index
-        if cache["rows"] and (now - cache["built_at"]) < _MCS_TITLE_INDEX_TTL_S:
-            return cache["rows"]
-        rows = _mcs_build_title_index()
-        if rows or not cache["rows"]:
-            cache["rows"] = rows
-            cache["built_at"] = now
-        return cache["rows"]
+        stale = [
+            letter for letter in _MCS_TITLE_LETTERS
+            if now - _mcs_title_index.get(letter, {}).get("built_at", 0.0)
+            >= _mcs_title_index.get(letter, {}).get(
+                "ttl", _MCS_TITLE_INDEX_TTL_S,
+            )
+        ]
+        if stale:
+            # The letter pages are static CDN HTML, so fetch them
+            # concurrently: a sequential crawl is a multi-second stall
+            # and the fan-out blocks on its slowest site. Bounded
+            # worker count, and ``map`` preserves order.
+            with concurrent.futures.ThreadPoolExecutor(
+                max_workers=_MCS_INDEX_FETCH_WORKERS,
+            ) as ex:
+                fetched = list(ex.map(_mcs_fetch_letter_rows, stale))
+            for letter, rows in zip(stale, fetched):
+                if rows is None:
+                    _mcs_title_index[letter] = {
+                        "rows": _mcs_title_index.get(letter, {}).get(
+                            "rows", [],
+                        ),
+                        "built_at": now,
+                        "ttl": _MCS_PARTIAL_INDEX_RETRY_S,
+                    }
+                else:
+                    _mcs_title_index[letter] = {
+                        "rows": rows,
+                        "built_at": now,
+                        "ttl": _MCS_TITLE_INDEX_TTL_S,
+                    }
+
+        # A-Z order keeps the deduped window stable across Load More.
+        rows: list[dict] = []
+        missing: list[str] = []
+        seen: set[str] = set()
+        for letter in _MCS_TITLE_LETTERS:
+            letter_rows = _mcs_title_index.get(letter, {}).get("rows") or []
+            if not letter_rows:
+                missing.append(letter)
+                continue
+            for row in letter_rows:
+                if row["slug"] not in seen:
+                    seen.add(row["slug"])
+                    rows.append(row)
+        return rows, missing
 
 
 def _mcs_keyword_match(query: str, haystack: str) -> bool:
@@ -1029,6 +1079,25 @@ def _mcs_keyword_match(query: str, haystack: str) -> bool:
     return all(term in hay for term in terms)
 
 
+def _mcs_fulltext_note(archive_rows: int) -> str:
+    """One-phrase description of what a keyword search just searched.
+
+    A keyword search with no body index reads a title, an author, tag
+    codes and a one-line synopsis per story — under 1% of the prose,
+    which is why a plausible query can return a couple of dozen hits
+    from a 17,000-story archive. Saying so on every keyword search is
+    what turns "this story isn't on the site" into "my index only
+    covers blurbs", and a part-built index gets its coverage reported
+    so growing result counts aren't a mystery either.
+    """
+    indexed = mcstories_fulltext.stats().stories
+    if not indexed:
+        return "blurbs only, full text not indexed"
+    if archive_rows and indexed < archive_rows:
+        return f"full text {indexed}/{archive_rows}"
+    return ""
+
+
 def search_mcstories(query: str, *, page: int = 1,
                      tags: Optional[list] = None, **_: object) -> list[dict]:
     """MCStories indexes every story by Dublin Core tag codes; the
@@ -1042,12 +1111,20 @@ def search_mcstories(query: str, *, page: int = 1,
     keeps direct callers honest too.
 
     Tag and keyword searches both serve from the cached whole-archive
-    title index (:func:`_mcs_title_index_rows`): MCStories has no
+    title index (:func:`_mcs_title_index_state`): MCStories has no
     search endpoint, and its ``/Tags/<code>.html`` pages list bare
     title+code rows — the index carries author, synopsis, and
     added-date for the same stories, and lets a tag and a keyword
     narrow each other. A bare browse with neither query nor tag falls
     back to the recent-additions page.
+
+    When the optional full-text index
+    (:mod:`ficary.erotica.mcstories_fulltext`) has been built, a story
+    also matches on its *body*. That's a union with the title-index
+    match, not a replacement: the title index matches substrings
+    (``foot`` inside ``barefoot``) while FTS5 matches whole tokens, so
+    each catches rows the other misses. Row order stays A-Z either way,
+    which is what keeps the Load More window stable.
     """
     # MCStories serves one un-paginated listing; window it per page.
     window_start, window_end = _single_listing_window(page)
@@ -1056,9 +1133,15 @@ def search_mcstories(query: str, *, page: int = 1,
     if first_tag and not code and not query:
         return []
     if code or query:
-        out = []
-        for r in _mcs_title_index_rows():
-            if code and code not in r["codes"].split():
+        rows, missing = _mcs_title_index_state()
+
+        def carries_code(row: dict) -> bool:
+            return not code or code in row["codes"].split()
+
+        ordered: list[dict] = []
+        matched: set[str] = set()
+        for r in rows:
+            if not carries_code(r):
                 continue
             if query:
                 haystack = (
@@ -1066,16 +1149,47 @@ def search_mcstories(query: str, *, page: int = 1,
                 )
                 if not _mcs_keyword_match(query, haystack):
                     continue
-            out.append({
+            ordered.append(r)
+            matched.add(r["slug"])
+
+        # Body matches extend the blurb matches rather than reordering
+        # them: a story whose own synopsis uses the query word is the
+        # strongest signal the archive gives us, so those keep the top
+        # of the list and today's results don't move. Everything found
+        # only in the prose follows in relevance order.
+        if query:
+            by_slug = {r["slug"]: r for r in rows}
+            for slug in mcstories_fulltext.ranked_slugs(query) or ():
+                if slug in matched:
+                    continue
+                row = by_slug.get(slug)
+                if row is None or not carries_code(row):
+                    continue
+                ordered.append(row)
+                matched.add(slug)
+
+        # Build result dicts for the requested window only — a common
+        # word can match thousands of bodies and all but one page of
+        # them gets thrown away.
+        page_rows = [
+            {
                 "title": r["title"], "author": r["author"],
                 "url": f"https://mcstories.com/{r['slug']}/",
                 "summary": r["summary"], "words": "?", "chapters": "?",
                 "rating": "M", "fandom": r["codes"], "status": "",
                 "site": "mcstories", "updated": r["updated"],
-            })
-            if len(out) >= window_end:
-                break
-        return out[window_start:]
+            }
+            for r in ordered[window_start:window_end]
+        ]
+        notes: list[str] = []
+        if missing:
+            notes.append(f"index incomplete: no {'/'.join(missing)} titles")
+        if query:
+            notes.append(_mcs_fulltext_note(len(rows)))
+        notes = [n for n in notes if n]
+        if notes:
+            return PartialIndexPage(page_rows, "; ".join(notes))
+        return page_rows
     # Bare browse (no query, no tag): recent additions.
     url = "https://mcstories.com/WhatsNew.html"
     html = _fetch(url)
@@ -3113,6 +3227,24 @@ def _normalise_tags(tags) -> list[str]:
     return [_TAG_COVERAGE_SUFFIX_RE.sub("", t).strip() for t in raw if t]
 
 
+class PartialIndexPage(list):
+    """A result page served from an index the adapter knows is
+    incomplete.
+
+    MCStories has no search endpoint, so its keyword and tag searches
+    filter a client-side index built from 26 letter pages. When one of
+    those pages doesn't come back, the search still returns hits — it
+    just can't have found every match. A plain list would report that
+    truncated result as a clean count, which is how a missing letter
+    page reads as "this story isn't on the site". The note travels to
+    the fan-out's per-site stats so the user sees the degradation.
+    """
+
+    def __init__(self, rows, note: str):
+        super().__init__(rows)
+        self.partial_note = note
+
+
 class SparsePage(list):
     """An empty result page whose source listing still has rows.
 
@@ -3346,7 +3478,10 @@ def search_erotica(
     # 12, SoFurry: FAIL (timeout)" so users know which sites contributed
     # versus which silently failed vs. returned zero hits.
     site_stats: dict[str, dict] = {
-        s: {"count": 0, "ok": True, "error": None, "exhausted": False}
+        s: {
+            "count": 0, "ok": True, "error": None, "exhausted": False,
+            "notice": None,
+        }
         for s in active
     }
 
@@ -3369,6 +3504,13 @@ def search_erotica(
                 if site_results is None:
                     site_results = []
                 site_stats[site_slug]["count"] = len(site_results)
+                # A PartialIndexPage succeeded but knows its backing
+                # index was incomplete — report the count *and* the
+                # caveat rather than passing a truncated result off as
+                # a clean one.
+                note = getattr(site_results, "partial_note", None)
+                if note:
+                    site_stats[site_slug]["notice"] = note
                 # An empty page means we've walked past this site's
                 # tail (single-listing adapters return [] for any
                 # window beyond their one page) — mark it exhausted so
