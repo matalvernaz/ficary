@@ -35,12 +35,22 @@ jobs:
         # wxPython has no universal Linux wheel on PyPI (the GTK3 ABI is
         # distro-version-specific); the extras repo hosts per-Ubuntu-version
         # wheels. Same recipe as build-linux.yml.
+        #
+        # --only-binary is load-bearing. pip picks the highest version
+        # across every source, and 4.3.0/4.3.1 shipped to PyPI as an
+        # sdist with no Linux wheel anywhere, so pip started preferring
+        # them over the newest extras wheel and building wxWidgets from
+        # source -- which fails, slowly, on a runner that only has the
+        # GTK *runtime* libs. Refusing sdists pins us to the newest real
+        # wheel and picks 4.3.x up automatically once extras publishes
+        # it. No `|| pip install wxPython` fallback for the same reason:
+        # it only ever turned "no wheel" into a doomed source build.
         run: |
           python -m pip install --upgrade pip
           UBUNTU_VERSION=$(lsb_release -rs)
-          pip install -f \
+          pip install --only-binary=wxPython -f \
             "https://extras.wxpython.org/wxPython4/extras/linux/gtk3/ubuntu-${UBUNTU_VERSION}" \
-            wxPython || pip install wxPython
+            wxPython
           pip install -e ".[dev,epub]"
 
       - name: Run pytest

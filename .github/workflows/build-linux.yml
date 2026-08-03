@@ -101,13 +101,22 @@ jobs:
         # built wheels keyed by Ubuntu version; using -f with that
         # URL adds it as a find-links source so pip picks the
         # right wheel for the runner's Ubuntu version.
+        #
+        # --only-binary is load-bearing. pip picks the highest
+        # version across every source, and 4.3.0/4.3.1 shipped to
+        # PyPI as an sdist with no Linux wheel anywhere, so pip
+        # started preferring them over the newest extras wheel and
+        # building wxWidgets from source -- which fails on a runner
+        # that only has the GTK *runtime* libs. Refusing sdists pins
+        # us to the newest real wheel and picks 4.3.x up
+        # automatically once extras publishes it.
         run: |
           python -m pip install --upgrade pip
           UBUNTU_VERSION=$(lsb_release -rs)
           echo "Detected Ubuntu $UBUNTU_VERSION"
-          pip install -f \
+          pip install --only-binary=wxPython -f \
             "https://extras.wxpython.org/wxPython4/extras/linux/gtk3/ubuntu-${UBUNTU_VERSION}" \
-            wxPython || pip install wxPython
+            wxPython
           pip install ".[all]"
           pip install pyinstaller
 
