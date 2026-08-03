@@ -89,6 +89,14 @@ _LOG_FILE_BACKUPS = 3
 
 _LOG_LEVELS = ["DEBUG", "INFO", "WARNING", "ERROR"]
 
+# Suffix of the file being updated -> the format string to re-export it
+# in, matching the format_ctrl choices. An update rewrites what's
+# already on disk, so the file's own extension decides the format
+# regardless of what the dropdown currently shows. No ".audio" entry:
+# an audiobook has no chapter list to merge against, so those never
+# reach the update path.
+_UPDATE_FORMAT_BY_SUFFIX = {".epub": "epub", ".html": "html", ".txt": "txt"}
+
 
 def _announce_label(ctrl: "wx.Window", text: str) -> None:
     """Update a StaticText (or similar) so a screen reader picks up the
@@ -2488,26 +2496,21 @@ class MainFrame(wx.Frame):
             self._log(f"Error: {e}")
             return
 
-        suffix = Path(path).suffix.lower()
-        fmt_map = {".epub": 0, ".html": 1, ".txt": 2}
-        self.format_ctrl.SetSelection(fmt_map.get(suffix, 0))
-
         mode = " (fresh re-download)" if refetch_all else ""
         self._log(
             f"Updating{mode}: {url} (existing file has {existing} chapters)"
         )
         update_path = Path(path)
-        # Snapshot params AFTER the SetSelection above so the snapshot
-        # reflects the new format pinned from the file's suffix.
-        #
-        # The destination is pinned on the snapshot rather than by
-        # driving output_ctrl: an update has to rewrite the file where
-        # it already lives, but _save_prefs persists whatever the
-        # Save-to box holds, so setting the widget meant updating one
-        # file in a staging folder silently redirected every later
-        # download there.
+        # Format and destination are pinned on the snapshot rather than
+        # by driving format_ctrl / output_ctrl. An update has to rewrite
+        # the existing file in place, in the format it already is, but
+        # _save_prefs persists both widgets — so driving them meant
+        # updating one .txt file in a scratch folder permanently
+        # switched the default format to txt and redirected every later
+        # download into that folder.
         params = replace(
             self._snapshot_download_params(),
+            fmt=_UPDATE_FORMAT_BY_SUFFIX.get(update_path.suffix.lower(), "epub"),
             raw_output_dir=str(update_path.parent),
         )
         self._enqueue_site_job(

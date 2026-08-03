@@ -22,14 +22,23 @@
   and no longer slow the other sites in a search when MCStories is
   throttling them. One attempt each; anything that fails is picked up
   by the retry above.
+* The list of stories is kept between runs. It was held in memory
+  only, so the first MCStories search after every start spent about 25
+  seconds reading the site's 26 index pages, then threw the result
+  away on exit — even though it stays usable for six hours. A restart
+  now reads it back in a fraction of a second, and a page that was
+  failing keeps its widened retry window rather than starting over at
+  a minute.
 
-**Updating a file no longer moves your downloads**
+**Updating a file no longer changes your download settings**
 
 * Choosing a file to update pointed the Save-to box at that file's
   folder, and Save-to is remembered between runs — so updating one
   file in a scratch folder quietly sent every later download there.
-  Updates still rewrite the file where it lives; they just don't
-  change the setting any more.
+* The same thing happened to the format dropdown: updating a .txt file
+  set the format to txt for everything afterwards.
+* Updates still rewrite the file where it lives, in the format it
+  already is. They just don't change either setting any more.
 
 ## 2.18.0 — 2026-07-26
 

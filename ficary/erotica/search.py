@@ -33,15 +33,18 @@ from __future__ import annotations
 
 import concurrent.futures
 import html as html_module
+import json
 import logging
 import re
 import string
 import threading
 import time
+from pathlib import Path
 from typing import Callable, Optional
 
 from bs4 import BeautifulSoup
 
+from ..atomic import atomic_write_text
 from ..scraper import BaseScraper
 from ..search import _parse_literotica_results, search_literotica
 from . import tapatalk
@@ -919,6 +922,70 @@ _MCS_CODE_LINE_RE = re.compile(r"^[a-z]{2}(?: [a-z]{2})*$")
 _mcs_title_index: dict[str, dict] = {}
 _mcs_title_index_lock = threading.Lock()
 
+# The cache is mirrored to disk because it was previously in-process
+# only: the first MCStories search after every app start paid a ~25s
+# 26-page crawl. The TTL is six hours, so a process-lifetime cache
+# threw away work that was still fresh. Failure state is persisted with
+# the rows so the retry backoff survives a restart too — otherwise
+# relaunching resets a throttled site's ladder to one minute.
+_MCS_TITLE_CACHE_FILENAME = "mcstories-titles.json"
+_mcs_title_index_loaded = False
+
+
+def _mcs_title_cache_path() -> Path:
+    from ..portable import cache_dir
+
+    return cache_dir() / _MCS_TITLE_CACHE_FILENAME
+
+
+def _mcs_load_title_cache() -> None:
+    """Populate the in-memory cache from disk, once per process.
+
+    Never raises: a cache that can't be read (absent, truncated, from a
+    future version) just leaves the index empty, and the next search
+    crawls as it always did. Caller holds ``_mcs_title_index_lock``.
+    """
+    global _mcs_title_index_loaded
+    if _mcs_title_index_loaded:
+        return
+    _mcs_title_index_loaded = True
+    try:
+        raw = json.loads(
+            _mcs_title_cache_path().read_text(encoding="utf-8"),
+        )
+    except (OSError, ValueError):
+        return
+    if not isinstance(raw, dict):
+        return
+    for letter in _MCS_TITLE_LETTERS:
+        entry = raw.get(letter)
+        if not isinstance(entry, dict):
+            continue
+        rows = entry.get("rows")
+        if not isinstance(rows, list):
+            continue
+        _mcs_title_index[letter] = {
+            "rows": rows,
+            "built_at": float(entry.get("built_at") or 0.0),
+            "ttl": float(entry.get("ttl") or _MCS_TITLE_INDEX_TTL_S),
+            "failures": int(entry.get("failures") or 0),
+        }
+
+
+def _mcs_save_title_cache() -> None:
+    """Mirror the in-memory cache to disk. Caller holds the lock.
+
+    Best-effort: a read-only or full cache dir costs the next start a
+    crawl, which is the behaviour this whole file had before, so it's
+    logged at debug rather than surfaced.
+    """
+    try:
+        path = _mcs_title_cache_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        atomic_write_text(path, json.dumps(_mcs_title_index))
+    except (OSError, ValueError, TypeError):
+        logger.debug("mcstories title cache write failed", exc_info=True)
+
 
 def _mcs_parse_title_row(div) -> Optional[dict]:
     """Parse one ``div.story`` block from a ``/Titles/<L>.html`` letter
@@ -1039,6 +1106,7 @@ def _mcs_title_index_state() -> tuple[list[dict], list[str]]:
     """
     now = time.time()
     with _mcs_title_index_lock:
+        _mcs_load_title_cache()
         stale = [
             letter for letter in _MCS_TITLE_LETTERS
             if now - _mcs_title_index.get(letter, {}).get("built_at", 0.0)
@@ -1075,6 +1143,7 @@ def _mcs_title_index_state() -> tuple[list[dict], list[str]]:
                         "ttl": _MCS_TITLE_INDEX_TTL_S,
                         "failures": 0,
                     }
+            _mcs_save_title_cache()
 
         # A-Z order keeps the deduped window stable across Load More.
         rows: list[dict] = []

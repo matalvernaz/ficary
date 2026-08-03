@@ -11,6 +11,23 @@ def _load(name: str) -> str:
     return (FIXTURES / name).read_text(encoding="utf-8")
 
 
+@pytest.fixture(autouse=True)
+def isolate_mcstories_title_cache(tmp_path, monkeypatch):
+    """Point the MCStories title-index cache at a per-test temp path.
+
+    The cache is mirrored to the portable cache dir and loaded once per
+    process, so without this a developer who has run a real search gets
+    a pre-populated index — and different results — from CI's empty one.
+    """
+    import ficary.erotica.search as search
+
+    monkeypatch.setattr(
+        search, "_mcs_title_cache_path",
+        lambda: tmp_path / "mcstories-titles.json",
+    )
+    monkeypatch.setattr(search, "_mcs_title_index_loaded", False)
+
+
 @pytest.fixture(scope="session")
 def wx_app():
     """A single ``wx.App`` shared by every GUI test in the session.

@@ -521,6 +521,36 @@ def test_mcstories_complete_index_is_not_refetched_within_its_ttl(monkeypatch):
     assert rows
 
 
+def test_mcstories_title_index_survives_a_restart(monkeypatch):
+    # The cache used to be in-process only, so the first search after
+    # every app start paid a 26-page crawl even though the six-hour TTL
+    # had barely been touched.
+    monkeypatch.setattr(S, "_mcs_title_index", {})
+    _letter_fetch(monkeypatch, EROTICA / "mcstories_titles.html", broken={})
+    warm, _ = S._mcs_title_index_state()
+    assert warm
+
+    # Restart: in-memory state gone, disk cache still there.
+    monkeypatch.setattr(S, "_mcs_title_index", {})
+    monkeypatch.setattr(S, "_mcs_title_index_loaded", False)
+    calls: list[str] = []
+    _patch_index_fetch(monkeypatch, lambda url: (calls.append(url), "")[1])
+
+    rows, missing = S._mcs_title_index_state()
+    assert calls == [], "a fresh process must not re-crawl a fresh cache"
+    assert missing == []
+    assert [r["slug"] for r in rows] == [r["slug"] for r in warm]
+
+
+def test_mcstories_title_cache_ignores_a_corrupt_file(monkeypatch):
+    S._mcs_title_cache_path().write_text("{not json", encoding="utf-8")
+    monkeypatch.setattr(S, "_mcs_title_index", {})
+    _letter_fetch(monkeypatch, EROTICA / "mcstories_titles.html", broken={})
+
+    rows, missing = S._mcs_title_index_state()
+    assert rows and missing == [], "an unreadable cache must just re-crawl"
+
+
 def test_mcstories_letter_retry_backs_off_while_it_keeps_failing(monkeypatch):
     # A site that is rate-limiting or serving a challenge fails all 26
     # letters, so a flat retry window meant every search a minute apart

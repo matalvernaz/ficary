@@ -534,6 +534,48 @@ def test_require_save_target_respects_explicit_output(wx_app):
         frame.Destroy()
 
 
+def test_updating_a_file_does_not_change_saved_download_settings(
+    wx_app, tmp_path, monkeypatch,
+):
+    """An update rewrites the file where it lives, in the format it
+    already is — pinned on the params snapshot, not by driving the
+    widgets. Driving them leaked into _save_prefs, so updating one .txt
+    in a scratch folder sent every later download there as txt."""
+    from ficary import updater
+    from ficary.gui import MainFrame
+
+    story = tmp_path / "scratch" / "A Story.txt"
+    story.parent.mkdir()
+    story.write_text("x", encoding="utf-8")
+    monkeypatch.setattr(
+        updater, "extract_source_url", lambda p: "https://example.com/s/1",
+    )
+    monkeypatch.setattr(updater, "count_chapters", lambda p: 3)
+
+    frame = MainFrame()
+    try:
+        frame.output_ctrl.SetValue("/tmp/library")
+        frame.format_ctrl.SetSelection(0)
+        assert frame.format_ctrl.GetString(0) == "epub", "fixture assumption"
+
+        recorded = {}
+        monkeypatch.setattr(
+            frame, "_run_download", lambda *a, **kw: recorded.update(kw),
+        )
+        monkeypatch.setattr(frame, "_enqueue_site_job", lambda url, job: job())
+
+        frame._begin_update_for_path(str(story))
+
+        assert recorded["params"].raw_output_dir == str(story.parent)
+        assert recorded["params"].fmt == "txt"
+        assert frame.output_ctrl.GetValue() == "/tmp/library"
+        assert frame.format_ctrl.GetString(
+            frame.format_ctrl.GetSelection(),
+        ) == "epub"
+    finally:
+        frame.Destroy()
+
+
 def test_update_covers_main_and_adult_roots(wx_app):
     """Check-for-Updates probes the separate adult root, not just the
     main library. _update_roots is the seam that decides which roots the
