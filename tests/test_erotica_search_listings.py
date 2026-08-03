@@ -222,7 +222,7 @@ def test_mcstories_tag_rows_serve_from_title_index(monkeypatch):
     # the index carries author, synopsis, and added-date for the same
     # stories.
     monkeypatch.setattr(S, "_mcs_title_index", {})
-    _patch_fetch(monkeypatch, EROTICA / "mcstories_titles.html")
+    _letter_fetch(monkeypatch, EROTICA / "mcstories_titles.html", broken={})
 
     rows = S.search_mcstories("", tags=["femdom"])
     assert [r["title"] for r in rows] == ["Zeb’s Awakening"]  # the fd row
@@ -248,7 +248,7 @@ def test_mcstories_keyword_scans_title_index(monkeypatch):
     # (the stubbed _fetch returns it for every letter page; dedupe by
     # slug collapses the 26 identical fetches to the 3 unique stories).
     monkeypatch.setattr(S, "_mcs_title_index", {})
-    _patch_fetch(monkeypatch, EROTICA / "mcstories_titles.html")
+    _letter_fetch(monkeypatch, EROTICA / "mcstories_titles.html", broken={})
 
     rows = S.search_mcstories("mc")  # every fixture story carries code "mc"
     assert len(rows) == 3
@@ -420,6 +420,17 @@ def test_fictionmania_details_page_parses():
 # the search still reported a clean count.
 
 
+def _patch_index_fetch(monkeypatch, fetch):
+    """Point the title-index crawl at ``fetch``.
+
+    The letter pages go through ``_MCS_INDEX_FETCHER`` rather than the
+    shared search fetcher — it fails after one attempt instead of
+    sleeping through a 30s/60s retry backoff — so patching ``S._fetch``
+    doesn't reach them.
+    """
+    monkeypatch.setattr(S._MCS_INDEX_FETCHER, "_fetch", fetch)
+
+
 def _letter_fetch(monkeypatch, fixture: Path, *, broken: dict):
     """Serve ``fixture`` for every letter page except the ones in
     ``broken``, which map a letter to either an exception to raise or a
@@ -432,7 +443,7 @@ def _letter_fetch(monkeypatch, fixture: Path, *, broken: dict):
                 return outcome
         return _read(fixture)
 
-    monkeypatch.setattr(S, "_fetch", fake_fetch)
+    _patch_index_fetch(monkeypatch, fake_fetch)
 
 
 def test_mcstories_index_reports_a_letter_it_could_not_fetch(monkeypatch):
@@ -484,7 +495,7 @@ def test_mcstories_index_retries_only_the_failed_letter(monkeypatch):
         fetched.append(url)
         return _read(EROTICA / "mcstories_titles.html")
 
-    monkeypatch.setattr(S, "_fetch", counting_fetch)
+    _patch_index_fetch(monkeypatch, counting_fetch)
     base = S.time.time()
     monkeypatch.setattr(
         S.time, "time",
@@ -499,17 +510,76 @@ def test_mcstories_index_retries_only_the_failed_letter(monkeypatch):
 
 def test_mcstories_complete_index_is_not_refetched_within_its_ttl(monkeypatch):
     monkeypatch.setattr(S, "_mcs_title_index", {})
-    _patch_fetch(monkeypatch, EROTICA / "mcstories_titles.html")
+    _letter_fetch(monkeypatch, EROTICA / "mcstories_titles.html", broken={})
     assert S._mcs_title_index_state()[1] == []
 
     calls: list[str] = []
-    monkeypatch.setattr(
-        S, "_fetch", lambda url: (calls.append(url), "")[1],
-    )
+    _patch_index_fetch(monkeypatch, lambda url: (calls.append(url), "")[1])
     rows, missing = S._mcs_title_index_state()
     assert calls == [], "a warm complete index must not re-crawl"
     assert missing == []
     assert rows
+
+
+def test_mcstories_letter_retry_backs_off_while_it_keeps_failing(monkeypatch):
+    # A site that is rate-limiting or serving a challenge fails all 26
+    # letters, so a flat retry window meant every search a minute apart
+    # re-crawled the whole alphabet. Consecutive failures have to widen
+    # the window instead, up to the normal TTL.
+    monkeypatch.setattr(S, "_mcs_title_index", {})
+    attempts: list[str] = []
+
+    def always_fails(url):
+        attempts.append(url)
+        raise S.SearchFetchError("boom")
+
+    _patch_index_fetch(monkeypatch, always_fails)
+    clock = S.time.time()
+    monkeypatch.setattr(S.time, "time", lambda: clock)
+
+    assert S._mcs_title_index_state()[1] == list(S._MCS_TITLE_LETTERS)
+    assert len(attempts) == 26
+    assert S._mcs_title_index["A"]["ttl"] == S._MCS_PARTIAL_INDEX_RETRY_S
+
+    # One retry window later: a second attempt, and the window doubles.
+    attempts.clear()
+    clock += S._MCS_PARTIAL_INDEX_RETRY_S + 1
+    S._mcs_title_index_state()
+    assert len(attempts) == 26
+    assert S._mcs_title_index["A"]["ttl"] == S._MCS_PARTIAL_INDEX_RETRY_S * 2
+
+    # ...and that wider window is respected: the same elapsed time no
+    # longer triggers a crawl.
+    attempts.clear()
+    clock += S._MCS_PARTIAL_INDEX_RETRY_S + 1
+    S._mcs_title_index_state()
+    assert attempts == [], "a backed-off letter must not be retried yet"
+
+
+def test_mcstories_letter_backoff_is_capped_and_reset_by_a_success(monkeypatch):
+    monkeypatch.setattr(S, "_mcs_title_index", {})
+    # Far more consecutive failures than the ladder needs to saturate.
+    S._mcs_title_index["A"] = {
+        "rows": [], "built_at": 0.0, "ttl": 1.0, "failures": 40,
+    }
+    _letter_fetch(
+        monkeypatch, EROTICA / "mcstories_titles.html",
+        broken={"A": S.SearchFetchError("boom")},
+    )
+    S._mcs_title_index_state()
+    assert S._mcs_title_index["A"]["ttl"] == S._MCS_TITLE_INDEX_TTL_S, (
+        "the backoff must not grow past the normal refresh interval"
+    )
+
+    # A letter that comes back drops straight to the normal TTL rather
+    # than staying on the ladder.
+    monkeypatch.setattr(S, "_mcs_title_index", {
+        "A": {"rows": [], "built_at": 0.0, "ttl": 1.0, "failures": 5},
+    })
+    _letter_fetch(monkeypatch, EROTICA / "mcstories_titles.html", broken={})
+    S._mcs_title_index_state()
+    assert S._mcs_title_index["A"]["failures"] == 0
+    assert S._mcs_title_index["A"]["ttl"] == S._MCS_TITLE_INDEX_TTL_S
 
 
 def test_mcstories_partial_note_reaches_the_fan_out_site_stats(monkeypatch):

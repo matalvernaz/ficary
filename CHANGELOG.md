@@ -1,5 +1,36 @@
 # Changelog
 
+## 2.18.1 — 2026-08-02
+
+**MCStories searches are quick again**
+
+* The full-text index added in 2.18.0 is gone, along with Search →
+  Build MCStories Full-Text Index and `--mcstories-index`. Keyword
+  search is back to matching titles, authors, tag codes and synopses.
+  It finds less, and it finds it immediately. If a build was ever
+  started, the index file it left behind can be deleted — it is
+  `mcstories-fulltext.sqlite3` in ficary's cache folder, and it may be
+  several hundred megabytes.
+* A letter page that failed to load was retried a minute later, and
+  every minute after that. When the site is throttling, all 26 pages
+  fail together, so each search re-crawled the whole alphabet — and
+  each failed page sat through a 30-second and then a 60-second retry
+  before giving up, which is where the minutes went. Retries now widen
+  after each consecutive failure, from a minute out to the normal
+  six-hour refresh, and a page that comes back resets it.
+* The letter pages also no longer wait through those retries at all,
+  and no longer slow the other sites in a search when MCStories is
+  throttling them. One attempt each; anything that fails is picked up
+  by the retry above.
+
+**Updating a file no longer moves your downloads**
+
+* Choosing a file to update pointed the Save-to box at that file's
+  folder, and Save-to is remembered between runs — so updating one
+  file in a scratch folder quietly sent every later download there.
+  Updates still rewrite the file where it lives; they just don't
+  change the setting any more.
+
 ## 2.18.0 — 2026-07-26
 
 **MCStories keyword search can read the stories**
