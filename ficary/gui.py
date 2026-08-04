@@ -302,6 +302,86 @@ def _show_update_dialog(
     }.get(result, "later")
 
 
+class _UpdateProgressDialog(wx.Dialog):
+    """Self-update progress: a gauge, a byte-count line, a spoken phase line, Cancel.
+
+    Deliberately not ``wx.ProgressDialog``. On MSW that is a native task dialog on
+    its own thread, so the app owns none of its children and there is no control to
+    hang an accessible name-change off. That left the entire verify-extract-swap
+    phase unannounced: the dialog sat reading "Downloaded 47 / 47 MB" and looked
+    finished for as long as the install took. Owning the dialog also keeps teardown
+    on the main thread, clear of the screen-reader COM races that tearing down a
+    native task dialog mid-announcement provokes.
+
+    Three channels, each carrying only what the others can't:
+
+    ``_gauge`` carries how far along, and is never narrated here. It is a native
+    ``msctls_progress32`` reporting ``ROLE_SYSTEM_PROGRESSBAR``, which NVDA already
+    tracks -- beeping every 1% by default, or speaking every 10% if the user chose
+    speech. Speaking our own percentage duplicates a channel the user has already
+    tuned, is coarser than the default, and overrides a deliberate "progress bar
+    output: off".
+
+    ``_detail`` carries byte counts, for the eyes only. ``SetLabel`` without
+    ``SetName`` is silent to a screen reader (see :func:`_announce_label`), which is
+    what a figure changing ten times a second should be.
+
+    ``_phase`` carries which phase, and is the only line announced. No
+    accessibility API distinguishes "downloading" from "installing" when the bar
+    reads 100% for both.
+    """
+
+    # Wide enough that neither status string needs the dialog to resize mid-download,
+    # which would shift focus under the user.
+    _WIDTH = 460
+
+    def __init__(self, parent: wx.Window, tag: str, cancelled) -> None:
+        super().__init__(parent, title="Downloading update")
+        self._cancelled = cancelled
+        self._install_announced = False  # one-shot, after the last progress callback
+
+        sizer = wx.BoxSizer(wx.VERTICAL)
+        self._phase = wx.StaticText(self, label=f"Downloading {tag}...")
+        sizer.Add(self._phase, 0, wx.EXPAND | wx.ALL, 8)
+        self._gauge = wx.Gauge(self, range=100, size=(self._WIDTH, -1))
+        sizer.Add(self._gauge, 0, wx.EXPAND | wx.ALL, 8)
+        self._detail = wx.StaticText(self, label="")
+        sizer.Add(self._detail, 0, wx.EXPAND | wx.ALL, 8)
+        self._cancel_btn = wx.Button(self, wx.ID_CANCEL, "&Cancel")
+        self._cancel_btn.Bind(wx.EVT_BUTTON, self._on_cancel)
+        sizer.Add(self._cancel_btn, 0, wx.ALL, 8)
+        self.Bind(wx.EVT_CLOSE, self._on_cancel)
+        self.SetSizerAndFit(sizer)
+
+    def pump(self, done: int, total: int) -> None:  # main thread, via wx.CallAfter
+        """Reflect download progress; total is 0 when no size was advertised."""
+        if total <= 0:
+            self._gauge.Pulse()
+            return
+        pct = min(100, int(done * 100 / total))
+        self._gauge.SetValue(pct)
+        self._detail.SetLabel(
+            f"Downloaded {done / 1024 / 1024:.0f} / {total / 1024 / 1024:.0f} MB"
+        )
+        if pct >= 100 and not self._install_announced:
+            self._install_announced = True
+            _announce_label(self._phase, "Download finished. Installing the update.")
+
+    def _on_cancel(self, event) -> None:
+        if isinstance(event, wx.CloseEvent) and event.CanVeto():
+            event.Veto()  # the frame destroys us once the worker unwinds; don't die early
+        if self._cancelled.is_set():
+            return
+        self._cancelled.set()
+        self._cancel_btn.Disable()
+        # Cancellation is checked at the next progress callback, so it isn't instant --
+        # and once the download finishes it stops taking effect at all. Say so rather
+        # than leaving a pressed button with no feedback.
+        _announce_label(
+            self._phase, "Cancelling. This takes effect at the next download step."
+        )
+
+
 class MainFrame(wx.Frame):
     def __init__(self):
         from . import __version__
@@ -349,6 +429,7 @@ class MainFrame(wx.Frame):
         self._library_frame = None
         self._browser_frame = None
         self._reader_frame = None
+        self._update_dialog = None  # live only while a self-update downloads
         # Per-session record of fandom-subfolder create decisions:
         # fandom-folder name → True (create) / False (don't create).
         # Re-asked every launch so the user stays in control if they
@@ -2043,45 +2124,29 @@ class MainFrame(wx.Frame):
         except Exception:
             pass
 
-        progress = wx.ProgressDialog(
-            "Downloading update",
-            f"Downloading {info['tag']}...",
-            maximum=100,
-            parent=self,
-            style=(
-                wx.PD_APP_MODAL | wx.PD_CAN_ABORT
-                | wx.PD_ELAPSED_TIME | wx.PD_REMAINING_TIME
-            ),
-        )
         cancel_event = threading.Event()
+        self._update_dialog = _UpdateProgressDialog(self, info["tag"], cancel_event)
+        # Owner-disabled rather than PD_APP_MODAL: the frame accepts no input while the
+        # dialog is up, without wx.ProgressDialog's separate-thread native machinery.
+        self.Disable()
+        self._update_dialog.Show()
+
         # progress_cb runs on the worker thread, but wxPython widgets are
-        # not thread-safe — calling progress.Update() directly from the
-        # worker deadlocks the main event loop (freeze). Marshal display
-        # updates through wx.CallAfter and read the cancel state via a
-        # threading.Event that the main thread sets when the user clicks
-        # Abort. Throttle to ~10 Hz so we don't flood the main thread.
+        # not thread-safe — touching one from the worker deadlocks the main
+        # event loop (freeze). Marshal display updates through wx.CallAfter,
+        # and pass cancellation back the other way through a threading.Event
+        # the Cancel button sets on the main thread. Throttle to ~10 Hz so we
+        # don't flood the main thread.
         last_call = [0.0]
 
-        def _apply_update(done, total):
-            if cancel_event.is_set():
-                return
-            if total <= 0:
-                return
-            pct = min(100, int(done * 100 / total))
-            done_mb = done / 1024 / 1024
-            total_mb = total / 1024 / 1024
-            kept_going, _ = progress.Update(
-                pct, f"Downloaded {done_mb:.0f} / {total_mb:.0f} MB"
-            )
-            if not kept_going:
-                cancel_event.set()
+        def _pump(done, total):  # main thread
+            if self._update_dialog is not None:  # a queued pump can outlive Destroy()
+                self._update_dialog.pump(done, total)
 
-        def progress_cb(done, total):
-            # cancel_event is set by _apply_update on the main thread
-            # (ProgressDialog.Update returns False after Abort). The old
-            # direct progress.WasCancelled() read from this worker was a
-            # cross-thread widget access; dropping it costs at most one
-            # 0.1 s throttle window of Abort latency.
+        def progress_cb(done, total):  # worker thread
+            # Raising aborts the download; download_and_replace cleans up and
+            # re-raises, so worker() routes it to _update_failed. Cancellation
+            # therefore lands within one throttle window, not instantly.
             if cancel_event.is_set():
                 raise RuntimeError("Update cancelled by user.")
             now = time.monotonic()
@@ -2089,20 +2154,31 @@ class MainFrame(wx.Frame):
             if done < total and now - last_call[0] < 0.1:
                 return
             last_call[0] = now
-            wx.CallAfter(_apply_update, done, total)
+            wx.CallAfter(_pump, done, total)
 
         def worker():
             try:
                 self_update.download_and_replace(info, progress_cb=progress_cb)
             except Exception as exc:
-                wx.CallAfter(self._update_failed, progress, exc)
+                wx.CallAfter(self._update_failed, exc)
                 return
-            wx.CallAfter(self._update_succeeded, progress, info["tag"])
+            wx.CallAfter(self._update_succeeded, info["tag"])
 
         threading.Thread(target=worker, daemon=True).start()
 
-    def _update_failed(self, progress, exc):
-        progress.Destroy()
+    def _close_update_dialog(self) -> None:
+        """Re-enable the frame, then drop the progress dialog.
+
+        Order matters: destroying the focused window while its owner is still
+        disabled makes Windows hand focus to another application entirely.
+        """
+        self.Enable()
+        if self._update_dialog is not None:
+            self._update_dialog.Destroy()
+            self._update_dialog = None
+
+    def _update_failed(self, exc):
+        self._close_update_dialog()
         wx.MessageBox(
             f"Update failed: {exc}\n\nYour current version is unchanged.",
             "Update Error",
@@ -2110,8 +2186,8 @@ class MainFrame(wx.Frame):
             parent=self,
         )
 
-    def _update_succeeded(self, progress, tag):
-        progress.Destroy()
+    def _update_succeeded(self, tag):
+        self._close_update_dialog()
         # _perform_update refused to start while work was active, but
         # work can START during the download (the clipboard-watch timer
         # keeps firing under the modal). sys.exit(0) below bypasses

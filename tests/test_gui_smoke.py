@@ -678,3 +678,86 @@ def test_add_from_url_list_dialog_constructs(wx_app):
             dlg.Destroy()
     finally:
         frame.Destroy()
+
+
+def test_update_progress_dialog_channels(wx_app):
+    """The self-update dialog's three channels must stay separated.
+
+    The gauge carries the percentage (NVDA reports a native progress bar
+    itself), the byte counts are visual-only, and the phase line is the
+    one thing announced. Regressions here are silent in production: the
+    app still works, blind users just stop being told what phase it's in
+    — or start being told the percentage twice.
+    """
+    import threading
+
+    from ficary.gui import MainFrame, _UpdateProgressDialog
+
+    frame = MainFrame()
+    try:
+        cancelled = threading.Event()
+        dlg = _UpdateProgressDialog(frame, "v9.9.9", cancelled)
+        try:
+            assert "v9.9.9" in dlg._phase.GetLabel()
+            opening_phase = dlg._phase.GetLabel()
+
+            dlg.pump(52_428_800, 104_857_600)  # 50 MB of 100
+            assert dlg._gauge.GetValue() == 50
+            # Byte counts land on the visible label...
+            assert dlg._detail.GetLabel() == "Downloaded 50 / 100 MB"
+            # ...and must NOT reach the accessible name, or NVDA reads a
+            # figure that changes ten times a second.
+            assert "50" not in dlg._detail.GetName()
+            # Mid-download, nothing is announced at all: the gauge is the
+            # progress channel and the phase hasn't changed.
+            assert dlg._phase.GetLabel() == opening_phase
+
+            dlg.pump(104_857_600, 104_857_600)
+            assert dlg._gauge.GetValue() == 100
+            # The install phase is both shown and announced -- _announce_label
+            # mirrors the text into the accessible name, which is what NVDA reads.
+            assert dlg._phase.GetLabel() == "Download finished. Installing the update."
+            assert dlg._phase.GetName() == dlg._phase.GetLabel()
+
+            # One-shot: extraction sends no further callbacks, but a repeated
+            # final pump must not re-announce.
+            dlg.pump(104_857_600, 104_857_600)
+            assert dlg._install_announced is True
+
+            # Neither status string may force the dialog wider, which would
+            # move the window under a user mid-download.
+            assert dlg._phase.GetBestSize().width <= dlg._WIDTH
+            assert dlg._detail.GetBestSize().width <= dlg._WIDTH
+        finally:
+            dlg.Destroy()
+    finally:
+        frame.Destroy()
+
+
+def test_update_progress_dialog_unknown_size_and_cancel(wx_app):
+    """No advertised size falls back to an indeterminate gauge, and Cancel
+    reports itself rather than leaving a dead button."""
+    import threading
+
+    import wx
+
+    from ficary.gui import MainFrame, _UpdateProgressDialog
+
+    frame = MainFrame()
+    try:
+        cancelled = threading.Event()
+        dlg = _UpdateProgressDialog(frame, "v9.9.9", cancelled)
+        try:
+            dlg.pump(1234, 0)  # no Content-Length: Pulse(), and no divide by zero
+            assert not dlg._install_announced
+
+            dlg._on_cancel(wx.CommandEvent(wx.EVT_BUTTON.typeId))
+            assert cancelled.is_set()
+            assert not dlg._cancel_btn.IsEnabled()
+            # Announced, not just displayed -- a disabled button is invisible
+            # to someone who can't see it grey out.
+            assert "Cancelling" in dlg._phase.GetName()
+        finally:
+            dlg.Destroy()
+    finally:
+        frame.Destroy()

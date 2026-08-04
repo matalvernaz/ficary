@@ -1,5 +1,23 @@
 # Changelog
 
+## 2.18.2 — 2026-08-03
+
+**The update download says what it's doing**
+
+* Installing an update used to go quiet at the end. The progress window
+  reached "Downloaded 47 / 47 MB" and stayed there for the whole verify,
+  extract and swap, which looks identical to being finished. It now says
+  "Download finished. Installing the update." when the download ends, and
+  a screen reader announces it.
+* The download percentage is no longer read out. A screen reader already
+  reports a progress bar in whatever way it has been set to — a beep per
+  percent, spoken steps, or nothing at all — so the percentage was being
+  announced twice, at a coarser interval than the reader's own, and to
+  people who had turned progress reporting off on purpose. The bar still
+  reports itself; the byte counts stay on screen.
+* Cancel now says that it has been pressed and that it takes effect at the
+  next download step, instead of only greying itself out.
+
 ## 2.18.1 — 2026-08-02
 
 **MCStories searches are quick again**
