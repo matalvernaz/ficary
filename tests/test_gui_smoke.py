@@ -761,3 +761,77 @@ def test_update_progress_dialog_unknown_size_and_cancel(wx_app):
             dlg.Destroy()
     finally:
         frame.Destroy()
+
+
+class _MemoryPrefs:
+    """Dict-backed stand-in for ``prefs.Prefs`` so preference tests
+    don't read or write the user's real wx.Config store."""
+
+    def __init__(self, initial=None):
+        self._values = dict(initial or {})
+
+    def get(self, key, default=None):
+        from ficary.prefs import DEFAULTS
+
+        val = self._values.get(key)
+        if val:
+            return val
+        return default if default is not None else DEFAULTS.get(key)
+
+    def set(self, key, value):
+        self._values[key] = "" if value is None else str(value)
+
+    def get_bool(self, key, default=None):
+        from ficary.prefs import DEFAULTS
+
+        if key in self._values:
+            return bool(self._values[key])
+        return DEFAULTS.get(key, False) if default is None else default
+
+    def set_bool(self, key, value):
+        self._values[key] = bool(value)
+
+    def flush(self):
+        pass
+
+
+def test_preferences_ok_keeps_live_save_to_folder(wx_app, monkeypatch):
+    """Opening Preferences and clicking OK must not revert the Save-to
+    folder to whatever was persisted at last app close.
+
+    The dialog seeds its "Default output folder" field from the
+    ``output_dir`` pref, but the main form only persists that pref on
+    app close -- so a Save-to folder set this session was invisible to
+    the dialog, got written back stale on OK, and ``apply_preferences``
+    then pushed the stale value into the live form. Changing an
+    unrelated setting (the log folder, say) silently moved every
+    subsequent download out of the library root, which disables the
+    library's fandom auto-sort entirely.
+    """
+    import wx
+
+    from ficary import preferences, prefs as _p
+    from ficary.gui import MainFrame
+
+    frame = MainFrame()
+    try:
+        frame.prefs = _MemoryPrefs({_p.KEY_OUTPUT_DIR: "/old/staging"})
+        frame.output_ctrl.SetValue("/library/root")
+
+        captured = {}
+
+        def fake_show_modal(self):
+            captured["seeded"] = self.output_dir_ctrl.GetValue()
+            self._save()  # what wx.ID_OK does via _on_ok
+            return wx.ID_OK
+
+        monkeypatch.setattr(
+            preferences.PreferencesDialog, "ShowModal", fake_show_modal,
+        )
+        frame._on_preferences_menu(None)
+
+        assert captured["seeded"] == "/library/root"
+        assert frame.output_ctrl.GetValue() == "/library/root"
+        assert frame.prefs.get(_p.KEY_OUTPUT_DIR) == "/library/root"
+    finally:
+        frame.Destroy()

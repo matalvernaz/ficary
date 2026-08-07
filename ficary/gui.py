@@ -3975,6 +3975,14 @@ class MainFrame(wx.Frame):
     def _on_preferences_menu(self, event):
         from .preferences import PreferencesDialog
 
+        # The dialog seeds its copies of the download-form fields
+        # (Save-to folder, filename template, format, log level, ...)
+        # from prefs, but the form only persists those on app close.
+        # Without this snapshot the dialog loads last session's values
+        # and writes them back on OK — apply_preferences() then pushes
+        # them into the live form, silently reverting a Save-to folder
+        # the user set this session.
+        self._save_prefs()
         dlg = PreferencesDialog(self, self.prefs, main_frame=self)
         try:
             dlg.ShowModal()

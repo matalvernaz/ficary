@@ -1,5 +1,20 @@
 # Changelog
 
+## 2.18.3 — 2026-08-07
+
+**Preferences no longer resets the save folder**
+
+* Changing any setting in Preferences could silently move the Save-to
+  folder back to whatever it was when the app last closed. Picking a new
+  save folder on the main window and then visiting Preferences for an
+  unrelated reason — the log folder, the log level — was enough to undo
+  it, and downloads went to the old folder from then on. Preferences now
+  reads the folder currently in the form.
+* The knock-on effect was worse than the wrong folder: fandom auto-sort
+  only runs when the save folder is inside the library, so a reverted
+  folder outside it meant downloads stopped being filed into the library
+  at all.
+
 ## 2.18.2 — 2026-08-03
 
 **The update download says what it's doing**
