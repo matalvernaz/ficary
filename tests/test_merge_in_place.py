@@ -421,3 +421,89 @@ def test_download_one_update_keeps_original_filename_even_when_template_differs(
     assert update_path.exists()
     siblings = sorted(p.name for p in tmp_path.iterdir() if p.is_file())
     assert siblings == ["My Custom Name.html"]
+
+
+class TestUpdateSkipsLLMOnExistingChapters:
+    """An update merges the existing file's chapters with the new ones
+    and re-exports the whole story. Chapters read back off disk must not
+    be sent to the LLM author's-note classifier again.
+
+    The disk cache can't absorb the re-runs: it keys on the chapter's
+    pre-strip paragraph text, so a chapter read back from an export
+    (post-strip) never matches its own cached entry. The result was one
+    LLM call per existing chapter on every single update, scaling with
+    story length, each one confirming the notes a previous run already
+    removed.
+    """
+
+    LLM = {"provider": "openai", "endpoint": "", "model": "test-model"}
+
+    @staticmethod
+    def _body(n: int) -> str:
+        paras = "".join(
+            f"<p>Chapter body sentence {i} for part {n}.</p>" for i in range(1, 7)
+        )
+        return paras + "<p>Thanks for reading, please review!</p>"
+
+    @pytest.fixture
+    def calls(self, monkeypatch, tmp_path):
+        """Record classifier invocations and keep the on-disk A/N cache
+        inside tmp_path so a previous run can't mask a regression."""
+        from ficary import attribution, exporters
+
+        seen: list[list[str]] = []
+
+        def fake_classify(paragraphs, *, llm_config=None, **kwargs):
+            seen.append(list(paragraphs))
+            return {
+                i for i, p in enumerate(paragraphs)
+                if p.startswith("Thanks for reading")
+            }
+
+        monkeypatch.setattr(
+            attribution, "classify_authors_notes_via_llm", fake_classify,
+        )
+        monkeypatch.setattr(
+            exporters, "_llm_an_cache_path",
+            lambda site_name, story_id: tmp_path / f"an_{story_id}.json",
+        )
+        return seen
+
+    def test_existing_chapters_are_not_reclassified(self, tmp_path, calls):
+        from ficary.updater import read_chapters
+
+        existing = _story("https://x", chapters=[
+            Chapter(number=n, title=f"Ch {n}", html=self._body(n))
+            for n in (1, 2, 3)
+        ])
+        path = export_epub(
+            existing, str(tmp_path), strip_notes=True, llm_config=self.LLM,
+        )
+        assert len(calls) == 3, "each new chapter is classified once"
+
+        from_disk = read_chapters(Path(path))
+        assert all(c.from_existing_file for c in from_disk)
+
+        calls.clear()
+        merged = _story("https://x", chapters=from_disk + [
+            Chapter(number=4, title="Ch 4", html=self._body(4)),
+        ])
+        export_epub(
+            merged, str(tmp_path), strip_notes=True, llm_config=self.LLM,
+        )
+        assert len(calls) == 1, (
+            "only the newly-downloaded chapter goes to the LLM; "
+            f"got {len(calls)} calls"
+        )
+
+    def test_freshly_downloaded_chapters_still_go_to_the_llm(
+        self, tmp_path, calls,
+    ):
+        """The skip keys off file provenance, not off being an update --
+        a chapter that came from the site is classified as normal."""
+        story = _story("https://x", chapters=[
+            Chapter(number=n, title=f"Ch {n}", html=self._body(n))
+            for n in (1, 2)
+        ])
+        export_epub(story, str(tmp_path), strip_notes=True, llm_config=self.LLM)
+        assert len(calls) == 2

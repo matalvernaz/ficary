@@ -1,5 +1,27 @@
 # Changelog
 
+## 2.18.4 — 2026-08-07
+
+**Updating a story only runs the LLM over the new chapters**
+
+* Updating a file re-ran the LLM author's-note pass over every chapter
+  already in it, not just the ones the update fetched. On a story with
+  forty chapters that was forty classifications to add one, each of them
+  re-confirming notes an earlier run had already removed. There is a
+  cache meant to prevent this, but it could never hit: it is keyed on a
+  chapter's text before notes are stripped, and a chapter read back out
+  of an existing file is the version after. Chapters that come from the
+  file on disk now skip the LLM entirely.
+* The quick pattern-based pass still runs on those chapters, so a file
+  imported from FanFicFare or FicHub still gets its obvious "A/N:"
+  blocks cleaned up the first time ficary updates it.
+* Tightened what counts as a chapter banner when deciding where a
+  chapter's front matter ends. A paragraph opening "Chapter four had
+  been the worst of them, she thought." was being read as a banner and
+  dropped along with everything above it. It now has to look like a
+  title — short, and leading with the chapter marker — rather than
+  merely mention one.
+
 ## 2.18.3 — 2026-08-07
 
 **Preferences no longer resets the save folder**

@@ -9,6 +9,12 @@ class Chapter:
     number: int
     title: str
     html: str
+    # Read back out of an existing export rather than fetched from the
+    # site. Its HTML has already been through the export pipeline, so
+    # the expensive LLM author's-note pass would only re-confirm what a
+    # previous run already stripped — and it can't even do that from
+    # cache, since the cache is keyed on the pre-strip paragraph text.
+    from_existing_file: bool = False
 
 
 @dataclass

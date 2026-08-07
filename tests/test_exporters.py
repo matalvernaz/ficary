@@ -312,6 +312,54 @@ class TestChapterHeaderCutoff:
         assert "chapter five of his life" in out
         assert "He sighed" in out
 
+    def test_does_not_strip_prose_sentence_opening_with_chapter_word(self):
+        """A paragraph that *starts* "Chapter four had been..." is a
+        sentence, not a banner. The length cap alone let it through at
+        53 chars; the word-count gate is what rejects it.
+
+        This matters most on the update path, which re-runs this pass
+        over chapters read back from the existing file. A predicate that
+        matches prose strips one paragraph per update, walking down the
+        chapter a line at a time.
+        """
+        html = (
+            "<p>Chapter four had been the worst of them, she thought.</p>"
+            "<p>She set the book down on the table.</p>"
+            "<p>Outside, the rain had not let up.</p>"
+            "<p>She counted to ten and started again.</p>"
+        )
+        out = self._strip(html)
+        assert "Chapter four had been the worst" in out
+        assert "She set the book down" in out
+
+    def test_does_not_strip_prose_mentioning_chapter_mid_sentence(self):
+        """Marker-offset gate: the banner regex has to match at the
+        start of the paragraph, not 23 characters into a sentence."""
+        html = (
+            "<p>She turned the page to chapter four and sighed.</p>"
+            "<p>The kettle had gone cold again.</p>"
+            "<p>He knocked twice and waited.</p>"
+            "<p>Nobody came to the door.</p>"
+        )
+        out = self._strip(html)
+        assert "She turned the page to chapter four" in out
+
+    def test_still_strips_decorated_banner(self):
+        """The tightening must not cost us the shapes that made the
+        pass worth having: leading decoration and a title suffix."""
+        html = (
+            "<p>I own nothing.</p>"
+            "<p>* Chapter Twenty-Three: The Long Road Home *</p>"
+            "<p>The gate stood open.</p>"
+            "<p>She walked through it.</p>"
+            "<p>The road went on.</p>"
+            "<p>It did not end.</p>"
+        )
+        out = self._strip(html)
+        assert "I own nothing" not in out
+        assert "Long Road Home" not in out
+        assert "The gate stood open" in out
+
     def test_does_not_strip_when_banner_in_bottom_half(self):
         # Hypothetical: a paragraph reading "Chapter 1" appears in
         # the bottom half (e.g. a flashback's title). Top-half gate

@@ -285,6 +285,25 @@ def html_to_text(html: str) -> str:
 # ── Exporters ─────────────────────────────────────────────────────
 
 
+def _llm_config_for(llm_config: dict | None, chapter) -> dict | None:
+    """Suppress the LLM A/N pass for chapters read back off disk.
+
+    An update merges the existing file's chapters with the newly
+    fetched ones and re-exports the lot, so without this every old
+    chapter is classified again on every update. The disk cache can't
+    absorb that: it keys on the chapter's pre-strip paragraph text, and
+    a chapter read back from an export is post-strip, so the key never
+    matches. The classification is also pointless — the notes it would
+    look for were removed by the run that wrote the file.
+
+    The regex pass still runs, which is what strips notes out of a
+    foreign (FanFicFare / FicHub) file's chapters on first update.
+    """
+    if getattr(chapter, "from_existing_file", False):
+        return None
+    return llm_config
+
+
 def _prepare_chapter_html(
     html: str,
     hr_as_stars: bool,
@@ -511,7 +530,7 @@ def export_txt(
             _prepare_chapter_html_with_llm_fallback(
                 ch.html, hr_as_stars=False, strip_notes=strip_notes,
                 chapter_notes=chapter_notes,
-                llm_config=llm_config,
+                llm_config=_llm_config_for(llm_config, ch),
                 site_name=site_name, story_id=story.id,
                 chapter_number=ch.number, progress=progress,
                 consecutive_timeouts=consecutive_timeouts,
@@ -665,7 +684,7 @@ def export_html(
                 ch.html, hr_as_stars, strip_notes,
                 chapter_notes=chapter_notes,
                 ornament_tokens=ornament_tokens,
-                llm_config=llm_config,
+                llm_config=_llm_config_for(llm_config, ch),
                 site_name=site_name,
                 story_id=story.id,
                 chapter_number=ch.number,
@@ -1320,21 +1339,39 @@ _CHAPTER_HEADER_RE = re.compile(
 # patience", "she ran into Chapter House") from triggering a strip.
 _CHAPTER_HEADER_MAX_LEN = 100
 _END_MARKER_MAX_LEN = 60
+# A banner leads with its marker, give or take decoration: "-Chapter
+# One:", "* Prologue *", "~ Chapter 5 ~". Prose that happens to mention
+# a chapter reaches the marker later in the sentence.
+_CHAPTER_HEADER_MAX_MARKER_OFFSET = 4
+# Banners are titles, not sentences. "Chapter Twenty-Three: The Long
+# Road Home" is six words; a sentence opening "Chapter four had been
+# the worst of them, she thought." is ten.
+_CHAPTER_HEADER_MAX_WORDS = 8
 
 
 def _is_chapter_header_paragraph(text: str) -> bool:
     """``True`` when the paragraph's whole text is a chapter banner.
 
-    Two corroborating signals are required: the paragraph matches
-    the chapter-header regex AND it's short enough to be standalone
-    (story prose containing the words ``chapter five`` is much
-    longer than a banner). False positives here strip real prose, so
-    the gate is intentionally conservative.
+    Corroborating signals, all required: the chapter-header regex
+    matches, the match starts the paragraph rather than sitting mid-
+    sentence, the text is title-length in words, and it's short enough
+    overall to be standalone.
+
+    False positives here strip real prose, so the gate is intentionally
+    conservative — and doubly so since the update path re-runs this over
+    chapters read back from an existing file. A predicate that matches
+    prose doesn't just strip a paragraph once; it strips the next one on
+    every subsequent update, walking down the chapter.
     """
     s = (text or "").strip()
     if not s or len(s) > _CHAPTER_HEADER_MAX_LEN:
         return False
-    return bool(_CHAPTER_HEADER_RE.search(s))
+    if len(s.split()) > _CHAPTER_HEADER_MAX_WORDS:
+        return False
+    match = _CHAPTER_HEADER_RE.search(s)
+    if match is None:
+        return False
+    return match.start() <= _CHAPTER_HEADER_MAX_MARKER_OFFSET
 
 
 def _is_end_marker_paragraph(text: str) -> bool:
@@ -2399,7 +2436,7 @@ def export_epub(
                 ch.html, hr_as_stars, strip_notes,
                 chapter_notes=chapter_notes,
                 ornament_tokens=ornament_tokens,
-                llm_config=llm_config,
+                llm_config=_llm_config_for(llm_config, ch),
                 site_name=site_prefix,
                 story_id=story.id,
                 chapter_number=ch.number,

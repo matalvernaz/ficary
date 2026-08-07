@@ -1056,7 +1056,10 @@ def _entries_to_chapters(
             title = parse_chapter_heading(
                 number, heading, display_n=display_ns[number],
             )
-        chapters.append(Chapter(number=number, title=title, html=body_html))
+        chapters.append(Chapter(
+            number=number, title=title, html=body_html,
+            from_existing_file=True,
+        ))
     return chapters
 
 
