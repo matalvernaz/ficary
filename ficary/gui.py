@@ -1574,16 +1574,14 @@ class MainFrame(wx.Frame):
             if fmt in formats:
                 self.format_ctrl.SetSelection(formats.index(fmt))
 
-        out = self.prefs.get(_p.KEY_OUTPUT_DIR)
-        if out:
-            self.output_ctrl.SetValue(out)
-        else:
-            # No explicit save location stored yet — if the user has a
-            # configured library, default to its root so fandom-folder
-            # auto-routing kicks in immediately on the first download.
-            library_root = (self.prefs.get(_p.KEY_LIBRARY_PATH, "") or "").strip()
-            if library_root:
-                self.output_ctrl.SetValue(library_root)
+        # Save-to always starts at the library root so fandom-folder
+        # auto-routing applies by default. Pointing it elsewhere is a
+        # per-download staging override and is deliberately not
+        # persisted — a stored folder outside the library root silently
+        # disabled auto-sort for every later download.
+        library_root = (self.prefs.get(_p.KEY_LIBRARY_PATH, "") or "").strip()
+        if library_root:
+            self.output_ctrl.SetValue(library_root)
 
         self.hr_stars_ctrl.SetValue(self.prefs.get_bool(_p.KEY_HR_AS_STARS))
         self.strip_notes_ctrl.SetValue(self.prefs.get_bool(_p.KEY_STRIP_NOTES))
@@ -1644,7 +1642,9 @@ class MainFrame(wx.Frame):
             _p.KEY_FORMAT,
             self.format_ctrl.GetString(self.format_ctrl.GetSelection()),
         )
-        self.prefs.set(_p.KEY_OUTPUT_DIR, self.output_ctrl.GetValue())
+        # Save-to is intentionally absent: it's a per-download override
+        # and persisting it lets it outlive the download it was meant
+        # for, outranking the library root on every launch after.
         self.prefs.set_bool(_p.KEY_HR_AS_STARS, self.hr_stars_ctrl.GetValue())
         self.prefs.set_bool(_p.KEY_STRIP_NOTES, self.strip_notes_ctrl.GetValue())
         self.prefs.set_bool(
@@ -2311,7 +2311,6 @@ class MainFrame(wx.Frame):
             chosen = dlg.GetPath()
 
         self.prefs.set(_p.KEY_LIBRARY_PATH, chosen)
-        self.prefs.set(_p.KEY_OUTPUT_DIR, chosen)
         self.output_ctrl.SetValue(chosen)
         self._log(f"Library folder set: {chosen}")
         return True
@@ -3194,7 +3193,6 @@ class MainFrame(wx.Frame):
         if choice == wx.YES:
             self.prefs.set(_p.KEY_LIBRARY_PATH, best_root)
             self.output_ctrl.SetValue(best_root)
-            self.prefs.set(_p.KEY_OUTPUT_DIR, best_root)
             self._log(f"Library root set: {best_root}")
 
     def _export_story(self, story, params: _DownloadParams):
@@ -3976,12 +3974,11 @@ class MainFrame(wx.Frame):
         from .preferences import PreferencesDialog
 
         # The dialog seeds its copies of the download-form fields
-        # (Save-to folder, filename template, format, log level, ...)
-        # from prefs, but the form only persists those on app close.
-        # Without this snapshot the dialog loads last session's values
-        # and writes them back on OK — apply_preferences() then pushes
-        # them into the live form, silently reverting a Save-to folder
-        # the user set this session.
+        # (filename template, format, log level, ...) from prefs, but
+        # the form only persists those on app close. Without this
+        # snapshot the dialog loads last session's values and writes
+        # them back on OK, and apply_preferences() then pushes the
+        # stale values into the live form.
         self._save_prefs()
         dlg = PreferencesDialog(self, self.prefs, main_frame=self)
         try:
@@ -4005,8 +4002,10 @@ class MainFrame(wx.Frame):
         """
         from . import prefs as _p
 
-        # Download-form fields that mirror prefs
-        self.output_ctrl.SetValue(self.prefs.get(_p.KEY_OUTPUT_DIR) or "")
+        # Download-form fields that mirror prefs. Save-to is not one of
+        # them — Preferences no longer owns a default output folder, so
+        # OKing the dialog must leave a staging folder set this session
+        # alone.
         self.name_ctrl.SetValue(self.prefs.get(_p.KEY_NAME_TEMPLATE) or "")
 
         fmt = (self.prefs.get(_p.KEY_FORMAT) or "epub").lower()

@@ -182,19 +182,12 @@ class PreferencesDialog(wx.Dialog):
         panel = wx.Panel(self.notebook)
         sizer = wx.BoxSizer(wx.VERTICAL)
 
-        # Output directory
-        dir_row = wx.BoxSizer(wx.HORIZONTAL)
-        dir_row.Add(
-            wx.StaticText(panel, label="Default &output folder:"),
-            0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 6,
+        self._add_help_text(
+            sizer, panel,
+            "Downloads are saved to your library folder and sorted into "
+            "fandom subfolders. Set it in the Library window (Ctrl+L), "
+            "along with the optional separate adult-library folder.",
         )
-        self.output_dir_ctrl = wx.TextCtrl(panel)
-        self.output_dir_ctrl.SetName("Default output folder")
-        dir_row.Add(self.output_dir_ctrl, 1, wx.RIGHT, 4)
-        browse_btn = wx.Button(panel, label="Bro&wse...")
-        browse_btn.Bind(wx.EVT_BUTTON, self._on_browse_output)
-        dir_row.Add(browse_btn, 0)
-        sizer.Add(dir_row, 0, wx.EXPAND | wx.ALL, 6)
 
         # Filename template
         row, self.name_template_ctrl = self._labeled_row(
@@ -707,7 +700,6 @@ class PreferencesDialog(wx.Dialog):
     def _load_values(self):
         """Populate every control from the current prefs snapshot."""
         # General
-        self.output_dir_ctrl.SetValue(self.prefs.get(_p.KEY_OUTPUT_DIR) or "")
         self.name_template_ctrl.SetValue(
             self.prefs.get(_p.KEY_NAME_TEMPLATE) or ""
         )
@@ -829,15 +821,6 @@ class PreferencesDialog(wx.Dialog):
             self.prefs.get_bool(_p.KEY_LOG_TO_FILE)
         )
 
-    def _on_browse_output(self, event):
-        dlg = wx.DirDialog(
-            self, "Choose default output folder",
-            defaultPath=self.output_dir_ctrl.GetValue() or "",
-        )
-        if dlg.ShowModal() == wx.ID_OK:
-            self.output_dir_ctrl.SetValue(dlg.GetPath())
-        dlg.Destroy()
-
     def _on_browse_log_dir(self, event):
         dlg = wx.DirDialog(
             self, "Choose log folder",
@@ -869,7 +852,6 @@ class PreferencesDialog(wx.Dialog):
         close would overwrite the pref with the stale form value.
         """
         # General
-        self.prefs.set(_p.KEY_OUTPUT_DIR, self.output_dir_ctrl.GetValue())
         self.prefs.set(_p.KEY_NAME_TEMPLATE, self.name_template_ctrl.GetValue())
         self.prefs.set_bool(
             _p.KEY_CHECK_UPDATES, self.check_updates_ctrl.GetValue(),

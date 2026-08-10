@@ -38,6 +38,10 @@ def llm_provider_pref_keys(provider: str) -> tuple[str, str, str]:
 
 KEY_NAME_TEMPLATE = "name_template"
 KEY_FORMAT = "format"
+# Legacy. The library root is the download destination; a Save-to folder
+# outside it is a per-download override that deliberately does not
+# persist. Read only by _migrate_output_dir_to_library, which promotes a
+# pre-2.19 value into KEY_LIBRARY_PATH and then deletes it.
 KEY_OUTPUT_DIR = "output_dir"
 KEY_CHECK_UPDATES = "check_updates"
 KEY_SKIPPED_VERSION = "skipped_update_version"
@@ -284,6 +288,31 @@ def _migrate_legacy_wx_config(cfg) -> None:
         pass
 
 
+def _migrate_output_dir_to_library(cfg) -> None:
+    """Promote a pre-2.19 ``output_dir`` into ``library_path``, then drop it.
+
+    ``output_dir`` used to be a persistent "Default output folder" pref
+    that duplicated the library root. The two could drift, and when the
+    saved value fell outside the library root ``_resolve_output_dir``
+    took its staging-directory early return and downloads stopped being
+    sorted into the library at all.
+
+    Only fires when no library is configured: someone who set up a
+    library has already stated where stories live, and their stale
+    ``output_dir`` must not override it. Best-effort; deleting the key
+    is optional since nothing reads it any more."""
+    try:
+        library = cfg.Read(KEY_LIBRARY_PATH, "")
+        legacy = cfg.Read(KEY_OUTPUT_DIR, "")
+        if legacy and not library:
+            cfg.Write(KEY_LIBRARY_PATH, legacy)
+        if legacy:
+            cfg.DeleteEntry(KEY_OUTPUT_DIR)
+            cfg.Flush()
+    except Exception:
+        pass
+
+
 class Prefs:
     """Thin wrapper over wx.Config with string and bool accessors."""
 
@@ -313,6 +342,8 @@ class Prefs:
         else:
             self._cfg = wx.Config("ficary")
             _migrate_legacy_wx_config(self._cfg)
+
+        _migrate_output_dir_to_library(self._cfg)
 
     def get(self, key: str, default=None):
         if self._cfg is None:

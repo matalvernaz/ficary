@@ -796,32 +796,28 @@ class _MemoryPrefs:
 
 
 def test_preferences_ok_keeps_live_save_to_folder(wx_app, monkeypatch):
-    """Opening Preferences and clicking OK must not revert the Save-to
-    folder to whatever was persisted at last app close.
+    """Opening Preferences and clicking OK must leave the Save-to folder
+    exactly as the user set it this session.
 
-    The dialog seeds its "Default output folder" field from the
-    ``output_dir`` pref, but the main form only persists that pref on
-    app close -- so a Save-to folder set this session was invisible to
-    the dialog, got written back stale on OK, and ``apply_preferences``
-    then pushed the stale value into the live form. Changing an
-    unrelated setting (the log folder, say) silently moved every
-    subsequent download out of the library root, which disables the
-    library's fandom auto-sort entirely.
+    Preferences no longer owns a default output folder, so there is no
+    stale copy for OK to write back. This used to be a real revert: the
+    dialog seeded its own field from ``output_dir``, the main form only
+    persisted that pref on app close, and ``apply_preferences`` pushed
+    the stale value into the live form -- moving downloads out of the
+    library root and disabling fandom auto-sort.
     """
     import wx
 
-    from ficary import preferences, prefs as _p
+    from ficary import preferences
     from ficary.gui import MainFrame
 
     frame = MainFrame()
     try:
-        frame.prefs = _MemoryPrefs({_p.KEY_OUTPUT_DIR: "/old/staging"})
-        frame.output_ctrl.SetValue("/library/root")
-
-        captured = {}
+        frame.prefs = _MemoryPrefs({})
+        frame.output_ctrl.SetValue("/tmp/one-off-staging")
 
         def fake_show_modal(self):
-            captured["seeded"] = self.output_dir_ctrl.GetValue()
+            assert not hasattr(self, "output_dir_ctrl")
             self._save()  # what wx.ID_OK does via _on_ok
             return wx.ID_OK
 
@@ -830,8 +826,30 @@ def test_preferences_ok_keeps_live_save_to_folder(wx_app, monkeypatch):
         )
         frame._on_preferences_menu(None)
 
-        assert captured["seeded"] == "/library/root"
+        assert frame.output_ctrl.GetValue() == "/tmp/one-off-staging"
+    finally:
+        frame.Destroy()
+
+
+def test_save_to_folder_does_not_persist(wx_app):
+    """A Save-to folder outside the library is a per-download override.
+
+    Persisting it is what let it outlive the download it was meant for
+    and outrank the library root on every later launch -- the exact
+    drift that made downloads stop landing in the library.
+    """
+    from ficary import prefs as _p
+    from ficary.gui import MainFrame
+
+    frame = MainFrame()
+    try:
+        frame.prefs = _MemoryPrefs({_p.KEY_LIBRARY_PATH: "/library/root"})
+        frame.output_ctrl.SetValue("/tmp/one-off-staging")
+        frame._save_prefs()
+
+        assert frame.prefs.get(_p.KEY_OUTPUT_DIR, "") == ""
+
+        frame._load_prefs()
         assert frame.output_ctrl.GetValue() == "/library/root"
-        assert frame.prefs.get(_p.KEY_OUTPUT_DIR) == "/library/root"
     finally:
         frame.Destroy()

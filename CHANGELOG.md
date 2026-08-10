@@ -1,5 +1,24 @@
 # Changelog
 
+## 2.19.0 — 2026-08-09
+
+**Downloads always go to the library**
+
+* Preferences no longer has a "Default output folder". It was a second,
+  separate copy of the library folder, and the two could drift apart.
+  When the saved value ended up pointing somewhere outside the library,
+  downloads stopped being sorted into fandom subfolders at all and piled
+  up flat in whatever folder it named — a debug or staging folder, in
+  the case that prompted this. The library folder set in the Library
+  window is now the one and only place downloads are saved.
+* If you had a default output folder set and no library folder,
+  the upgrade turns that folder into your library folder. If you had
+  both, the library folder is kept and the stale value is discarded.
+* The Save-to box on the download form still works for sending a single
+  download somewhere else, and it no longer persists. It starts at the
+  library folder every time the app opens, so a one-off can't quietly
+  become the permanent destination.
+
 ## 2.18.4 — 2026-08-07
 
 **Updating a story only runs the LLM over the new chapters**
