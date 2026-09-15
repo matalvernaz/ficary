@@ -166,6 +166,9 @@ def test_cli_reports_its_version():
 
 def test_release_builds_gate_on_the_test_workflow():
     """A tag must not publish an artifact from an untested revision."""
+    # PyYAML comes from the ``dev`` extra, which the Tests workflow
+    # installs. Import it rather than skipping without it: a release
+    # gate that goes quiet when a dependency is missing is no gate.
     import yaml
     from pathlib import Path
 

@@ -49,6 +49,34 @@ def test_restoring_the_oldest_backup_keeps_it(tmp_path):
     assert json.loads(idx.read_text())["generation"] == 1
 
 
+def test_backups_taken_in_one_second_stay_in_creation_order(tmp_path, monkeypatch):
+    """The embedded timestamp is second-resolution, so six backups
+    written in a tight loop all carry the same stamp. Ordering then fell
+    through to directory order, and on a hashed-directory filesystem
+    that is the random uuid salt — so "newest first" was a lie and
+    ``_prune`` could drop a newer backup while keeping an older one.
+
+    Small directories on this developer's filesystem happen to enumerate
+    in creation order, which is why only CI caught it; the adverse order
+    is forced here so the test does not depend on the host.
+    """
+    idx = tmp_path / "index.json"
+    for i in range(6):
+        idx.write_text(json.dumps({"generation": i}))
+        B.backup(idx)
+
+    real_iterdir = Path.iterdir
+    monkeypatch.setattr(
+        Path, "iterdir", lambda self: iter(list(real_iterdir(self))[::-1])
+    )
+
+    generations = [
+        json.loads(entry.read_text())["generation"]
+        for entry in B.list_backups(idx)
+    ]
+    assert generations == [5, 4, 3, 2, 1, 0]
+
+
 # ── L06: rescans must not undo manual classifications ──────────────
 
 def test_record_preserves_manual_adult_and_abandoned_marks(tmp_path):

@@ -46,7 +46,10 @@ today, still wrong" without the backup dir turning into clutter."""
 # fires two backups inside one second — the prior shape silently
 # overwrote the first backup, taking the unreadable original with it.
 _BACKUP_SUFFIX_RE = re.compile(
-    r"\.backup-(?P<ts>\d{8}-\d{6})(?:-[0-9a-f]+)?\.json$",
+    # The fractional part is absent on backups written before 2.20.0.
+    # A bare second sorts ahead of any fraction of the same second,
+    # which is the right answer: those backups are the older ones.
+    r"\.backup-(?P<ts>\d{8}-\d{6}(?:\.\d{6})?)(?:-[0-9a-f]+)?\.json$",
     re.IGNORECASE,
 )
 
@@ -69,7 +72,11 @@ def backup(index_path: Path, *, protect: Path | None = None) -> Path | None:
     index_path = Path(index_path)
     if not index_path.exists():
         return None
-    stamp = datetime.now(tz=timezone.utc).strftime("%Y%m%d-%H%M%S")
+    # Microseconds, not whole seconds: several backups inside one second
+    # are routine (a heal snapshot, the save after it, a restore's safety
+    # copy), and a second-resolution stamp left their relative order to
+    # the directory, where the uuid salt randomises it.
+    stamp = datetime.now(tz=timezone.utc).strftime("%Y%m%d-%H%M%S.%f")
     # 8 hex chars of uuid4 = 32 bits of collision-resistance, enough
     # for a workflow that produces at most a few backups per second.
     salt = uuid.uuid4().hex[:8]
@@ -113,11 +120,22 @@ def list_backups(index_path: Path) -> list[Path]:
 
     Ordering is by the filename's embedded timestamp rather than file
     mtime, so a filesystem that rounds mtime to seconds (or whose
-    clock jumped backwards) still returns a stable order."""
+    clock jumped backwards) still returns a stable order.
+
+    That stamp carries microseconds as of 2.20.0. It used to be whole
+    seconds, and several backups inside one second are routine — a heal
+    snapshot, the save that follows it, then a restore's safety copy.
+    Their order fell through to directory order, which on a
+    hashed-directory filesystem is the random uuid salt, so "newest
+    first" was untrue and ``_prune`` could delete a newer backup while
+    keeping an older one. mtime is the secondary key, which still
+    separates a pool of older second-resolution names; where mtime is
+    coarse too, the result is no worse than it was.
+    """
     index_path = Path(index_path)
     if not index_path.parent.exists():
         return []
-    candidates: list[tuple[str, Path]] = []
+    candidates: list[tuple[str, int, Path]] = []
     prefix = f"{index_path.stem}.backup-"
     for p in index_path.parent.iterdir():
         if not p.is_file():
@@ -127,9 +145,15 @@ def list_backups(index_path: Path) -> list[Path]:
         m = _BACKUP_SUFFIX_RE.search(p.name)
         if m is None:
             continue
-        candidates.append((m.group("ts"), p))
-    candidates.sort(key=lambda t: t[0], reverse=True)
-    return [p for _ts, p in candidates]
+        try:
+            written = p.stat().st_mtime_ns
+        except OSError:
+            # Vanished between the listing and the stat. Sort it oldest
+            # rather than dropping it; the caller handles a missing file.
+            written = 0
+        candidates.append((m.group("ts"), written, p))
+    candidates.sort(key=lambda t: (t[0], t[1]), reverse=True)
+    return [p for _ts, _written, p in candidates]
 
 
 def restore(backup_path: Path, index_path: Path) -> Path | None:

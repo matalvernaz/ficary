@@ -86,6 +86,10 @@ alert.
 * Restoring the oldest of your ten retained index backups deleted it
   before reading it, so the restore failed and the recovery point you
   chose was gone.
+* Index backups taken in the same second were listed in an arbitrary
+  order, so the list of recovery points was not really newest-first and
+  the cleanup that keeps the ten most recent could discard the wrong
+  one. Backups are now stamped to the microsecond.
 * A rescan erased stories you had marked adult or abandoned.
 * Repairing the library stamped a file's metadata as current without
   re-reading it, turning data that was known to be stale into data that
