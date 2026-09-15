@@ -186,10 +186,11 @@ class TGStorytimeScraper(BaseScraper):
         for chap_num in range(max(2, skip_chapters + 1), num_chapters + 1):
             if not chapter_in_spec(chap_num, chapters):
                 continue
-            ch_title = chapter_titles.get(str(chap_num), f"Chapter {chap_num}")
+            site_title = chapter_titles.get(str(chap_num))
+            ch_title = site_title or f"Chapter {chap_num}"
 
             cached = self._load_chapter_cache(
-                sid, chap_num, expect_title=ch_title,
+                sid, chap_num, expect_title=site_title,
             )
             if cached is not None:
                 story.chapters.append(cached)

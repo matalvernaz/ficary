@@ -199,3 +199,22 @@ def test_the_macos_build_fetches_an_arm64_ffmpeg():
     )
     assert "ffmpeg9arm.zip" in workflow and "ffprobe9arm.zip" in workflow
     assert "lipo -archs" in workflow, "the architecture must be verified"
+
+
+def test_a_synthesised_chapter_title_is_not_used_as_a_guard():
+    """``"Chapter 2"`` comes from the ordinal, so it always matches the
+    cached placeholder and would make the guard silently useless. The
+    adapters must pass the site's own title, or nothing."""
+    import re
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1] / "ficary"
+    sources = [root / "scraper.py"] + sorted((root / "erotica").glob("*.py"))
+    for path in sources:
+        text = path.read_text(encoding="utf-8")
+        for match in re.finditer(r"expect_title=(\w+)", text):
+            name = match.group(1)
+            assert name != "ch_title", (
+                f"{path.name} guards the chapter cache with a possibly "
+                "synthesised title; pass the site's own title instead"
+            )

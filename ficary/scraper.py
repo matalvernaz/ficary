@@ -1414,8 +1414,15 @@ class BaseScraper:
         the ordinal, so an author inserting a chapter silently shifts
         every later one and the ordinal would serve its predecessor's
         text. Comparing the title catches that shift: a mismatch is
-        treated as a miss and the chapter is refetched. Pass ``None`` or
-        an empty string when the site offers no title to compare.
+        treated as a miss and the chapter is refetched.
+
+        Pass ``None`` when the site publishes no title for this chapter.
+        In particular do not pass a synthesised ``"Chapter N"``: it is
+        derived from the ordinal, so it matches the cached placeholder
+        whichever chapter moved, and the guard would do nothing while
+        looking like it worked. Sites with neither titles nor stable
+        chapter ids cannot detect an insertion at all; a fresh-copy
+        re-download is the remedy there.
         """
         if not self.use_cache:
             return None
@@ -2525,10 +2532,15 @@ class FFNScraper(BaseScraper):
         for chap_num in range(max(2, skip_chapters + 1), num_chapters + 1):
             if not chapter_in_spec(chap_num, chapters):
                 continue
-            ch_title = chapter_titles.get(str(chap_num), f"Chapter {chap_num}")
+            # ``chapter_titles.get`` without the placeholder: the
+            # cache guard needs the site's real title, and a synthesised
+            # "Chapter N" is derived from the ordinal, so it would match
+            # the cached placeholder no matter which chapter moved.
+            site_title = chapter_titles.get(str(chap_num))
+            ch_title = site_title or f"Chapter {chap_num}"
 
             cached = self._load_chapter_cache(
-                story_id, chap_num, expect_title=ch_title,
+                story_id, chap_num, expect_title=site_title,
             )
             if cached is not None:
                 story.chapters.append(cached)

@@ -178,10 +178,11 @@ class GiantessWorldScraper(BaseScraper):
                 continue
             if not chapter_in_spec(i, chapters):
                 continue
-            ch_title = chapter_titles.get(str(i), "")
+            site_title = chapter_titles.get(str(i))
+            ch_title = site_title or ""
 
             cached = self._load_chapter_cache(
-                sid, i, expect_title=ch_title,
+                sid, i, expect_title=site_title,
             )
             if cached is not None:
                 story.chapters.append(cached)
