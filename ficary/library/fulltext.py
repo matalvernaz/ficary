@@ -38,7 +38,7 @@ from __future__ import annotations
 
 import re
 import sqlite3
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Iterable
 
@@ -314,12 +314,28 @@ class FullTextIndex:
 
     # ── Read path ─────────────────────────────────────────────────
 
+    def update_relpath(self, root: str, url: str, relpath: str) -> int:
+        """Point a story's indexed rows at its new file.
+
+        The projection stores the path it saw at index time, so a
+        reorganisation that moved the file left every hit pointing at a
+        path that no longer exists.
+        """
+        cur = self._conn.cursor()
+        cur.execute(
+            "UPDATE chapters SET relpath = ? WHERE root = ? AND url = ?",
+            (str(relpath), str(root), str(url)),
+        )
+        self._conn.commit()
+        return cur.rowcount or 0
+
     def search(
         self,
         query: str,
         *,
         root: str | None = None,
         limit: int | None = 50,
+        reconcile: object = None,
     ) -> list[FullTextHit]:
         """Run ``query`` against the FTS5 index.
 
@@ -334,6 +350,13 @@ class FullTextIndex:
         cap". Ordering is FTS5's BM25 ranking (lower = better match),
         so the most relevant hits float to the top even when a
         library is dominated by one fandom.
+
+        ``reconcile`` takes a :class:`~ficary.library.index.LibraryIndex`
+        and makes the metadata index the authority on identity: a hit
+        for a story that is no longer indexed is dropped, and a hit
+        whose path has moved is corrected. Without it the projection
+        answers with whatever it recorded, so a removed or reorganised
+        story kept producing results pointing at files that are gone.
         """
         needle = (query or "").strip()
         if not needle:
@@ -380,6 +403,8 @@ class FullTextIndex:
                 chapter_title=r[6],
                 snippet=r[7],
             ))
+        if reconcile is not None:
+            hits = _reconcile_hits(hits, reconcile)
         return hits
 
     # ── Housekeeping ──────────────────────────────────────────────
@@ -418,6 +443,32 @@ class FullTextIndex:
 
     def __exit__(self, *exc) -> None:
         self.close()
+
+
+def _reconcile_hits(hits: list[FullTextHit], index) -> list[FullTextHit]:
+    """Filter and correct ``hits`` against the metadata index.
+
+    Drops stories the index no longer knows about and rewrites a stale
+    relpath to the current one. Any failure to consult the index leaves
+    the hits untouched — a degraded search beats no search.
+    """
+    from pathlib import Path as _Path
+
+    kept: list[FullTextHit] = []
+    for hit in hits:
+        try:
+            entry = index.lookup_by_url(_Path(hit.root), hit.url)
+        except Exception:
+            kept.append(hit)
+            continue
+        if entry is None:
+            # Removed from the library since it was indexed.
+            continue
+        current = entry.get("relpath") or hit.relpath
+        if current != hit.relpath:
+            hit = replace(hit, relpath=current)
+        kept.append(hit)
+    return kept
 
 
 def populate_from_library(

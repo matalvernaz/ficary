@@ -22,12 +22,15 @@ that no read ever triggers.
 
 from __future__ import annotations
 
+import logging
 import os
 from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from .library.index import LibraryIndex
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -154,19 +157,39 @@ class PruneResult:
     pruned: int = 0
     bytes_freed: int = 0
     quarantine_dir: Path | None = None
+    # Entries that could not be quarantined. They are left in place:
+    # deleting a cache because the recoverable move failed turns a
+    # reversible prune into permanent loss.
+    failed: list = field(default_factory=list)
 
     def summary(self) -> str:
-        if not self.pruned:
+        if not self.pruned and not self.failed:
             return "Nothing pruned."
         where = (
             f"; recoverable from {self.quarantine_dir} until the next sweep"
             if self.quarantine_dir else ""
         )
-        return (
-            f"Pruned {self.pruned} cache entr"
-            f"{'y' if self.pruned == 1 else 'ies'} "
-            f"({_format_bytes(self.bytes_freed)}{where})."
-        )
+        parts = []
+        if self.pruned:
+            parts.append(
+                f"Quarantined {self.pruned} cache entr"
+                f"{'y' if self.pruned == 1 else 'ies'} "
+                # Quarantined bytes are moved, not reclaimed — the sweep
+                # frees them later.
+                f"({_format_bytes(self.bytes_freed)} moved{where})."
+            )
+        if self.failed:
+            names = ", ".join(p.name for p in self.failed[:3])
+            more = (
+                f" and {len(self.failed) - 3} more"
+                if len(self.failed) > 3 else ""
+            )
+            parts.append(
+                f"Left {len(self.failed)} entr"
+                f"{'y' if len(self.failed) == 1 else 'ies'} in place "
+                f"because quarantine failed: {names}{more}."
+            )
+        return " ".join(parts)
 
 
 _TRASH_DIRNAME = ".trash"
@@ -185,26 +208,37 @@ def prune(report: CacheReport) -> PruneResult:
     ``_TRASH_MAX_AGE_DAYS`` are deleted on the next prune, so disk is
     eventually reclaimed. Safe to call with an empty orphan list.
     """
-    import shutil
     import time
+    import uuid
     result = PruneResult()
     if not report.orphan_entries:
         return result
     cache_root = report.orphan_entries[0].parent
     _sweep_old_trash(cache_root / _TRASH_DIRNAME)
-    batch = cache_root / _TRASH_DIRNAME / time.strftime("%Y%m%d-%H%M%S")
+    # A second-resolution name collided when two prunes ran inside the
+    # same second: the rename landed on an occupied directory, the
+    # fallback deleted the freshly-recreated cache, and the summary
+    # pointed at the previous generation's quarantine. A unique suffix
+    # gives every batch its own directory.
+    batch = (
+        cache_root / _TRASH_DIRNAME
+        / f"{time.strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:8]}"
+    )
     for path in report.orphan_entries:
         size = _dir_size(path)
         try:
             batch.mkdir(parents=True, exist_ok=True)
             os.replace(path, batch / path.name)
-        except OSError:
-            # Cross-device or locked — fall back to outright removal so
-            # the orphan doesn't survive the prune it was flagged for.
-            try:
-                shutil.rmtree(path)
-            except OSError:
-                continue
+        except OSError as exc:
+            # Fail closed. Quarantine is the whole promise of this
+            # operation, so an entry that cannot be moved stays where it
+            # is and gets reported instead of deleted.
+            logger.warning(
+                "Could not quarantine cache entry %s (%s); leaving it in "
+                "place", path, exc,
+            )
+            result.failed.append(path)
+            continue
         result.pruned += 1
         result.bytes_freed += size
     if batch.is_dir():

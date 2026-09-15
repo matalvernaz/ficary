@@ -51,7 +51,7 @@ _BACKUP_SUFFIX_RE = re.compile(
 )
 
 
-def backup(index_path: Path) -> Path | None:
+def backup(index_path: Path, *, protect: Path | None = None) -> Path | None:
     """Copy the index file to a timestamped sibling and prune old
     backups. Returns the new backup's path, or ``None`` when the
     source file doesn't exist (e.g. first-run before any scan).
@@ -81,7 +81,7 @@ def backup(index_path: Path) -> Path | None:
     # enshrine as the new "correct" index.
     from ..atomic import atomic_write_bytes
     atomic_write_bytes(backup_path, index_path.read_bytes())
-    _prune(index_path)
+    _prune(index_path, protect=protect)
     return backup_path
 
 
@@ -150,23 +150,48 @@ def restore(backup_path: Path, index_path: Path) -> Path | None:
     index_path = Path(index_path)
     if not backup_path.exists():
         raise FileNotFoundError(f"Backup not found: {backup_path}")
+    # Read the chosen snapshot before anything else touches the pool.
+    # Taking the safety snapshot first prunes the pool back to ten, and
+    # when the user picked the oldest of ten that prune deleted the file
+    # about to be read — the restore failed and the recovery point the
+    # user chose was gone.
+    payload = backup_path.read_bytes()
     safety_snapshot: Path | None = None
     if index_path.exists():
-        safety_snapshot = backup(index_path)
+        safety_snapshot = backup(index_path, protect=backup_path)
         if safety_snapshot is not None:
             logger.info(
                 "pre-restore safety snapshot of %s saved to %s",
                 index_path, safety_snapshot,
             )
     from ..atomic import atomic_write_bytes
-    atomic_write_bytes(index_path, backup_path.read_bytes())
+    atomic_write_bytes(index_path, payload)
     return safety_snapshot
 
 
-def _prune(index_path: Path) -> None:
-    """Drop the oldest backups so only :data:`_MAX_BACKUPS` remain."""
+def _prune(index_path: Path, *, protect: Path | None = None) -> None:
+    """Drop the oldest backups so only :data:`_MAX_BACKUPS` remain.
+
+    ``protect`` names a backup the caller is actively using — a restore
+    in progress, for instance. Pruning it out from under that caller is
+    how restoring the oldest of a full pool used to destroy the very
+    snapshot the user had chosen.
+    """
     existing = list_backups(index_path)
+    keep = None
+    if protect is not None:
+        try:
+            keep = Path(protect).resolve()
+        except OSError:
+            keep = Path(protect)
     for old in existing[_MAX_BACKUPS:]:
+        if keep is not None:
+            try:
+                if old.resolve() == keep:
+                    continue
+            except OSError:
+                if old == keep:
+                    continue
         try:
             old.unlink()
         except OSError:

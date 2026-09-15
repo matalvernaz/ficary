@@ -49,6 +49,8 @@ class DownloadJob:
     ao3_cookie: Optional[str] = None
     ao3_user_agent: Optional[str] = None
     webnovel_cookie: Optional[str] = None
+    scribblehub_cookie: Optional[str] = None
+    subscribestar_cookie: Optional[str] = None
     chyoa_max_depth: Optional[int] = None
 
     # ── bulk-update run options (read by _run_update_queue) ───────
@@ -98,7 +100,10 @@ class DownloadJob:
             KEY_LLM_STRIP_NOTES,
             KEY_NAME_TEMPLATE,
             KEY_SPEECH_RATE,
+            KEY_CF_SOLVE,
+            KEY_SCRIBBLEHUB_COOKIE,
             KEY_STRIP_NOTES,
+            KEY_SUBSCRIBESTAR_COOKIE,
             KEY_WEBNOVEL_COOKIE,
             Prefs,
         )
@@ -122,6 +127,15 @@ class DownloadJob:
             ao3_cookie=(prefs.get(KEY_AO3_COOKIE) or None),
             ao3_user_agent=(prefs.get(KEY_AO3_USER_AGENT) or None),
             webnovel_cookie=(prefs.get(KEY_WEBNOVEL_COOKIE) or None),
+            # Newer site credentials and the Cloudflare solver are
+            # saved settings like any other; leaving them out meant an
+            # unattended library or watch download hit a login gate the
+            # manual GUI path would have sailed through.
+            scribblehub_cookie=(prefs.get(KEY_SCRIBBLEHUB_COOKIE) or None),
+            subscribestar_cookie=(
+                prefs.get(KEY_SUBSCRIBESTAR_COOKIE) or None
+            ),
+            cf_solve=prefs.get_bool(KEY_CF_SOLVE),
             fichub=prefs.get_bool(KEY_FICHUB),
             attribution=(prefs.get(KEY_ATTRIBUTION_BACKEND) or "builtin"),
             attribution_model_size=(prefs.get(KEY_ATTRIBUTION_MODEL_SIZE) or ""),

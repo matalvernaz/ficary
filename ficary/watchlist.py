@@ -201,6 +201,13 @@ class Watch:
     last_error: str = ""
     cooldown_until: str = ""
     created_at: str = field(default_factory=_now_iso)
+    # Work observed but not yet completed. Observation state
+    # (``last_seen``) advances as soon as the site is read — that is
+    # what we saw — but a download or an alert that failed must survive
+    # until it succeeds, otherwise the next poll finds nothing new and
+    # the work is lost with the error quietly cleared alongside it.
+    pending_downloads: list[str] = field(default_factory=list)
+    pending_notification: dict = field(default_factory=dict)
 
     def display_label(self) -> str:
         """Return a name for logs and notifications.
@@ -406,6 +413,38 @@ class WatchlistStore:
             self.save()
             return True
 
+    #: Fields a poll owns. Everything else on a Watch belongs to the
+    #: user, and a poll that started before their edit must not write a
+    #: stale copy of it back.
+    POLL_OWNED_FIELDS = (
+        "last_seen",
+        "last_checked_at",
+        "last_error",
+        "cooldown_until",
+        "pending_downloads",
+        "pending_notification",
+    )
+
+    def update_poll_state(self, watch: Watch) -> Watch:
+        """Write back only the fields a poll owns.
+
+        Returns the merged record. ``update()`` replaces the whole row,
+        so a poll holding a watch across minutes of network work undid
+        any edit the user made in the meantime — pausing a watch during
+        a poll silently re-enabled it.
+        """
+        with _STORE_WRITE_LOCK:
+            self._reload_if_backed()
+            for i, existing in enumerate(self._watches):
+                if existing.id != watch.id:
+                    continue
+                for name in self.POLL_OWNED_FIELDS:
+                    setattr(existing, name, getattr(watch, name))
+                self.save()
+                return existing
+            # The user deleted it mid-poll; their delete wins.
+            return watch
+
     def update(self, watch: Watch) -> None:
         """Replace the stored watch whose id matches ``watch.id``.
 
@@ -594,8 +633,27 @@ def run_once(
             watch.last_checked_at = _now_iso()
             watch.last_error = result.error
 
+            # Re-read the user-owned configuration now that the network
+            # work is done. Pausing a watch, changing its channels or
+            # switching auto-download off during a long poll must take
+            # effect on this pass, not be overwritten by it.
+            current = store.get(watch.id)
+            if current is not None:
+                for name in (
+                    "enabled", "label", "channels", "auto_download",
+                    "query", "filters", "target", "site",
+                ):
+                    setattr(watch, name, getattr(current, name))
+                if not watch.enabled:
+                    # Paused mid-poll: record what we observed, deliver
+                    # nothing, and leave the pending work for a later run.
+                    _queue_pending_downloads(watch, result)
+                    store.update_poll_state(watch)
+                    results.append(result)
+                    continue
+
             # Auto-download runs BEFORE dispatch so the notification can
-            # carry the saved paths. Gated on new_items, not the
+            # carry the saved paths. Gated on pending work, not the
             # cooldown — a suppressed notification must not suppress the
             # download. Injectable like ``notifier``/``scraper_factory``;
             # the CLI/GUI pass cli.make_watch_downloader(prefs). A failed
@@ -604,14 +662,25 @@ def run_once(
             # everything else in this loop). Note the download runs
             # inside _RUN_ONCE_LOCK: a long download delays a concurrent
             # Run Now — accepted v1 tradeoff, documented in the GUI help.
+            if result.ok:
+                _queue_pending_downloads(watch, result)
             if (
                 downloader is not None
                 and watch.auto_download
                 and result.ok
-                and result.new_items
+                and watch.pending_downloads
             ):
+                # Retry everything still outstanding, not just what this
+                # poll turned up: a download that failed once used to be
+                # forgotten because the next poll saw no new items.
+                attempt = PollResult(
+                    watch_id=result.watch_id, ok=True,
+                    new_items=list(watch.pending_downloads),
+                    chapter_delta=result.chapter_delta,
+                    notification=result.notification,
+                )
                 try:
-                    saved = downloader(watch, result) or []
+                    saved = downloader(watch, attempt) or []
                 except Exception as exc:  # noqa: BLE001 — runner stability
                     logger.exception(
                         "Auto-download failed for %s", watch.display_label(),
@@ -628,16 +697,39 @@ def run_once(
                         )
                 else:
                     result.downloaded_paths = [str(p) for p in saved]
+                    # Everything asked for came back, so nothing is
+                    # outstanding. A partial result keeps the rest
+                    # pending for the next pass.
+                    watch.pending_downloads = _still_pending(
+                        watch.pending_downloads, saved,
+                    )
+                    if watch.pending_downloads:
+                        watch.last_error = (
+                            f"auto-download incomplete: "
+                            f"{len(watch.pending_downloads)} item(s) pending"
+                        )
                     if result.downloaded_paths and result.notification is not None:
                         result.notification.message += "".join(
                             f"\nSaved to: {p}" for p in result.downloaded_paths
                         )
 
+            # An alert that could not be delivered last time is still
+            # owed. Send it with (or instead of) this poll's news rather
+            # than letting it disappear.
+            if result.ok and result.notification is None and watch.pending_notification:
+                result.notification = _notification_from_dict(
+                    watch.pending_notification,
+                )
             if result.ok and result.notification is not None:
                 if _in_cooldown(watch, now()):
                     logger.info(
                         "Suppressing notification for %s — still in cooldown "
                         "until %s", watch.display_label(), watch.cooldown_until,
+                    )
+                    # Hold it rather than drop it: a cooldown is meant to
+                    # coalesce alerts, not discard the news.
+                    watch.pending_notification = _notification_to_dict(
+                        result.notification,
                     )
                 else:
                     # The default ``dispatch_notification`` never raises;
@@ -650,8 +742,12 @@ def run_once(
                     # ``last_checked_at`` / cooldown stays stale.
                     # Catch defensively so one bad notifier can't
                     # silence the rest of the watchlist.
+                    delivered: list = []
+                    failures: list = []
                     try:
-                        notifier(watch.channels, result.notification, prefs)
+                        outcome = notifier(
+                            watch.channels, result.notification, prefs,
+                        )
                     except Exception as exc:  # noqa: BLE001 — runner stability
                         logger.exception(
                             "Notifier raised for %s; treating as a delivery "
@@ -661,17 +757,112 @@ def run_once(
                         # Surface the failure on the watch's last_error
                         # so the user sees it in the GUI/CLI listing
                         # rather than the alert just silently vanishing.
+                        failures = [("*", f"{exc.__class__.__name__}: {exc}")]
                         watch.last_error = (
                             f"notification dispatch failed: "
                             f"{exc.__class__.__name__}: {exc}"
                         )
-                    watch.cooldown_until = datetime.fromtimestamp(
-                        now() + NOTIFICATION_COOLDOWN_S, tz=timezone.utc,
-                    ).isoformat(timespec="seconds")
+                    else:
+                        # The documented contract is
+                        # ``(delivered, failures)``. Ignoring it is how a
+                        # failed send used to advance the cooldown and
+                        # consume the alert with an empty last_error.
+                        delivered, failures = _split_dispatch_outcome(outcome)
+                        if failures:
+                            watch.last_error = (
+                                "notification delivery failed: "
+                                + "; ".join(
+                                    f"{ch}: {msg}" for ch, msg in failures[:3]
+                                )
+                            )
+                    if delivered:
+                        watch.pending_notification = {}
+                        watch.cooldown_until = datetime.fromtimestamp(
+                            now() + NOTIFICATION_COOLDOWN_S, tz=timezone.utc,
+                        ).isoformat(timespec="seconds")
+                    else:
+                        # Nothing got through. Keep the alert pending and
+                        # leave the cooldown alone so the next poll
+                        # retries instead of staying quiet.
+                        watch.pending_notification = _notification_to_dict(
+                            result.notification,
+                        )
 
-            store.update(watch)
+            store.update_poll_state(watch)
             results.append(result)
         return results
+
+
+def _split_dispatch_outcome(outcome):
+    """Normalise a notifier's return value into ``(delivered, failures)``.
+
+    The in-tree dispatcher returns that pair. A custom notifier may
+    return ``None``; treat that as "delivered, reported nothing", which
+    is the old behaviour and keeps test doubles working.
+    """
+    if outcome is None:
+        return (["*"], [])
+    try:
+        delivered, failures = outcome
+    except (TypeError, ValueError):
+        return (["*"], [])
+    return (list(delivered or []), list(failures or []))
+
+
+def _notification_to_dict(notification) -> dict:
+    """Serialise a notification so a failed delivery survives a restart."""
+    if notification is None:
+        return {}
+    return {
+        "title": getattr(notification, "title", ""),
+        "message": getattr(notification, "message", ""),
+        "url": getattr(notification, "url", "") or "",
+    }
+
+
+def _notification_from_dict(data: dict):
+    """Rebuild a held notification. Returns ``None`` for an empty dict."""
+    if not data:
+        return None
+    return Notification(
+        title=data.get("title", ""),
+        message=data.get("message", ""),
+        url=data.get("url", "") or "",
+    )
+
+
+def _queue_pending_downloads(watch: Watch, result: PollResult) -> None:
+    """Record what this poll found as work still owed, without dropping
+    anything an earlier poll already owed.
+
+    Observation and delivery are separate ledgers. ``last_seen`` says
+    what the site showed; ``pending_downloads`` says what we still have
+    to fetch because of it.
+    """
+    if not result.new_items:
+        return
+    if watch.type == WATCH_TYPE_STORY:
+        # A story watch has exactly one thing to fetch, however many
+        # chapters appeared.
+        wanted = [watch.target]
+    else:
+        wanted = list(result.new_items)
+    for item in wanted:
+        if item and item not in watch.pending_downloads:
+            watch.pending_downloads.append(item)
+
+
+def _still_pending(pending: list[str], saved) -> list[str]:
+    """Which pending items the downloader did not account for.
+
+    A downloader that saved something for every item clears the queue.
+    One that came back with fewer files than items keeps the shortfall
+    pending rather than guessing which ones landed — retrying a story
+    that is already up to date is cheap; losing one is not.
+    """
+    if len(saved) >= len(pending):
+        return []
+    return list(pending)
 
 
 def _in_cooldown(watch: Watch, now_epoch: float) -> bool:

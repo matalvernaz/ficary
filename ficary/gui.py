@@ -216,6 +216,7 @@ class _WxLogHandler(logging.Handler):
 
 from . import legacy as _legacy
 from .download_queue import (
+    DownloadOutcome,
     DownloadQueues,
     WORKER_THREAD_PREFIX,
     site_from_thread_name,
@@ -3542,7 +3543,7 @@ class MainFrame(wx.Frame):
 
             if is_update and not refetch_all and len(story.chapters) == 0:
                 self._log("Up to date. No new chapters.")
-                return
+                return DownloadOutcome(ok=True, reason="already up to date")
 
             if is_update and not refetch_all:
                 new_count = len(story.chapters)
@@ -3601,9 +3602,16 @@ class MainFrame(wx.Frame):
 
             path = self._export_story(story, params)
             self._log(f"\nDone! Saved to: {path}")
+            # Hand back what was written. Another caller may be joined to
+            # this job through the per-site queue's single-flight
+            # registry, and it needs the paths as much as the verdict.
+            return DownloadOutcome(
+                ok=True, saved_paths=[str(path)] if path else [],
+            )
 
         except Exception as e:
             self._log(f"\nError: {e}")
+            return DownloadOutcome(ok=False, reason=str(e))
         finally:
             # Legacy raw-thread callers (batch/series/author dispatch)
             # set ``_global_busy`` before spawning the thread and rely

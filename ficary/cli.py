@@ -2530,6 +2530,7 @@ def _handle_populate_search(args: argparse.Namespace) -> None:
 def _handle_library_search(args: argparse.Namespace) -> None:
     """Full-text search across the library index's chapter content."""
     from .library import FullTextIndex, default_search_db_path
+    from .library.index import LibraryIndex
 
     if not args.library_search.strip():
         print(
@@ -2554,12 +2555,17 @@ def _handle_library_search(args: argparse.Namespace) -> None:
             sys.exit(1)
         root_filter = str(root.resolve())
 
+    idx = LibraryIndex.load()
     with FullTextIndex(db_path) as fti:
         try:
             hits = fti.search(
                 args.library_search,
                 root=root_filter,
                 limit=args.library_search_limit,
+                # The metadata index owns identity: a story removed or
+                # moved since it was indexed must not be reported at a
+                # path that no longer exists.
+                reconcile=idx,
             )
         except ValueError as exc:
             print(f"Error: {exc}", file=sys.stderr)
@@ -5272,7 +5278,7 @@ def make_watch_downloader(prefs):
     """
     import copy
 
-    from .download_queue import DownloadQueues
+    from .download_queue import DownloadOutcome, DownloadQueues, outcome_of
     from .exporters import check_format_deps
     from .jobs import DownloadJob
     from .library.index import LibraryIndex
@@ -5282,6 +5288,11 @@ def make_watch_downloader(prefs):
 
     base_job = DownloadJob.from_prefs()
     base_job.format = prefs.get(KEY_FORMAT) or "epub"
+    # Fresh works found by author/search watches are ordinary downloads
+    # and belong in the library, routed by the same rules as a manual
+    # one. Without this they landed in the process's working directory,
+    # unindexed, and adult routing was skipped entirely.
+    _apply_library_autosort(base_job)
     check_format_deps(base_job.format)
 
     def downloader(watch, result) -> list:
@@ -5303,10 +5314,17 @@ def make_watch_downloader(prefs):
                     )
                     break
             def job_fn():
-                return _download_one(
+                # Report through the shared outcome type so a joiner
+                # gets the saved paths too, instead of having to infer
+                # success from a bare return value.
+                produced: list[Path] = []
+                ok = _download_one(
                     url, job, output_dir,
                     update_path=update_path,
-                    on_export=saved.append,
+                    on_export=produced.append,
+                )
+                return DownloadOutcome(
+                    ok=bool(ok), saved_paths=[str(p) for p in produced],
                 )
 
             # Route through the process-wide per-site queue rather than
@@ -5322,10 +5340,13 @@ def make_watch_downloader(prefs):
                 site_name, job_fn, dedupe_key=canonical_url(url) or url,
             )
             # Block until the queued job settles (propagates its return /
-            # exception). _download_one returns False for blocked /
-            # rate-limited / locked / missing-dep failures; record it so
-            # run_once reports a failure instead of a silent success.
-            if not fut.result():
+            # exception). The job answers with a DownloadOutcome, so a
+            # job this call merely joined still hands back its saved
+            # paths and a real success/failure verdict.
+            outcome = outcome_of(fut.result())
+            if outcome.ok:
+                saved.extend(Path(p) for p in outcome.saved_paths)
+            else:
                 failures.append(url)
 
         if watch.type == WATCH_TYPE_STORY:

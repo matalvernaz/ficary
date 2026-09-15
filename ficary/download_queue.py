@@ -26,9 +26,46 @@ import logging
 import queue
 import threading
 from concurrent.futures import Future
+from dataclasses import dataclass, field
 from typing import Callable
 
 from . import single_flight
+
+
+@dataclass
+class DownloadOutcome:
+    """What a queued download job produced.
+
+    Queued jobs are joined by whoever asked for the same story — a
+    watch auto-download can end up waiting on a job the GUI started.
+    "Did it work, and what did it write" therefore has to be a value
+    both sides understand. It used to be the future's truthiness, and
+    the GUI's successful path returns ``None``, so a watch that joined
+    a perfectly good GUI download reported the download as failed.
+    """
+
+    ok: bool = False
+    saved_paths: list[str] = field(default_factory=list)
+    reason: str = ""
+
+    def __bool__(self) -> bool:
+        return self.ok
+
+
+def outcome_of(value) -> DownloadOutcome:
+    """Coerce whatever a job returned into a :class:`DownloadOutcome`.
+
+    ``None`` means a job that reported nothing — a joined job, or a
+    caller that predates the contract. That is not a failure; only an
+    explicit ``False`` is.
+    """
+    if isinstance(value, DownloadOutcome):
+        return value
+    if value is None:
+        return DownloadOutcome(ok=True, reason="no result reported")
+    if value is False:
+        return DownloadOutcome(ok=False, reason="download reported failure")
+    return DownloadOutcome(ok=True)
 
 
 logger = logging.getLogger(__name__)

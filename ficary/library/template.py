@@ -86,6 +86,22 @@ _WINDOWS_RESERVED = frozenset(
 _MAX_SEGMENT_LEN = 200
 
 
+def _byte_len(s: str) -> int:
+    """UTF-8 byte length — the unit filesystems actually limit."""
+    return len(s.encode("utf-8", errors="ignore"))
+
+
+def _truncate_bytes(s: str, budget: int) -> str:
+    """Trim ``s`` to at most ``budget`` UTF-8 bytes without splitting a
+    character. Never returns an empty string for non-empty input, so a
+    caller always has something to name the file."""
+    encoded = s.encode("utf-8", errors="ignore")
+    if len(encoded) <= budget:
+        return s
+    trimmed = encoded[:budget].decode("utf-8", errors="ignore")
+    return trimmed or s[:1]
+
+
 def _safe(value: str) -> str:
     cleaned = _UNSAFE.sub("_", value).strip(". ")
     return cleaned or "_"
@@ -101,17 +117,20 @@ def _final_segment(s: str) -> str:
     * Windows reserved device names (CON, PRN, etc.) — prefix an
       underscore so the final name isn't e.g. "CON.epub"
     """
-    if len(s) > _MAX_SEGMENT_LEN:
+    # Filesystems cap a path component in *bytes*, not characters. A
+    # 105-character CJK title is 305 UTF-8 bytes and the create fails
+    # with ENAMETOOLONG, so measure and truncate in bytes.
+    if _byte_len(s) > _MAX_SEGMENT_LEN:
         base, sep, ext = s.rpartition(".")
         # Only treat the trailing part as an extension if it looks
         # like one: short, alphanumeric, and non-empty. Otherwise
         # truncate the raw string so we don't cleave a title at a
         # coincidental dot.
         if sep and base and 1 <= len(ext) <= 10 and ext.isalnum():
-            budget = max(1, _MAX_SEGMENT_LEN - len(sep) - len(ext))
-            s = base[:budget] + sep + ext
+            budget = max(1, _MAX_SEGMENT_LEN - _byte_len(sep + ext))
+            s = _truncate_bytes(base, budget) + sep + ext
         else:
-            s = s[:_MAX_SEGMENT_LEN]
+            s = _truncate_bytes(s, _MAX_SEGMENT_LEN)
     base_for_reserved = s.split(".", 1)[0].lower()
     if base_for_reserved in _WINDOWS_RESERVED:
         s = "_" + s

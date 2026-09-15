@@ -7,8 +7,8 @@
   "counts": {
     "P1": 15,
     "P2": 35,
-    "open": 28,
-    "fixed": 22,
+    "open": 25,
+    "fixed": 25,
     "rejected": 0
   },
   "counting_note": "50 confirmed findings, including linked failure modes; not 50 independent root causes. Distribution observations, dependency advisory records, static concerns and UX proposals are separate. Probe success means reproduction completed, not defect repaired.",
@@ -237,7 +237,7 @@
       "id": "CORE-08",
       "priority": "P1",
       "title": "declared Python 3.9 support fails at import",
-      "status": "open",
+      "status": "fixed",
       "verification": "confirmed_by_targeted_local_probe",
       "detail": "CORE.md#core-08",
       "detail_line": 69,
@@ -246,13 +246,14 @@
       "evidence_files": [
         "evidence/python39_probe.py",
         "evidence/python39_probe.log"
-      ]
+      ],
+      "resolved_in": "5ee8f77"
     },
     {
       "id": "CORE-09",
       "priority": "P2",
       "title": "the pip entry point rejects no arguments instead of opening the GUI",
-      "status": "open",
+      "status": "fixed",
       "verification": "confirmed_by_targeted_local_probe",
       "detail": "CORE.md#core-09",
       "detail_line": 79,
@@ -261,13 +262,14 @@
       "evidence_files": [
         "evidence/core_entrypoint_repros.py",
         "evidence/core_entrypoint_repros.json"
-      ]
+      ],
+      "resolved_in": "5ee8f77"
     },
     {
       "id": "CORE-10",
       "priority": "P2",
       "title": "deduplication discards deliberate exports to another format or folder",
-      "status": "open",
+      "status": "fixed",
       "verification": "confirmed_by_targeted_local_probe",
       "detail": "CORE.md#core-10",
       "detail_line": 89,
@@ -276,7 +278,8 @@
       "evidence_files": [
         "evidence/core_entrypoint_repros.py",
         "evidence/core_entrypoint_repros.json"
-      ]
+      ],
+      "resolved_in": "5ee8f77"
     },
     {
       "id": "CORE-11",

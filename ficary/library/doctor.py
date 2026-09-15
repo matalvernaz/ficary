@@ -33,10 +33,13 @@ Usage sketch::
 
 from __future__ import annotations
 
+import logging
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterator
+
+logger = logging.getLogger(__name__)
 
 from .index import LibraryIndex
 
@@ -146,6 +149,7 @@ class HealReport:
     removed_stale_duplicates: int = 0
     refreshed_drift: int = 0
     scanned_orphans: int = 0
+    promoted_duplicates: int = 0
 
     def summary(self) -> str:
         parts = []
@@ -170,6 +174,12 @@ class HealReport:
         if self.scanned_orphans:
             parts.append(
                 f"indexed {self.scanned_orphans} orphan file(s)"
+            )
+        if self.promoted_duplicates:
+            parts.append(
+                f"promoted {self.promoted_duplicates} surviving cop"
+                f"{'y' if self.promoted_duplicates == 1 else 'ies'} "
+                "to primary"
             )
         if not parts:
             return "No changes."
@@ -261,6 +271,37 @@ def check_integrity(root: Path, index: LibraryIndex) -> IntegrityReport:
 
 # ── Mutation ──────────────────────────────────────────────────────
 
+def _promote_surviving_duplicate(root: Path, entry: dict):
+    """Make a still-present duplicate the story's primary file.
+
+    Returns the promoted relpath, or ``None`` when no tracked copy
+    survives. The old primary is not kept in ``duplicate_relpaths`` —
+    it is gone.
+    """
+    dupes = list(entry.get("duplicate_relpaths") or [])
+    for rel in dupes:
+        if not rel:
+            continue
+        if (root / rel).is_file():
+            entry["relpath"] = rel
+            remaining = [d for d in dupes if d != rel]
+            if remaining:
+                entry["duplicate_relpaths"] = remaining
+            else:
+                entry.pop("duplicate_relpaths", None)
+            # The signature described the file that vanished.
+            try:
+                st = (root / rel).stat()
+            except OSError:
+                entry.pop("file_mtime", None)
+                entry.pop("file_size", None)
+            else:
+                entry["file_mtime"] = st.st_mtime
+                entry["file_size"] = st.st_size
+            return rel
+    return None
+
+
 def heal(
     root: Path,
     index: LibraryIndex,
@@ -287,9 +328,24 @@ def heal(
     if drop_missing and report.missing_files:
         stories = lib_state["stories"]
         for url, _entry in report.missing_files:
-            if url in stories:
-                del stories[url]
-                result.removed_missing += 1
+            entry = stories.get(url)
+            if entry is None:
+                continue
+            # A renamed file is recorded as a duplicate of the vanished
+            # primary. Dropping the story anyway un-tracked content that
+            # is still on disk — and because the integrity check counts
+            # duplicates as tracked, the same run's orphan scan never
+            # picked it back up.
+            promoted = _promote_surviving_duplicate(root, entry)
+            if promoted is not None:
+                logger.info(
+                    "doctor: promoting surviving copy %s for %s",
+                    promoted, url,
+                )
+                result.promoted_duplicates += 1
+                continue
+            del stories[url]
+            result.removed_missing += 1
 
     if prune_duplicates and report.stale_duplicate_relpaths:
         stories = lib_state["stories"]
@@ -336,10 +392,36 @@ def heal(
             primary_rel = entry.get("relpath")
             if not primary_rel:
                 continue
+            path = root / primary_rel
             try:
-                st = (root / primary_rel).stat()
+                st = path.stat()
             except OSError:
                 continue
+            # Re-read what the signature vouches for before stamping it.
+            # Stamping mtime/size alone turned "this entry is stale" into
+            # "this entry is current", so the refresh path then trusted a
+            # chapter count that no longer matched the file and stopped
+            # offering the update.
+            try:
+                from ..updater import extract_metadata
+
+                md = extract_metadata(path)
+            except Exception:
+                # Extraction failed, so the cached metadata cannot be
+                # vouched for: leave the signature stale and let the
+                # refresh path reparse.
+                logger.debug(
+                    "doctor: could not re-read %s; leaving its signature "
+                    "stale", path, exc_info=True,
+                )
+                continue
+            # ``chapter_count`` defaults to 0 when nothing could be
+            # parsed; stamping that would replace a good count with a
+            # wrong one.
+            if md.chapter_count:
+                entry["chapter_count"] = md.chapter_count
+            if md.status:
+                entry["status"] = md.status
             entry["file_mtime"] = st.st_mtime
             entry["file_size"] = st.st_size
             result.refreshed_drift += 1

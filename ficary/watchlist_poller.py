@@ -126,9 +126,16 @@ class WatchlistPoller:
         """
         autopoll = self._prefs.get_bool(_p.KEY_WATCH_AUTOPOLL)
         self._interval = self._read_interval()
-        if autopoll and not self.is_running():
+        if autopoll:
+            # Always call start(): it is idempotent, and only start()
+            # holds the lock that can cancel a stop the running worker
+            # has not observed yet. Gating on ``not is_running()`` meant
+            # switching autopoll off and straight back on during a poll
+            # left the stop request standing, and the worker exited when
+            # its poll finished — autopoll read as enabled with nothing
+            # polling.
             self.start()
-        elif not autopoll and self.is_running():
+        elif self.is_running():
             self.stop()
 
     # ── Thread body ─────────────────────────────────────────

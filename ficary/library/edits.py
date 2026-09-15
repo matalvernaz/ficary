@@ -213,13 +213,23 @@ _ScraperCache = dict[str, BaseScraper]
 
 def _scraper_for_url(url: str, cache: _ScraperCache) -> BaseScraper | None:
     """Return a scraper instance for ``url``, reusing an existing
-    one from ``cache`` when available."""
+    one from ``cache`` when available.
+
+    Caching is switched off on every scraper this scan touches,
+    including instances handed in by the caller. The whole point of an
+    edit scan is to compare upstream text against what we stored, and a
+    warm chapter cache answers with the stored text — so a warm install
+    reported every silently-edited story as unchanged. Sessions, cookies
+    and rate limiting are untouched; only the chapter-body cache is.
+    """
     cls = detect_scraper(url)
     key = getattr(cls, "site_name", cls.__name__)
     scraper = cache.get(key)
     if scraper is None:
-        scraper = cls()
+        scraper = cls(use_cache=False)
         cache[key] = scraper
+    elif getattr(scraper, "use_cache", False):
+        scraper.use_cache = False
     return scraper
 
 

@@ -136,6 +136,11 @@ class LibraryIndex:
         # changes. None means "never loaded from disk" (first write, no
         # prior state to conflict with).
         self._loaded_sig: "tuple[float, int] | None" = None
+        # True when ``load()`` found no file at all. Distinct from
+        # ``_loaded_sig is None``, which an instance constructed
+        # directly also has: only a load that *checked* and found
+        # nothing may be surprised by a file appearing later.
+        self._loaded_absent = False
 
     # ── Construction ────────────────────────────────────────────
 
@@ -162,10 +167,16 @@ class LibraryIndex:
         index until the situation is resolved."""
         p = Path(path) if path else default_index_path()
         if not p.exists():
-            return cls(p, _empty())
+            inst = cls(p, _empty())
+            # Record that the file was absent, as a state distinct from
+            # "haven't checked". Two instances that both loaded before
+            # either wrote used to believe they were each the first
+            # writer, and the second save silently discarded the first.
+            inst._loaded_absent = True
+            return inst
         try:
             raw = json.loads(p.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError):
+        except (json.JSONDecodeError, OSError, UnicodeDecodeError):
             inst = cls(p, _empty())
             # File exists but is unparseable. Set a blocker to prevent
             # blind overwrite — a JSON-corrupt index might still be
@@ -186,6 +197,15 @@ class LibraryIndex:
             # crash _migrate_non_canonical_keys with an AttributeError and
             # break load()'s "never raises" contract (audit #9).
             or not isinstance(raw.get("libraries", {}), dict)
+            # Each library must itself be a mapping of url -> entry. A
+            # null or list value further down used to escape as an
+            # AttributeError from the key migration, breaking load()'s
+            # never-raises contract for exactly the recovery tooling
+            # that needs it most.
+            or not all(
+                isinstance(v, dict)
+                for v in raw.get("libraries", {}).values()
+            )
         ):
             snapshot_path, blocker = _snapshot_unreadable_index(p, raw)
             inst = cls(p, _empty())
@@ -222,6 +242,16 @@ class LibraryIndex:
                     "another process since load(); reload before saving "
                     "to avoid silently overwriting concurrent changes"
                 )
+        elif getattr(self, "_loaded_absent", False):
+            # We loaded nothing because the file did not exist. If it
+            # exists now, somebody else got there first and this write
+            # would erase their entries.
+            if _stat_signature(self._path) is not None:
+                raise IndexConflictError(
+                    f"library index at {self._path} was created by "
+                    "another writer since load(); reload before saving "
+                    "to avoid discarding its entries"
+                )
         atomic_write_text(
             self._path,
             json.dumps(self._data, indent=2, sort_keys=True),
@@ -230,6 +260,7 @@ class LibraryIndex:
         # Re-stat after our own write so subsequent saves don't
         # spuriously detect our last write as another writer's.
         self._loaded_sig = _stat_signature(self._path)
+        self._loaded_absent = False
 
     @property
     def save_blocker(self) -> str | None:
@@ -347,6 +378,14 @@ class LibraryIndex:
                     # preserved across rescans, so the browser can sort by
                     # "date added" without it resetting on every scan.
                     "added_at",
+                    # Manual classifications. These are the user's
+                    # judgement, not anything the scanner can derive from
+                    # the file, so a rescan must not silently revive a
+                    # story the user retired or unhide one they marked
+                    # adult. Clearing them is an explicit action
+                    # (revive_abandoned, the browser's adult toggle).
+                    "abandoned_at",
+                    "adult",
                 ):
                     if k in existing:
                         existing_preserved[k] = existing[k]

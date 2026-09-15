@@ -93,8 +93,14 @@ def test_reconfigure_stops_thread_when_autopoll_disabled(monkeypatch):
     assert stopped == [True]
 
 
-def test_reconfigure_noop_when_already_in_target_state(monkeypatch):
-    """Enabled + already running → no start; disabled + not running → no stop."""
+def test_reconfigure_always_starts_when_enabled(monkeypatch):
+    """Enabled → start() every time; disabled + not running → no stop.
+
+    ``start()`` is idempotent and is the only place holding the lock
+    that cancels a stop the running worker has not observed yet, so
+    reconfigure must call it even when a worker is already alive.
+    Skipping it left autopoll enabled with a worker about to exit.
+    """
     prefs = _FakePrefs({_p.KEY_WATCH_AUTOPOLL: True})
     poller = WatchlistPoller(prefs)
 
@@ -108,9 +114,25 @@ def test_reconfigure_noop_when_already_in_target_state(monkeypatch):
     monkeypatch.setattr(poller, "start", lambda: calls.append("start"))
     monkeypatch.setattr(poller, "stop", lambda: calls.append("stop"))
     poller.reconfigure()
-    assert calls == []
+    assert calls == ["start"]
 
     prefs.set_bool(_p.KEY_WATCH_AUTOPOLL, False)
     poller._thread = None
     poller.reconfigure()
-    assert calls == []
+    assert calls == ["start"]
+
+
+def test_reconfigure_cancels_an_unobserved_stop(monkeypatch):
+    """Autopoll off then on during a poll must leave polling alive."""
+    prefs = _FakePrefs({_p.KEY_WATCH_AUTOPOLL: True})
+    poller = WatchlistPoller(prefs)
+
+    class _LiveThread:
+        def is_alive(self):
+            return True
+
+    poller._thread = _LiveThread()
+    poller._stop.set()          # stop requested, worker still polling
+    prefs.set_bool(_p.KEY_WATCH_AUTOPOLL, True)
+    poller.reconfigure()
+    assert not poller._stop.is_set()

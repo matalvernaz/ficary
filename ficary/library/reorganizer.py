@@ -199,6 +199,9 @@ def apply(
 
     # Track source parents for an empty-dir cleanup pass after.
     touched_dirs: set[Path] = set()
+    # (url, new relpath) for every file actually moved, so the optional
+    # full-text projection can be pointed at the new locations.
+    relocated: list[tuple[str, str]] = []
 
     for op in ops:
         if not op.source.exists():
@@ -227,6 +230,7 @@ def apply(
         entry = idx.lookup_by_url(root, op.source_url)
         if entry is not None:
             entry["relpath"] = str(op.target.relative_to(root))
+            relocated.append((op.source_url, entry["relpath"]))
         else:
             # The file is moved on disk but the index has no matching
             # entry — surface it loudly rather than silently leaving an
@@ -250,8 +254,35 @@ def apply(
 
     if result.applied > 0:
         idx.save()
+        _sync_fulltext_paths(root, relocated)
 
     return result
+
+
+def _sync_fulltext_paths(root: Path, moved: list) -> None:
+    """Point the full-text projection at the files' new locations.
+
+    Best effort: no search index is a normal state, and a reorganise
+    must not fail because the optional projection could not be updated.
+    Skipping it entirely was the bug — search kept returning the paths
+    the files used to have.
+    """
+    if not moved:
+        return
+    try:
+        from .fulltext import FullTextIndex, default_search_db_path
+
+        db_path = default_search_db_path()
+        if not db_path.exists():
+            return
+        with FullTextIndex(db_path) as fti:
+            for url, relpath in moved:
+                fti.update_relpath(str(root), url, relpath)
+    except Exception:
+        logger.warning(
+            "Could not update the full-text index after reorganising; "
+            "run --populate-search to refresh it.", exc_info=True,
+        )
 
 
 def _entry_to_metadata(url: str, entry: dict) -> FileMetadata:
