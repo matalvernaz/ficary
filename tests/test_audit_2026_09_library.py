@@ -408,3 +408,40 @@ def test_outcome_of_treats_a_silent_join_as_success():
     assert outcome_of(DownloadOutcome(ok=True, saved_paths=["/x"])).saved_paths == [
         "/x"
     ]
+
+
+# ── Follow-up: pending work belongs only to downloading watches ────
+
+def test_a_notify_only_watch_never_accumulates_pending_downloads(tmp_path):
+    store, watch = _story_watch(tmp_path, auto_download=False)
+
+    run_once(store, None, scraper_factory=_scraper_factory(3),
+             notifier=lambda *a: (["email"], []))
+
+    saved = _reloaded(store.path).get(watch.id)
+    assert saved.pending_downloads == []
+
+
+def test_a_pause_saved_during_a_poll_stops_delivery(tmp_path):
+    store, watch = _story_watch(tmp_path)
+    sent = []
+
+    def pause_midway(url):
+        other = _reloaded(store.path)
+        row = other.get(watch.id)
+        row.enabled = False
+        other.update(row)
+
+        class _Scraper:
+            def get_chapter_count(self, u):
+                return 3
+
+        return _Scraper()
+
+    run_once(store, None, scraper_factory=pause_midway,
+             notifier=lambda *a: sent.append(a) or (["email"], []))
+
+    assert sent == [], "a watch paused during the poll must not notify"
+    saved = _reloaded(store.path).get(watch.id)
+    assert saved.enabled is False
+    assert saved.last_seen == 3, "the observation itself is still recorded"

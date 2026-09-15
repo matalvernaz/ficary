@@ -7,8 +7,8 @@
   "counts": {
     "P1": 15,
     "P2": 35,
-    "open": 9,
-    "fixed": 41,
+    "open": 0,
+    "fixed": 50,
     "rejected": 0
   },
   "counting_note": "50 confirmed findings, including linked failure modes; not 50 independent root causes. Distribution observations, dependency advisory records, static concerns and UX proposals are separate. Probe success means reproduction completed, not defect repaired.",
@@ -559,7 +559,7 @@
       "id": "UX-01",
       "priority": "P1",
       "title": "Linux source/pip preferences cannot persist because their filename is the data directory",
-      "status": "open",
+      "status": "fixed",
       "verification": "confirmed_by_targeted_local_probe",
       "detail": "UX.md#ux-01",
       "detail_line": 11,
@@ -569,13 +569,14 @@
         "evidence/ux_preferences_storage_probe.py",
         "evidence/ux_preferences_storage_probe.json",
         "evidence/ux_preferences_storage_probe.stderr"
-      ]
+      ],
+      "resolved_in": "56bc647"
     },
     {
       "id": "UX-02",
       "priority": "P1",
       "title": "closing a search window leaves the application permanently busy",
-      "status": "open",
+      "status": "fixed",
       "verification": "confirmed_by_targeted_local_probe",
       "detail": "UX.md#ux-02",
       "detail_line": 27,
@@ -585,13 +586,14 @@
         "evidence/ux_native_probe.py",
         "evidence/ux_native_probe.json",
         "evidence/ux_native_probe.stderr"
-      ]
+      ],
+      "resolved_in": "56bc647"
     },
     {
       "id": "UX-03",
       "priority": "P1",
       "title": "authentication fields collapse to zero height in the default Preferences dialog",
-      "status": "open",
+      "status": "fixed",
       "verification": "confirmed_by_targeted_local_probe",
       "detail": "UX.md#ux-03",
       "detail_line": 43,
@@ -601,13 +603,14 @@
         "evidence/ux_native_probe.py",
         "evidence/ux_native_probe.json",
         "evidence/ux_native_probe.stderr"
-      ]
+      ],
+      "resolved_in": "56bc647"
     },
     {
       "id": "UX-04",
       "priority": "P2",
       "title": "default search windows clip filters horizontally",
-      "status": "open",
+      "status": "fixed",
       "verification": "confirmed_by_targeted_local_probe",
       "detail": "UX.md#ux-04",
       "detail_line": 57,
@@ -617,13 +620,14 @@
         "evidence/ux_native_probe.py",
         "evidence/ux_native_probe.json",
         "evidence/ux_native_probe.stderr"
-      ]
+      ],
+      "resolved_in": "56bc647"
     },
     {
       "id": "UX-05",
       "priority": "P2",
       "title": "library/watch jobs discard saved Cloudflare and newer site credentials",
-      "status": "open",
+      "status": "fixed",
       "verification": "confirmed_by_targeted_local_probe",
       "detail": "UX.md#ux-05",
       "detail_line": 71,
@@ -632,13 +636,14 @@
       "evidence_files": [
         "evidence/ux_jobs_probe.py",
         "evidence/ux_jobs_probe.json"
-      ]
+      ],
+      "resolved_in": "56bc647"
     },
     {
       "id": "UX-06",
       "priority": "P2",
       "title": "fetching Audiobookshelf libraries freezes the desktop event loop",
-      "status": "open",
+      "status": "fixed",
       "verification": "confirmed_by_targeted_local_probe",
       "detail": "UX.md#ux-06",
       "detail_line": 87,
@@ -647,13 +652,14 @@
       "evidence_files": [
         "evidence/ux_abs_preferences_probe.py",
         "evidence/ux_abs_preferences_probe.json"
-      ]
+      ],
+      "resolved_in": "56bc647"
     },
     {
       "id": "UX-07",
       "priority": "P2",
       "title": "Cancel does not discard Audiobookshelf connection changes",
-      "status": "open",
+      "status": "fixed",
       "verification": "confirmed_by_targeted_local_probe",
       "detail": "UX.md#ux-07",
       "detail_line": 101,
@@ -662,13 +668,14 @@
       "evidence_files": [
         "evidence/ux_abs_preferences_probe.py",
         "evidence/ux_abs_preferences_probe.json"
-      ]
+      ],
+      "resolved_in": "56bc647"
     },
     {
       "id": "UX-08",
       "priority": "P1",
       "title": "Update File leaves a renamed book stale and writes a second book",
-      "status": "open",
+      "status": "fixed",
       "verification": "confirmed_by_targeted_local_probe",
       "detail": "UX.md#ux-08",
       "detail_line": 117,
@@ -677,19 +684,21 @@
       "evidence_files": [
         "evidence/ux_gui_update_probe.py",
         "evidence/ux_gui_update_probe.json"
-      ]
+      ],
+      "resolved_in": "56bc647"
     },
     {
       "id": "UX-09",
       "priority": "P2",
       "title": "the first-run manual directs users to controls that moved",
-      "status": "open",
+      "status": "fixed",
       "verification": "confirmed_source_contract",
       "detail": "UX.md#ux-09",
       "detail_line": 133,
       "repair_group": "R07",
       "acceptance_check": "The version-matched first-run guide leads a keyboard user from empty library through Add Story to the saved book; shortcuts and text-file versus web-list commands match the app.",
-      "evidence_files": []
+      "evidence_files": [],
+      "resolved_in": "56bc647"
     },
     {
       "id": "AUD-A01",

@@ -138,36 +138,55 @@ def _destination(
     return resolve_export_path(Path(output_dir) / filename, story)
 
 
-def _same_source(path: Path, story: Story) -> bool:
-    """Is the file at ``path`` an export of ``story``?
+def _existing_source_url(path: Path) -> str:
+    """The source URL of the export already at ``path``, if we can tell.
 
-    Compared by source URL, the only identity an export actually
-    carries. A read failure answers "unknown" as ``False`` so the
-    caller allocates a new name rather than overwriting a file it
-    could not identify.
+    Tries the file's own embedded metadata first, then the library
+    index, which knows the URL for every file it has scanned even when
+    the file itself carries no readable source (a lossy TXT, a
+    third-party import). Returns an empty string when neither answers.
+    """
+    try:
+        from .updater import extract_source_url
+
+        found = extract_source_url(path)
+        if found:
+            return found
+    except Exception:
+        pass
+    try:
+        from .library.index import LibraryIndex
+
+        index = LibraryIndex.load()
+        resolved = path.resolve()
+        for root in index.library_roots():
+            root_path = Path(root)
+            for url, entry in index.stories_in(root_path):
+                rel = entry.get("relpath")
+                if rel and (root_path / rel).resolve() == resolved:
+                    return url
+    except Exception:
+        logger.debug("index lookup for %s failed", path, exc_info=True)
+    return ""
+
+
+def _existing_is_other_story(path: Path, story: Story) -> bool:
+    """True only when the file at ``path`` is positively a *different* work.
+
+    Deliberately conservative. An unidentifiable file keeps the
+    historical overwrite behaviour: refusing to write would strand a
+    re-download behind an ever-growing chain of numbered siblings,
+    which is a worse failure than the one this guards against.
     """
     url = getattr(story, "url", None)
     if not url:
         return False
-    try:
-        from .updater import extract_source_url
-
-        existing = extract_source_url(path)
-    except Exception:
+    existing = _existing_source_url(path)
+    if not existing:
         return False
-    return _canonical_source(existing) == _canonical_source(url)
+    from .sites import canonical_url
 
-
-def _canonical_source(url: str) -> str:
-    """Normalise a source URL enough to compare two exports."""
-    text = (url or "").strip().rstrip("/").lower()
-    for prefix in ("https://", "http://"):
-        if text.startswith(prefix):
-            text = text[len(prefix):]
-            break
-    if text.startswith("www."):
-        text = text[4:]
-    return text
+    return canonical_url(existing) != canonical_url(url)
 
 
 def resolve_export_path(path: Path, story: Story) -> Path:
@@ -181,12 +200,14 @@ def resolve_export_path(path: Path, story: Story) -> Path:
     numbered sibling instead.
     """
     path = Path(path)
-    if not path.exists() or _same_source(path, story):
+    if not path.exists() or not _existing_is_other_story(path, story):
         return path
     stem, suffix = path.stem, path.suffix
     for n in range(2, _MAX_COLLISION_SUFFIX):
         candidate = path.with_name(f"{stem} ({n}){suffix}")
-        if not candidate.exists() or _same_source(candidate, story):
+        if not candidate.exists() or not _existing_is_other_story(
+            candidate, story,
+        ):
             logger.info(
                 "%s already holds a different story; writing %s instead",
                 path.name, candidate.name,

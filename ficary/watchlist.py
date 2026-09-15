@@ -637,6 +637,18 @@ def run_once(
             # work is done. Pausing a watch, changing its channels or
             # switching auto-download off during a long poll must take
             # effect on this pass, not be overwritten by it.
+            # Re-read from disk, not from the list this loop is walking:
+            # ``get`` serves the in-memory snapshot taken before the
+            # network work, which is exactly the stale copy this guard
+            # exists to avoid.
+            try:
+                store.reload()
+            except Exception:
+                logger.exception(
+                    "Could not re-read the watchlist after polling %s; "
+                    "using the pre-poll configuration.",
+                    watch.display_label(),
+                )
             current = store.get(watch.id)
             if current is not None:
                 for name in (
@@ -647,7 +659,8 @@ def run_once(
                 if not watch.enabled:
                     # Paused mid-poll: record what we observed, deliver
                     # nothing, and leave the pending work for a later run.
-                    _queue_pending_downloads(watch, result)
+                    if watch.auto_download:
+                        _queue_pending_downloads(watch, result)
                     store.update_poll_state(watch)
                     results.append(result)
                     continue
@@ -662,7 +675,11 @@ def run_once(
             # everything else in this loop). Note the download runs
             # inside _RUN_ONCE_LOCK: a long download delays a concurrent
             # Run Now — accepted v1 tradeoff, documented in the GUI help.
-            if result.ok:
+            # Only a watch that downloads owes downloads. A notify-only
+            # watch would otherwise accumulate every work it ever saw,
+            # and fetch the whole backlog the moment auto-download was
+            # switched on.
+            if result.ok and watch.auto_download:
                 _queue_pending_downloads(watch, result)
             if (
                 downloader is not None
