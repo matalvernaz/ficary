@@ -175,8 +175,10 @@ alert.
   deliberate: a failure you can retry is better than a book missing
   most of its chapters.
 * Linux source and pip installs: preferences move to `settings.ini` in
-  Ficary's data folder. Anything the old location managed to save is
-  copied across on first launch.
+  Ficary's data folder. Nothing was ever persisting at the old
+  location, so expect to set your library folder, format and logins
+  once more after upgrading. If the old location did somehow hold
+  settings, they are copied across on first launch.
 
 ## 2.19.0 — 2026-08-09
 
