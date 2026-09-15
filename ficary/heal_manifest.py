@@ -16,6 +16,7 @@ import re
 import time
 import uuid
 from dataclasses import asdict, dataclass, field
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
@@ -27,7 +28,45 @@ logger = logging.getLogger(__name__)
 _MANIFEST_DIRNAME = "heal-manifests"
 _SNAPSHOT_DIRNAME = "snapshots"
 _MAX_MANIFESTS = 10
-_NAME_RE = re.compile(r"^heal-(\d{8}-\d{6})-[0-9a-f]{8}\.json$")
+# The fractional second is absent on manifests written before 2.20.0.
+_NAME_RE = re.compile(
+    r"^heal-(?P<ts>\d{8}-\d{6}(?:\.\d{6})?)-[0-9a-f]{8}\.json$"
+)
+
+
+def _stamp() -> str:
+    """Local-time name stamp, to the microsecond.
+
+    Whole seconds were not enough. Two heals inside one second produced
+    names that differed only in their uuid salt, so ``list_manifests``
+    ordered them at random: ``--doctor-restore-last`` could restore the
+    earlier heal's snapshot, and ``_prune_old`` could delete the newer
+    manifest and keep the older one. Local time, matching the stamps
+    already on disk, so old and new names still sort together.
+    """
+    return datetime.now().strftime("%Y%m%d-%H%M%S.%f")
+
+
+def _newest_first(paths) -> list[Path]:
+    """Sort stamped manifests newest first.
+
+    The embedded stamp is the primary key so a filesystem with a coarse
+    or backwards-jumping clock still gives a stable order; mtime only
+    separates the second-resolution names written before 2.20.0, which
+    the stamp alone cannot tell apart.
+    """
+    entries = []
+    for path in paths:
+        m = _NAME_RE.match(path.name)
+        if m is None:
+            continue
+        try:
+            written = path.stat().st_mtime_ns
+        except OSError:
+            written = 0
+        entries.append((m.group("ts"), written, path))
+    entries.sort(key=lambda t: (t[0], t[1]), reverse=True)
+    return [path for _ts, _written, path in entries]
 
 
 @dataclass
@@ -72,7 +111,7 @@ def write_manifest(manifest: HealManifest) -> Path:
     directory = manifest_dir()
     directory.mkdir(parents=True, exist_ok=True)
     if not manifest.path:
-        stamp = time.strftime("%Y%m%d-%H%M%S")
+        stamp = _stamp()
         salt = uuid.uuid4().hex[:8]
         manifest.path = str(directory / f"heal-{stamp}-{salt}.json")
     manifest.created_at = manifest.created_at or time.strftime(
@@ -118,7 +157,7 @@ def capture_snapshot(src, kind: str) -> Optional[Path]:
     try:
         directory = snapshot_dir()
         directory.mkdir(parents=True, exist_ok=True)
-        stamp = time.strftime("%Y%m%d-%H%M%S")
+        stamp = _stamp()
         salt = uuid.uuid4().hex[:8]
         dest = directory / f"{stamp}-{salt}-{kind}{src.suffix or '.json'}"
         atomic_write_bytes(dest, src.read_bytes())
@@ -147,9 +186,9 @@ def list_manifests() -> list[Path]:
     directory = manifest_dir()
     if not directory.is_dir():
         return []
-    entries = [p for p in directory.iterdir() if _NAME_RE.match(p.name)]
-    entries.sort(key=lambda p: p.name, reverse=True)
-    return entries
+    return _newest_first(
+        p for p in directory.iterdir() if _NAME_RE.match(p.name)
+    )
 
 
 def latest_manifest() -> Optional[HealManifest]:
@@ -187,8 +226,9 @@ def _unlink_owned_snapshots(manifest: HealManifest) -> None:
 
 
 def _prune_old(directory: Path) -> None:
-    entries = [p for p in directory.iterdir() if _NAME_RE.match(p.name)]
-    entries.sort(key=lambda p: p.name, reverse=True)
+    entries = _newest_first(
+        p for p in directory.iterdir() if _NAME_RE.match(p.name)
+    )
     for old in entries[_MAX_MANIFESTS:]:
         # Delete the manifest's owned snapshots before the manifest itself
         # so pruning never orphans snapshot files under snapshots/.

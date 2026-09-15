@@ -64,6 +64,10 @@ alert.
   first disarmed the other. Each render has its own.
 * Installing Piper failed on the package layout its own release uses,
   and afterwards a folder was accepted as the installed program.
+* An unreadable voice map or accent list is set aside so you can fix
+  the typo and rename it back. Two renders hitting the same broken file
+  in the same second set it aside to the same name, and the second move
+  erased the first rescued copy.
 
 *Your reading*
 
@@ -90,6 +94,9 @@ alert.
   order, so the list of recovery points was not really newest-first and
   the cleanup that keeps the ten most recent could discard the wrong
   one. Backups are now stamped to the microsecond.
+* Two repairs run in the same second left "restore the last repair"
+  picking between them at random, and the record of the newer one could
+  be the one discarded when the list was trimmed.
 * A rescan erased stories you had marked adult or abandoned.
 * Repairing the library stamped a file's metadata as current without
   re-reading it, turning data that was known to be stale into data that

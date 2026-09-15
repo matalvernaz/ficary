@@ -22,6 +22,7 @@ from __future__ import annotations
 import json
 import logging
 import time
+from datetime import datetime
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -34,7 +35,11 @@ def _quarantine(path: Path, why: Exception) -> None:
     would otherwise REWRITE the user's whole map (the docstring promise
     is "edits survive re-renders"). Quarantined content is recoverable
     with a one-character fix."""
-    stamp = time.strftime("%Y%m%d-%H%M%S")
+    # Microseconds, not whole seconds: ``replace`` overwrites, so two
+    # renders that both read the same corrupt sidecar inside one second
+    # would quarantine over each other and destroy the edits this move
+    # exists to preserve.
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S.%f")
     target = path.with_name(f"{path.name}.corrupt-{stamp}")
     try:
         path.replace(target)

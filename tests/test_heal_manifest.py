@@ -33,6 +33,30 @@ class TestManifestRoundTrip:
             hm.write_manifest(hm.HealManifest(label=f"heal {i}"))
         assert len(hm.list_manifests()) == 10
 
+    def test_manifests_from_one_second_keep_their_order(
+        self, portable_tmp, monkeypatch
+    ):
+        """Six heals in a tight loop share a whole-second stamp, so the
+        name sort fell through to the uuid salt: --doctor-restore-last
+        could restore an earlier heal, and the depth-cap prune could
+        delete the newest manifest. The adverse directory order is
+        forced because small directories enumerate in creation order on
+        some filesystems and the bug then hides."""
+        for i in range(6):
+            hm.write_manifest(hm.HealManifest(label=f"heal {i}"))
+
+        real_iterdir = Path.iterdir
+        monkeypatch.setattr(
+            Path, "iterdir", lambda self: iter(list(real_iterdir(self))[::-1])
+        )
+
+        labels = [
+            json.loads(m.read_text(encoding="utf-8"))["label"]
+            for m in hm.list_manifests()
+        ]
+        assert labels == [f"heal {i}" for i in reversed(range(6))]
+        assert hm.latest_manifest().label == "heal 5"
+
     def test_mark_restored_persists(self, portable_tmp):
         hm.write_manifest(hm.HealManifest(
             label="x", watchlist_snapshot="/w.json"))

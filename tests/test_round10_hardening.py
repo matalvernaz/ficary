@@ -79,6 +79,22 @@ class TestSidecarQuarantine:
         assert len(quarantined) == 1
         assert "Harry" in quarantined[0].read_text(encoding="utf-8")
 
+    def test_second_corruption_does_not_overwrite_the_first(self, tmp_path):
+        """The quarantine name was stamped to the whole second and the
+        move overwrites, so a second corrupt read inside that second
+        destroyed the first rescued copy. Both must survive: each holds
+        edits the user is meant to be able to fix and rename back."""
+        path = tmp_path / ".ficary-accents-1.json"
+        path.write_text('{"Harry": "en-GB",}', encoding="utf-8")
+        assert accent_map.load_accents(path) == {}
+        path.write_text('{"Hermione": "en-GB",}', encoding="utf-8")
+        assert accent_map.load_accents(path) == {}
+
+        quarantined = sorted(tmp_path.glob(".ficary-accents-1.json.corrupt-*"))
+        assert len(quarantined) == 2
+        rescued = "".join(q.read_text(encoding="utf-8") for q in quarantined)
+        assert "Harry" in rescued and "Hermione" in rescued
+
     def test_utf16_sidecar_does_not_crash(self, tmp_path):
         path = tmp_path / ".ficary-accents-1.json"
         path.write_bytes(json.dumps({"Harry": "en-GB"}).encode("utf-16"))

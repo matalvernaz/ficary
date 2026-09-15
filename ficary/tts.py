@@ -1427,8 +1427,15 @@ class VoiceMapper:
                 # support) recover whatever survived the corruption.
                 logger.warning("Voice map unreadable (%s); quarantining", exc)
                 try:
+                    from datetime import datetime
+
+                    # Microseconds, because ``rename`` overwrites: two
+                    # renders reading the same corrupt map inside one
+                    # second would quarantine over each other, losing
+                    # the map this whole branch exists to preserve.
+                    stamp = datetime.now().strftime("%Y%m%d-%H%M%S.%f")
                     quarantine = self.map_path.with_name(
-                        f"{self.map_path.stem}.corrupt-{int(__import__('time').time())}"
+                        f"{self.map_path.stem}.corrupt-{stamp}"
                         f"{self.map_path.suffix}"
                     )
                     self.map_path.rename(quarantine)
