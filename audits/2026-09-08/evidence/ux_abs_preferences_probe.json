@@ -1,0 +1,18 @@
+{
+  "timeline": [
+    {
+      "event": "request_start",
+      "main_thread": true
+    },
+    {
+      "event": "request_end"
+    },
+    {
+      "event": "ui_timer"
+    }
+  ],
+  "settings_after_cancel_without_ok": {
+    "abs_url": "https://new.invalid",
+    "abs_token": "synthetic-new-token"
+  }
+}

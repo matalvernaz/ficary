@@ -1,0 +1,876 @@
+{
+  "audit_started": "2026-09-08",
+  "audit_completed": "2026-09-13",
+  "repository_commit": "8f79e57399686357fcfead0e9fce29e70790beb1",
+  "version": "2.19.0",
+  "application_changes": false,
+  "counts": {
+    "P1": 15,
+    "P2": 35
+  },
+  "counting_note": "50 confirmed findings, including linked failure modes; not 50 independent root causes. Distribution observations, dependency advisory records, static concerns and UX proposals are separate. Probe success means reproduction completed, not defect repaired.",
+  "repair_groups": [
+    {
+      "id": "R01",
+      "title": "Preserve export destinations and source identity",
+      "finding_ids": [
+        "CORE-01",
+        "CORE-05",
+        "UX-08"
+      ]
+    },
+    {
+      "id": "R02",
+      "title": "Enforce privacy and connection boundaries",
+      "finding_ids": [
+        "CORE-11",
+        "AUD-A01",
+        "AUD-A03",
+        "AUD-A14"
+      ]
+    },
+    {
+      "id": "R03",
+      "title": "Conserve chapter and speech content",
+      "finding_ids": [
+        "CORE-02",
+        "CORE-03",
+        "CORE-06",
+        "L16",
+        "AUD-A06"
+      ]
+    },
+    {
+      "id": "R04",
+      "title": "Persist settings and support advertised launch paths",
+      "finding_ids": [
+        "UX-01",
+        "CORE-08",
+        "CORE-09",
+        "CORE-07"
+      ]
+    },
+    {
+      "id": "R05",
+      "title": "Make library repair and persistence conservative",
+      "finding_ids": [
+        "L01",
+        "L06",
+        "L07",
+        "L08",
+        "L11",
+        "L12",
+        "L13",
+        "L14",
+        "L15"
+      ]
+    },
+    {
+      "id": "R06",
+      "title": "Preserve download intent and watch outcomes",
+      "finding_ids": [
+        "CORE-10",
+        "UX-05",
+        "L02",
+        "L03",
+        "L04",
+        "L05",
+        "L09",
+        "L10",
+        "AUD-A11"
+      ]
+    },
+    {
+      "id": "R07",
+      "title": "Repair desktop lifecycle, layout and draft settings",
+      "finding_ids": [
+        "UX-02",
+        "UX-03",
+        "UX-04",
+        "UX-06",
+        "UX-07",
+        "UX-09"
+      ]
+    },
+    {
+      "id": "R08",
+      "title": "Own reader and soundscape playback lifecycles",
+      "finding_ids": [
+        "AUD-A04",
+        "AUD-A05",
+        "AUD-A08",
+        "AUD-A12",
+        "AUD-A13"
+      ]
+    },
+    {
+      "id": "R09",
+      "title": "Repair audio installation, cancellation and LLM configuration",
+      "finding_ids": [
+        "CORE-04",
+        "AUD-A02",
+        "AUD-A07",
+        "AUD-A09",
+        "AUD-A10"
+      ]
+    }
+  ],
+  "findings": [
+    {
+      "id": "CORE-01",
+      "priority": "P1",
+      "title": "filename collisions overwrite different stories; update staging can delete an unrelated book",
+      "status": "open",
+      "verification": "confirmed_by_targeted_local_probe",
+      "detail": "CORE.md#core-01",
+      "detail_line": 11,
+      "repair_group": "R01",
+      "acceptance_check": "Two works with identical title/author retain both files; updating a renamed export only replaces that exact target; requesting a different format preserves the original and correct extensions.",
+      "evidence_files": [
+        "evidence/core_repros.py",
+        "evidence/core_repros.json",
+        "evidence/core_entrypoint_repros.py",
+        "evidence/core_entrypoint_repros.json"
+      ]
+    },
+    {
+      "id": "CORE-02",
+      "priority": "P1",
+      "title": "ordinal chapter caches substitute old content after insertion/reordering",
+      "status": "open",
+      "verification": "confirmed_by_targeted_local_probe",
+      "detail": "CORE.md#core-02",
+      "detail_line": 21,
+      "repair_group": "R03",
+      "acceptance_check": "Warm-cache TOC insertion, deletion and reordering return each current source chapter once, in the requested order, with no stale body substitution.",
+      "evidence_files": [
+        "evidence/core_repros.py",
+        "evidence/core_repros.json"
+      ]
+    },
+    {
+      "id": "CORE-03",
+      "priority": "P1",
+      "title": "ScribbleHub TOC failure silently turns a recent-chapter excerpt into a complete book",
+      "status": "open",
+      "verification": "confirmed_by_targeted_local_probe",
+      "detail": "CORE.md#core-03",
+      "detail_line": 29,
+      "repair_group": "R03",
+      "acceptance_check": "Failed complete-TOC enumeration cannot produce or cache an artifact represented as a complete book; retry recovers the complete list.",
+      "evidence_files": [
+        "evidence/core_repros.py",
+        "evidence/core_repros.json"
+      ]
+    },
+    {
+      "id": "CORE-04",
+      "priority": "P2",
+      "title": "SubscribeStar CLI audiobook command raises NameError; its progress callback also has the wrong arity",
+      "status": "open",
+      "verification": "confirmed_by_targeted_local_probe",
+      "detail": "CORE.md#core-04",
+      "detail_line": 37,
+      "repair_group": "R09",
+      "acceptance_check": "The SubscribeStar audio CLI handler reaches a fake generator and accepts its real three-argument progress callback without an exception.",
+      "evidence_files": [
+        "evidence/core_repros.py",
+        "evidence/core_repros.json"
+      ]
+    },
+    {
+      "id": "CORE-05",
+      "priority": "P1",
+      "title": "merged SubscribeStar stories lose their source identity and cannot be updated correctly",
+      "status": "open",
+      "verification": "confirmed_by_targeted_local_probe",
+      "detail": "CORE.md#core-05",
+      "detail_line": 45,
+      "repair_group": "R01",
+      "acceptance_check": "Two merged works from one creator round-trip distinct stable source identities through export, index, update and reading/audio settings.",
+      "evidence_files": [
+        "evidence/core_repros.py",
+        "evidence/core_repros.json"
+      ]
+    },
+    {
+      "id": "CORE-06",
+      "priority": "P2",
+      "title": "Google Doc plain text is reinterpreted as HTML and loses literal content",
+      "status": "open",
+      "verification": "confirmed_by_targeted_local_probe",
+      "detail": "CORE.md#core-06",
+      "detail_line": 53,
+      "repair_group": "R03",
+      "acceptance_check": "Literal angle brackets, ampersands and quoted markup survive Google Doc text conversion as prose.",
+      "evidence_files": [
+        "evidence/core_repros.py",
+        "evidence/core_repros.json"
+      ]
+    },
+    {
+      "id": "CORE-07",
+      "priority": "P2",
+      "title": "newer sites are absent from the shared paste/clipboard story registry",
+      "status": "open",
+      "verification": "confirmed_by_targeted_local_probe",
+      "detail": "CORE.md#core-07",
+      "detail_line": 61,
+      "repair_group": "R04",
+      "acceptance_check": "Every supported scraper passes host detection, valid-story extraction, classification, canonicalization and export-source round-trip checks.",
+      "evidence_files": [
+        "evidence/core_repros.py",
+        "evidence/core_repros.json"
+      ]
+    },
+    {
+      "id": "CORE-08",
+      "priority": "P1",
+      "title": "declared Python 3.9 support fails at import",
+      "status": "open",
+      "verification": "confirmed_by_targeted_local_probe",
+      "detail": "CORE.md#core-08",
+      "detail_line": 69,
+      "repair_group": "R04",
+      "acceptance_check": "A clean install on the declared minimum Python version imports the CLI and completes a smoke export; unsupported versions are rejected by package metadata.",
+      "evidence_files": [
+        "evidence/python39_probe.py",
+        "evidence/python39_probe.log"
+      ]
+    },
+    {
+      "id": "CORE-09",
+      "priority": "P2",
+      "title": "the pip entry point rejects no arguments instead of opening the GUI",
+      "status": "open",
+      "verification": "confirmed_by_targeted_local_probe",
+      "detail": "CORE.md#core-09",
+      "detail_line": 79,
+      "repair_group": "R04",
+      "acceptance_check": "Console script, module and frozen entrypoints dispatch no arguments to the GUI, arguments to the CLI, and remain safe to import.",
+      "evidence_files": [
+        "evidence/core_entrypoint_repros.py",
+        "evidence/core_entrypoint_repros.json"
+      ]
+    },
+    {
+      "id": "CORE-10",
+      "priority": "P2",
+      "title": "deduplication discards deliberate exports to another format or folder",
+      "status": "open",
+      "verification": "confirmed_by_targeted_local_probe",
+      "detail": "CORE.md#core-10",
+      "detail_line": 89,
+      "repair_group": "R06",
+      "acceptance_check": "Same URL plus different requested output format or destination produces both artifacts; equivalent duplicate requests still share work.",
+      "evidence_files": [
+        "evidence/core_entrypoint_repros.py",
+        "evidence/core_entrypoint_repros.json"
+      ]
+    },
+    {
+      "id": "CORE-11",
+      "priority": "P1",
+      "title": "debug diagnostics write session cookies into logs",
+      "status": "open",
+      "verification": "confirmed_by_targeted_local_probe",
+      "detail": "CORE.md#core-11",
+      "detail_line": 99,
+      "repair_group": "R02",
+      "acceptance_check": "Synthetic session/authentication values never appear in diagnostic logs or exported reports, including response headers, URL queries and exception text.",
+      "evidence_files": [
+        "evidence/core_logging_probe.py",
+        "evidence/core_logging_probe.json"
+      ]
+    },
+    {
+      "id": "L01",
+      "priority": "P1",
+      "title": "restoring the oldest retained backup deletes it before reading",
+      "status": "open",
+      "verification": "confirmed_by_targeted_local_probe",
+      "detail": "LIBRARY.md#l01",
+      "detail_line": 19,
+      "repair_group": "R05",
+      "acceptance_check": "Restoring any of ten retained snapshots succeeds without evicting the selected source before it is read, and preserves a pre-restore safety snapshot.",
+      "evidence_files": [
+        "evidence/library_repros.py",
+        "evidence/library_repros.log"
+      ]
+    },
+    {
+      "id": "L02",
+      "priority": "P2",
+      "title": "a poll completion undoes concurrent user edits to a watch",
+      "status": "open",
+      "verification": "confirmed_by_targeted_local_probe",
+      "detail": "LIBRARY.md#l02",
+      "detail_line": 27,
+      "repair_group": "R06",
+      "acceptance_check": "Pause/label/channel/auto-download edits made while a poll is blocked survive completion; pending side effects honor current user configuration.",
+      "evidence_files": [
+        "evidence/library_repros.py",
+        "evidence/library_repros.log"
+      ]
+    },
+    {
+      "id": "L03",
+      "priority": "P2",
+      "title": "failed auto-downloads are forgotten rather than retried",
+      "status": "open",
+      "verification": "confirmed_by_targeted_local_probe",
+      "detail": "LIBRARY.md#l03",
+      "detail_line": 35,
+      "repair_group": "R06",
+      "acceptance_check": "A failed auto-download remains pending and visibly failed across another poll and process restart; a successful retry retires only the failed item.",
+      "evidence_files": [
+        "evidence/library_repros.py",
+        "evidence/library_repros.log"
+      ]
+    },
+    {
+      "id": "L04",
+      "priority": "P2",
+      "title": "notification failures silently consume the alert",
+      "status": "open",
+      "verification": "confirmed_by_targeted_local_probe",
+      "detail": "LIBRARY.md#l04",
+      "detail_line": 43,
+      "repair_group": "R06",
+      "acceptance_check": "Returned delivery failures are visible and retried per channel; successful channels are not duplicated, and cooldown does not discard pending updates.",
+      "evidence_files": [
+        "evidence/library_repros.py",
+        "evidence/library_repros.log"
+      ]
+    },
+    {
+      "id": "L05",
+      "priority": "P2",
+      "title": "toggling autopoll off then on during a poll leaves it stopped",
+      "status": "open",
+      "verification": "confirmed_by_targeted_local_probe",
+      "detail": "LIBRARY.md#l05",
+      "detail_line": 51,
+      "repair_group": "R06",
+      "acceptance_check": "Off then on during a blocked poll leaves exactly one active polling worker after the blocked poll finishes.",
+      "evidence_files": [
+        "evidence/library_repros.py",
+        "evidence/library_repros.log"
+      ]
+    },
+    {
+      "id": "L06",
+      "priority": "P2",
+      "title": "normal rescans erase manual adult and abandoned marks",
+      "status": "open",
+      "verification": "confirmed_by_targeted_local_probe",
+      "detail": "LIBRARY.md#l06",
+      "detail_line": 59,
+      "repair_group": "R05",
+      "acceptance_check": "Ordinary rescans preserve manual adult and abandoned state; explicit revival behavior is separately verified.",
+      "evidence_files": [
+        "evidence/library_repros.py",
+        "evidence/library_repros.log",
+        "evidence/library_integration_repros.py",
+        "evidence/library_integration_repros.log"
+      ]
+    },
+    {
+      "id": "L07",
+      "priority": "P2",
+      "title": "doctor heals stale cache signatures without refreshing cached metadata",
+      "status": "open",
+      "verification": "confirmed_by_targeted_local_probe",
+      "detail": "LIBRARY.md#l07",
+      "detail_line": 67,
+      "repair_group": "R05",
+      "acceptance_check": "Healing a changed two-to-three-chapter file refreshes derived metadata before accepting its new signature; failed extraction remains invalidated.",
+      "evidence_files": [
+        "evidence/library_repros.py",
+        "evidence/library_repros.log"
+      ]
+    },
+    {
+      "id": "L08",
+      "priority": "P2",
+      "title": "cache quarantine failures fall back to irreversible deletion",
+      "status": "open",
+      "verification": "confirmed_by_targeted_local_probe",
+      "detail": "LIBRARY.md#l08",
+      "detail_line": 75,
+      "repair_group": "R05",
+      "acceptance_check": "Two quarantines within one second retain both generations; an injected move failure preserves the source and is reported as failure.",
+      "evidence_files": [
+        "evidence/library_repros.py",
+        "evidence/library_repros.log"
+      ]
+    },
+    {
+      "id": "L09",
+      "priority": "P2",
+      "title": "fresh watch downloads bypass the configured library and adult routing",
+      "status": "open",
+      "verification": "confirmed_by_targeted_local_probe",
+      "detail": "LIBRARY.md#l09",
+      "detail_line": 83,
+      "repair_group": "R06",
+      "acceptance_check": "Fresh story/author/search watch downloads resolve to configured main/adult library paths and become indexed; existing updates retain their exact targets.",
+      "evidence_files": [
+        "evidence/library_integration_repros.py",
+        "evidence/library_integration_repros.log"
+      ]
+    },
+    {
+      "id": "L10",
+      "priority": "P2",
+      "title": "joining a successful GUI download reports auto-download failure",
+      "status": "open",
+      "verification": "confirmed_by_targeted_local_probe",
+      "detail": "LIBRARY.md#l10",
+      "detail_line": 93,
+      "repair_group": "R06",
+      "acceptance_check": "A watch joining a successful GUI download receives saved paths and a successful outcome; failed and cancelled results remain distinct.",
+      "evidence_files": [
+        "evidence/library_integration_repros.py",
+        "evidence/library_integration_repros.log"
+      ]
+    },
+    {
+      "id": "L11",
+      "priority": "P2",
+      "title": "two first-time index writers silently overwrite one another",
+      "status": "open",
+      "verification": "confirmed_by_targeted_local_probe",
+      "detail": "LIBRARY.md#l11",
+      "detail_line": 101,
+      "repair_group": "R05",
+      "acceptance_check": "Two index instances loaded before first creation cannot silently lose either writer; also validate the intended GUI/CLI cross-process contract.",
+      "evidence_files": [
+        "evidence/library_integration_repros.py",
+        "evidence/library_integration_repros.log"
+      ]
+    },
+    {
+      "id": "L12",
+      "priority": "P2",
+      "title": "malformed index files still crash recovery-facing consumers",
+      "status": "open",
+      "verification": "confirmed_by_targeted_local_probe",
+      "detail": "LIBRARY.md#l12",
+      "detail_line": 109,
+      "repair_group": "R05",
+      "acceptance_check": "Invalid UTF-8 and malformed nested index values produce a usable recovery state while preserving the original bytes.",
+      "evidence_files": [
+        "evidence/library_integration_repros.py",
+        "evidence/library_integration_repros.log"
+      ]
+    },
+    {
+      "id": "L13",
+      "priority": "P2",
+      "title": "doctor drops a story even when an indexed duplicate still exists",
+      "status": "open",
+      "verification": "confirmed_by_targeted_local_probe",
+      "detail": "LIBRARY.md#l13",
+      "detail_line": 117,
+      "repair_group": "R05",
+      "acceptance_check": "Doctor promotes a surviving readable duplicate of a missing primary and preserves story metadata during the same repair pass.",
+      "evidence_files": [
+        "evidence/library_integration_repros.py",
+        "evidence/library_integration_repros.log"
+      ]
+    },
+    {
+      "id": "L14",
+      "priority": "P2",
+      "title": "library template length limits count characters rather than filesystem bytes",
+      "status": "open",
+      "verification": "confirmed_by_targeted_local_probe",
+      "detail": "LIBRARY.md#l14",
+      "detail_line": 125,
+      "repair_group": "R05",
+      "acceptance_check": "CJK and other multibyte filenames fit the target filesystem component limit with extension/suffix reserved and collision-safe truncation.",
+      "evidence_files": [
+        "evidence/library_integration_repros.py",
+        "evidence/library_integration_repros.log"
+      ]
+    },
+    {
+      "id": "L15",
+      "priority": "P2",
+      "title": "reorganization and removal leave stale full-text results",
+      "status": "open",
+      "verification": "confirmed_by_targeted_local_probe",
+      "detail": "LIBRARY.md#l15",
+      "detail_line": 133,
+      "repair_group": "R05",
+      "acceptance_check": "Move, remove, fresh export and rescan leave full-text results pointing at current existing files, with explicit stale/rebuild status on interruption.",
+      "evidence_files": [
+        "evidence/library_integration_repros.py",
+        "evidence/library_integration_repros.log"
+      ]
+    },
+    {
+      "id": "L16",
+      "priority": "P2",
+      "title": "silent-edit scans reuse cached chapters and miss the edits they seek",
+      "status": "open",
+      "verification": "confirmed_by_targeted_local_probe",
+      "detail": "LIBRARY.md#l16",
+      "detail_line": 141,
+      "repair_group": "R03",
+      "acceptance_check": "A warm-cache silent-edit scan fetches current chapter bodies and detects a changed later chapter while retaining authentication and rate limiting.",
+      "evidence_files": [
+        "evidence/library_integration_repros.py",
+        "evidence/library_integration_repros.log"
+      ]
+    },
+    {
+      "id": "UX-01",
+      "priority": "P1",
+      "title": "Linux source/pip preferences cannot persist because their filename is the data directory",
+      "status": "open",
+      "verification": "confirmed_by_targeted_local_probe",
+      "detail": "UX.md#ux-01",
+      "detail_line": 11,
+      "repair_group": "R04",
+      "acceptance_check": "Preferences survive a new settings instance and restart on native Linux; directory/file migration preserves settings and failed writes are surfaced.",
+      "evidence_files": [
+        "evidence/ux_preferences_storage_probe.py",
+        "evidence/ux_preferences_storage_probe.json",
+        "evidence/ux_preferences_storage_probe.stderr"
+      ]
+    },
+    {
+      "id": "UX-02",
+      "priority": "P1",
+      "title": "closing a search window leaves the application permanently busy",
+      "status": "open",
+      "verification": "confirmed_by_targeted_local_probe",
+      "detail": "UX.md#ux-02",
+      "detail_line": 27,
+      "repair_group": "R07",
+      "acceptance_check": "Closing a blocked search then completing its worker releases that operation; reopening remains usable and old completion cannot clear newer work.",
+      "evidence_files": [
+        "evidence/ux_native_probe.py",
+        "evidence/ux_native_probe.json",
+        "evidence/ux_native_probe.stderr"
+      ]
+    },
+    {
+      "id": "UX-03",
+      "priority": "P1",
+      "title": "authentication fields collapse to zero height in the default Preferences dialog",
+      "status": "open",
+      "verification": "confirmed_by_targeted_local_probe",
+      "detail": "UX.md#ux-03",
+      "detail_line": 43,
+      "repair_group": "R07",
+      "acceptance_check": "Every credential field remains visible or keyboard-scrollable at default size, enlarged fonts and a small work area.",
+      "evidence_files": [
+        "evidence/ux_native_probe.py",
+        "evidence/ux_native_probe.json",
+        "evidence/ux_native_probe.stderr"
+      ]
+    },
+    {
+      "id": "UX-04",
+      "priority": "P2",
+      "title": "default search windows clip filters horizontally",
+      "status": "open",
+      "verification": "confirmed_by_targeted_local_probe",
+      "detail": "UX.md#ux-04",
+      "detail_line": 57,
+      "repair_group": "R07",
+      "acceptance_check": "All site filters remain usable at default width and larger system text, with visual order matching keyboard order.",
+      "evidence_files": [
+        "evidence/ux_native_probe.py",
+        "evidence/ux_native_probe.json",
+        "evidence/ux_native_probe.stderr"
+      ]
+    },
+    {
+      "id": "UX-05",
+      "priority": "P2",
+      "title": "library/watch jobs discard saved Cloudflare and newer site credentials",
+      "status": "open",
+      "verification": "confirmed_by_targeted_local_probe",
+      "detail": "UX.md#ux-05",
+      "detail_line": 71,
+      "repair_group": "R06",
+      "acceptance_check": "Manual, library-refresh and watch jobs receive the same configured CF solver and ScribbleHub/SubscribeStar credentials with intended precedence.",
+      "evidence_files": [
+        "evidence/ux_jobs_probe.py",
+        "evidence/ux_jobs_probe.json"
+      ]
+    },
+    {
+      "id": "UX-06",
+      "priority": "P2",
+      "title": "fetching Audiobookshelf libraries freezes the desktop event loop",
+      "status": "open",
+      "verification": "confirmed_by_targeted_local_probe",
+      "detail": "UX.md#ux-06",
+      "detail_line": 87,
+      "repair_group": "R07",
+      "acceptance_check": "A slow or failed Audiobookshelf library fetch keeps UI timers/input responsive and cannot update a closed dialog.",
+      "evidence_files": [
+        "evidence/ux_abs_preferences_probe.py",
+        "evidence/ux_abs_preferences_probe.json"
+      ]
+    },
+    {
+      "id": "UX-07",
+      "priority": "P2",
+      "title": "Cancel does not discard Audiobookshelf connection changes",
+      "status": "open",
+      "verification": "confirmed_by_targeted_local_probe",
+      "detail": "UX.md#ux-07",
+      "detail_line": 101,
+      "repair_group": "R07",
+      "acceptance_check": "Fetching libraries then cancelling leaves the saved URL/token and selections unchanged; OK commits a consistent draft configuration.",
+      "evidence_files": [
+        "evidence/ux_abs_preferences_probe.py",
+        "evidence/ux_abs_preferences_probe.json"
+      ]
+    },
+    {
+      "id": "UX-08",
+      "priority": "P1",
+      "title": "Update File leaves a renamed book stale and writes a second book",
+      "status": "open",
+      "verification": "confirmed_by_targeted_local_probe",
+      "detail": "UX.md#ux-08",
+      "detail_line": 117,
+      "repair_group": "R01",
+      "acceptance_check": "Updating a renamed TXT/HTML/EPUB or a work whose upstream title changed replaces exactly the selected file and produces no unintended duplicate.",
+      "evidence_files": [
+        "evidence/ux_gui_update_probe.py",
+        "evidence/ux_gui_update_probe.json"
+      ]
+    },
+    {
+      "id": "UX-09",
+      "priority": "P2",
+      "title": "the first-run manual directs users to controls that moved",
+      "status": "open",
+      "verification": "confirmed_source_contract",
+      "detail": "UX.md#ux-09",
+      "detail_line": 133,
+      "repair_group": "R07",
+      "acceptance_check": "The version-matched first-run guide leads a keyboard user from empty library through Add Story to the saved book; shortcuts and text-file versus web-list commands match the app.",
+      "evidence_files": []
+    },
+    {
+      "id": "AUD-A01",
+      "priority": "P1",
+      "title": "SMTP TLS never verifies the mail server certificate",
+      "status": "open",
+      "verification": "confirmed_by_targeted_local_probe",
+      "detail": "AUDIO.md#aud-a01",
+      "detail_line": 23,
+      "repair_group": "R02",
+      "acceptance_check": "SMTP_SSL and STARTTLS use certificate and hostname verification; an untrusted or wrong-host local certificate is rejected before authentication.",
+      "evidence_files": [
+        "evidence/audio-boundaries-probe.py",
+        "evidence/audio-boundaries-probe.txt"
+      ]
+    },
+    {
+      "id": "AUD-A02",
+      "priority": "P1",
+      "title": "Piper binary installation fails on nested Unix archives and then reports a directory as installed",
+      "status": "open",
+      "verification": "confirmed_by_targeted_local_probe",
+      "detail": "AUDIO.md#aud-a02",
+      "detail_line": 32,
+      "repair_group": "R09",
+      "acceptance_check": "Representative nested Unix and Windows Piper packages install to executable files; interrupted/failed installs are not reported healthy and can be repaired.",
+      "evidence_files": [
+        "evidence/audio-boundaries-probe.py",
+        "evidence/audio-boundaries-probe.txt"
+      ]
+    },
+    {
+      "id": "AUD-A03",
+      "priority": "P1",
+      "title": "local-only synthesis can silently send story text to Edge",
+      "status": "open",
+      "verification": "confirmed_by_targeted_local_probe",
+      "detail": "AUDIO.md#aud-a03",
+      "detail_line": 42,
+      "repair_group": "R02",
+      "acceptance_check": "With only a local provider enabled, failures invoke no cloud synthesizer and yield a visible error or an allowed local fallback.",
+      "evidence_files": [
+        "evidence/audio-boundaries-probe.py",
+        "evidence/audio-boundaries-probe.txt"
+      ]
+    },
+    {
+      "id": "AUD-A04",
+      "priority": "P2",
+      "title": "app voice ignores restored/bookmarked location and does not persist listening progress",
+      "status": "open",
+      "verification": "confirmed_by_targeted_local_probe",
+      "detail": "AUDIO.md#aud-a04",
+      "detail_line": 51,
+      "repair_group": "R08",
+      "acceptance_check": "Bookmark/resume/Stop/restart begin at the saved content position; listening progress survives reopen and periodic checkpointing limits crash loss.",
+      "evidence_files": [
+        "evidence/audio-reader-probe.py",
+        "evidence/audio-reader-probe.txt"
+      ]
+    },
+    {
+      "id": "AUD-A05",
+      "priority": "P2",
+      "title": "delayed voice resolution can restart speech after Stop or a mode switch",
+      "status": "open",
+      "verification": "confirmed_by_targeted_local_probe",
+      "detail": "AUDIO.md#aud-a05",
+      "detail_line": 60,
+      "repair_group": "R08",
+      "acceptance_check": "Queued voice-resolution/highlight/completion callbacks become inert after Stop, mode change, chapter change or close.",
+      "evidence_files": [
+        "evidence/audio-reader-probe.py",
+        "evidence/audio-reader-probe.txt"
+      ]
+    },
+    {
+      "id": "AUD-A06",
+      "priority": "P1",
+      "title": "incomplete audiobooks are reported successful and their missing speech is permanently cached",
+      "status": "open",
+      "verification": "confirmed_by_targeted_local_probe",
+      "detail": "AUDIO.md#aud-a06",
+      "detail_line": 73,
+      "repair_group": "R03",
+      "acceptance_check": "Failed segments or chapters cannot enter the complete audio cache or a complete-success result; a later retry restores all requested prose.",
+      "evidence_files": [
+        "evidence/audio-cache-race-probe.py",
+        "evidence/audio-cache-race-probe.txt"
+      ]
+    },
+    {
+      "id": "AUD-A07",
+      "priority": "P2",
+      "title": "cancellation is ignored during final assembly; preprocessing has no cancellation checkpoints",
+      "status": "open",
+      "verification": "confirmed_by_targeted_local_probe",
+      "detail": "AUDIO.md#aud-a07",
+      "detail_line": 83,
+      "repair_group": "R09",
+      "acceptance_check": "Cancellation during preprocessing, heading, intro or mux prevents a successful finished result and automatic upload; request boundaries honor cancellation.",
+      "evidence_files": [
+        "evidence/audio-cache-race-probe.py",
+        "evidence/audio-cache-race-probe.txt"
+      ]
+    },
+    {
+      "id": "AUD-A08",
+      "priority": "P2",
+      "title": "an obsolete soundscape build stops the newly selected soundscape",
+      "status": "open",
+      "verification": "confirmed_by_targeted_local_probe",
+      "detail": "AUDIO.md#aud-a08",
+      "detail_line": 92,
+      "repair_group": "R08",
+      "acceptance_check": "An obsolete blocked ambience build cannot stop handles owned by its replacement; close also cancels a not-yet-started build.",
+      "evidence_files": [
+        "evidence/audio-cache-race-probe.py",
+        "evidence/audio-cache-race-probe.txt"
+      ]
+    },
+    {
+      "id": "AUD-A09",
+      "priority": "P2",
+      "title": "failed LLM attribution is cached as a successful result and never retried",
+      "status": "open",
+      "verification": "confirmed_by_targeted_local_probe",
+      "detail": "AUDIO.md#aud-a09",
+      "detail_line": 102,
+      "repair_group": "R09",
+      "acceptance_check": "A provider/model attribution failure does not create a successful fallback cache entry; correction and retry work in the same process and after restart.",
+      "evidence_files": [
+        "evidence/audio-attribution-probe.py",
+        "evidence/audio-attribution-probe.txt"
+      ]
+    },
+    {
+      "id": "AUD-A10",
+      "priority": "P2",
+      "title": "choosing LLM speaker attribution does nothing unless unrelated note stripping is enabled",
+      "status": "open",
+      "verification": "confirmed_by_targeted_local_probe",
+      "detail": "AUDIO.md#aud-a10",
+      "detail_line": 112,
+      "repair_group": "R09",
+      "acceptance_check": "All four combinations of LLM attribution and LLM note stripping receive independent correct configuration and call only their selected backends.",
+      "evidence_files": [
+        "evidence/audio-gui-probe.py",
+        "evidence/audio-gui-probe.txt"
+      ]
+    },
+    {
+      "id": "AUD-A11",
+      "priority": "P2",
+      "title": "concurrent audiobook renders overwrite and clear each other's Cancel control",
+      "status": "open",
+      "verification": "confirmed_by_targeted_local_probe",
+      "detail": "AUDIO.md#aud-a11",
+      "detail_line": 121,
+      "repair_group": "R06",
+      "acceptance_check": "Completing render A does not clear render B cancellation; every active job remains individually cancellable or a documented Cancel-all cancels all.",
+      "evidence_files": [
+        "evidence/audio-gui-probe.py",
+        "evidence/audio-gui-probe.txt"
+      ]
+    },
+    {
+      "id": "AUD-A12",
+      "priority": "P2",
+      "title": "the live-TTS generation token does not prevent playback after Stop",
+      "status": "open",
+      "verification": "confirmed_by_targeted_local_probe",
+      "detail": "AUDIO.md#aud-a12",
+      "detail_line": 131,
+      "repair_group": "R08",
+      "acceptance_check": "A worker paused after its highlight callback cannot start playback after Stop returns or interfere with a replacement controller.",
+      "evidence_files": [
+        "evidence/audio-live-stop-probe.py",
+        "evidence/audio-live-stop-probe.txt"
+      ]
+    },
+    {
+      "id": "AUD-A13",
+      "priority": "P2",
+      "title": "naturally completed chapters leak live-TTS temporary audio when advancing",
+      "status": "open",
+      "verification": "confirmed_by_targeted_local_probe",
+      "detail": "AUDIO.md#aud-a13",
+      "detail_line": 141,
+      "repair_group": "R08",
+      "acceptance_check": "Natural completion followed by replay/advance/close disposes every previous controller and removes its temporary audio.",
+      "evidence_files": [
+        "evidence/audio-reader-probe.py",
+        "evidence/audio-reader-probe.txt"
+      ]
+    },
+    {
+      "id": "AUD-A14",
+      "priority": "P2",
+      "title": "reader selects the first installed voice regardless of enabled provider or language",
+      "status": "open",
+      "verification": "confirmed_by_targeted_local_probe",
+      "detail": "AUDIO.md#aud-a14",
+      "detail_line": 151,
+      "repair_group": "R02",
+      "acceptance_check": "Reader voice choice respects enabled providers and language, persists explicitly, and displays which provider will receive text.",
+      "evidence_files": [
+        "evidence/audio-reader-probe.py",
+        "evidence/audio-reader-probe.txt"
+      ]
+    }
+  ],
+  "distribution_report": "DISTRIBUTION.md"
+}

@@ -1,0 +1,69 @@
+{
+  "fresh_export_collision": {
+    "same_path": true,
+    "remaining_files": 1,
+    "remaining_source": "https://www.fanfiction.net/s/202"
+  },
+  "update_collision": {
+    "success": true,
+    "unrelated_book_survives": false,
+    "updated_file_chapters": 2
+  },
+  "ordinal_cache_insertion": {
+    "expected": [
+      "A",
+      "INSERTED",
+      "B"
+    ],
+    "actual_bodies": [
+      "<p>Body for A</p>",
+      "<p>Body for B</p>",
+      "<p>Body for B</p>"
+    ],
+    "fetched": [
+      "B"
+    ]
+  },
+  "scribblehub_partial_toc": {
+    "reported_chapter_count": 2,
+    "titles": [
+      "Chapter 8",
+      "Chapter 9"
+    ],
+    "raised": false
+  },
+  "subscribestar_audio": {
+    "error": "NameError",
+    "message": "name 'generate_audiobook' is not defined"
+  },
+  "subscribestar_identity": {
+    "titles": [
+      "A Tale",
+      "Another Tale"
+    ],
+    "ids": [
+      0,
+      0
+    ],
+    "urls": [
+      "https://subscribestar.adult/creator",
+      "https://subscribestar.adult/creator"
+    ]
+  },
+  "google_doc_text_escape": {
+    "html": "<p>The literal <secret> vanishes.</p>",
+    "rendered_text": "The literal  vanishes."
+  },
+  "site_registry": [
+    {
+      "url": "https://www.scribblehub.com/series/1234/a-story/",
+      "clipboard_match": null,
+      "classification": "unknown"
+    },
+    {
+      "url": "https://subscribestar.adult/posts/1234",
+      "clipboard_match": null,
+      "classification": "unknown"
+    }
+  ]
+}

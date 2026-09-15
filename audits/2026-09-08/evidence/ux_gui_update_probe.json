@@ -1,0 +1,17 @@
+{
+  "original_unchanged": true,
+  "original_chapters": 1,
+  "files": {
+    "Synthetic title - Synthetic author.txt": 2,
+    "My renamed book.txt": 1
+  },
+  "logs": [
+    "Updating: https://www.fanfiction.net/s/12345 (existing file has 1 chapters)",
+    "Couldn't read existing chapters (TXT exports are lossy; full re-download required); re-downloading full story...",
+    "Found 1 new chapters. Re-exporting...",
+    "\n  Title:    Synthetic title",
+    "  Author:   Synthetic author",
+    "  Chapters: 2",
+    "\nDone! Saved to: /tmp/ficary-ux-update-w8sjtboo/Synthetic title - Synthetic author.txt"
+  ]
+}

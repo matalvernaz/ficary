@@ -1,0 +1,3 @@
+Using CPython 3.9.25 interpreter at: /tmp/ficary-audit-python/cpython-3.9.25-linux-aarch64-gnu/bin/python3.9
+Creating virtual environment at: /tmp/ficary-audit-python/venv39
+Activate with: source /tmp/ficary-audit-python/venv39/bin/activate

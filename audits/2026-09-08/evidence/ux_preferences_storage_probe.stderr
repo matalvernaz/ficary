@@ -1,0 +1,12 @@
+00:55:18: Error: can't create file '/tmp/ficary-ux-prefs-wifzsr8i/.ficary' (error 21: Is a directory)
+00:55:18: Error: Error copying the file '/tmp/ficary-ux-prefs-wifzsr8i/.ficary6YNInT' to '/tmp/ficary-ux-prefs-wifzsr8i/.ficary'.
+00:55:18: Error: File '/tmp/ficary-ux-prefs-wifzsr8i/.ficary6YNInT' couldn't be renamed '/tmp/ficary-ux-prefs-wifzsr8i/.ficary' (error 21: Is a directory)
+00:55:18: Error: can't commit changes to file '/tmp/ficary-ux-prefs-wifzsr8i/.ficary' (error 21: Is a directory)
+00:55:18: Error: Failed to update user configuration file.
+00:55:18: Error: can't create file '/tmp/ficary-ux-prefs-wifzsr8i/.ficary' (error 21: Is a directory)
+00:55:18: Error: Error copying the file '/tmp/ficary-ux-prefs-wifzsr8i/.ficaryJtB89I' to '/tmp/ficary-ux-prefs-wifzsr8i/.ficary'.
+00:55:18: Error: File '/tmp/ficary-ux-prefs-wifzsr8i/.ficaryJtB89I' couldn't be renamed '/tmp/ficary-ux-prefs-wifzsr8i/.ficary' (error 21: Is a directory)
+00:55:18: Error: can't commit changes to file '/tmp/ficary-ux-prefs-wifzsr8i/.ficary' (error 21: Is a directory)
+00:55:18: Error: Failed to update user configuration file.
+00:55:18: Error: Failed to create a temporary file name (error 2: No such file or directory)
+00:55:18: Error: can't open user configuration file.

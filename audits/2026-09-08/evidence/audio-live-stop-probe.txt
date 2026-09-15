@@ -1,0 +1,3 @@
+Play calls before releasing stale worker: 0
+Play calls after Stop already returned: 1
+Old worker finished: True

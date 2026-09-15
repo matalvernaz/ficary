@@ -1,0 +1,209 @@
+{
+  "wx_version": "4.2.3 gtk3 (phoenix) wxWidgets 3.2.7",
+  "search_close": {
+    "busy_while_running": true,
+    "busy_after_worker_finished": true,
+    "reopened_search_enabled": false
+  },
+  "preferences_downloads": {
+    "dialog_size": [
+      640,
+      520
+    ],
+    "page_size": [
+      622,
+      415
+    ],
+    "page_type": "Panel",
+    "sizer_minimum": [
+      610,
+      642
+    ],
+    "controls": [
+      {
+        "field": "format_ctrl",
+        "rect": [
+          113,
+          6,
+          503,
+          34
+        ],
+        "within_page": true
+      },
+      {
+        "field": "html_style_ctrl",
+        "rect": [
+          151,
+          52,
+          465,
+          34
+        ],
+        "within_page": true
+      },
+      {
+        "field": "chapter_notes_ctrl",
+        "rect": [
+          340,
+          98,
+          276,
+          34
+        ],
+        "within_page": true
+      },
+      {
+        "field": "cf_solve_ctrl",
+        "rect": [
+          6,
+          284,
+          500,
+          21
+        ],
+        "within_page": true
+      },
+      {
+        "field": "webnovel_cookie_ctrl",
+        "rect": [
+          160,
+          365,
+          456,
+          34
+        ],
+        "within_page": true
+      },
+      {
+        "field": "ao3_cookie_ctrl",
+        "rect": [
+          91,
+          411,
+          525,
+          0
+        ],
+        "within_page": true
+      },
+      {
+        "field": "ao3_user_agent_ctrl",
+        "rect": [
+          121,
+          421,
+          495,
+          0
+        ],
+        "within_page": false
+      },
+      {
+        "field": "scribblehub_cookie_ctrl",
+        "rect": [
+          142,
+          421,
+          474,
+          0
+        ],
+        "within_page": false
+      },
+      {
+        "field": "subscribestar_cookie_ctrl",
+        "rect": [
+          153,
+          421,
+          463,
+          0
+        ],
+        "within_page": false
+      }
+    ]
+  },
+  "search_geometry": {
+    "ffn": {
+      "size": [
+        820,
+        640
+      ],
+      "panel_size": [
+        820,
+        640
+      ],
+      "sizer_minimum": [
+        982,
+        687
+      ],
+      "clipped": [
+        {
+          "name": "Genre",
+          "label": "",
+          "rect": [
+            729,
+            52,
+            123,
+            34
+          ]
+        },
+        {
+          "name": "Time",
+          "label": "",
+          "rect": [
+            729,
+            90,
+            169,
+            34
+          ]
+        }
+      ]
+    },
+    "ao3": {
+      "size": [
+        820,
+        640
+      ],
+      "panel_size": [
+        820,
+        640
+      ],
+      "sizer_minimum": [
+        982,
+        679
+      ],
+      "clipped": [
+        {
+          "name": "Status",
+          "label": "",
+          "rect": [
+            788,
+            52,
+            114,
+            34
+          ]
+        }
+      ]
+    },
+    "royalroad": {
+      "size": [
+        820,
+        640
+      ],
+      "panel_size": [
+        820,
+        640
+      ],
+      "sizer_minimum": [
+        982,
+        708
+      ],
+      "clipped": []
+    },
+    "wattpad": {
+      "size": [
+        820,
+        640
+      ],
+      "panel_size": [
+        820,
+        640
+      ],
+      "sizer_minimum": [
+        982,
+        448
+      ],
+      "clipped": []
+    }
+  }
+}

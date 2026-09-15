@@ -1,0 +1,412 @@
+[
+  {
+    "cell": null,
+    "code": "F401",
+    "end_location": {
+      "column": 10,
+      "row": 22
+    },
+    "filename": "/home/matt/ffn-dl/ficary/attribution.py",
+    "fix": {
+      "applicability": "safe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 1,
+            "row": 23
+          },
+          "location": {
+            "column": 1,
+            "row": 22
+          }
+        }
+      ],
+      "message": "Remove unused import: `os`"
+    },
+    "location": {
+      "column": 8,
+      "row": 22
+    },
+    "message": "`os` imported but unused",
+    "noqa_row": 22,
+    "severity": "error",
+    "url": "https://docs.astral.sh/ruff/rules/unused-import"
+  },
+  {
+    "cell": null,
+    "code": "F821",
+    "end_location": {
+      "column": 34,
+      "row": 547
+    },
+    "filename": "/home/matt/ffn-dl/ficary/cli.py",
+    "fix": null,
+    "location": {
+      "column": 16,
+      "row": 547
+    },
+    "message": "Undefined name `generate_audiobook`",
+    "noqa_row": 547,
+    "severity": "error",
+    "url": "https://docs.astral.sh/ruff/rules/undefined-name"
+  },
+  {
+    "cell": null,
+    "code": "F841",
+    "end_location": {
+      "column": 48,
+      "row": 1589
+    },
+    "filename": "/home/matt/ffn-dl/ficary/cli.py",
+    "fix": {
+      "applicability": "safe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 48,
+            "row": 1589
+          },
+          "location": {
+            "column": 41,
+            "row": 1589
+          }
+        }
+      ],
+      "message": "Remove assignment to unused variable `exc`"
+    },
+    "location": {
+      "column": 45,
+      "row": 1589
+    },
+    "message": "Local variable `exc` is assigned to but never used",
+    "noqa_row": 1589,
+    "severity": "error",
+    "url": "https://docs.astral.sh/ruff/rules/unused-variable"
+  },
+  {
+    "cell": null,
+    "code": "F541",
+    "end_location": {
+      "column": 50,
+      "row": 1899
+    },
+    "filename": "/home/matt/ffn-dl/ficary/cli.py",
+    "fix": {
+      "applicability": "safe",
+      "edits": [
+        {
+          "content": "\"  Cancelled before probe.\"",
+          "end_location": {
+            "column": 50,
+            "row": 1899
+          },
+          "location": {
+            "column": 22,
+            "row": 1899
+          }
+        }
+      ],
+      "message": "Remove extraneous `f` prefix"
+    },
+    "location": {
+      "column": 22,
+      "row": 1899
+    },
+    "message": "f-string without any placeholders",
+    "noqa_row": 1899,
+    "severity": "error",
+    "url": "https://docs.astral.sh/ruff/rules/f-string-missing-placeholders"
+  },
+  {
+    "cell": null,
+    "code": "F841",
+    "end_location": {
+      "column": 30,
+      "row": 2092
+    },
+    "filename": "/home/matt/ffn-dl/ficary/cli.py",
+    "fix": {
+      "applicability": "unsafe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 1,
+            "row": 2093
+          },
+          "location": {
+            "column": 1,
+            "row": 2092
+          }
+        }
+      ],
+      "message": "Remove assignment to unused variable `cancelled`"
+    },
+    "location": {
+      "column": 21,
+      "row": 2092
+    },
+    "message": "Local variable `cancelled` is assigned to but never used",
+    "noqa_row": 2092,
+    "severity": "error",
+    "url": "https://docs.astral.sh/ruff/rules/unused-variable"
+  },
+  {
+    "cell": null,
+    "code": "F541",
+    "end_location": {
+      "column": 51,
+      "row": 2924
+    },
+    "filename": "/home/matt/ffn-dl/ficary/cli.py",
+    "fix": {
+      "applicability": "safe",
+      "edits": [
+        {
+          "content": "\"Library-index backups (newest first):\"",
+          "end_location": {
+            "column": 51,
+            "row": 2924
+          },
+          "location": {
+            "column": 11,
+            "row": 2924
+          }
+        }
+      ],
+      "message": "Remove extraneous `f` prefix"
+    },
+    "location": {
+      "column": 11,
+      "row": 2924
+    },
+    "message": "f-string without any placeholders",
+    "noqa_row": 2924,
+    "severity": "error",
+    "url": "https://docs.astral.sh/ruff/rules/f-string-missing-placeholders"
+  },
+  {
+    "cell": null,
+    "code": "F821",
+    "end_location": {
+      "column": 25,
+      "row": 3071
+    },
+    "filename": "/home/matt/ffn-dl/ficary/cli.py",
+    "fix": null,
+    "location": {
+      "column": 13,
+      "row": 3071
+    },
+    "message": "Undefined name `LibraryIndex`",
+    "noqa_row": 3071,
+    "severity": "error",
+    "url": "https://docs.astral.sh/ruff/rules/undefined-name"
+  },
+  {
+    "cell": null,
+    "code": "F541",
+    "end_location": {
+      "column": 55,
+      "row": 3470
+    },
+    "filename": "/home/matt/ffn-dl/ficary/cli.py",
+    "fix": {
+      "applicability": "safe",
+      "edits": [
+        {
+          "content": "\"\\nFailed. Still watching...\\n\"",
+          "end_location": {
+            "column": 55,
+            "row": 3470
+          },
+          "location": {
+            "column": 23,
+            "row": 3470
+          }
+        }
+      ],
+      "message": "Remove extraneous `f` prefix"
+    },
+    "location": {
+      "column": 23,
+      "row": 3470
+    },
+    "message": "f-string without any placeholders",
+    "noqa_row": 3470,
+    "severity": "error",
+    "url": "https://docs.astral.sh/ruff/rules/f-string-missing-placeholders"
+  },
+  {
+    "cell": null,
+    "code": "F401",
+    "end_location": {
+      "column": 41,
+      "row": 19
+    },
+    "filename": "/home/matt/ffn-dl/ficary/gui.py",
+    "fix": {
+      "applicability": "safe",
+      "edits": [
+        {
+          "content": "from dataclasses import dataclass, replace",
+          "end_location": {
+            "column": 50,
+            "row": 19
+          },
+          "location": {
+            "column": 1,
+            "row": 19
+          }
+        }
+      ],
+      "message": "Remove unused import: `dataclasses.field`"
+    },
+    "location": {
+      "column": 36,
+      "row": 19
+    },
+    "message": "`dataclasses.field` imported but unused",
+    "noqa_row": 19,
+    "severity": "error",
+    "url": "https://docs.astral.sh/ruff/rules/unused-import"
+  },
+  {
+    "cell": null,
+    "code": "F401",
+    "end_location": {
+      "column": 23,
+      "row": 21
+    },
+    "filename": "/home/matt/ffn-dl/ficary/gui.py",
+    "fix": {
+      "applicability": "safe",
+      "edits": [
+        {
+          "content": "from typing import Optional",
+          "end_location": {
+            "column": 33,
+            "row": 21
+          },
+          "location": {
+            "column": 1,
+            "row": 21
+          }
+        }
+      ],
+      "message": "Remove unused import: `typing.Any`"
+    },
+    "location": {
+      "column": 20,
+      "row": 21
+    },
+    "message": "`typing.Any` imported but unused",
+    "noqa_row": 21,
+    "severity": "error",
+    "url": "https://docs.astral.sh/ruff/rules/unused-import"
+  },
+  {
+    "cell": null,
+    "code": "F401",
+    "end_location": {
+      "column": 23,
+      "row": 21
+    },
+    "filename": "/home/matt/ffn-dl/ficary/gui_search.py",
+    "fix": {
+      "applicability": "safe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 1,
+            "row": 22
+          },
+          "location": {
+            "column": 1,
+            "row": 21
+          }
+        }
+      ],
+      "message": "Remove unused import: `typing.Any`"
+    },
+    "location": {
+      "column": 20,
+      "row": 21
+    },
+    "message": "`typing.Any` imported but unused",
+    "noqa_row": 21,
+    "severity": "error",
+    "url": "https://docs.astral.sh/ruff/rules/unused-import"
+  },
+  {
+    "cell": null,
+    "code": "F401",
+    "end_location": {
+      "column": 41,
+      "row": 19
+    },
+    "filename": "/home/matt/ffn-dl/ficary/jobs.py",
+    "fix": {
+      "applicability": "safe",
+      "edits": [
+        {
+          "content": "from dataclasses import dataclass",
+          "end_location": {
+            "column": 41,
+            "row": 19
+          },
+          "location": {
+            "column": 1,
+            "row": 19
+          }
+        }
+      ],
+      "message": "Remove unused import: `dataclasses.field`"
+    },
+    "location": {
+      "column": 36,
+      "row": 19
+    },
+    "message": "`dataclasses.field` imported but unused",
+    "noqa_row": 19,
+    "severity": "error",
+    "url": "https://docs.astral.sh/ruff/rules/unused-import"
+  },
+  {
+    "cell": null,
+    "code": "F401",
+    "end_location": {
+      "column": 43,
+      "row": 17
+    },
+    "filename": "/home/matt/ffn-dl/ficary/reader/gui.py",
+    "fix": {
+      "applicability": "safe",
+      "edits": [
+        {
+          "content": "from ..audio.engine import get_engine",
+          "end_location": {
+            "column": 55,
+            "row": 17
+          },
+          "location": {
+            "column": 1,
+            "row": 17
+          }
+        }
+      ],
+      "message": "Remove unused import: `..audio.engine.CHANNEL_AMBIENT`"
+    },
+    "location": {
+      "column": 28,
+      "row": 17
+    },
+    "message": "`..audio.engine.CHANNEL_AMBIENT` imported but unused",
+    "noqa_row": 17,
+    "severity": "error",
+    "url": "https://docs.astral.sh/ruff/rules/unused-import"
+  }
+]

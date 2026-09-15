@@ -1,0 +1,20 @@
+{
+  "pip_no_args": {
+    "exit_code": 2,
+    "error": "ficary: error: either a URL, --batch FILE, --update FILE, or --author URL is required"
+  },
+  "update_format": {
+    "exit_code": 0,
+    "suffix": ".epub",
+    "still_valid_epub_zip": false,
+    "starts_with_html": true
+  },
+  "different_output_deduped": {
+    "same_future": true,
+    "first_result": "epub",
+    "second_result": "epub",
+    "jobs_executed": [
+      "epub@folder-A"
+    ]
+  }
+}

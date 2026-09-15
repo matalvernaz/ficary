@@ -1,0 +1,14 @@
+{
+  "saved_cf_solve": true,
+  "job_cf_solve": false,
+  "job_has_scribblehub_cookie": false,
+  "job_has_subscribestar_cookie": false,
+  "scribblehub_constructor_kwargs": {
+    "max_retries": 5,
+    "use_cache": true
+  },
+  "subscribestar_constructor_kwargs": {
+    "max_retries": 5,
+    "use_cache": true
+  }
+}

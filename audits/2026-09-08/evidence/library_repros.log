@@ -1,0 +1,16 @@
+Auto-download failed for https://www.fanfiction.net/s/12345/1/
+Traceback (most recent call last):
+  File "/home/matt/ffn-dl/ficary/watchlist.py", line 614, in run_once
+    saved = downloader(watch, result) or []
+            ~~~~~~~~~~^^^^^^^^^^^^^^^
+  File "/home/matt/ffn-dl/audits/2026-09-08/evidence/library_repros.py", line 63, in failed_download
+    raise OSError("isolated simulated disk failure")
+OSError: isolated simulated disk failure
+{"case": "restore_oldest", "current_index": {"current": true}, "error": "FileNotFoundError", "selected_backup_survives": false}
+{"case": "poll_overwrites_user_edit", "enabled": true, "label": ""}
+{"case": "failed_download_no_retry", "download_attempts": 1, "first_error": "OSError: isolated simulated disk failure", "last_seen": 3, "persisted_error": "", "second_new_items": []}
+{"attempts": 1, "case": "delivery_failure_consumed", "cooldown": "2001-09-09T01:56:40+00:00", "last_error": "", "last_seen": 3}
+{"case": "autopoll_off_on", "pref_enabled": true, "stop_set_after_reenable": true, "worker_alive": false}
+{"after": false, "before": true, "case": "scan_erases_abandoned"}
+{"case": "heal_stamps_stale_chapter_count", "drift_entries": 1, "local_after_heal": 2, "local_before_heal": 3, "refreshed": 1}
+{"active_exists": false, "case": "cache_quarantine_collision", "first_pruned": 1, "quarantined_content": "first generation", "second_pruned": 1}

@@ -1,0 +1,6 @@
+Attribution backend 'llm' failed (synthetic provider unavailable); falling back to builtin for the rest of this render
+Failure recorded under: [('llm', 'ollama-audit-model')]
+Pipeline has_failed(llm,None): False
+Fallback cache entries written: 1
+Fallback cache content: [{"text": "Hello there,", "speaker": "Alice", "emotion": null, "scene_break": false}, {"text": "said Alice.", "speaker": null, "emotion": null, "scene_break": false}]
+Provider attempts after second render (should retry): 1

@@ -1,0 +1,3 @@
+# Keep audit evidence despite repository-wide generated-file rules.
+!evidence/*.txt
+!evidence/coverage.json

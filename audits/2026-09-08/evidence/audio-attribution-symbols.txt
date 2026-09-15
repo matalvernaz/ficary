@@ -1,0 +1,106 @@
+15:`refine_speakers(segments, full_text, backend)` is the main dispatcher;
+31:def _is_frozen() -> bool:
+54:class LLMUnavailable(RuntimeError):
+71:class LLMTimeout(LLMUnavailable):
+166:def sizes_for(backend: str) -> dict | None:
+173:def default_size(backend: str) -> str | None:
+178:def normalize_size(backend: str, size: str | None) -> str | None:
+190:def available() -> List[str]:
+195:def is_installed(backend: str) -> bool:
+210:    except (ImportError, ValueError):
+214:def install_command(backend: str) -> List[str] | None:
+230:def install_unsupported_reason(backend: str) -> str | None:
+245:        except ImportError:
+259:def install(backend: str, log_callback=None) -> bool:
+288:        except ImportError as exc:
+317:        except OSError as exc:
+358:def has_failed(backend: str, model_size: str | None = None) -> bool:
+362:    `refine_speakers` call so it can avoid persisting unrefined builtin
+370:def refine_speakers(
+409:        size = llm_cache_token(
+438:    except Exception as exc:  # the whole point is to never blow up the render
+543:def _extract_self_intro_name(text: str, known_speakers: Iterable[str]):
+573:def _apply_self_introductions(all_segments, known_speakers):
+617:def _collect_global_speaker_counts(all_segments) -> dict[str, int]:
+626:def _filter_junk_speakers(all_segments, speaker_counts, character_tokens=None):
+669:def _character_tokens(character_list):
+696:def post_refine(all_segments, character_list=None):
+734:def _spacy_model_available(model_name: str) -> bool:
+737:    except (ImportError, ValueError):
+741:def _spacy_download(model_name: str, log_callback=None) -> bool:
+752:        except ImportError as exc:
+776:    except OSError as exc:
+789:def _ensure_spacy_model(model_name: str, log_callback=None) -> bool:
+815:        except ImportError:
+834:def _refine_with_fastcoref(segments, full_text):
+979:def _booknlp_model_dir():
+984:def _download_booknlp_file(url, dest, expected_size):
+1056:        except (urllib.error.URLError, TimeoutError, OSError) as exc:
+1067:def _ensure_booknlp_models(model_size: str) -> None:
+1094:def _basename_any_sep(s: str) -> str:
+1102:def _patch_booknlp_windows_paths() -> None:
+1151:def _patch_booknlp_state_dict() -> None:
+1197:def _patch_booknlp_text_encoding() -> None:
+1249:def _get_booknlp_model(model_size: str):
+1270:def _refine_with_booknlp(segments, full_text, model_size="small"):
+1348:                    except (KeyError, ValueError):
+1373:                    except (KeyError, ValueError):
+1393:                    except (KeyError, ValueError):
+1525:def _model_limits(model: str) -> tuple[int, int]:
+1541:def _max_output_tokens_for_model(model: str) -> int:
+1568:def _llm_request_timeout_s(override: int | None = None) -> int:
+1591:        except (TypeError, ValueError):
+1600:    except (TypeError, ValueError):
+1620:def _escape_user_xml(text: str) -> str:
+1650:def _looks_quoted(text: str) -> bool:
+1670:def _llm_provider_supported(provider: str) -> bool:
+1681:def _is_cloud_provider(provider: str) -> bool:
+1685:def _chunk_chars_for_provider(provider: str) -> int:
+1696:def _llm_default_endpoint(provider: str) -> str:
+1706:def _llm_normalize_endpoint(provider: str, endpoint: str | None) -> str:
+1716:def _llm_ollama_runtime(endpoint: str, model: str) -> str | None:
+1739:    except (urllib.error.URLError, OSError, ValueError):
+1758:    except (TypeError, ValueError):
+1770:def _llm_call(
+1908:def _llm_http_with_retry(
+1927:        except urllib.error.HTTPError as exc:
+1934:                except Exception:
+1946:                    except (TypeError, ValueError):
+1970:            except Exception:
+1975:        except TimeoutError as exc:
+1983:        except (urllib.error.URLError, OSError) as exc:
+2013:def _extract_llm_text(body: str, provider: str) -> str:
+2036:    except (ValueError, _json.JSONDecodeError):
+2080:class LLMProbeResult:
+2107:def probe_llm_endpoint(
+2168:    except urllib.error.HTTPError as exc:
+2186:    except (urllib.error.URLError, TimeoutError, OSError) as exc:
+2204:    except ValueError:
+2255:def compute_model_choices(
+2286:def _llm_parse_speaker_map(reply: str) -> dict[str, dict]:
+2322:    except (ValueError, _json.JSONDecodeError):
+2397:def _llm_normalise_emotion(raw: str | None) -> str | None:
+2422:def _llm_canonicalise_name(
+2451:def _refine_with_llm(
+2594:            reply = _llm_call(
+2605:                # ``_llm_call`` directly.
+2655:def llm_cache_token(provider: str, model: str) -> str:
+2693:def _an_batch_size_for_provider(provider: str) -> int:
+2739:def classify_authors_notes_via_llm(
+2809:        except LLMUnavailable:
+2811:        except Exception as exc:  # noqa: BLE001 — additive, never fail
+2829:def _classify_an_batch(
+2884:    reply = _llm_call(
+2915:    except (ValueError, _json.JSONDecodeError):
+2950:def _an_truthy(value: object) -> bool:
+2975:def _parse_an_response(parsed, paragraphs: list[str]) -> set[int]:
+2998:            except (TypeError, ValueError):
+3024:        except (TypeError, ValueError):
+3061:def _walk_index_fields(obj, n_paragraphs: int):
+3069:                except (TypeError, ValueError):
+3080:def _walk_int_lists(obj, n_paragraphs: int):
+3128:def should_constrain_an_to_boundaries(provider: str) -> bool:
+3143:def constrain_an_to_boundaries(
+3169:def expand_an_block(flagged: set[int], n_paragraphs: int) -> set[int]:
+3233:def _walk_strings(obj):
+3245:def _normalise_para(s: str) -> str:

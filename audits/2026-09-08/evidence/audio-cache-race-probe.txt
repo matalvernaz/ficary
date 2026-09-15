@@ -1,0 +1,8 @@
+First render output: Successful sentence that is long enough to avoid small-segment merging.
+First render synth calls: 4
+Second render synth calls: 4
+Second render still omits LOST sentence: True
+Cancel set during last heading but render returns success: True
+New soundscape handles before old load completes: [2]
+New soundscape handles after old load completes: []
+Session still marked started: True

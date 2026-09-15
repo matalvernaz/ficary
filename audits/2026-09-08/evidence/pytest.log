@@ -1,0 +1,228 @@
+........................................................................ [  3%]
+........................................................................ [  6%]
+........................................................................ [  9%]
+........................................................................ [ 13%]
+........................................................................ [ 16%]
+........................................................................ [ 19%]
+........................................................................ [ 23%]
+........................................................................ [ 26%]
+........................................................................ [ 29%]
+........................................................................ [ 32%]
+........................................................................ [ 36%]
+........................................................................ [ 39%]
+........................................................................ [ 42%]
+........................................................................ [ 46%]
+........................................................................ [ 49%]
+........................................................................ [ 52%]
+........................................................................ [ 55%]
+........................................................................ [ 59%]
+........................................................................ [ 62%]
+........................................................................ [ 65%]
+........................................................................ [ 69%]
+........................................................................ [ 72%]
+........................................................................ [ 75%]
+........................................................................ [ 78%]
+........................................................................ [ 82%]
+........................................................................ [ 85%]
+........................................................................ [ 88%]
+........................................................................ [ 92%]
+........................................................................ [ 95%]
+........................................................................ [ 98%]
+..............................                                           [100%]
+=============================== warnings summary ===============================
+tests/test_library_fulltext.py::test_populate_indexes_scanned_library
+  <frozen posixpath>:82: ResourceWarning: unclosed database in <sqlite3.Connection object at 0xffff9129b790>
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_library_fulltext.py::test_populate_indexes_scanned_library
+  <frozen posixpath>:82: ResourceWarning: unclosed database in <sqlite3.Connection object at 0xffff8b694400>
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_library_fulltext.py::test_populate_indexes_scanned_library
+  <frozen posixpath>:82: ResourceWarning: unclosed database in <sqlite3.Connection object at 0xffff8b6944f0>
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_library_fulltext.py::test_populate_indexes_scanned_library
+  <frozen posixpath>:82: ResourceWarning: unclosed database in <sqlite3.Connection object at 0xffff8b694310>
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_library_fulltext.py::test_populate_indexes_scanned_library
+  <frozen posixpath>:82: ResourceWarning: unclosed database in <sqlite3.Connection object at 0xffff8b694040>
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_library_fulltext.py::test_populate_indexes_scanned_library
+  <frozen posixpath>:82: ResourceWarning: unclosed database in <sqlite3.Connection object at 0xffff8b694220>
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_library_fulltext.py::test_populate_indexes_scanned_library
+  <frozen posixpath>:82: ResourceWarning: unclosed database in <sqlite3.Connection object at 0xffff8b6945e0>
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_library_fulltext.py::test_populate_indexes_scanned_library
+  <frozen posixpath>:82: ResourceWarning: unclosed database in <sqlite3.Connection object at 0xffff8b6947c0>
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_library_gui_logic.py::test_relative_to_root_under_root
+  /usr/lib/python3.13/inspect.py:3089: ResourceWarning: unclosed database in <sqlite3.Connection object at 0xffff8b6948b0>
+    params = OrderedDict((param.name, param) for param in parameters)
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_library_gui_logic.py::test_relative_to_root_under_root
+  /usr/lib/python3.13/inspect.py:3089: ResourceWarning: unclosed database in <sqlite3.Connection object at 0xffff8b695030>
+    params = OrderedDict((param.name, param) for param in parameters)
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_library_gui_logic.py::test_relative_to_root_under_root
+  /usr/lib/python3.13/inspect.py:3089: ResourceWarning: unclosed database in <sqlite3.Connection object at 0xffff8b6957b0>
+    params = OrderedDict((param.name, param) for param in parameters)
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_library_gui_logic.py::test_relative_to_root_under_root
+  /usr/lib/python3.13/inspect.py:3089: ResourceWarning: unclosed database in <sqlite3.Connection object at 0xffff8b695990>
+    params = OrderedDict((param.name, param) for param in parameters)
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+tests/test_library_gui_logic.py::test_relative_to_root_under_root
+  /usr/lib/python3.13/inspect.py:3089: ResourceWarning: unclosed database in <sqlite3.Connection object at 0xffff8b6955d0>
+    params = OrderedDict((param.name, param) for param in parameters)
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+================================ tests coverage ================================
+_______________ coverage: platform linux, python 3.13.5-final-0 ________________
+
+Name                                Stmts   Miss  Cover
+-------------------------------------------------------
+ficary/__init__.py                     15     15     0%
+ficary/__main__.py                     26     26     0%
+ficary/_cf_worker.py                   86     24    72%
+ficary/accent_map.py                   59      8    86%
+ficary/ao3.py                         410    118    71%
+ficary/atomic.py                       87     19    78%
+ficary/attribution.py                1255    453    64%
+ficary/audio/__init__.py                0      0   100%
+ficary/audio/engine.py                371    178    52%
+ficary/audio/events.py                 18      0   100%
+ficary/audiobookshelf.py               58     14    76%
+ficary/cache_doctor.py                169     26    85%
+ficary/cf_solve.py                    244     99    59%
+ficary/character_profile.py           186     37    80%
+ficary/cli.py                        2368   1749    26%
+ficary/content_hash.py                 22      0   100%
+ficary/doctor.py                      102     23    77%
+ficary/download_queue.py              154     27    82%
+ficary/erotica/__init__.py             19      0   100%
+ficary/erotica/aff.py                 231     33    86%
+ficary/erotica/bdsmlibrary.py         144     92    36%
+ficary/erotica/chastitymansion.py      10      0   100%
+ficary/erotica/chyoa.py               210     49    77%
+ficary/erotica/darkwanderer.py          9      0   100%
+ficary/erotica/fictionmania.py        139     30    78%
+ficary/erotica/giantessworld.py       108     76    30%
+ficary/erotica/greatfeet.py            93      9    90%
+ficary/erotica/literotica.py          271     98    64%
+ficary/erotica/lushstories.py         111     13    88%
+ficary/erotica/mcstories.py           156     21    87%
+ficary/erotica/mousepad.py            161      6    96%
+ficary/erotica/nifty.py               156     22    86%
+ficary/erotica/readonlymind.py        135    100    26%
+ficary/erotica/search.py             1308    182    86%
+ficary/erotica/sexstories.py          104      8    92%
+ficary/erotica/storiesonline.py       229     63    72%
+ficary/erotica/tapatalk.py             58     18    69%
+ficary/erotica/tgstorytime.py         124     14    89%
+ficary/erotica/ticklingforum.py         9      0   100%
+ficary/erotica/xenforo.py             148     26    82%
+ficary/exporters.py                   955     89    91%
+ficary/fichub.py                      178     20    89%
+ficary/ficwad.py                      257     96    63%
+ficary/gui.py                        2016   1138    44%
+ficary/gui_dialogs.py                1230   1048    15%
+ficary/gui_help.py                     17      9    47%
+ficary/gui_search.py                  592    352    41%
+ficary/gui_watchlist.py               423    267    37%
+ficary/heal_manifest.py               124     15    88%
+ficary/jobs.py                         61      6    90%
+ficary/legacy.py                       55     22    60%
+ficary/library/__init__.py             10      0   100%
+ficary/library/abandoned.py           150     30    80%
+ficary/library/backup.py               63      7    89%
+ficary/library/browser.py             500    153    69%
+ficary/library/candidate.py            22      1    95%
+ficary/library/doctor.py              169     29    83%
+ficary/library/edits.py               137     33    76%
+ficary/library/find.py                 41      0   100%
+ficary/library/fulltext.py            184     32    83%
+ficary/library/gui.py                 684    460    33%
+ficary/library/gui_logic.py            14      0   100%
+ficary/library/hashes.py               25      2    92%
+ficary/library/identifier.py           51      2    96%
+ficary/library/index.py               225     12    95%
+ficary/library/mirrors.py             209     19    91%
+ficary/library/refresh.py             138     27    80%
+ficary/library/reorganizer.py         123     11    91%
+ficary/library/review.py               40      1    98%
+ficary/library/scanner.py             159     28    82%
+ficary/library/stats.py               117      4    97%
+ficary/library/template.py             70      1    99%
+ficary/logging_utils.py                44     21    52%
+ficary/mailer.py                       74     60    19%
+ficary/mediaminer.py                  234     57    76%
+ficary/merge.py                        50      2    96%
+ficary/models.py                      106      3    97%
+ficary/neural_env.py                  199    154    23%
+ficary/notifications.py               124     51    59%
+ficary/ollama_install.py              179     22    88%
+ficary/optional_features.py           149     52    65%
+ficary/portable.py                    117     54    54%
+ficary/preferences.py                 404     56    86%
+ficary/prefs.py                       141     28    80%
+ficary/reader/__init__.py               0      0   100%
+ficary/reader/chunker.py               84      4    95%
+ficary/reader/gui.py                  397    397     0%
+ficary/reader/live_tts.py             185     22    88%
+ficary/reader/sleep_timer.py           49      1    98%
+ficary/reader/source.py               106     16    85%
+ficary/reader/state.py                 93      7    92%
+ficary/reader/theme.py                 34     15    56%
+ficary/royalroad.py                   253     54    79%
+ficary/scraper.py                    1068    201    81%
+ficary/scribblehub.py                 134     37    72%
+ficary/search.py                     1216    196    84%
+ficary/self_update.py                 483    179    63%
+ficary/single_flight.py                43      2    95%
+ficary/sites.py                       103      0   100%
+ficary/soundscape/__init__.py           0      0   100%
+ficary/soundscape/editor.py           169    169     0%
+ficary/soundscape/library.py           49     13    73%
+ficary/soundscape/model.py             36      3    92%
+ficary/soundscape/session.py          107      6    94%
+ficary/subscribestar.py               194     45    77%
+ficary/tts.py                        1386    720    48%
+ficary/tts_providers/__init__.py       90     22    76%
+ficary/tts_providers/edge.py           66     66     0%
+ficary/tts_providers/piper.py         199    134    33%
+ficary/updater.py                     502     46    91%
+ficary/url_classifier.py               74     32    57%
+ficary/watchlist.py                   293     26    91%
+ficary/watchlist_doctor.py            123     10    92%
+ficary/watchlist_poller.py             96     41    57%
+ficary/wattpad.py                     345    106    69%
+ficary/webnovel.py                    189     48    75%
+-------------------------------------------------------
+TOTAL                               28589  10768    62%
+Coverage JSON written to file audits/2026-09-08/evidence/coverage.json
+2190 passed, 13 warnings in 88.81s (0:01:28)

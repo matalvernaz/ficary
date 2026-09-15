@@ -1,0 +1,295 @@
+{
+  "verified_at_utc": "2026-09-13T22:00:49.062248+00:00",
+  "status": "passed",
+  "errors": [],
+  "repository_head": "8f79e57399686357fcfead0e9fce29e70790beb1",
+  "git_status": "?? audits/",
+  "tracked_changes": [],
+  "untracked_files_outside_audit": [],
+  "confirmed_findings": 50,
+  "priorities": {
+    "P1": 15,
+    "P2": 35
+  },
+  "repair_groups": 9,
+  "local_markdown_links_checked": 155,
+  "source_reference_paths_and_line_bounds_checked": 122,
+  "unique_evidence_files_referenced_by_registry": 36,
+  "diagnostic_scripts": 17,
+  "baseline_junit": {
+    "tests": 2190,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0
+  },
+  "baseline_coverage": {
+    "covered_lines": 17821,
+    "num_statements": 28589,
+    "percent_covered": 62.33516387421736,
+    "percent_covered_display": "62",
+    "missing_lines": 10768,
+    "excluded_lines": 18,
+    "percent_statements_covered": 62.33516387421736,
+    "percent_statements_covered_display": "62"
+  },
+  "dependency_scans": {
+    "2026-09-08": {
+      "records": 41,
+      "distinct_package_advisory_pairs": 37,
+      "packages": 11
+    },
+    "2026-09-13": {
+      "records": 70,
+      "distinct_package_advisory_pairs": 37,
+      "packages": 11
+    }
+  },
+  "ignored_audit_files": [],
+  "artifact_manifest_excludes_self": {
+    ".gitignore": {
+      "bytes": 108,
+      "sha256": "e1c1496136ba978e068531bb26ece24b8828b4bae3f4b60d07d6dfb24147be9f"
+    },
+    "AUDIO.md": {
+      "bytes": 22885,
+      "sha256": "f90b3ef7d3617296275904415c875df08c39d9ab0066d8c04b8629c8e00f3f2f"
+    },
+    "CORE.md": {
+      "bytes": 12895,
+      "sha256": "62a3cc8b3c81457954170f2da4e03c0697672b415914d0aacb6b959f0d25074d"
+    },
+    "DISTRIBUTION.md": {
+      "bytes": 9481,
+      "sha256": "cf89d6828fc98d378ed8416a7c0e37d6cd60ef6c0bb2535f28a2cc7ad318dce3"
+    },
+    "LIBRARY.md": {
+      "bytes": 22372,
+      "sha256": "8a676248533c37acc1348726b8047fa1182d5ad5fe45b3d8120d051e0915ea75"
+    },
+    "PROGRESS.md": {
+      "bytes": 5872,
+      "sha256": "3547d1e899fa541e1f7d61ad81f14d12888b0964e5d1f4d2c3d157282b6d5740"
+    },
+    "REPORT.md": {
+      "bytes": 26104,
+      "sha256": "79a38dcbd2a20688b13b8e63789109c9517ddcc3d69ac3892b6eafce416e5b67"
+    },
+    "UX.md": {
+      "bytes": 25218,
+      "sha256": "5545a70e026b6aad64b3899a8b7ff2d58784d01697a49fd0a0f3ec2419368245"
+    },
+    "evidence/README.md": {
+      "bytes": 8530,
+      "sha256": "7a53c7698c1f463bda1f9817ba45921ac97c125c277d964cdf5055f20134b09b"
+    },
+    "evidence/audio-attribution-probe.py": {
+      "bytes": 1864,
+      "sha256": "f2e935cc5d4150ad8c73350d87362bac8d374634a3ccc4bf2550c3e9fb72a997"
+    },
+    "evidence/audio-attribution-probe.txt": {
+      "bytes": 493,
+      "sha256": "b86a6edcbf93dfc5685472515017be2bb23f3abf268952d76b3032e29889f69a"
+    },
+    "evidence/audio-attribution-symbols.txt": {
+      "bytes": 5372,
+      "sha256": "d4d7f1992e8113889417f4d47605dc4ab6e0f67c697796cf747122da296e87c9"
+    },
+    "evidence/audio-boundaries-probe.py": {
+      "bytes": 2433,
+      "sha256": "5ee4fcc9a9bcdc3ded1f67753542b6d3f293dd6a40ddb880aa7ae3fb7cd1e500"
+    },
+    "evidence/audio-boundaries-probe.txt": {
+      "bytes": 593,
+      "sha256": "9c64b3bb8c859d32d45d6217dc96fdfad6c35f59336f141b2c7899eaccfedf68"
+    },
+    "evidence/audio-cache-race-probe.py": {
+      "bytes": 4218,
+      "sha256": "661aa805ef9acf3374481f80b4ffbcc93d291914400f837a8edc41db09486c1e"
+    },
+    "evidence/audio-cache-race-probe.txt": {
+      "bytes": 401,
+      "sha256": "fd1e687e77ed3a4439e28223c732dcafd748ec5f8599452b3c4e6a61f8e811f9"
+    },
+    "evidence/audio-gui-probe.py": {
+      "bytes": 2414,
+      "sha256": "49a93797b40e49d5eced9c9d68e30d7263a73c25925afb4847a0158b29355577"
+    },
+    "evidence/audio-gui-probe.txt": {
+      "bytes": 222,
+      "sha256": "e9aeb0cf622f91f9b8dea0565d951e8544e3a6a8c45a7f277c4a0deeb71779ce"
+    },
+    "evidence/audio-live-stop-probe.py": {
+      "bytes": 1061,
+      "sha256": "b9789f25636510212c38de63daaabce64e530b06d165bd3051871bb6bee90c42"
+    },
+    "evidence/audio-live-stop-probe.txt": {
+      "bytes": 112,
+      "sha256": "24683980710534187d3d94a83b58889f99db5a53001cca46ca1b59ba4837dc42"
+    },
+    "evidence/audio-reader-probe.py": {
+      "bytes": 4024,
+      "sha256": "3ad4b1384d48044834db4168a4775cab1c417de9f8783c5acecd1a6ce1792e52"
+    },
+    "evidence/audio-reader-probe.txt": {
+      "bytes": 419,
+      "sha256": "4da15f3e477ffbe75ac3038097cfe3de9a8b06bce6724dbb9b7fc00a7a5f131c"
+    },
+    "evidence/core_entrypoint_repros.json": {
+      "bytes": 451,
+      "sha256": "ba00f07fccafba9ce386472266a05a3f715f2d5edca1a26c05c8840a6b1cf457"
+    },
+    "evidence/core_entrypoint_repros.py": {
+      "bytes": 2343,
+      "sha256": "5df9823d4f40b599c930f6066d359f660976433ee21ba72ffe38f52ecc6175ad"
+    },
+    "evidence/core_logging_probe.json": {
+      "bytes": 227,
+      "sha256": "cdf14604b0e68ec13b2a759c01c28b9266e766f2f1e0a942fa6efb4503102b26"
+    },
+    "evidence/core_logging_probe.py": {
+      "bytes": 1069,
+      "sha256": "9dd22919f5d514f891236e94252fae403f1204132110d2d763a6fa8813665403"
+    },
+    "evidence/core_repros.json": {
+      "bytes": 1449,
+      "sha256": "933cba217830e4757e50eca677234566eb0fc487bd05d79f59e2a9dff650242c"
+    },
+    "evidence/core_repros.py": {
+      "bytes": 5219,
+      "sha256": "7e3fb2782ff7f4fd20cb6497a87b6a55dc9432a3937910894b1b7ce1ebdec1c6"
+    },
+    "evidence/coverage.json": {
+      "bytes": 1278221,
+      "sha256": "29791a662ec6b6a0887ce0bd34da3d5e335705a21364b7e40f89a48dc49eec34"
+    },
+    "evidence/environment-2026-09-13.json": {
+      "bytes": 258,
+      "sha256": "524bc97a289379471198459bf2afcf0a7c5b62dd933271d75826822c6e490efa"
+    },
+    "evidence/library_integration_repros.log": {
+      "bytes": 1505,
+      "sha256": "e27e8b4ee355c638f5b283482af4a776b7b0b248fbb487d1da9d7fd129e0391f"
+    },
+    "evidence/library_integration_repros.py": {
+      "bytes": 9056,
+      "sha256": "e892194d67b1efb67cdbe6b05d250d6645e49c4ecec000acb5a3397e53347ccd"
+    },
+    "evidence/library_repros.log": {
+      "bytes": 1396,
+      "sha256": "2cb74cd59399a9f0add220a265463550db0ffe6fd26cc3fdc6925d95b63cfa9e"
+    },
+    "evidence/library_repros.py": {
+      "bytes": 6712,
+      "sha256": "c89631614fe3e0ad67425414c9c32ddd79cb682dae23a7ab2e09e1bd7e1f786c"
+    },
+    "evidence/pip-audit-2026-09-13.json": {
+      "bytes": 81056,
+      "sha256": "07239c117e1bd3393a7a7a52fd053a6e37ccc553bb18647e240836a3bb0f128d"
+    },
+    "evidence/pip-audit-2026-09-13.log": {
+      "bytes": 46,
+      "sha256": "8f9c91d5e55dcc91ceb4c481ae189a55127f471900a6bc9c0ad43990b3fdb4c5"
+    },
+    "evidence/pip-audit.json": {
+      "bytes": 50703,
+      "sha256": "edb95451ad68afe95bc9c19687daad244edff05554a594414ac535aae94c3959"
+    },
+    "evidence/pip-audit.log": {
+      "bytes": 46,
+      "sha256": "875c51c4f884f82bdde54d0785c9a18834fbf5dfda1123daf75b7dbed7f0e20f"
+    },
+    "evidence/pip-check-2026-09-13.log": {
+      "bytes": 63,
+      "sha256": "18e716e37269560b02025078da6fd88e9518d92711d37d4d8d8de778a817d778"
+    },
+    "evidence/pytest.log": {
+      "bytes": 14608,
+      "sha256": "62a324cb495f022136389bfe721e5570cb2895cc4d7084db070ea059d6b9ab9e"
+    },
+    "evidence/pytest.xml": {
+      "bytes": 275906,
+      "sha256": "e95e94534edbfb82a900cbd7a185edeb29bfda8ac504e02c78d3507a6c2b9836"
+    },
+    "evidence/python39-deps.log": {
+      "bytes": 744,
+      "sha256": "b3373b7f56b6cdcfce16c618ea08cb558ce6d943c7b84b8e224ac99ec55e8962"
+    },
+    "evidence/python39-install.log": {
+      "bytes": 191,
+      "sha256": "3a677ce40e80624bf7473692facb1adcdd19ded487ddb617244dd00c3d4810b8"
+    },
+    "evidence/python39-venv.log": {
+      "bytes": 241,
+      "sha256": "4db2ce709c8ec2f3178bbe5e885db37390ba5a8bc8b48f9753c1f7b2511e947e"
+    },
+    "evidence/python39_probe.log": {
+      "bytes": 525,
+      "sha256": "6026144559ba203009ff6ae69afce88e05700b2222a490590d19bec5c8f7bc8a"
+    },
+    "evidence/python39_probe.py": {
+      "bytes": 478,
+      "sha256": "cd16fd0005ecbe7f7727f146655d13c1a83a4c5d1d61c8fd76787f823461e7e9"
+    },
+    "evidence/ruff.json": {
+      "bytes": 9300,
+      "sha256": "6515e83e4826dee33e283f55e0fe5081e0d68af1a00f3948e20049990c5a3541"
+    },
+    "evidence/run_baseline.py": {
+      "bytes": 1125,
+      "sha256": "e7f648c35fb08e8ac5651764d24e5722e8cc1c3079693d1f5127d626839f4ded"
+    },
+    "evidence/ux_abs_preferences_probe.json": {
+      "bytes": 297,
+      "sha256": "a03489169c481d272ff80e4afc00736d22b22f5f9a9052c5b3fa4df916b7e8ec"
+    },
+    "evidence/ux_abs_preferences_probe.py": {
+      "bytes": 1339,
+      "sha256": "83b5d81a3154c544889a6a04f3e8d9d93f140b5c499502945ebe8e6ae83d065e"
+    },
+    "evidence/ux_gui_update_probe.json": {
+      "bytes": 608,
+      "sha256": "aa0a5cf2073132f3b005009720903e4e4024a86940b31e1fa409f3a86fae794f"
+    },
+    "evidence/ux_gui_update_probe.py": {
+      "bytes": 2019,
+      "sha256": "fee3525c71f3e27a854c839709e873104d3efdcd49a6fee1a7c510dcf5c103bf"
+    },
+    "evidence/ux_jobs_probe.json": {
+      "bytes": 310,
+      "sha256": "5b69926d08b8589f2be27d056bf885b27fbd1c07240e56b113d171d72dda2d1b"
+    },
+    "evidence/ux_jobs_probe.py": {
+      "bytes": 1304,
+      "sha256": "b3d1cd750a400c75a186f560ccb009d31d05b0b39bbd939536bdc6a2c5146235"
+    },
+    "evidence/ux_native_probe.json": {
+      "bytes": 3324,
+      "sha256": "8b9288f90570e3eb218d1ea86bc8f2a35e77373f337b9289c3cc859ba5ce4de9"
+    },
+    "evidence/ux_native_probe.py": {
+      "bytes": 4173,
+      "sha256": "0772ab421e3358a131e3b139be31409f3680c4e304f314bdcf509ebd542fcf11"
+    },
+    "evidence/ux_native_probe.stderr": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "evidence/ux_preferences_storage_probe.json": {
+      "bytes": 322,
+      "sha256": "524284e779a993d7f27b4cc04d71a16821454f3d5380b955cf13230a481289d9"
+    },
+    "evidence/ux_preferences_storage_probe.py": {
+      "bytes": 1195,
+      "sha256": "1581f4ab87ab7558c3715c02b42e086d0c3e2403af21d2d1934b4bd52e539bb0"
+    },
+    "evidence/ux_preferences_storage_probe.stderr": {
+      "bytes": 1264,
+      "sha256": "93b7af636d31b311b3227ab61e6c5b50cb5c3ba78ca5767d2806e1fae5cc376f"
+    },
+    "findings.json": {
+      "bytes": 33154,
+      "sha256": "852906fdb7072a5d41f153169596a70ae7f2f5f4cf1595f3bc8f473788cdc2c5"
+    }
+  },
+  "limits": "Artifact integrity and consistency checks only. Product baseline and diagnostic results are historical evidence against the unchanged audited commit; no product fix or new platform validation is implied."
+}

@@ -1,0 +1,4 @@
+{
+  "cookie_value_in_debug_log": true,
+  "synthetic_log": "audit url=https://example.invalid/story profile=chrome status=200 jar=[] headers={'Set-Cookie': 'session=SYNTHETIC_SESSION_VALUE; Secure; HttpOnly'} body[:300]=''\n"
+}

@@ -1,0 +1,8 @@
+Resume caret: 52
+Text sent to TTS: 'First sentence of the chapter.\n\nSecond sentence to resume here.'
+Saved position after highlighting final chunk: (1, 0)
+Late resolution starts after Stop + Screen reader mode: True
+Total start calls: 2
+Reader default with only Piper selected: edge:foreign
+First completed chapter temp files survive reader close: True
+Latest completed chapter temp files survive reader close: False

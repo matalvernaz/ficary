@@ -1,0 +1,8 @@
+SMTP_SSL defaults: {'check_hostname': False, 'verify_mode': 'CERT_NONE'}
+STARTTLS default context: {'check_hostname': False, 'verify_mode': 'CERT_NONE'}
+Local Piper failure fallback voices: ['piper:en_US-amy-medium', 'piper:en_US-amy-medium', 'piper:en_US-amy-medium', 'en-US-AriaNeural']
+Cloud fallback returned success: True
+Piper install result: False
+Piper install logs: ['Piper: downloading mock.tar.gz ...', "Piper install failed: Destination path '/tmp/ficary-audit-audio-yu3pygzz/install/piper/piper' already exists"]
+Resolved executable is directory: True
+Second install result: True

@@ -1,0 +1,4 @@
+LLM attribution selected, notes stripping disabled: llm None
+Second render overwrites cancel target: True
+First render completes while second active; cancel pointer: None
+Cancel after first completes reaches second: False

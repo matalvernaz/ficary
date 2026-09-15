@@ -1,0 +1,11 @@
+{"autosort": false, "case": "watch_download_ignores_output_and_auth_prefs", "cf_solve": false, "output_dir": ".", "scribblehub_cookie_present": false, "subscribestar_cookie_present": false}
+{"case": "watch_join_gui_success_none", "error": "download failed for https://www.fanfiction.net/s/987654/1/ \u2014 see the log for the reason", "own_download_executed": false}
+{"adapter": "ffn", "adult_override": null, "case": "scan_erases_manual_adult"}
+{"case": "heal_drops_live_duplicate", "duplicates_before": ["renamed.html"], "missing_before": 1, "orphan_scans": 0, "removed": 1, "renamed_file_survives": true, "story_still_indexed": false}
+{"case": "first_write_conflict_missed", "surviving_urls": ["https://www.fanfiction.net/s/2"]}
+{"case": "index_corruption_invalid-utf8", "error": "UnicodeDecodeError"}
+{"case": "index_corruption_null-library", "error": "AttributeError"}
+{"case": "unicode_filename_limit", "characters": 105, "error": "OSError: errno=36", "utf8_bytes": 305}
+{"case": "reorganize_stale_fulltext_paths", "current_index_relpath": "organized/renamed.html", "hit_path_exists": false, "hit_relpath": "renamed.html", "moved": 1, "search_hits": 2}
+{"case": "remove_leaves_fulltext_ghost", "hits_after_removal": 2}
+{"case": "silent_edits_reuses_cache", "default_changed": 0, "default_fetches": ["https://www.fanfiction.net/s/987654/1"], "default_unchanged": 1, "forced_changed_chapters": [2], "forced_fetches": ["https://www.fanfiction.net/s/987654/1", "https://www.fanfiction.net/s/987654/2"]}

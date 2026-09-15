@@ -1,0 +1,10 @@
+3.9.25 (main, Oct 31 2025, 22:59:33) 
+[Clang 21.1.4 ]
+Traceback (most recent call last):
+  File "/home/matt/ffn-dl/audits/2026-09-08/evidence/python39_probe.py", line 11, in <module>
+    import ficary.cli
+  File "/home/matt/ffn-dl/ficary/cli.py", line 15, in <module>
+    from .exporters import (
+  File "/home/matt/ffn-dl/ficary/exporters.py", line 49, in <module>
+    def _emit(progress: Callable[[str], None] | None, line: str) -> None:
+TypeError: unsupported operand type(s) for |: '_CallableGenericAlias' and 'NoneType'
