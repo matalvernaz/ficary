@@ -158,9 +158,12 @@ class TestTocPaging:
         sc = ScribbleHubScraper()
         monkeypatch.setattr(sc, "_session", lambda: FakeSession())
         monkeypatch.setattr(sc, "_delay", lambda *a, **k: None)
-        chapters = sc._fetch_full_toc(1, BeautifulSoup("<html></html>", "lxml"))
+        chapters, enumerated = sc._fetch_full_toc(
+            1, BeautifulSoup("<html></html>", "lxml"),
+        )
         # All three chapters, oldest-first.
         assert [c["id"] for c in chapters] == [10, 20, 30]
+        assert enumerated is True
 
     def test_full_toc_falls_back_to_embedded_when_ajax_empty(self, monkeypatch):
         from bs4 import BeautifulSoup
@@ -179,8 +182,11 @@ class TestTocPaging:
         sc = ScribbleHubScraper()
         monkeypatch.setattr(sc, "_session", lambda: FakeSession())
         monkeypatch.setattr(sc, "_delay", lambda *a, **k: None)
-        chapters = sc._fetch_full_toc(1, embedded)
+        chapters, enumerated = sc._fetch_full_toc(1, embedded)
         assert [c["id"] for c in chapters] == [5]
+        # An immediately-empty AJAX response is a complete enumeration:
+        # the endpoint had nothing to add to the embedded list.
+        assert enumerated is True
 
 
 class TestChapterBody:

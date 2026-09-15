@@ -203,6 +203,23 @@ _STORY_URL_PATTERNS_STRICT: list[tuple[type[BaseScraper], re.Pattern[str]]] = [
         FFNScraper,
         re.compile(r"https?://(?:www\.)?fanfiction\.net/s/\d+", re.I),
     ),
+    (
+        ScribbleHubScraper,
+        re.compile(
+            r"https?://(?:www\.)?scribblehub\.com/series/\d+",
+            re.I,
+        ),
+    ),
+    (
+        SubscribeStarScraper,
+        re.compile(
+            # A post, or the synthetic per-work URL a merged serial
+            # exports under (``/<handle>/story/<title>``).
+            r"https?://(?:www\.)?subscribestar\.adult/"
+            r"(?:posts/\d+|[^/?#\s]+/story/[^/?#\s]+)",
+            re.I,
+        ),
+    ),
 ]
 
 

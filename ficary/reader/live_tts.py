@@ -78,7 +78,15 @@ class LiveTTSController:
         return self._worker is not None and self._worker.is_alive()
 
     # ── transport ─────────────────────────────────────────────────
-    def start(self, text: str, chapter_number: Optional[int] = None) -> None:
+    def start(self, text: str, chapter_number: Optional[int] = None,
+              start_offset: int = 0) -> None:
+        """Speak ``text``, beginning at the chunk containing ``start_offset``.
+
+        ``start_offset`` is a character index into ``text`` — the reader
+        passes the saved listening position so Play resumes instead of
+        restarting the chapter. Chunk indices stay absolute so a
+        highlight still lines up with the displayed text.
+        """
         self.stop()
         with self._lock:
             self._gen += 1
@@ -90,9 +98,15 @@ class LiveTTSController:
         self._resume.set()
         if not self._chunks:
             return
+        pending = self._chunks
+        if start_offset > 0:
+            resumed = [c for c in self._chunks if c.end > start_offset]
+            # An offset past the end of the chapter means the listener
+            # finished it; replay rather than play nothing at all.
+            pending = resumed or self._chunks
         self._tmp_dir.mkdir(parents=True, exist_ok=True)
         self._worker = threading.Thread(
-            target=self._run, args=(gen, list(self._chunks)), daemon=True)
+            target=self._run, args=(gen, list(pending)), daemon=True)
         self._worker.start()
 
     def pause(self) -> None:
@@ -143,11 +157,16 @@ class LiveTTSController:
         failed = 0
         completed = False
         try:
-            for i, chunk in enumerate(chunks):
+            for chunk in chunks:
                 if not self._current(gen):
                     return
                 if not self._wait_stop_aware(self._resume, gen):
                     return
+                # Index by the chunk's own position in the chapter, not
+                # by its position in this run's list: a resumed run
+                # starts partway in and would otherwise synthesise (and
+                # cache) the wrong text.
+                i = chunk.index
                 path = self._ensure_synth(gen, i)
                 if not self._current(gen):
                     return
@@ -162,8 +181,19 @@ class LiveTTSController:
                 if self._on_highlight:
                     self._on_highlight(chunk)
                 self._emit(ReaderEvent.TTS_CHUNK, chunk.index)
-                self._done.clear()
-                self._engine.play_file(path, CHANNEL_VOICE, on_done=self._done.set)
+                # Register the playback under the same lock ``stop`` uses
+                # to bump the generation. Checking ``_current`` before the
+                # callbacks above is not enough: Stop returns after a
+                # bounded join, so it can complete while this worker is
+                # still inside a callback and the unguarded ``play_file``
+                # then starts speech after Stop already returned.
+                with self._lock:
+                    if gen != self._gen or self._stop.is_set():
+                        return
+                    self._done.clear()
+                    self._engine.play_file(
+                        path, CHANNEL_VOICE, on_done=self._done.set,
+                    )
                 if not self._wait_stop_aware(self._done, gen):
                     return
             completed = True

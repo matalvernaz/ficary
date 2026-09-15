@@ -14,6 +14,7 @@ import logging
 import mimetypes
 import os
 import smtplib
+import ssl
 from email.message import EmailMessage
 from pathlib import Path
 
@@ -23,6 +24,20 @@ logger = logging.getLogger(__name__)
 # lookup on the first send, short enough that a hung relay can't wedge
 # the watchlist poll loop for minutes.
 SMTP_TIMEOUT_S = 30
+
+
+def _tls_context() -> ssl.SSLContext:
+    """Return a certificate-verifying TLS context for SMTP.
+
+    ``smtplib`` defaults to ``ssl._create_stdlib_context()`` when no
+    context is passed, which sets ``check_hostname=False`` and
+    ``verify_mode=CERT_NONE`` — the connection is encrypted but any
+    server that can intercept it may impersonate the configured relay
+    and collect the SMTP password along with the message. Building the
+    context here means both the implicit-TLS and STARTTLS paths verify
+    the chain and the hostname.
+    """
+    return ssl.create_default_context()
 
 # Implicit-TLS port. Everything else uses STARTTLS.
 SMTP_SSL_PORT = 465
@@ -97,13 +112,16 @@ def send_text(to_addr: str, subject: str, body: str, prefs=None) -> None:
     # Port 465 is the implicit-TLS ("SSL") port; everything else is
     # STARTTLS (explicit TLS upgrade). Matches send_file's logic.
     if cfg["port"] == SMTP_SSL_PORT:
-        with smtplib.SMTP_SSL(cfg["host"], cfg["port"], timeout=SMTP_TIMEOUT_S) as smtp:
+        with smtplib.SMTP_SSL(
+            cfg["host"], cfg["port"], timeout=SMTP_TIMEOUT_S,
+            context=_tls_context(),
+        ) as smtp:
             smtp.login(cfg["user"], cfg["password"])
             smtp.send_message(msg)
     else:
         with smtplib.SMTP(cfg["host"], cfg["port"], timeout=SMTP_TIMEOUT_S) as smtp:
             smtp.ehlo()
-            smtp.starttls()
+            smtp.starttls(context=_tls_context())
             smtp.login(cfg["user"], cfg["password"])
             smtp.send_message(msg)
 
@@ -152,12 +170,15 @@ def send_file(to_addr: str, attachment_path, subject=None, body="", prefs=None):
     )
 
     if cfg["port"] == SMTP_SSL_PORT:
-        with smtplib.SMTP_SSL(cfg["host"], cfg["port"], timeout=SMTP_TIMEOUT_S) as smtp:
+        with smtplib.SMTP_SSL(
+            cfg["host"], cfg["port"], timeout=SMTP_TIMEOUT_S,
+            context=_tls_context(),
+        ) as smtp:
             smtp.login(cfg["user"], cfg["password"])
             smtp.send_message(msg)
     else:
         with smtplib.SMTP(cfg["host"], cfg["port"], timeout=SMTP_TIMEOUT_S) as smtp:
             smtp.ehlo()
-            smtp.starttls()
+            smtp.starttls(context=_tls_context())
             smtp.login(cfg["user"], cfg["password"])
             smtp.send_message(msg)

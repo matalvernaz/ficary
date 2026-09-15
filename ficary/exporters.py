@@ -18,6 +18,9 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_TEMPLATE = "{title} - {author}"
 
+# How many "Title (2).epub" variants to try before giving up.
+_MAX_COLLISION_SUFFIX = 100
+
 # Selectable HTML title-page layouts (``--html-style`` / the "Default
 # HTML layout" preference). ``modern`` is the styled default: an
 # ``<h1>`` over a ``<table class="meta-table">`` and a page title of
@@ -103,6 +106,96 @@ def _safe_filename(name):
     if stem.lower() in _WIN_RESERVED_NAMES:
         stem = "_" + stem
     return stem + dot + ext
+
+
+def _destination(
+    story: Story, output_dir, template: str, suffix: str, output_path=None,
+) -> Path:
+    """Decide where an export is written.
+
+    ``output_path`` is an exact destination the caller has already
+    chosen — an update replacing a specific file, for instance. It is
+    honoured as given (only the extension is corrected when it names a
+    different format), because the caller, not the template, owns that
+    decision. Otherwise the template names the file and
+    :func:`resolve_export_path` keeps it from landing on a different
+    story's export.
+    """
+    if output_path is not None:
+        path = Path(output_path)
+        if path.suffix.lower() != suffix:
+            # An explicit format change must not leave EPUB bytes under
+            # a ``.html`` name: keep the requested format's extension
+            # and write beside the original instead of over it.
+            path = path.with_name(path.stem + suffix)
+            logger.info(
+                "Requested format differs from the target file; writing "
+                "%s instead of replacing it", path.name,
+            )
+            return resolve_export_path(path, story)
+        return path
+    filename = format_filename(story, template) + suffix
+    return resolve_export_path(Path(output_dir) / filename, story)
+
+
+def _same_source(path: Path, story: Story) -> bool:
+    """Is the file at ``path`` an export of ``story``?
+
+    Compared by source URL, the only identity an export actually
+    carries. A read failure answers "unknown" as ``False`` so the
+    caller allocates a new name rather than overwriting a file it
+    could not identify.
+    """
+    url = getattr(story, "url", None)
+    if not url:
+        return False
+    try:
+        from .updater import extract_source_url
+
+        existing = extract_source_url(path)
+    except Exception:
+        return False
+    return _canonical_source(existing) == _canonical_source(url)
+
+
+def _canonical_source(url: str) -> str:
+    """Normalise a source URL enough to compare two exports."""
+    text = (url or "").strip().rstrip("/").lower()
+    for prefix in ("https://", "http://"):
+        if text.startswith(prefix):
+            text = text[len(prefix):]
+            break
+    if text.startswith("www."):
+        text = text[4:]
+    return text
+
+
+def resolve_export_path(path: Path, story: Story) -> Path:
+    """Return the path this export may safely write to.
+
+    Two different stories can produce the same ``{title} - {author}``
+    filename — a common title by a common pen name, or the same work
+    posted under two ids. Writing anyway replaced one story's file with
+    the other's and the user lost a book they never asked to replace.
+    When the existing file is a different work, step aside to a
+    numbered sibling instead.
+    """
+    path = Path(path)
+    if not path.exists() or _same_source(path, story):
+        return path
+    stem, suffix = path.stem, path.suffix
+    for n in range(2, _MAX_COLLISION_SUFFIX):
+        candidate = path.with_name(f"{stem} ({n}){suffix}")
+        if not candidate.exists() or _same_source(candidate, story):
+            logger.info(
+                "%s already holds a different story; writing %s instead",
+                path.name, candidate.name,
+            )
+            return candidate
+    raise OSError(
+        f"Could not find a free filename near {path.name} — "
+        f"{_MAX_COLLISION_SUFFIX} numbered variants are already taken."
+    )
 
 
 def format_filename(story: Story, template: str = DEFAULT_TEMPLATE) -> str:
@@ -505,12 +598,14 @@ def export_txt(
     progress: Callable[[str], None] | None = None,
     html_style: str = DEFAULT_HTML_STYLE,  # accepted for signature parity; HTML-only
     chapter_notes: str = DEFAULT_CHAPTER_NOTES,
+    output_path: Path | str | None = None,
 ) -> Path:
     chapter_notes = _chapter_notes_for_format(
         chapter_notes, supports_collapse=False,
     )
-    filename = format_filename(story, template) + ".txt"
-    path = Path(output_dir) / filename
+    path = _destination(
+        story, output_dir, template, ".txt", output_path,
+    )
 
     site_name, _publisher = _site_info(story.url)
 
@@ -607,12 +702,14 @@ def export_html(
     progress: Callable[[str], None] | None = None,
     html_style: str = DEFAULT_HTML_STYLE,
     chapter_notes: str = DEFAULT_CHAPTER_NOTES,
+    output_path: Path | str | None = None,
 ) -> Path:
     chapter_notes = _chapter_notes_for_format(
         chapter_notes, supports_collapse=True,
     )
-    filename = format_filename(story, template) + ".html"
-    path = Path(output_dir) / filename
+    path = _destination(
+        story, output_dir, template, ".html", output_path,
+    )
 
     site_name, _publisher = _site_info(story.url)
 
@@ -2262,6 +2359,7 @@ def export_epub(
     progress: Callable[[str], None] | None = None,
     html_style: str = DEFAULT_HTML_STYLE,  # accepted for signature parity; HTML-only
     chapter_notes: str = DEFAULT_CHAPTER_NOTES,
+    output_path: Path | str | None = None,
 ) -> Path:
     chapter_notes = _chapter_notes_for_format(
         chapter_notes, supports_collapse=False,
@@ -2460,8 +2558,9 @@ def export_epub(
     book.add_item(epub.EpubNav())
     book.spine = ["nav", title_page] + epub_chapters
 
-    filename = format_filename(story, template) + ".epub"
-    path = Path(output_dir) / filename
+    path = _destination(
+        story, output_dir, template, ".epub", output_path,
+    )
     # ``ebooklib`` insists on writing via a filesystem path rather than
     # a stream, so we hand it a temp path inside ``atomic_path`` and let
     # the context manager commit the rename on a clean exit. A crash or

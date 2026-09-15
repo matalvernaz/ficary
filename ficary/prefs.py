@@ -214,6 +214,8 @@ KEY_READER_FONT_PT = "reader_font_pt"
 KEY_READER_THEME = "reader_theme"
 KEY_READER_TTS_MODE = "reader_tts_mode"
 KEY_READER_AUTOADVANCE = "reader_autoadvance"
+KEY_READER_VOICE = "reader_voice"
+KEY_READER_LANGUAGE = "reader_language"
 
 # Default GUI polling interval for the watchlist background thread, in
 # seconds. One hour balances freshness against site politeness — FFN's
@@ -259,6 +261,8 @@ DEFAULTS = {
     KEY_READER_THEME: "light",
     KEY_READER_TTS_MODE: "screenreader",
     KEY_READER_AUTOADVANCE: True,
+    KEY_READER_VOICE: "",
+    KEY_READER_LANGUAGE: "",
     KEY_ABS_URL: "",
     KEY_ABS_TOKEN: "",
     KEY_ABS_LIBRARY_ID: "",

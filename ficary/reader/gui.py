@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
 
 import wx
 
@@ -21,9 +22,12 @@ from ..soundscape.session import SoundscapeSession
 from ..prefs import (
     KEY_READER_AUTOADVANCE,
     KEY_READER_FONT_PT,
+    KEY_READER_LANGUAGE,
     KEY_READER_THEME,
     KEY_READER_TTS_MODE,
+    KEY_READER_VOICE,
     KEY_SPEECH_RATE,
+    KEY_TTS_PROVIDERS,
 )
 from . import theme as _theme
 from .live_tts import LiveTTSController
@@ -34,6 +38,7 @@ from .source import StorySource
 logger = logging.getLogger(__name__)
 
 _EXCERPT_RADIUS = 40  # chars either side of the caret saved with a bookmark
+_POSITION_SAVE_INTERVAL_S = 5  # debounce for listening-position autosave
 
 
 class ReaderFrame(wx.Frame):
@@ -55,6 +60,16 @@ class ReaderFrame(wx.Frame):
         self._live = None
         self._resolving_voice = False
         self._last_voice = ""
+        # Every playback request carries this token. Stop, a chapter
+        # change, a mode switch and close all bump it, so a voice
+        # lookup that was still on the network when the user cancelled
+        # can't come back and start speaking.
+        self._playback_gen = 0
+        # Listening position within the current chapter's text (not the
+        # control, which also holds the heading prefix). Kept in step
+        # with the spoken chunk so Play resumes where the voice stopped.
+        self._listen_offset = 0
+        self._last_pos_save = 0.0
         self._soundscape_session = None
         self._sleep_timer = SleepTimer(on_expire=lambda: wx.CallAfter(self._on_sleep_expire))
 
@@ -159,6 +174,13 @@ class ReaderFrame(wx.Frame):
         self.btn_stop.Bind(wx.EVT_BUTTON, self._on_stop_tts)
         transport.Add(self.btn_play, 0, wx.ALL, 4)
         transport.Add(self.btn_stop, 0, wx.ALL, 4)
+        # Name the service that will receive the story text. "App voice"
+        # alone doesn't say whether that is a local model or a cloud
+        # endpoint, and that is the difference the provider setting is
+        # there to control.
+        self.voice_status = wx.StaticText(panel, label="Voice: not started")
+        self.voice_status.SetName("Voice status")
+        transport.Add(self.voice_status, 0, wx.ALL | wx.ALIGN_CENTRE_VERTICAL, 4)
         right.Add(transport, 0, wx.ALL, 4)
 
         root.Add(left, 0, wx.EXPAND)
@@ -186,19 +208,33 @@ class ReaderFrame(wx.Frame):
             # with (1, 0).
             return
         try:
-            offset = self.text.GetInsertionPoint()
+            offset = self._content_position()
         except RuntimeError:
             return
         self._state.save_position(
             self.source.story_key, self._current_chapter, offset,
             title=self.source.title)
 
+    def _content_position(self) -> int:
+        """The single position worth persisting for this chapter.
+
+        While the app voice is reading, the spoken chunk is where the
+        user actually is — the caret hasn't moved since they pressed
+        Play. Otherwise the caret is authoritative, which is what
+        screen-reader mode relies on.
+        """
+        if self._live is not None and self._listen_offset:
+            return self._text_prefix_len + self._listen_offset
+        return self.text.GetInsertionPoint()
+
     # ── chapter loading ───────────────────────────────────────────
     def _load_chapter(self, number: int, caret: int = 0) -> None:
-        live = getattr(self, "_live", None)
-        if live is not None and live.is_active():
-            live.stop()
-            self._live = None
+        # A chapter change retires any pending playback request, and the
+        # outgoing controller is released whether or not it was still
+        # speaking — a finished one still owns its temp audio.
+        self._new_playback_gen()
+        if getattr(self, "_live", None) is not None:
+            self._dispose_live()
             self._paused = False
         try:
             rc = self.source.load_chapter(number)
@@ -218,6 +254,9 @@ class ReaderFrame(wx.Frame):
         caret = max(0, min(caret, self.text.GetLastPosition()))
         self.text.SetInsertionPoint(caret)
         self.text.ShowPosition(caret)
+        # One position, two views: the control's caret includes the
+        # heading prefix, the listening offset indexes the chapter text.
+        self._listen_offset = max(0, caret - self._text_prefix_len)
         if self.chapter_list.GetItemCount() >= number:
             self.chapter_list.Select(number - 1)
             self.chapter_list.EnsureVisible(number - 1)
@@ -281,9 +320,39 @@ class ReaderFrame(wx.Frame):
         _theme.apply_to_textctrl(self.text, nxt, self.prefs.get(KEY_READER_FONT_PT))
 
     # ── app-voice (live TTS) ──────────────────────────────────────
+    def _new_playback_gen(self) -> int:
+        """Invalidate every in-flight playback request and return the
+        new token. Called by Stop, chapter loads, mode switches and
+        close — anything that means "whatever was starting, don't"."""
+        self._playback_gen += 1
+        return self._playback_gen
+
+    def _playback_current(self, gen: int) -> bool:
+        return self._alive and gen == self._playback_gen
+
+    def _dispose_live(self) -> None:
+        """Stop and release the current controller, active or not.
+
+        A controller that reached the end of its chapter is no longer
+        active, but it still owns a temp directory full of synthesised
+        MP3s. Replacing it without stopping it first leaked one of those
+        directories per chapter for the life of the process.
+        """
+        live = getattr(self, "_live", None)
+        self._live = None
+        if live is None:
+            return
+        try:
+            live.stop()
+        except Exception:
+            logger.debug("Reader TTS controller stop failed", exc_info=True)
+
     def _on_mode(self, event) -> None:
         appvoice = self.mode.GetSelection() == 1
         self.prefs.set(KEY_READER_TTS_MODE, "appvoice" if appvoice else "screenreader")
+        # Invalidate either way: switching *to* app voice mid-resolution
+        # shouldn't inherit a request made before the user changed mind.
+        self._new_playback_gen()
         if not appvoice:
             self._on_stop_tts(None)
 
@@ -315,18 +384,30 @@ class ReaderFrame(wx.Frame):
         # catalog on first use) — run it off the GUI thread so a slow or
         # offline first Play doesn't freeze the window.
         self._resolving_voice = True
+        gen = self._new_playback_gen()
         threading.Thread(
-            target=self._resolve_voice_and_play, daemon=True,
+            target=self._resolve_voice_and_play, args=(gen,), daemon=True,
             name="ficary-reader-voice",
         ).start()
 
-    def _resolve_voice_and_play(self) -> None:
+    def _resolve_voice_and_play(self, gen: int) -> None:
         voice = self._default_voice()
-        wx.CallAfter(self._begin_playback, voice)
+        wx.CallAfter(self._begin_playback, voice, gen)
 
-    def _begin_playback(self, voice: str) -> None:
+    def _begin_playback(self, voice: str, gen: int | None = None) -> None:
         self._resolving_voice = False
+        if gen is not None and not self._playback_current(gen):
+            # Stop, a chapter change or a mode switch happened while the
+            # voice catalog was being fetched. Honour that, don't speak.
+            return
         if not self._alive:
+            return
+        try:
+            if self.mode.GetSelection() != 1:
+                # Reading mode moved to the screen reader while the voice
+                # was resolving. Starting now would talk over it.
+                return
+        except RuntimeError:
             return
         if not voice:
             wx.MessageBox(
@@ -336,20 +417,49 @@ class ReaderFrame(wx.Frame):
             return
         self._paused = False
         self._last_voice = voice
+        if gen is None:
+            gen = self._new_playback_gen()
+        resume_at = self._resume_offset()
+        # Release the previous chapter's controller (and its temp audio)
+        # before the replacement takes its place.
+        self._dispose_live()
         controller = LiveTTSController(
             self._engine, voice=voice,
             rate=str(self.prefs.get(KEY_SPEECH_RATE) or "0"),
-            on_highlight=lambda c: wx.CallAfter(self._highlight_chunk, c),
-            on_complete=lambda failed: wx.CallAfter(self._on_tts_complete, failed),
+            on_highlight=lambda c: wx.CallAfter(self._highlight_chunk, c, gen),
+            on_complete=lambda failed: wx.CallAfter(
+                self._on_tts_complete, failed, gen),
             story_key=self.source.story_key,
         )
         self._live = controller
+        self._update_voice_status()
         text = self._current_rc.text if self._current_rc else ""
-        controller.start(text, self._current_chapter)
+        # Resume where the listener (or the caret) left off instead of
+        # restarting the chapter every time Play is pressed.
+        self._listen_offset = resume_at
+        controller.start(
+            text, self._current_chapter, start_offset=resume_at,
+        )
 
-    def _on_tts_complete(self, failed_chunks: int) -> None:
+    def _resume_offset(self) -> int:
+        """Where the next Play should start reading from.
+
+        The listening position is the default, but a caret the user has
+        moved since the last spoken chunk is an explicit "read from
+        here" and wins. Stop syncs the caret to the listening position
+        so the two only differ when the user actually navigated.
+        """
+        try:
+            caret = max(0, self.text.GetInsertionPoint() - self._text_prefix_len)
+        except RuntimeError:
+            return self._listen_offset
+        return caret if caret != self._listen_offset else self._listen_offset
+
+    def _on_tts_complete(self, failed_chunks: int, gen: int | None = None) -> None:
         """Natural end-of-chapter: announce any skipped sections, then
         auto-advance when the pref asks for it."""
+        if gen is not None and not self._playback_current(gen):
+            return
         if not self._alive:
             return
         if failed_chunks:
@@ -365,23 +475,51 @@ class ReaderFrame(wx.Frame):
             return
         voice = self._last_voice
         self._load_chapter(self._current_chapter + 1)
+        # A fresh chapter starts at its beginning, not at the offset the
+        # previous chapter's listening position left behind.
+        self._listen_offset = 0
         if voice:
             # Reuse the resolved voice — no need to re-hit the catalog
             # between chapters.
             self._begin_playback(voice)
 
     def _on_stop_tts(self, event) -> None:
-        if self._live is not None:
-            self._live.stop()
-            self._live = None
+        self._new_playback_gen()
+        # Remember where the voice got to so Play resumes rather than
+        # restarting the chapter.
+        self._save_position()
+        self._dispose_live()
         self._paused = False
         self._clear_highlight()
+        # Leave the caret where the voice stopped: that is where the
+        # screen reader should pick up, and it keeps "resume" and "read
+        # from the caret" pointing at the same place.
+        if self._listen_offset:
+            try:
+                pos = min(
+                    self._text_prefix_len + self._listen_offset,
+                    self.text.GetLastPosition(),
+                )
+                self.text.SetInsertionPoint(pos)
+                self.text.ShowPosition(pos)
+            except RuntimeError:
+                pass
 
-    def _highlight_chunk(self, chunk) -> None:
-        if not self._alive or self._live is None:
+    def _highlight_chunk(self, chunk, gen: int | None = None) -> None:
+        if gen is not None and not self._playback_current(gen):
             # A CallAfter queued just before Stop (or from a superseded
             # worker) must not repaint a highlight nothing is reading.
             return
+        if not self._alive or self._live is None:
+            return
+        # The spoken chunk *is* the listening position. Saving it here
+        # (debounced) means a crash or a forced quit loses seconds of
+        # audio rather than the whole chapter.
+        self._listen_offset = chunk.start
+        now = time.monotonic()
+        if now - self._last_pos_save >= _POSITION_SAVE_INTERVAL_S:
+            self._last_pos_save = now
+            self._save_position()
         pal = _theme.palette(self.prefs.get(KEY_READER_THEME))
         self._clear_highlight()
         start = self._text_prefix_len + chunk.start
@@ -395,14 +533,104 @@ class ReaderFrame(wx.Frame):
                                  self.prefs.get(KEY_READER_FONT_PT))
 
     def _default_voice(self) -> str:
+        """Pick the voice the reader should speak with.
+
+        An explicit saved choice wins. Otherwise the catalog is narrowed
+        to the providers the user left enabled and then to the reading
+        language, so "offline only" really means offline and an English
+        story isn't read by whichever locale happens to sort first in
+        the provider's catalog.
+        """
         try:
-            from ..tts_providers import all_voices
-            voices = all_voices()
+            from ..tts_providers import all_voices, voice_by_id
+
+            saved = (self.prefs.get(KEY_READER_VOICE) or "").strip()
+            providers = self._enabled_providers()
+            if saved:
+                info = voice_by_id(saved)
+                if info is not None and (
+                    not providers or info.provider in providers
+                ):
+                    return saved
+            voices = all_voices(providers=providers)
+            if providers:
+                # Filter the result as well as the request: the catalog
+                # is the thing that decides which service receives the
+                # story text, so the restriction is enforced on what
+                # comes back, not only on what was asked for.
+                voices = [v for v in voices if v.provider in providers]
             if not voices:
+                if providers:
+                    logger.info(
+                        "No reader voice available from the enabled "
+                        "provider(s): %s", ", ".join(providers),
+                    )
                 return ""
+            lang = self._preferred_language()
+            if lang:
+                matching = [v for v in voices if v.language.lower() == lang]
+                if matching:
+                    voices = matching
             return getattr(voices[0], "id", "") or getattr(voices[0], "name", "")
         except Exception:
+            logger.debug("Reader voice selection failed", exc_info=True)
             return ""
+
+    def _preferred_language(self) -> str:
+        """Two-letter reading language: the explicit preference, else the
+        system locale. Empty when neither is known, which means "don't
+        filter" rather than "guess English"."""
+        lang = (self.prefs.get(KEY_READER_LANGUAGE) or "").strip().lower()
+        if lang:
+            return lang.split("-", 1)[0]
+        try:
+            import locale
+
+            tag = locale.getlocale()[0] or ""
+        except Exception:
+            tag = ""
+        tag = tag.replace("-", "_").split("_", 1)[0].strip().lower()
+        return tag if tag.isalpha() and len(tag) == 2 else ""
+
+    def _enabled_providers(self) -> list[str] | None:
+        """The TTS providers the user allows, or None for "any installed".
+
+        Same preference the audiobook generator reads, so a reader that
+        is told to stay local doesn't quietly reach a cloud voice the
+        renderer would have refused.
+        """
+        raw = (self.prefs.get(KEY_TTS_PROVIDERS) or "").strip()
+        if not raw:
+            return None
+        names = [n.strip().lower() for n in raw.split(",") if n.strip()]
+        return names or None
+
+    def _update_voice_status(self) -> None:
+        status = getattr(self, "voice_status", None)
+        if status is None:
+            return
+        voice = self._last_voice
+        if not voice:
+            label = "Voice: not started"
+        else:
+            from ..tts_providers import parse_voice_id
+
+            provider, short = parse_voice_id(voice)
+            label = f"Voice: {short} ({provider})"
+        try:
+            status.SetLabel(label)
+        except RuntimeError:
+            pass
+
+    def voice_provider_label(self) -> str:
+        """Human-readable "which service will receive this text"."""
+        from ..tts_providers import parse_voice_id
+
+        voice = self._last_voice or self._default_voice()
+        if not voice:
+            return "none"
+        provider, _ = parse_voice_id(voice)
+        return provider
 
     # ── soundscape ────────────────────────────────────────────────
     def _make_soundscape_session(self):
@@ -458,13 +686,11 @@ class ReaderFrame(wx.Frame):
 
     # ── lifecycle ─────────────────────────────────────────────────
     def _on_close(self, event) -> None:
+        self._save_position()
         self._alive = False
+        self._new_playback_gen()
         self._sleep_timer.cancel()
-        if self._live is not None:
-            try:
-                self._live.stop()
-            except Exception:
-                pass
+        self._dispose_live()
         self._engine.emit(Event(ReaderEvent.READER_CLOSED, story_key=self.source.story_key))
         if self._soundscape_session is not None:
             try:

@@ -132,6 +132,99 @@ def record_transient_403() -> None:
         counter[0] += 1
 
 
+# Header names whose values carry credentials or a session. Diagnostic
+# logging keeps the header *name* (knowing the server set a cookie is
+# half the answer when root-causing a 403) and drops the value.
+SENSITIVE_HEADERS = frozenset({
+    "authorization",
+    "cookie",
+    "proxy-authorization",
+    "set-cookie",
+    "www-authenticate",
+    "x-api-key",
+    "x-auth-token",
+    "x-csrf-token",
+})
+
+# Query parameters that carry a credential in a URL. Sites hand these
+# out in redirect chains, and a URL goes into every diagnostic line.
+SENSITIVE_QUERY_PARAMS = frozenset({
+    "access_token",
+    "api_key",
+    "apikey",
+    "auth",
+    "key",
+    "password",
+    "pw",
+    "secret",
+    "session",
+    "sessionid",
+    "sig",
+    "signature",
+    "token",
+})
+
+REDACTED = "<redacted>"
+
+
+def redact_headers(headers) -> dict:
+    """Return ``headers`` with credential-bearing values replaced.
+
+    Debug fetch diagnostics dump the whole response header map so a
+    403 can be traced to cookie-jar drift or a Cloudflare challenge.
+    ``Set-Cookie`` sits in that map with a live session value, so an
+    unredacted dump puts the reader's authenticated session into a log
+    file that then gets attached to a bug report. Cookie *names* stay
+    readable — for a ``Set-Cookie`` the name before ``=`` is kept and
+    only its value is dropped.
+    """
+    try:
+        items = list(headers.items())
+    except Exception:
+        return {}
+    cleaned = {}
+    for name, value in items:
+        if str(name).lower() not in SENSITIVE_HEADERS:
+            cleaned[name] = value
+            continue
+        text = str(value)
+        if "=" in text:
+            cookie_name = text.split("=", 1)[0].strip()
+            # Only treat it as a name when it looks like a cookie key,
+            # not an auth scheme carrying base64 padding.
+            if cookie_name and " " not in cookie_name:
+                cleaned[name] = f"{cookie_name}={REDACTED}"
+                continue
+        cleaned[name] = REDACTED
+    return cleaned
+
+
+def redact_url(url: str) -> str:
+    """Return ``url`` with credential query parameters and userinfo masked.
+
+    Keeps the scheme, host and path intact so the line still says which
+    request it describes.
+    """
+    from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+
+    try:
+        parts = urlsplit(str(url))
+    except (ValueError, TypeError):
+        return REDACTED
+    netloc = parts.netloc
+    if "@" in netloc:
+        netloc = f"{REDACTED}@{netloc.rsplit('@', 1)[1]}"
+    query = parts.query
+    if query:
+        pairs = parse_qsl(query, keep_blank_values=True)
+        if pairs:
+            query = urlencode([
+                (k, REDACTED if k.lower() in SENSITIVE_QUERY_PARAMS else v)
+                for k, v in pairs
+            ])
+    return urlunsplit((parts.scheme, netloc, parts.path, query, parts.fragment))
+
+
 def _correlation_record_factory(_default_factory=None):
     """Wrap the current :func:`logging.getLogRecordFactory` so every
     record for an ``ficary.*`` logger gets the active correlation id

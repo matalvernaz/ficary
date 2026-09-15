@@ -137,7 +137,12 @@ def piper_executable() -> str | None:
     if on_path:
         return on_path
     candidate = piper_binary_dir() / ("piper.exe" if os.name == "nt" else "piper")
-    if candidate.exists() and os.access(candidate, os.X_OK):
+    # ``is_file()`` and not ``exists()``: a release archive that unpacks
+    # into a nested ``piper/`` directory leaves a *directory* at exactly
+    # this path, and a directory passes both ``exists()`` and the X_OK
+    # access check — so a failed install used to report healthy and
+    # every later synthesis tried to execute a folder.
+    if candidate.is_file() and os.access(candidate, os.X_OK):
         return str(candidate)
     return None
 
@@ -242,6 +247,14 @@ def install_piper_binary(log_callback=None) -> bool:
     target_dir = piper_binary_dir()
     target_dir.mkdir(parents=True, exist_ok=True)
     archive = target_dir / name
+    # Unpack into a scratch directory and only move a completed layout
+    # into the managed root. Extracting in place meant a nested
+    # ``piper/piper`` archive collided with its own containing folder
+    # during flattening, aborting the install and leaving a half-written
+    # tree behind.
+    staging = target_dir / ".staging"
+    shutil.rmtree(staging, ignore_errors=True)
+    staging.mkdir(parents=True, exist_ok=True)
     try:
         if log_callback:
             log_callback(f"Piper: downloading {name} ...")
@@ -259,49 +272,74 @@ def install_piper_binary(log_callback=None) -> bool:
             with zipfile.ZipFile(archive) as zf:
                 _assert_safe_archive_members(
                     (info.filename for info in zf.infolist()),
-                    target_dir,
+                    staging,
                 )
-                zf.extractall(target_dir)
+                zf.extractall(staging)
         else:
             with tarfile.open(archive, "r:gz") as tf:
                 _assert_safe_archive_members(
                     (member.name for member in tf.getmembers()),
-                    target_dir,
+                    staging,
                 )
                 # Python 3.12+ ``filter="data"`` rejects symlinks /
                 # hardlinks pointing outside the destination, plus
                 # device / fifo / special members — defenses our own
                 # name-only validator can't provide for tar.
                 try:
-                    tf.extractall(target_dir, filter="data")
+                    tf.extractall(staging, filter="data")
                 except TypeError:
                     # Older Python without the filter argument.
-                    tf.extractall(target_dir)
+                    tf.extractall(staging)
         # Some release archives unpack into a nested ``piper/`` dir;
         # flatten it so piper_executable() finds the binary directly.
-        nested = target_dir / "piper"
-        if nested.is_dir() and nested != target_dir:
-            for item in nested.iterdir():
-                shutil.move(str(item), str(target_dir / item.name))
-            try:
-                nested.rmdir()
-            except OSError:
-                pass
-        binary = target_dir / ("piper.exe" if os.name == "nt" else "piper")
-        if binary.exists() and os.name != "nt":
+        # Staging makes this safe: the source and destination are
+        # different directories, so the nested folder can never be its
+        # own move target.
+        root = staging
+        nested = staging / "piper"
+        if nested.is_dir():
+            root = nested
+        exe_name = "piper.exe" if os.name == "nt" else "piper"
+        staged_binary = root / exe_name
+        if not staged_binary.is_file():
+            raise OSError(
+                f"Piper archive {name} did not contain an executable "
+                f"{exe_name}"
+            )
+        for item in root.iterdir():
+            dest = target_dir / item.name
+            if dest.is_dir() and not dest.is_symlink():
+                shutil.rmtree(dest, ignore_errors=True)
+            elif dest.exists() or dest.is_symlink():
+                dest.unlink(missing_ok=True)
+            shutil.move(str(item), str(dest))
+        binary = target_dir / exe_name
+        if binary.is_file() and os.name != "nt":
             try:
                 binary.chmod(binary.stat().st_mode | 0o111)
             except OSError:
                 pass
         archive.unlink(missing_ok=True)
+        installed = piper_executable() is not None
         if log_callback:
-            log_callback(f"Piper: binary installed at {binary}")
-        return piper_executable() is not None
+            if installed:
+                log_callback(f"Piper: binary installed at {binary}")
+            else:
+                log_callback(
+                    "Piper install finished but no runnable binary was "
+                    f"found at {binary}"
+                )
+        return installed
     except (urllib.error.URLError, OSError, zipfile.BadZipFile,
             tarfile.TarError) as exc:
         if log_callback:
             log_callback(f"Piper install failed: {exc}")
         return False
+    finally:
+        # Never leave a partial extraction behind claiming to be an
+        # install; the next attempt starts from a clean tree.
+        shutil.rmtree(staging, ignore_errors=True)
+        archive.unlink(missing_ok=True)
 
 
 # ── Voice download ────────────────────────────────────────────────

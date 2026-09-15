@@ -38,6 +38,23 @@ def _descriptor(n):
     return {"url": f"https://example.invalid/ch/{n}", "title": f"Chapter {n}"}
 
 
+def _prewarm(scraper, story_id, n, html):
+    """Seed the chapter cache the way ``_materialise_chapters`` writes it.
+
+    Entries are keyed by the chapter's canonical URL, not its ordinal —
+    a chapter inserted upstream must not serve the previous occupant of
+    that position.
+    """
+    from ficary.models import Chapter as ModelChapter
+    from ficary.scraper import chapter_cache_key
+
+    scraper._save_chapter_cache(
+        story_id,
+        ModelChapter(number=n, title=f"Chapter {n}", html=html),
+        cache_key=chapter_cache_key(_descriptor(n)["url"]),
+    )
+
+
 class TestProbeChapterCount:
     def test_probe_paces_before_counting(self, scraper, monkeypatch):
         """``probe_chapter_count`` must run the pacing gate *before* the
@@ -119,9 +136,7 @@ class TestMaterialiseChapters:
 
         # Pre-warm chapters 2 and 4 in the cache.
         for n in (2, 4):
-            scraper._save_chapter_cache(
-                1, ModelChapter(number=n, title=f"Chapter {n}", html=f"<p>c{n}</p>"),
-            )
+            _prewarm(scraper, 1, n, f"<p>c{n}</p>")
 
         requested = []
 
@@ -165,9 +180,7 @@ class TestMaterialiseChapters:
     def test_progress_callback_receives_cache_flag(self, scraper):
         from ficary.models import Chapter as ModelChapter
 
-        scraper._save_chapter_cache(
-            1, ModelChapter(number=2, title="Chapter 2", html="<p>c2</p>"),
-        )
+        _prewarm(scraper, 1, 2, "<p>c2</p>")
         scraper._fetch_parallel = lambda urls: [
             "<div id=ct>body</div>" for _ in urls
         ]

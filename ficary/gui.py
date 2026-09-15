@@ -46,7 +46,12 @@ class _DownloadParams:
     hr_as_stars: bool
     strip_notes: bool
     llm_strip_notes: bool
+    # The A/N-stripping config. Kept separate from the attribution
+    # config below because either feature can be selected without the
+    # other; sharing one slot meant choosing LLM speaker attribution did
+    # nothing unless LLM note stripping happened to be on too.
     llm_render_config: Optional[dict] = None
+    attribution_llm_config: Optional[dict] = None
     audio_backend: Optional[str] = None
     audio_size: Optional[str] = None
     speech_rate: Optional[int] = None
@@ -903,6 +908,12 @@ class MainFrame(wx.Frame):
         # hours-long and used to be uncancellable short of killing the
         # app (which orphaned piper/ffmpeg children mid-write).
         self._render_cancel = None
+        # Every in-flight render's cancel event. Concurrent per-site
+        # downloads can each be exporting audio, and a single pointer
+        # meant the first one to finish cleared the other's event and
+        # disabled the shared button while it was still running.
+        self._render_cancels = []
+        self._render_cancel_lock = threading.Lock()
         self.cancel_render_btn = wx.Button(panel, label="Cancel &render")
         self.cancel_render_btn.SetName(
             "Cancel the running audiobook render after the current segment"
@@ -920,14 +931,29 @@ class MainFrame(wx.Frame):
         sizer.Add(btn_sizer, 0, wx.ALL, pad)
 
     def _on_cancel_render(self, event):
-        cancel = self._render_cancel
-        if cancel is not None and not cancel.is_set():
+        """Cancel every audiobook render currently in flight.
+
+        With concurrent per-site downloads there can be more than one,
+        and one shared button cannot mean "the one you were thinking
+        of" — so it means all of them, and the log says so.
+        """
+        with self._render_cancel_lock:
+            pending = [c for c in self._render_cancels if not c.is_set()]
+        if not pending:
+            return
+        for cancel in pending:
             cancel.set()
+        if len(pending) == 1:
             self._log(
                 "\nCancelling audiobook render — stopping after the "
                 "current segment..."
             )
-            self.cancel_render_btn.Disable()
+        else:
+            self._log(
+                f"\nCancelling {len(pending)} audiobook renders — each "
+                "stops after its current segment..."
+            )
+        self.cancel_render_btn.Disable()
 
     # ── Helpers ───────────────────────────────────────────────
 
@@ -2898,6 +2924,16 @@ class MainFrame(wx.Frame):
         llm_strip_notes = (
             strip_notes and self.llm_strip_notes_ctrl.GetValue()
         )
+        audio_backend = (
+            self._selected_attribution_backend() if fmt == "audio" else None
+        )
+        # Snapshot the LLM connection whenever *either* feature needs it.
+        # Resolving it once keeps a single Preferences read per click.
+        llm_cfg = (
+            self._llm_config_for_render()
+            if (llm_strip_notes or audio_backend == "llm")
+            else None
+        )
         return _DownloadParams(
             fmt=fmt,
             raw_output_dir=(self.output_ctrl.GetValue() or "").strip(),
@@ -2905,12 +2941,11 @@ class MainFrame(wx.Frame):
             hr_as_stars=self.hr_stars_ctrl.GetValue(),
             strip_notes=strip_notes,
             llm_strip_notes=llm_strip_notes,
-            llm_render_config=(
-                self._llm_config_for_render() if llm_strip_notes else None
+            llm_render_config=llm_cfg if llm_strip_notes else None,
+            attribution_llm_config=(
+                llm_cfg if audio_backend == "llm" else None
             ),
-            audio_backend=(
-                self._selected_attribution_backend() if fmt == "audio" else None
-            ),
+            audio_backend=audio_backend,
             audio_size=(
                 self._selected_size() if fmt == "audio" else None
             ),
@@ -3217,12 +3252,14 @@ class MainFrame(wx.Frame):
             backend = params.audio_backend or "builtin"
             size = params.audio_size
             rate = params.speech_rate if params.speech_rate is not None else 0
-            # Reuse the same LLM config the A/N strip path uses when the
-            # selected attribution backend is "llm". The two snapshot
-            # slots are kept distinct because A/N strip can be on
-            # without LLM attribution being on.
+            # Two independent settings, two snapshot slots: LLM speaker
+            # attribution and LLM A/N stripping can each be selected on
+            # their own.
             llm_config = (
-                params.llm_render_config if backend == "llm" else None
+                params.attribution_llm_config if backend == "llm" else None
+            )
+            an_config = (
+                params.llm_render_config if params.llm_strip_notes else None
             )
             size_note = f", size={size}" if size else ""
             llm_note = (
@@ -3234,7 +3271,9 @@ class MainFrame(wx.Frame):
                 f"rate={rate:+d}%)..."
             )
             cancel = threading.Event()
-            self._render_cancel = cancel
+            with self._render_cancel_lock:
+                self._render_cancels.append(cancel)
+                self._render_cancel = cancel
             wx.CallAfter(self.cancel_render_btn.Enable)
             try:
                 m4b = generate_audiobook(
@@ -3244,6 +3283,7 @@ class MainFrame(wx.Frame):
                     attribution_backend=backend,
                     attribution_model_size=size,
                     attribution_llm_config=llm_config,
+                    llm_an_config=an_config,
                     enabled_tts_providers=list(params.enabled_tts_providers),
                     strip_notes=params.strip_notes,
                     hr_as_stars=params.hr_as_stars,
@@ -3251,8 +3291,18 @@ class MainFrame(wx.Frame):
                     cancel_event=cancel,
                 )
             finally:
-                self._render_cancel = None
-                wx.CallAfter(self.cancel_render_btn.Disable)
+                with self._render_cancel_lock:
+                    if cancel in self._render_cancels:
+                        self._render_cancels.remove(cancel)
+                    remaining = list(self._render_cancels)
+                    # Only surrender the shared pointer if it is still
+                    # ours; a later render may have replaced it.
+                    if self._render_cancel is cancel:
+                        self._render_cancel = (
+                            remaining[-1] if remaining else None
+                        )
+                if not remaining:
+                    wx.CallAfter(self.cancel_render_btn.Disable)
             if params.send_to_abs and m4b is not None:
                 self._upload_to_abs(m4b, story)
             if m4b is not None:

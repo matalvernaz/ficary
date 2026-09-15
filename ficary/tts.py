@@ -11,6 +11,7 @@ import subprocess
 import sys
 import tempfile
 from collections import Counter
+from dataclasses import dataclass
 from pathlib import Path
 
 from . import legacy as _legacy
@@ -2253,9 +2254,55 @@ def _build_voice_pool(
     return out
 
 
+@dataclass
+class ChapterAudioResult:
+    """Outcome of synthesising one chapter's segments.
+
+    ``bool(result)`` stays the old "did we write a file" answer so the
+    existing call sites read the same, but the counts let the caller
+    tell a complete chapter from one that quietly lost prose. A chapter
+    that dropped segments must never be promoted into the shared audio
+    cache, otherwise a transient provider failure is baked in forever
+    and every later render replays the gap.
+    """
+
+    ok: bool
+    attempted: int = 0
+    succeeded: int = 0
+
+    def __bool__(self) -> bool:
+        return self.ok
+
+    @property
+    def missing(self) -> int:
+        return max(0, self.attempted - self.succeeded)
+
+    @property
+    def complete(self) -> bool:
+        return self.ok and self.missing == 0
+
+
+def _voice_allowed(voice, enabled_providers) -> bool:
+    """Is ``voice`` served by a provider the user left enabled?
+
+    ``enabled_providers`` of ``None`` means "no restriction configured"
+    — the historical behaviour. When the user has narrowed synthesis to
+    a local provider, a fallback voice belonging to a cloud provider is
+    not a valid substitute: honouring the setting matters more than
+    filling the gap, because the alternative is silently uploading the
+    story text to a service the user switched off.
+    """
+    if not enabled_providers:
+        return True
+    from . import tts_providers
+
+    provider, _ = tts_providers.parse_voice_id(voice)
+    return provider in set(enabled_providers)
+
+
 async def _generate_with_semaphore(
     sem, seg, voice, path, idx, ch_num, speech_rate=0, narrator_voice=None,
-    cancel_event=None,
+    cancel_event=None, enabled_providers=None,
 ):
     """Generate one segment with a concurrency limiter.
 
@@ -2294,6 +2341,29 @@ async def _generate_with_semaphore(
         attempts = attempts + (
             ("edge-default", NARRATOR_VOICE, seg_no_emotion),
         )
+    # ...unless the user restricted synthesis to a provider set that
+    # doesn't include the last resort. NARRATOR_VOICE is an Edge (cloud)
+    # voice, so an unfiltered fallback chain sends the prose to
+    # Microsoft even when only the offline provider is enabled.
+    allowed = [
+        a for a in attempts if _voice_allowed(a[1], enabled_providers)
+    ]
+    if len(allowed) != len(attempts):
+        dropped = sorted({a[1] for a in attempts if a not in allowed})
+        logger.debug(
+            "Segment %d (ch %d): skipping fallback voice(s) %s — provider "
+            "not enabled",
+            idx, ch_num, ", ".join(dropped),
+        )
+    attempts = tuple(allowed)
+    if not attempts:
+        logger.warning(
+            "Segment %d (ch %d) has no voice from an enabled provider "
+            "(requested %s); leaving it unsynthesised rather than using "
+            "a disabled provider",
+            idx, ch_num, voice,
+        )
+        return None
     if cancel_event is not None and cancel_event.is_set():
         return None
     async with sem:
@@ -2340,7 +2410,7 @@ async def _generate_with_semaphore(
 async def generate_chapter_audio(
     segments, voice_mapper, output_path,
     chapter_num=0, narrator_voice=None, speech_rate=0,
-    cancel_event=None,
+    cancel_event=None, enabled_providers=None,
 ):
     """Generate audio for a full chapter's worth of segments.
 
@@ -2360,6 +2430,7 @@ async def generate_chapter_audio(
             segments, voice_mapper, output_path, tmp_dir,
             chapter_num=chapter_num, narrator=narrator,
             speech_rate=speech_rate, cancel_event=cancel_event,
+            enabled_providers=enabled_providers,
         )
     finally:
         # Single cleanup point — any exception path between here and the
@@ -2371,6 +2442,7 @@ async def generate_chapter_audio(
 async def _generate_chapter_audio_inner(
     segments, voice_mapper, output_path, tmp_dir,
     *, chapter_num, narrator, speech_rate, cancel_event=None,
+    enabled_providers=None,
 ):
     sem = asyncio.Semaphore(_TTS_CONCURRENCY)
 
@@ -2399,7 +2471,7 @@ async def _generate_chapter_audio_inner(
         tasks.append((i, seg_path, seg.speaker, _generate_with_semaphore(
             sem, seg, voice, seg_path, i, chapter_num,
             speech_rate=speech_rate, narrator_voice=narrator,
-            cancel_event=cancel_event,
+            cancel_event=cancel_event, enabled_providers=enabled_providers,
         )))
         plan.append(("speech", seg.speaker, task_idx))
 
@@ -2417,6 +2489,8 @@ async def _generate_chapter_audio_inner(
     # Build the ordered playback sequence, dropping failed TTS segments
     # but keeping scene-break pauses.
     ordered = []  # [(kind, speaker, path_or_None)]
+    attempted = len(tasks)
+    succeeded = 0
     for kind, speaker, task_idx in plan:
         if kind == "scene_break":
             if scene_break_clip is not None:
@@ -2431,6 +2505,15 @@ async def _generate_chapter_audio_inner(
             continue
         if r is not None:
             ordered.append(("speech", speaker, r))
+            succeeded += 1
+
+    if succeeded < attempted:
+        logger.warning(
+            "Chapter %d: %d of %d speech segment(s) could not be "
+            "synthesised; this chapter will not be cached so a retry "
+            "can fill the gap",
+            chapter_num, attempted - succeeded, attempted,
+        )
 
     # Drop leading/trailing scene-break pauses — a chapter that opens or
     # closes on silence sounds like a bug, not a beat.
@@ -2440,7 +2523,7 @@ async def _generate_chapter_audio_inner(
         ordered.pop()
 
     if not any(kind == "speech" for kind, _, _ in ordered):
-        return False
+        return ChapterAudioResult(False, attempted, succeeded)
 
     # Merge segments into one chapter file using ffmpeg, inserting the
     # speaker-change silence clip between consecutive segments whose
@@ -2486,7 +2569,7 @@ async def _generate_chapter_audio_inner(
             "ffmpeg concat for ch %d timed out after %ds",
             chapter_num, _FFMPEG_BUILD_TIMEOUT_S,
         )
-        return False
+        return ChapterAudioResult(False, attempted, succeeded)
 
     if result.returncode != 0:
         tail = _decode_stderr(result.stderr).strip()[-400:]
@@ -2504,9 +2587,9 @@ async def _generate_chapter_audio_inner(
                 )
             except OSError:
                 pass
-        return False
+        return ChapterAudioResult(False, attempted, succeeded)
 
-    return True
+    return ChapterAudioResult(True, attempted, succeeded)
 
 
 def _escape_ffmeta(value) -> str:
@@ -3191,11 +3274,13 @@ def generate_audiobook(
     attribution_backend="builtin",
     attribution_model_size=None,
     attribution_llm_config=None,
+    llm_an_config=None,
     enabled_tts_providers=None,
     strip_notes=False,
     hr_as_stars=False,
     chapter_notes="keep",
     cancel_event=None,
+    incomplete_callback=None,
 ):
     """Generate an M4B audiobook from a Story with character voice mapping.
 
@@ -3209,6 +3294,11 @@ def generate_audiobook(
     expose one (BookNLP: "small" or "big"; ignored otherwise).
     attribution_llm_config is required when attribution_backend=="llm":
     a dict with keys ``provider``, ``model``, ``api_key``, ``endpoint``.
+    llm_an_config supplies the LLM connection for the author's-note
+    stripping pass. It is independent of attribution_llm_config: either
+    feature can be selected without the other. When omitted it falls
+    back to attribution_llm_config for an "llm" attribution backend,
+    which is how callers used to reach it.
     strip_notes, when True, drops paragraph-level author's notes before
     synthesis (listeners who want A/Ns read aloud can leave it off).
     hr_as_stars, when True, replaces every scene divider (<hr/> plus
@@ -3253,6 +3343,7 @@ def generate_audiobook(
     # and the narrator block at voice-assignment time. Empty/None on
     # any failure so each consumer no-ops naturally.
     unified_analysis: dict | None = None
+    _raise_if_cancelled(cancel_event, "Audiobook render cancelled.")
     if attribution_backend == "llm" and attribution_llm_config:
         from . import character_profile
 
@@ -3295,17 +3386,25 @@ def generate_audiobook(
     # Gather full text for gender detection — honours the caller's
     # strip-notes / hr-as-stars preferences so A/Ns and dividers are
     # handled consistently with what the listener will hear.
-    use_llm_an = (
-        strip_notes
-        and attribution_backend == "llm"
-        and bool(attribution_llm_config)
-    )
+    # LLM note-stripping is its own setting. It used to be reachable
+    # only when the attribution backend also happened to be "llm", so
+    # asking for one feature silently required the other.
+    an_config = llm_an_config
+    if an_config is None and attribution_backend == "llm":
+        an_config = attribution_llm_config
+    use_llm_an = strip_notes and bool(an_config)
     ornament_tokens = (
         _story_ornament_tokens(story.chapters) if hr_as_stars else frozenset()
     )
     full_text = ""
     chapter_texts = []
     for ch in story.chapters:
+        # Each pass here can be an LLM round-trip per chapter, so a
+        # Cancel during preprocessing used to keep billing requests for
+        # the whole book before the first chapter-loop check.
+        _raise_if_cancelled(
+            cancel_event, "Audiobook render cancelled during preprocessing."
+        )
         text = _html_to_audiobook_text(
             ch.html, strip_notes=strip_notes, hr_as_stars=hr_as_stars,
             chapter_notes=chapter_notes,
@@ -3315,7 +3414,7 @@ def generate_audiobook(
             # Backstop: regex-based strip_note_paragraphs may have left
             # disguised A/Ns (mid-chapter outros, beta thanks dressed as
             # prose). Ask the LLM to flag any remaining ones.
-            text = _llm_strip_an_paragraphs(text, attribution_llm_config)
+            text = _llm_strip_an_paragraphs(text, an_config)
         chapter_texts.append(text)
         full_text += text + "\n"
 
@@ -3351,6 +3450,10 @@ def generate_audiobook(
         hits = 0
         misses = 0
         for idx, (text, segs) in enumerate(zip(chapter_texts, all_segments)):
+            _raise_if_cancelled(
+                cancel_event,
+                "Audiobook render cancelled during speaker attribution.",
+            )
             key = _hash_chapter_text(text)
             cached = _load_attr_entry(
                 attribution_backend, cache_size_bucket, key,
@@ -3374,6 +3477,7 @@ def generate_audiobook(
             # see a "cache hit" and skip the real refinement forever.
             if attribution.has_failed(
                 attribution_backend, attribution_model_size,
+                llm_config=attribution_llm_config,
             ):
                 misses += 1
                 continue
@@ -3547,6 +3651,8 @@ def generate_audiobook(
             progress_callback=progress_callback,
             all_segments=all_segments,
             cancel_event=cancel_event,
+            enabled_providers=enabled_tts_providers,
+            incomplete_callback=incomplete_callback,
         )
     finally:
         # Single cleanup point — any exception before the original
@@ -3557,16 +3663,47 @@ def generate_audiobook(
         shutil.rmtree(build_tmp, ignore_errors=True)
 
 
+def _raise_if_cancelled(cancel_event, message):
+    """Abort the render when the user has pressed Cancel.
+
+    The per-chapter loop already checks, but the tail of a render
+    (cover fetch, intro synthesis, M4B mux) used to run to completion
+    regardless, so Cancel during the last chapter still produced — and
+    auto-uploaded — a finished book.
+    """
+    if cancel_event is not None and cancel_event.is_set():
+        raise AudiobookCancelled(message)
+
+
+def _format_incomplete_report(incomplete, total) -> str:
+    """One line naming the chapters that lost prose."""
+    shown = [
+        f"ch {num} ({missing}/{attempted} segments missing)"
+        for num, _title, missing, attempted in incomplete[:5]
+    ]
+    if len(incomplete) > 5:
+        shown.append(f"and {len(incomplete) - 5} more")
+    return (
+        f"Incomplete audiobook: {len(incomplete)} of {total} chapter(s) "
+        f"are missing speech — {', '.join(shown)}. Those chapters were "
+        "not cached; re-run the render to retry them."
+    )
+
+
 def _generate_audiobook_inner(
     *,
     story, output_dir, build_tmp, cache_root,
     mapper, narrator, speech_rate, progress_callback, all_segments,
-    cancel_event=None,
+    cancel_event=None, enabled_providers=None, incomplete_callback=None,
 ):
     chapter_files = []
     total = len(story.chapters)
     cache_hits = 0
     cache_misses = 0
+    # (chapter number, title, missing segments, attempted segments) for
+    # every chapter that lost prose. Reported at the end so the listener
+    # learns the book is short of the source before they play it.
+    incomplete: list[tuple] = []
 
     display_ns = _chapter_display_numbers(
         (i, c.title) for i, c in enumerate(story.chapters, 1)
@@ -3599,6 +3736,7 @@ def _generate_audiobook_inner(
                         chapter_num=i, narrator_voice=narrator,
                         speech_rate=speech_rate,
                         cancel_event=cancel_event,
+                        enabled_providers=enabled_providers,
                     )
                 )
                 if cancel_event is not None and cancel_event.is_set():
@@ -3614,10 +3752,25 @@ def _generate_audiobook_inner(
                     tmp_body.unlink(missing_ok=True)
                 raise
             if success and tmp_body.exists() and tmp_body.stat().st_size > 0:
-                os.replace(tmp_body, body_path)
-                cache_misses += 1
+                if getattr(success, "complete", True):
+                    os.replace(tmp_body, body_path)
+                    cache_misses += 1
+                else:
+                    # The chapter is missing prose. Use what we have for
+                    # this build so the render still produces something
+                    # playable, but keep it out of the shared cache: a
+                    # cached partial is indistinguishable from a complete
+                    # chapter, so the gap would survive every retry.
+                    partial_body = build_tmp / f"partial_{i:04d}.mp3"
+                    os.replace(tmp_body, partial_body)
+                    body_path = partial_body
+                    incomplete.append(
+                        (i, ch.title, success.missing, success.attempted)
+                    )
             else:
                 logger.warning("No audio generated for chapter %d", i)
+                attempted = getattr(success, "attempted", 0) or 0
+                incomplete.append((i, ch.title, attempted, attempted))
                 if tmp_body.exists():
                     tmp_body.unlink(missing_ok=True)
                 _safe_progress(progress_callback, i, total, ch.title)
@@ -3658,11 +3811,27 @@ def _generate_audiobook_inner(
     if not chapter_files:
         raise RuntimeError("No chapter audio was generated.")
 
+    if incomplete:
+        summary = _format_incomplete_report(incomplete, total)
+        logger.warning("%s", summary)
+        _safe_progress(progress_callback, total, total, summary)
+        if incomplete_callback is not None:
+            try:
+                incomplete_callback(summary, list(incomplete))
+            except Exception:
+                logger.exception(
+                    "incomplete_callback raised; continuing render",
+                )
+
     logger.info(
         "Chapter audio cache: %d hit%s, %d miss%s (%s)",
         cache_hits, "" if cache_hits == 1 else "s",
         cache_misses, "" if cache_misses == 1 else "es",
         cache_root,
+    )
+
+    _raise_if_cancelled(
+        cancel_event, f"Audiobook render cancelled after {total} chapter(s)."
     )
 
     # Download cover image for embedding
@@ -3702,10 +3871,22 @@ def _generate_audiobook_inner(
     filename = f"{_safe_filename(story.title)} - {_safe_filename(story.author)}.m4b"
     m4b_path = output_dir / filename
 
+    _raise_if_cancelled(
+        cancel_event, "Audiobook render cancelled before the final assembly."
+    )
+
     logger.info("Building M4B with %d chapters...", len(chapter_files))
     # build_tmp cleanup is handled by the outer ``generate_audiobook``
     # finally clause so any exception path before this point also clears
     # the per-run scratch dir.
     build_m4b(chapter_files, story, m4b_path, cover_path, intro_file=intro_path)
+
+    if cancel_event is not None and cancel_event.is_set():
+        # Cancel landed during the mux. Don't hand back a file the user
+        # asked us to stop making — a later auto-upload would ship it.
+        m4b_path.unlink(missing_ok=True)
+        raise AudiobookCancelled(
+            "Audiobook render cancelled during the final assembly."
+        )
 
     return m4b_path

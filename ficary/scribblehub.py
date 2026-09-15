@@ -38,6 +38,14 @@ _CHAPTER_URL_RE = re.compile(r"/read/\d+-[^/]+/chapter/(\d+)", re.IGNORECASE)
 _PROFILE_URL_RE = re.compile(r"scribblehub\.com/profile/\d+", re.IGNORECASE)
 
 
+class PartialTableOfContentsError(StoryNotFoundError):
+    """The site would not hand over a complete chapter list.
+
+    Raised instead of quietly exporting the recent-chapters excerpt the
+    series page embeds, which looks like a finished short story.
+    """
+
+
 class ScribbleHubScraper(CookieAuthMixin, BaseScraper):
     """Scraper for scribblehub.com original fiction."""
 
@@ -98,11 +106,22 @@ class ScribbleHubScraper(CookieAuthMixin, BaseScraper):
             if a.get_text(strip=True)
         ]
 
+        # ScribbleHub prints the real chapter total beside the table of
+        # contents. It is the only way to tell a complete enumeration
+        # from the handful of recent chapters the page embeds.
+        declared = None
+        count_el = soup.select_one(".wi_novel_title.toc .cnt_toc")
+        if count_el is not None:
+            digits = re.sub(r"[^0-9]", "", count_el.get_text(strip=True))
+            if digits:
+                declared = int(digits)
+
         return {
             "title": title,
             "author": author,
             "summary": summary,
             "author_url": author_url,
+            "declared_chapters": declared,
             "extra": {"fandoms": genres} if genres else {},
         }
 
@@ -139,7 +158,9 @@ class ScribbleHubScraper(CookieAuthMixin, BaseScraper):
     # (a 100-page series at even 50 chapters/page is 5000 chapters).
     _MAX_TOC_PAGES = 100
 
-    def _fetch_full_toc(self, story_id, series_soup) -> list[dict]:
+    def _fetch_full_toc(
+        self, story_id, series_soup,
+    ) -> tuple[list[dict], bool]:
         """Fetch the complete chapter list.
 
         The series page only embeds the latest chapters, so ask the AJAX
@@ -155,6 +176,11 @@ class ScribbleHubScraper(CookieAuthMixin, BaseScraper):
         page_chapters = self._parse_toc_anchors(series_soup)
         collected: dict[int, dict] = {}   # id -> anchor, newest-first
         order: list[dict] = []
+        # Did the AJAX enumeration run to a natural end? A blocked or
+        # broken request is not the same answer as "that was all of
+        # them", and the difference decides whether the embedded
+        # excerpt may be presented as a whole book.
+        enumerated = False
         try:
             sess = self._session()
             for pagenum in range(1, self._MAX_TOC_PAGES + 1):
@@ -172,7 +198,17 @@ class ScribbleHubScraper(CookieAuthMixin, BaseScraper):
                     },
                     timeout=30,
                 )
-                if resp.status_code != 200 or not resp.text.strip():
+                if resp.status_code != 200:
+                    logger.warning(
+                        "ScribbleHub TOC request for %s returned HTTP %s; "
+                        "the chapter list may be incomplete",
+                        story_id, resp.status_code,
+                    )
+                    break
+                if not resp.text.strip():
+                    # An empty 200 is the endpoint saying "no more
+                    # pages" — a complete enumeration, not a failure.
+                    enumerated = True
                     break
                 new = [
                     a for a in self._toc_anchors_raw(
@@ -180,10 +216,18 @@ class ScribbleHubScraper(CookieAuthMixin, BaseScraper):
                     if a["id"] not in collected
                 ]
                 if not new:
+                    enumerated = True
                     break
                 for a in new:
                     collected[a["id"]] = a
                     order.append(a)
+            else:
+                # Hit the page cap without the endpoint saying "no
+                # more" — an incomplete enumeration, not a whole TOC.
+                logger.warning(
+                    "ScribbleHub TOC for %s hit the %d-page cap",
+                    story_id, self._MAX_TOC_PAGES,
+                )
         except Exception as exc:
             logger.debug("ScribbleHub TOC AJAX failed: %s", exc, exc_info=True)
         if order:
@@ -191,8 +235,10 @@ class ScribbleHubScraper(CookieAuthMixin, BaseScraper):
             # The AJAX list is authoritative when it's at least as
             # complete as the embedded one.
             if len(ajax_chapters) >= len(page_chapters):
-                return ajax_chapters
-        return page_chapters
+                return ajax_chapters, enumerated
+        # Falling back to the embedded excerpt: only complete if the
+        # endpoint itself said there was nothing more to list.
+        return page_chapters, enumerated
 
     @staticmethod
     def _parse_chapter_html(soup):
@@ -213,7 +259,14 @@ class ScribbleHubScraper(CookieAuthMixin, BaseScraper):
         story_id = self.parse_story_id(url_or_id)
         html = self._fetch(self._series_url(story_id))
         soup = BeautifulSoup(html, "lxml")
-        return len(self._fetch_full_toc(story_id, soup))
+        chapters, enumerated = self._fetch_full_toc(story_id, soup)
+        declared = self._parse_metadata(soup).get("declared_chapters")
+        if not enumerated and declared:
+            # An update check must not conclude "no new chapters" from a
+            # blocked TOC request. The page's own total is the better
+            # answer when the enumeration came back short.
+            return max(declared, len(chapters))
+        return len(chapters)
 
     def scrape_author_stories(self, url):
         """A ScribbleHub profile lists the member's own series."""
@@ -246,10 +299,24 @@ class ScribbleHubScraper(CookieAuthMixin, BaseScraper):
         soup = BeautifulSoup(html, "lxml")
 
         meta = self._parse_metadata(soup)
-        chapter_list = self._fetch_full_toc(story_id, soup)
+        chapter_list, enumerated = self._fetch_full_toc(story_id, soup)
         if not chapter_list:
             raise StoryNotFoundError(
                 f"No chapters found on ScribbleHub series {story_id}."
+            )
+        # The series page embeds only the most recent chapters. Passing
+        # that excerpt off as the whole book renumbered chapter 8 as
+        # chapter 1 and produced a "complete" two-chapter export of a
+        # forty-chapter serial, so refuse rather than guess.
+        declared = meta.get("declared_chapters")
+        incomplete = (declared or 0) > len(chapter_list) or not enumerated
+        if incomplete:
+            raise PartialTableOfContentsError(
+                f"ScribbleHub returned only {len(chapter_list)} chapter(s) "
+                + (f"of {declared} " if declared else "")
+                + f"for series {story_id}. The chapter-list request was "
+                "blocked or incomplete, so the download would be missing "
+                "prose and mis-numbered. Wait a moment and try again."
             )
 
         self._save_meta_cache(

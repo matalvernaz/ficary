@@ -47,6 +47,12 @@ class SoundscapeSession:
     def set_soundscape(self, soundscape: Optional[Soundscape]) -> None:
         if self._started:
             self._teardown()
+        else:
+            # Nothing is playing yet, but a build may still be decoding
+            # the outgoing soundscape. Bump the generation so it retires
+            # itself instead of fading in over the new selection.
+            with self._lock:
+                self._build_gen += 1
         self._soundscape = soundscape
         # Build whenever the reader is open — the old gate on "was already
         # running" made the FIRST assignment to a story (or any assignment
@@ -111,11 +117,17 @@ class SoundscapeSession:
         # the instant before the fade takes over. (fade_in below resets the
         # restore target to the soundscape's master volume.)
         self._engine.set_gain(CHANNEL_AMBIENT, 0.0)
+        # Every source this build creates, so an obsolete build can undo
+        # exactly its own work. It used to call ``engine.stop(channel)``,
+        # which also silenced the replacement soundscape that had already
+        # finished loading on the same channel — selecting an ambience
+        # while another was still decoding left silence.
+        mine: list[int] = []
         added = False
         for snd in sc.sounds:
             with self._lock:
                 if gen != self._build_gen:
-                    self._engine.stop(CHANNEL_AMBIENT)
+                    self._engine.stop_handles(CHANNEL_AMBIENT, mine)
                     return
             path = library.resolve_source(snd.source)
             if path is None:
@@ -125,10 +137,12 @@ class SoundscapeSession:
                 path, gain=snd.volume, positional=snd.positional,
                 azimuth=snd.azimuth, elevation=snd.elevation,
                 distance=snd.distance, channel=CHANNEL_AMBIENT)
+            if handle is not None:
+                mine.append(handle)
             added = added or handle is not None
         with self._lock:
             if gen != self._build_gen:
-                self._engine.stop(CHANNEL_AMBIENT)
+                self._engine.stop_handles(CHANNEL_AMBIENT, mine)
                 return
             if not added:
                 return

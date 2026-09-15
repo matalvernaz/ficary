@@ -7,7 +7,7 @@ import os
 import sys
 import threading
 from pathlib import Path
-from typing import Callable
+from typing import TYPE_CHECKING, Callable
 
 from . import legacy as _legacy
 from .ao3 import AO3LockedError
@@ -45,6 +45,10 @@ from .updater import (
 )
 from .wattpad import WattpadPaidStoryError
 from .webnovel import WebnovelLockedStoryError
+
+
+if TYPE_CHECKING:  # annotation-only; avoids importing the library at startup
+    from .library.index import LibraryIndex
 
 logger = logging.getLogger(__name__)
 
@@ -544,11 +548,12 @@ def _handle_subscribestar_story(
         return False
 
     if args.format == "audio":
+        from .tts import generate_audiobook
+
         path = generate_audiobook(
             story, str(output_dir),
-            progress_callback=lambda c, t, title, cached: progress(
-                c, t, title, False,
-            ),
+            # Audio progress callbacks take three arguments.
+            progress_callback=lambda c, t, title: progress(c, t, title, False),
             speech_rate=args.speech_rate,
             attribution_backend=args.attribution,
             attribution_model_size=args.attribution_model_size,
@@ -1117,25 +1122,23 @@ def _download_one(
                 chapter_notes=getattr(args, "chapter_notes", DEFAULT_CHAPTER_NOTES),
                 llm_config=_llm_strip_notes_config(args),
                 progress=status,
+                # An update writes straight to the file it is updating.
+                # Exporting under the templated name first and renaming
+                # afterwards destroyed whatever unrelated book already
+                # sat at that templated name.
+                output_path=update_path,
             )
 
-        # Filename preservation on update: if the user's existing
-        # file lives at a name that differs from what the template
-        # produces (e.g., they hand-named "Muggle-Raised Champion.html"
-        # but FFN's title is "Dragon Chronicles 1: Muggle-Raised
-        # Champion"), keep the original name. Without this rename,
-        # the export writes the templated name and orphans the old
-        # file — leaving two copies of the same fic and the legacy
-        # one stuck in the re-download loop forever. ``Path.replace``
-        # is atomic on POSIX and Windows.
-        if update_path is not None:
-            try:
-                same_path = path.resolve() == update_path.resolve()
-            except OSError:
-                same_path = False
-            if not same_path:
-                path.replace(update_path)
-                path = update_path
+        # Filename preservation on update: the exporter was handed
+        # ``update_path`` above, so a hand-renamed file keeps its name
+        # without a rename step. The only case where the returned path
+        # differs is a requested format change, which deliberately
+        # writes beside the original rather than over it.
+        if update_path is not None and path != update_path:
+            status(
+                f"\nThe existing file is {update_path.name}; the requested "
+                f"{args.format} export was written alongside it."
+            )
         status(f"\nSaved to: {path}")
         _auto_index_exported(path)
         if on_export is not None:

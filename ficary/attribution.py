@@ -355,7 +355,35 @@ def install(backend: str, log_callback=None) -> bool:
 _failed_runs: set[tuple[str, str | None]] = set()
 
 
-def has_failed(backend: str, model_size: str | None = None) -> bool:
+def failure_key(
+    backend: str,
+    model_size: str | None = None,
+    llm_config: dict | None = None,
+) -> tuple[str, str | None]:
+    """The key under which a failed backend run is recorded.
+
+    One function so the dispatcher and its callers cannot disagree.
+    They used to: ``refine_speakers`` filed LLM failures under
+    ``(llm, <provider>-<model>)`` while ``has_failed`` looked them up
+    under ``(llm, None)``, so a failed LLM run always answered "no
+    failure" and the caller cached unrefined builtin segments under the
+    LLM cache key — making every later render a cache hit that never
+    retried the provider.
+    """
+    size = normalize_size(backend, model_size)
+    if backend == "llm" and llm_config:
+        size = llm_cache_token(
+            llm_config.get("provider", ""),
+            llm_config.get("model", ""),
+        )
+    return (backend, size)
+
+
+def has_failed(
+    backend: str,
+    model_size: str | None = None,
+    llm_config: dict | None = None,
+) -> bool:
     """True if this backend already fell back to builtin in this run.
 
     The caller (tts.py audiobook pipeline) consults this after each
@@ -363,8 +391,30 @@ def has_failed(backend: str, model_size: str | None = None) -> bool:
     segments under the requested-backend's cache key — which would
     otherwise look like a successful BookNLP/fastcoref result on the
     next render and skip the real refinement entirely.
+
+    Pass the same ``llm_config`` given to :func:`refine_speakers` so the
+    lookup uses the same provider/model-qualified key the failure was
+    filed under.
     """
-    return (backend, normalize_size(backend, model_size)) in _failed_runs
+    return failure_key(backend, model_size, llm_config) in _failed_runs
+
+
+def clear_failures(
+    backend: str | None = None,
+    model_size: str | None = None,
+    llm_config: dict | None = None,
+) -> None:
+    """Forget recorded fallbacks so a retry can reach the backend again.
+
+    ``_failed_runs`` lives for the life of the process, so correcting an
+    API key or restarting a local model server otherwise had no effect
+    until the app was restarted. Called with no arguments it clears
+    every backend.
+    """
+    if backend is None:
+        _failed_runs.clear()
+        return
+    _failed_runs.discard(failure_key(backend, model_size, llm_config))
 
 
 def refine_speakers(
@@ -397,20 +447,15 @@ def refine_speakers(
     """
     if backend in (None, "", "builtin"):
         return segments
-    size = normalize_size(backend, model_size)
     # For the LLM backend, ``normalize_size`` is always None because
-    # LLM has no size variants — so without this discriminator one
-    # bad ``(provider, model, api_key)`` combination would disable
-    # every other LLM config (Ollama + GPT + Claude all sharing one
+    # LLM has no size variants — so without a discriminator one bad
+    # ``(provider, model, api_key)`` combination would disable every
+    # other LLM config (Ollama + GPT + Claude all sharing one
     # ``("llm", None)`` failure key) for the rest of the process.
-    # Encoding (provider, model) into the failure key means a failed
-    # OpenAI run doesn't poison a follow-up Ollama run.
-    if backend == "llm" and llm_config:
-        size = llm_cache_token(
-            llm_config.get("provider", ""),
-            llm_config.get("model", ""),
-        )
-    key = (backend, size)
+    # ``failure_key`` encodes (provider, model) so a failed OpenAI run
+    # doesn't poison a follow-up Ollama run.
+    key = failure_key(backend, model_size, llm_config)
+    size = key[1]
     if key in _failed_runs:
         return segments  # already reported; stay silent for remaining chapters
     if not is_installed(backend):

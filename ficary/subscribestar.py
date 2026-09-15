@@ -32,6 +32,7 @@ downloadable work. Two entry points fit ficary's model:
   one work.
 """
 
+import hashlib
 import html as _html
 import logging
 import re
@@ -46,6 +47,10 @@ from .scraper import BaseScraper, CookieAuthMixin, StoryNotFoundError
 logger = logging.getLogger(__name__)
 
 SS_BASE = "https://subscribestar.adult"
+
+# Keeps a synthetic merged-work id inside the range real post
+# ids occupy, so nothing downstream has to widen a column.
+_SYNTHETIC_ID_MODULO = 10 ** 12
 
 _POST_URL_RE = re.compile(r"subscribestar\.adult/posts/(\d+)", re.IGNORECASE)
 # Synthetic per-story URL minted by scrape_author_works so a creator's
@@ -99,9 +104,11 @@ class SubscribeStarScraper(CookieAuthMixin, BaseScraper):
         m = _POST_URL_RE.search(text)
         if m:
             return int(m.group(1))
-        # Synthetic per-story URL (a merged serial) has no single post id.
+        # Synthetic per-story URL (a merged serial) has no single post
+        # id, so derive a stable one from the URL itself. Returning 0 for
+        # every such work made them all the same story.
         if _STORY_URL_RE.search(text):
-            return 0
+            return SubscribeStarScraper.synthetic_story_id(text)
         raise ValueError(
             f"Cannot parse a SubscribeStar post id from: {text!r}\n"
             "Expected a post URL like https://subscribestar.adult/posts/12345 "
@@ -255,7 +262,10 @@ class SubscribeStarScraper(CookieAuthMixin, BaseScraper):
             # duplicates the part title we assign; drop it as the leader.
             if not paras and re.fullmatch(r"Chapter\s+\d+", text, re.IGNORECASE):
                 continue
-            paras.append(f"<p>{text}</p>")
+            # ``get_text`` returns plain text: interpolating it raw
+            # turned "the literal <secret>" into a tag and the words
+            # vanished from the export.
+            paras.append(f"<p>{_html.escape(text)}</p>")
         return "\n".join(paras) if paras else None
 
     # ── ficary entry points ────────────────────────────────────
@@ -264,6 +274,22 @@ class SubscribeStarScraper(CookieAuthMixin, BaseScraper):
         """Mint the synthetic per-story URL the picker/batch path treats
         as one downloadable work."""
         return f"{SS_BASE}/{handle}/story/{quote(display_title, safe='')}"
+
+    @staticmethod
+    def synthetic_story_id(story_url: str) -> int:
+        """A stable id for a merged serial that has no single post id.
+
+        Every merged work used to be ``id=0``, so two serials by the
+        same creator shared an identity: the library deduplicated them
+        into one entry, voice-map and reading-state sidecars collided,
+        and neither could be updated as itself. Derived from the
+        synthetic story URL with SHA-1 so the same work gets the same
+        id in every process and across restarts — ``hash()`` would not.
+        """
+        digest = hashlib.sha1(
+            str(story_url).encode("utf-8"), usedforsecurity=False,
+        ).hexdigest()
+        return int(digest[:15], 16) % _SYNTHETIC_ID_MODULO
 
     @staticmethod
     def _display_title(title: str) -> str:
@@ -395,11 +421,15 @@ class SubscribeStarScraper(CookieAuthMixin, BaseScraper):
             if body:
                 chapters.append(Chapter(number=n, title=f"Part {n}", html=body))
             self._delay()
+        story_url = self._story_url(handle, display_title)
         return Story(
-            id=0,
+            id=self.synthetic_story_id(story_url),
             title=display_title,
             author=handle,
             summary=f"{display_title} by {handle} (SubscribeStar).",
-            url=f"{SS_BASE}/{handle}",
+            # The per-work URL, not the creator page: the creator page
+            # is shared by every serial they publish and cannot be
+            # parsed back into this story.
+            url=story_url,
             chapters=chapters,
         )

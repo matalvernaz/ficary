@@ -175,6 +175,30 @@ class AudioEngine:
         for h in handles:
             self._backend.stop(h)
 
+    def stop_handles(self, channel: str, handles) -> None:
+        """Stop only ``handles`` on ``channel``, leaving the rest alone.
+
+        A channel-wide :meth:`stop` is the wrong tool for an obsolete
+        worker cleaning up after itself: by the time it notices it has
+        been superseded, the replacement's sources are already on the
+        same channel and a blanket stop silences them too.
+        """
+        wanted = [h for h in handles if h is not None]
+        if not wanted:
+            return
+        chan = self._channels.get(channel)
+        if not chan:
+            return
+        with self._lock:
+            owned = [h for h in wanted if h in chan.handles]
+            for h in owned:
+                chan.handles.remove(h)
+                chan.base_gains.pop(h, None)
+                self._done_cbs.pop(h, None)
+                self._handle_channel.pop(h, None)
+        for h in owned:
+            self._backend.stop(h)
+
     def pause(self, channel: str) -> None:
         chan = self._channels.get(channel)
         if not chan:

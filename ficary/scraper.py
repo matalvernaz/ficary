@@ -1,6 +1,7 @@
 """Base scraper with HTTP fetching, caching, and rate-limit handling."""
 
 import json
+import hashlib
 import logging
 import random
 import re
@@ -22,7 +23,7 @@ from curl_cffi.requests.exceptions import (
     Timeout as CurlTimeout,
 )
 
-from .logging_utils import record_transient_403
+from .logging_utils import record_transient_403, redact_headers, redact_url
 from .models import Chapter, Story
 
 logger = logging.getLogger(__name__)
@@ -251,6 +252,23 @@ class CookieAuthMixin:
         return bool(getattr(self, "_auth_cookies", None))
 
 
+def chapter_cache_key(chapter_url) -> Optional[str]:
+    """A stable per-chapter cache stem derived from its canonical URL.
+
+    Returns ``None`` when there is no URL to key on, which makes the
+    caller fall back to the ordinal stem. The digest is short but wide
+    enough that one story's chapters cannot collide, and it is stable
+    across processes and releases — unlike ``hash()``.
+    """
+    url = (chapter_url or "").strip()
+    if not url:
+        return None
+    digest = hashlib.sha1(
+        url.encode("utf-8"), usedforsecurity=False,
+    ).hexdigest()
+    return f"chu_{digest[:16]}"
+
+
 class BaseScraper:
     """Shared HTTP, retry, and cache logic for all site scrapers."""
 
@@ -474,10 +492,10 @@ class BaseScraper:
         """
         if not logger.isEnabledFor(logging.DEBUG):
             return
-        try:
-            headers = dict(resp.headers.items())
-        except Exception:
-            headers = {}
+        # Redact before the dict ever reaches the formatter: Set-Cookie
+        # lands here with a live session value, and a debug log routinely
+        # gets pasted into a bug report.
+        headers = redact_headers(getattr(resp, "headers", {}))
         # curl_cffi's Cookies object iterates as cookie names (strings),
         # not Cookie objects — the underlying jar is what holds Cookie
         # records with .name/.value/.domain. Use the jar for an accurate
@@ -494,8 +512,8 @@ class BaseScraper:
             )
         logger.debug(
             "%s url=%s profile=%s status=%d jar=%s headers=%s body[:%d]=%r",
-            label, url, self._browser, resp.status_code, cookie_names,
-            headers, DIAGNOSTIC_BODY_PREFIX_BYTES, body_prefix,
+            label, redact_url(url), self._browser, resp.status_code,
+            cookie_names, headers, DIAGNOSTIC_BODY_PREFIX_BYTES, body_prefix,
         )
 
     def _host_for_url(self, url: str) -> str:
@@ -1228,17 +1246,23 @@ class BaseScraper:
                 continue
             if not chapter_in_spec(number, chapter_spec):
                 continue
-            cached = self._load_chapter_cache(story_id, number)
+            # Key the cache on the chapter's own URL, not its position
+            # in the table of contents. An author inserting a chapter
+            # renumbers everything after it, and an ordinal key then
+            # served the previous occupant's body: A,B became A,B,B and
+            # the new chapter was never fetched at all.
+            key = chapter_cache_key(info.get("url"))
+            cached = self._load_chapter_cache(story_id, number, cache_key=key)
             if cached is not None:
-                plan.append((number, info["title"], cached))
+                plan.append((number, info["title"], cached, key))
             else:
-                plan.append((number, info["title"], None))
+                plan.append((number, info["title"], None, key))
                 fetch_urls.append(info["url"])
 
         fetched = self._fetch_parallel(fetch_urls) if fetch_urls else []
         cursor = 0
         result = []
-        for number, title, cached in plan:
+        for number, title, cached, key in plan:
             if cached is not None:
                 result.append(cached)
                 if progress_callback:
@@ -1248,7 +1272,7 @@ class BaseScraper:
             cursor += 1
             html = parse_chapter(BeautifulSoup(body, "lxml"))
             chapter = Chapter(number=number, title=title, html=html)
-            self._save_chapter_cache(story_id, chapter)
+            self._save_chapter_cache(story_id, chapter, cache_key=key)
             result.append(chapter)
             if progress_callback:
                 progress_callback(number, total, title, False)

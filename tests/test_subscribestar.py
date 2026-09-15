@@ -60,7 +60,15 @@ class TestURLParsing:
         )
         assert not SubscribeStarScraper.is_author_url(syn)
         assert detect_scraper(syn) is SubscribeStarScraper
-        assert SubscribeStarScraper.parse_story_id(syn) == 0
+        # A merged serial has no single post id, so its id is derived
+        # from the synthetic URL: stable across processes, and distinct
+        # per work. Every such story used to be id 0, which conflated
+        # every serial by the same creator.
+        story_id = SubscribeStarScraper.parse_story_id(syn)
+        assert story_id == SubscribeStarScraper.synthetic_story_id(syn)
+        assert story_id != 0
+        other = "https://subscribestar.adult/fibaro/story/Another%20Tale"
+        assert SubscribeStarScraper.parse_story_id(other) != story_id
 
 
 class TestAuthorWorks:
