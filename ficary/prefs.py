@@ -9,6 +9,7 @@ below stay identical.
 """
 
 import logging
+import os
 import re as _re
 from pathlib import Path
 
@@ -470,10 +471,19 @@ class Prefs:
             self._cfg = _FileStore(portable.settings_file())
             return
 
-        if wx.GetApp() is None and not portable.is_frozen():
-            # A command-line run. wx cannot resolve its standard paths
-            # without an app and prints an assertion on every read, so
-            # go straight to the file the app writes.
+        if (
+            wx.GetApp() is None
+            and not portable.is_frozen()
+            and (os.name != "nt" or portable.settings_file().exists())
+        ):
+            # A command-line run, on a platform where the settings live
+            # in a file. wx cannot resolve its standard paths without an
+            # app (it prints an assertion on every read and answers with
+            # the data directory), so read that file directly.
+            #
+            # Windows is excluded unless the file exists: there the
+            # application's settings live in the registry, which
+            # ``wx.Config`` reaches without a running app.
             self._cfg = _FileStore(portable.settings_file())
             return
 
