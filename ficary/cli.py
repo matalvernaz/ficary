@@ -3483,6 +3483,13 @@ def _handle_watch(args: argparse.Namespace) -> None:
         sys.exit(0)
 
 
+def _package_version() -> str:
+    """The shipped version string, without importing it at module load."""
+    from . import __version__
+
+    return __version__
+
+
 def _build_parser() -> argparse.ArgumentParser:
     """Build the argparse parser for the CLI.
 
@@ -3505,6 +3512,16 @@ def _build_parser() -> argparse.ArgumentParser:
             "{title} {author} {id} {words} {status} {rating} {language} {chapters}"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    # Every command-line tool is expected to answer this, and it gives
+    # a packaged build a meaningful smoke test: printing the version
+    # proves the frozen bundle imported the package, where ``--help``
+    # only proves argparse is present.
+    parser.add_argument(
+        "--version",
+        action="version",
+        version=f"ficary {_package_version()}",
+        help="Print the version and exit",
     )
     parser.add_argument(
         "url",

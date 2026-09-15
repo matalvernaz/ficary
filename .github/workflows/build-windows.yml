@@ -10,7 +10,14 @@ permissions:
   contents: write
 
 jobs:
+  test:
+    # Refuse to publish an artifact built from a revision whose tests
+    # have not passed. Runs against the tagged commit, not whatever
+    # happened to be green on a branch earlier.
+    uses: ./.github/workflows/tests.yml
+
   build:
+    needs: test
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v6
@@ -98,7 +105,19 @@ jobs:
             ficary/__main__.py
 
       - name: Smoke-test executable
-        run: dist\ficary\ficary.exe --help
+        # ``--help`` only proves argparse loaded. ``--version`` proves
+        # the frozen bundle imported the package itself, and running
+        # the bundled helpers proves the thing every audiobook render
+        # depends on actually executes on this platform.
+        run: |
+          dist\ficary\ficary.exe --help
+          dist\ficary\ficary.exe --version
+          Get-ChildItem -Path dist\ficary -Recurse -Filter ffmpeg.exe |
+            Select-Object -First 1 |
+            ForEach-Object { & $_.FullName -version | Select-Object -First 1 }
+          Get-ChildItem -Path dist\ficary -Recurse -Filter ffprobe.exe |
+            Select-Object -First 1 |
+            ForEach-Object { & $_.FullName -version | Select-Object -First 1 }
 
       # Drop the update helper alongside ficary.exe so the auto-updater
       # in ficary/self_update.py can copy it to %TEMP% and spawn it.

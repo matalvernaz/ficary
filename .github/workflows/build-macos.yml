@@ -21,7 +21,14 @@ permissions:
   contents: write
 
 jobs:
+  test:
+    # Refuse to publish an artifact built from a revision whose tests
+    # have not passed. Runs against the tagged commit, not whatever
+    # happened to be green on a branch earlier.
+    uses: ./.github/workflows/tests.yml
+
   build:
+    needs: test
     # macos-latest is arm64 (Apple Silicon) as of the mid-2024
     # runner swap. Produces an arm64 binary; Rosetta 2 lets Intel
     # Macs run it but a native Intel build would need macos-13.
@@ -36,28 +43,65 @@ jobs:
           python-version: "3.12"
 
       - name: Install ffmpeg and ffprobe
-        # Evermeet ships static-built macOS binaries of ffmpeg and
-        # ffprobe with no runtime dependencies beyond the macOS
-        # system libs. Same "bundle it, don't require users to
-        # brew install" philosophy the Windows build uses.
-        # evermeet.cx is a small single-server host like John Van
-        # Sickle's; same retry rationale as build-linux.yml — one
-        # transient connection timeout shouldn't fail the release.
+        # Static macOS builds with no runtime dependencies beyond the
+        # system libs. Same "bundle it, don't require users to brew
+        # install" philosophy the Windows build uses.
+        #
+        # osxexperts.net rather than evermeet.cx: this build runs on
+        # Apple Silicon and Evermeet publishes Intel binaries only
+        # ("I do not plan to provide native ffmpeg binaries for Apple
+        # Silicon ARM"). An arm64 app bundling an x86_64 helper needs
+        # Rosetta 2, which a clean Apple Silicon Mac does not have, so
+        # every audiobook render failed there with no useful message.
+        #
+        # Small single-server host like John Van Sickle's; same retry
+        # rationale as build-linux.yml — one transient connection
+        # timeout shouldn't fail the release.
         run: |
           set -e
           mkdir -p ffmpeg_bin
           curl -L --fail \
             --retry 5 --retry-delay 15 --retry-all-errors \
             --connect-timeout 30 --max-time 300 \
-            -o ffmpeg.zip https://evermeet.cx/ffmpeg/getrelease/zip
+            -o ffmpeg.zip https://www.osxexperts.net/ffmpeg9arm.zip
           curl -L --fail \
             --retry 5 --retry-delay 15 --retry-all-errors \
             --connect-timeout 30 --max-time 300 \
-            -o ffprobe.zip https://evermeet.cx/ffmpeg/getrelease/ffprobe/zip
+            -o ffprobe.zip https://www.osxexperts.net/ffprobe9arm.zip
           unzip -o ffmpeg.zip -d ffmpeg_bin/
           unzip -o ffprobe.zip -d ffmpeg_bin/
+          rm -rf ffmpeg_bin/__MACOSX
           chmod +x ffmpeg_bin/ffmpeg ffmpeg_bin/ffprobe
           ls -la ffmpeg_bin/
+
+      - name: Verify the helpers are native and runnable
+        # The whole point of the previous step is a helper this app can
+        # execute. Shipping the wrong architecture is invisible until a
+        # user tries to build an audiobook, so fail the build here
+        # instead: check the Mach-O architecture, then actually run
+        # each binary and mux a one-second file end to end.
+        run: |
+          set -e
+          for helper in ffmpeg ffprobe; do
+            echo "--- $helper ---"
+            file "ffmpeg_bin/$helper"
+            lipo -archs "ffmpeg_bin/$helper"
+            lipo -archs "ffmpeg_bin/$helper" | grep -qw arm64 || {
+              echo "::error::ffmpeg_bin/$helper is not an arm64 binary." \
+                   "This build runs on Apple Silicon; a translated" \
+                   "helper needs Rosetta 2, which a clean Mac lacks."
+              exit 1
+            }
+            # Ad-hoc sign: a downloaded binary is unsigned and Gatekeeper
+            # kills it on first exec. PyInstaller signs what it bundles,
+            # but we need to run these right now to prove they work.
+            codesign --force --sign - "ffmpeg_bin/$helper"
+            "ffmpeg_bin/$helper" -version | head -n 1
+          done
+          ./ffmpeg_bin/ffmpeg -v error -f lavfi -i "sine=duration=1" \
+            -c:a aac -y /tmp/helper-check.m4a
+          ./ffmpeg_bin/ffprobe -v error -show_entries format=duration \
+            -of csv=p=0 /tmp/helper-check.m4a
 
       - name: Install Python dependencies
         # wxPython ships macOS wheels on PyPI for both arm64 and
@@ -97,7 +141,19 @@ jobs:
       - name: Smoke-test bundle
         # --windowed builds put the binary inside Contents/MacOS;
         # CLI users will invoke it the same way.
-        run: dist/ficary.app/Contents/MacOS/ficary --help
+        #
+        # ``--help`` only proves argparse loaded. ``--version`` proves
+        # the frozen bundle imported the package itself, and running
+        # the bundled helpers proves the thing every audiobook render
+        # depends on actually executes on this platform.
+        run: |
+          set -e
+          dist/ficary.app/Contents/MacOS/ficary --help
+          dist/ficary.app/Contents/MacOS/ficary --version
+          find dist/ficary.app -name ffmpeg -type f -exec {} -version \; \
+            | head -n 1
+          find dist/ficary.app -name ffprobe -type f -exec {} -version \; \
+            | head -n 1
 
       - name: Package
         # ``ditto`` preserves macOS metadata (extended attributes,

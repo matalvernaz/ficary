@@ -6,6 +6,10 @@ on:
   pull_request:
     branches: [master, reader]
   workflow_dispatch:
+  # Callable so each release build can gate on the tagged revision's
+  # tests. A tag used to start three build workflows directly, none of
+  # which knew whether the commit it pointed at was green.
+  workflow_call:
 
 jobs:
   test:

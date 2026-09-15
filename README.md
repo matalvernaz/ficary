@@ -62,11 +62,14 @@ app offers to update itself.
 
 ### macOS (Apple Silicon)
 
-Download `ficary-macos-arm64.tar.gz` from the Releases page, extract
-it, and run `./ficary/ficary`. The app isn't signed with an Apple
-developer certificate, so the first launch needs right-click → Open
-(or **System Settings → Privacy & Security → Open Anyway**). After
-that it opens normally.
+Download `ficary-macos-arm64.zip` from the Releases page and
+double-click it to unpack `ficary.app`. Drag it to Applications, then
+open it. The app isn't signed with an Apple developer certificate, so
+the first launch needs right-click → Open (or **System Settings →
+Privacy & Security → Open Anyway**). After that it opens normally.
+
+For the command line, the binary lives inside the bundle:
+`ficary.app/Contents/MacOS/ficary --help`.
 
 ### Linux (x86_64)
 

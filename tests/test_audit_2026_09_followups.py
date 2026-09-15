@@ -146,3 +146,56 @@ def test_a_missing_settings_file_is_not_an_error(portable_root):
     prefs = prefs_mod.Prefs()
     assert prefs.get("library_path") in (None, "")
     assert prefs.get_bool("cf_solve") is False
+
+
+# ── Release plumbing ───────────────────────────────────────────────
+
+def test_cli_reports_its_version():
+    """A packaged build's smoke test relies on this."""
+    import subprocess
+    import sys
+
+    from ficary import __version__
+
+    out = subprocess.run(
+        [sys.executable, "-m", "ficary", "--version"],
+        capture_output=True, text=True, check=True,
+    )
+    assert __version__ in out.stdout
+
+
+def test_release_builds_gate_on_the_test_workflow():
+    """A tag must not publish an artifact from an untested revision."""
+    import yaml
+    from pathlib import Path
+
+    workflows = Path(__file__).resolve().parents[1] / ".github" / "workflows"
+    tests = yaml.safe_load((workflows / "tests.yml").read_text())
+    # PyYAML parses a bare ``on:`` key as the boolean True.
+    triggers = tests.get("on", tests.get(True))
+    assert "workflow_call" in triggers, "tests.yml must be callable"
+
+    for name in ("build-linux.yml", "build-macos.yml", "build-windows.yml"):
+        data = yaml.safe_load((workflows / name).read_text())
+        build = data["jobs"]["build"]
+        assert build.get("needs") == "test", f"{name} does not gate on tests"
+        assert data["jobs"]["test"]["uses"].endswith("tests.yml")
+
+
+def test_the_macos_build_fetches_an_arm64_ffmpeg():
+    """The bundle is arm64; a translated helper needs Rosetta 2."""
+    from pathlib import Path
+
+    workflow = (
+        Path(__file__).resolve().parents[1]
+        / ".github" / "workflows" / "build-macos.yml"
+    ).read_text()
+    downloads = [
+        line for line in workflow.splitlines()
+        if "https://" in line and not line.lstrip().startswith("#")
+    ]
+    assert not any("evermeet.cx" in line for line in downloads), (
+        "Evermeet publishes Intel binaries only"
+    )
+    assert "ffmpeg9arm.zip" in workflow and "ffprobe9arm.zip" in workflow
+    assert "lipo -archs" in workflow, "the architecture must be verified"
