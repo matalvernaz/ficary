@@ -1,5 +1,183 @@
 # Changelog
 
+## 2.20.0 — 2026-09-15
+
+**A stabilisation release: things that lost your work, quietly**
+
+An outside audit went through the whole program and found fifty
+confirmed defects. Every one of them is fixed here, along with several
+more found while fixing them. The theme is silence: operations that
+reported success while dropping a chapter, a setting, a backup or an
+alert.
+
+*Your files*
+
+* Two different stories with the same title and author wrote to the same
+  filename, and the second replaced the first. Ficary now checks which
+  story a file holds before writing over it, and puts the newcomer
+  beside it instead.
+* Updating a story you had renamed exported under the templated name and
+  then moved that file onto yours, destroying whatever unrelated book
+  already sat at the templated name. An update now writes straight to
+  the file it is updating. The same bug in the app's Update File left
+  your renamed book untouched and quietly wrote a second copy.
+* Updating a file while asking for a different format wrote the new
+  format into the old file's extension, leaving a `.epub` that was
+  really HTML. The requested format is now written beside the original.
+
+*Your chapters*
+
+* When an author inserted a chapter, every chapter after it shifted, and
+  the cache served each one the text of the chapter that used to sit in
+  that position. The result was a book with the new chapter missing and
+  an old one duplicated. Fixed for Royal Road, FicWad, MediaMiner and
+  ScribbleHub by keying the cache on the chapter's own address, and for
+  FanFiction.net, MCStories, BDSM Library, TGStorytime, Giantess World,
+  Adult FanFiction and StoriesOnline by checking the chapter's title
+  before reusing it.
+* ScribbleHub embeds only its most recent chapters in the series page.
+  When the request for the full chapter list was blocked, those few were
+  exported as a complete book, renumbered from one. Ficary now refuses
+  the download and tells you to try again.
+* A story from SubscribeStar's per-creator serials had no identity of
+  its own: every serial by the same creator shared one, so the library
+  collapsed them together and none could be updated. Each now has a
+  stable identity and its own address.
+* Text taken from a linked Google Doc was inserted into the book as
+  markup, so any prose in angle brackets vanished.
+
+*Your audiobooks*
+
+* A chapter whose speech partly failed was written into the permanent
+  cache as if complete, so the missing prose never came back. Incomplete
+  chapters are no longer cached, the render says which chapters are
+  short, and running it again retries them.
+* Choosing an offline voice did not keep the text offline: when local
+  synthesis failed, a segment fell through to a cloud voice. Synthesis
+  now stays inside the providers you enabled.
+* Cancel finished the book anyway. It now stops during preprocessing,
+  speaker attribution, the introduction and the final assembly, and no
+  longer hands back (or uploads) a book you asked it to stop making.
+* Choosing LLM speaker attribution did nothing unless you had also
+  enabled LLM note stripping. The two settings are independent now.
+* Two audiobooks rendering at once shared one Cancel: whichever finished
+  first disarmed the other. Each render has its own.
+* Installing Piper failed on the package layout its own release uses,
+  and afterwards a folder was accepted as the installed program.
+
+*Your reading*
+
+* App-voice reading always restarted the chapter from the beginning.
+  It now resumes where the voice stopped, and saves that position as
+  you listen.
+* Pressing Stop while the voice list was loading could start speech
+  afterwards. Stopping, changing chapter, switching to your screen
+  reader and closing the reader all cancel a pending start now.
+* The reader picked the first voice in the catalogue regardless of the
+  providers you had enabled or the language you read in. It now respects
+  both and shows which service will receive the text.
+* Finished chapters left their synthesised audio in the temporary folder
+  for the life of the session.
+* Choosing an ambient soundscape while another was still loading left
+  silence.
+
+*Your library*
+
+* Restoring the oldest of your ten retained index backups deleted it
+  before reading it, so the restore failed and the recovery point you
+  chose was gone.
+* A rescan erased stories you had marked adult or abandoned.
+* Repairing the library stamped a file's metadata as current without
+  re-reading it, turning data that was known to be stale into data that
+  was wrongly trusted.
+* Cache cleanup deleted an entry outright when it could not move it to
+  the recoverable folder, and two cleanups in the same second could
+  delete the newer one. It now leaves anything it cannot quarantine in
+  place and says so.
+* Repairing a story whose file had been renamed dropped it from the
+  library even though the renamed file was still tracked.
+* Full-text search kept returning stories after they were moved or
+  removed. Results now follow the library.
+* Checking for silently edited chapters read them from the cache, so it
+  compared stored text against itself and reported no edits.
+* Long non-Latin titles produced filenames the filesystem rejected.
+* A library sweep you cancelled reported "complete" with the counts it
+  had reached, which read as a library that needed nothing.
+
+*Your watches*
+
+* Editing a watch while a poll was running was undone when the poll
+  finished. Pausing one mid-poll re-enabled it.
+* A failed automatic download was forgotten: the next poll saw nothing
+  new and the error disappeared with it. Pending downloads are kept and
+  retried.
+* A notification that reached no channel started the quiet period
+  anyway, so the alert was lost. Failed deliveries are held and retried,
+  and the failure shows on the watch.
+* Turning auto-polling off and straight back on during a poll left it
+  switched on with nothing polling.
+* Stories found by a watch were downloaded into whatever folder Ficary
+  happened to be running in rather than your library, and without the
+  Cloudflare solver or the newer site logins you had configured.
+
+*Your settings*
+
+* On Linux source and pip installs, no preference was ever saved.
+  Everything appeared to work for the session and was gone at the next
+  launch. Settings now live in `settings.ini` in Ficary's data folder,
+  and a save that fails says so.
+* Running Ficary from the command line read no settings at all, so a
+  terminal download ignored your library folder, format and logins. It
+  now reads the same settings the app writes.
+* The AO3, ScribbleHub and SubscribeStar login fields had no height at
+  all in the Preferences window at its normal size. Preference pages
+  scroll now.
+* Search windows opened narrower than their own filter rows, so filters
+  on the right were drawn off the edge.
+* Fetching your Audiobookshelf libraries froze the window for as long as
+  the server took to answer, and saved the server address and token
+  before you pressed OK, so Cancel did not undo them.
+* Closing a search window while the search was running left the whole
+  app blocked until restart.
+
+*Privacy*
+
+* Sending to Kindle did not check the mail server's certificate, so
+  anything able to intercept the connection could impersonate your
+  relay and collect the password along with the book.
+* Debug logging wrote session cookies into the log file in full.
+
+*Installing and running*
+
+* The macOS build is for Apple Silicon but bundled Intel versions of
+  ffmpeg and ffprobe, so building an audiobook failed on a Mac without
+  Rosetta 2 installed.
+* Running `ficary` with no arguments exited with a usage error instead
+  of opening the window, which is what the manual describes.
+* The minimum Python version is now 3.10, which is what the code and its
+  dependencies have required for some time. The declared 3.9 could not
+  import Ficary at all.
+* Tagging a release no longer builds without running the tests first.
+* New: `ficary --version`.
+
+**Upgrading**
+
+* The first update after upgrading re-fetches every chapter of stories
+  from Royal Road, FicWad, MediaMiner and ScribbleHub. The chapter cache
+  is now keyed on each chapter's address rather than its position, so
+  existing entries no longer match.
+* SubscribeStar serials downloaded before this release have a different
+  identity now. Re-downloading one produces a new file rather than
+  updating the old one, and its saved voice assignments do not carry
+  over.
+* ScribbleHub downloads now fail outright when the chapter list cannot
+  be retrieved, where they used to produce a short book. This is
+  deliberate: a failure you can retry is better than a book missing
+  most of its chapters.
+* Linux source and pip installs: preferences move to `settings.ini` in
+  Ficary's data folder. Anything the old location managed to save is
+  copied across on first launch.
+
 ## 2.19.0 — 2026-08-09
 
 **Downloads always go to the library**
