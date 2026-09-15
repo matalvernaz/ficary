@@ -27,7 +27,10 @@ from __future__ import annotations
 
 import logging
 
+import threading
+
 import wx
+from wx.lib import scrolledpanel
 
 from . import attribution as _attribution_module
 from . import prefs as _p
@@ -96,6 +99,48 @@ _EMAIL_HELP = (
 )
 
 
+class _DraftPrefs:
+    """A read-only preferences view over unsaved dialog values.
+
+    Lets a connection test run against what is typed in the dialog
+    without committing it. Only ``get`` is needed: everything that
+    reads configuration goes through it.
+    """
+
+    def __init__(self, values: dict):
+        self._values = dict(values)
+
+    def get(self, key, default=None):
+        value = self._values.get(key)
+        return value if value not in (None, "") else default
+
+    def get_bool(self, key, default: bool = False) -> bool:
+        return bool(self._values.get(key, default))
+
+
+class _ScrollingPage(scrolledpanel.ScrolledPanel):
+    """A notebook page that scrolls when its content is taller than the
+    dialog.
+
+    Preferences pages grew past the shipped 640x520 dialog, and a plain
+    ``wx.Panel`` simply clips: the AO3 cookie and the newer site
+    credential fields ended up at zero height with no way to reach
+    them. ``ScrolledPanel`` also scrolls the focused child into view,
+    so tabbing (and a screen reader following focus) reaches every
+    field.
+    """
+
+    def __init__(self, parent):
+        super().__init__(parent, style=wx.TAB_TRAVERSAL | wx.VSCROLL)
+
+    def setup_scrolling(self) -> None:
+        self.SetupScrolling(scroll_x=False, scroll_y=True, scrollToTop=False)
+        # Keep the dialog from being resized narrower than the widest
+        # control; horizontal clipping has no scrollbar to recover it.
+        best = self.GetSizer().GetMinSize()
+        self.SetMinSize((best.width, -1))
+
+
 class PreferencesDialog(wx.Dialog):
     """Tabbed preferences dialog. Opens non-modally friendly (standard
     modal dialog with OK/Cancel). The owning MainFrame is responsible
@@ -110,6 +155,9 @@ class PreferencesDialog(wx.Dialog):
         )
         self.prefs = prefs
         self.main_frame = main_frame
+        # Bumped per Fetch libraries click so a slow reply from a server
+        # the user has since changed cannot repopulate the controls.
+        self._abs_fetch_generation = 0
 
         self._build_ui()
         self._load_values()
@@ -179,7 +227,7 @@ class PreferencesDialog(wx.Dialog):
     # ── Tabs ────────────────────────────────────────────────────
 
     def _build_general_tab(self):
-        panel = wx.Panel(self.notebook)
+        panel = _ScrollingPage(self.notebook)
         sizer = wx.BoxSizer(wx.VERTICAL)
 
         self._add_help_text(
@@ -220,10 +268,11 @@ class PreferencesDialog(wx.Dialog):
         sizer.Add(self.confirm_close_ctrl, 0, wx.ALL, 6)
 
         panel.SetSizer(sizer)
+        panel.setup_scrolling()
         return panel
 
     def _build_downloads_tab(self):
-        panel = wx.Panel(self.notebook)
+        panel = _ScrollingPage(self.notebook)
         sizer = wx.BoxSizer(wx.VERTICAL)
 
         row, self.format_ctrl = self._labeled_row(
@@ -410,10 +459,11 @@ class PreferencesDialog(wx.Dialog):
         )
 
         panel.SetSizer(sizer)
+        panel.setup_scrolling()
         return panel
 
     def _build_audiobook_tab(self):
-        panel = wx.Panel(self.notebook)
+        panel = _ScrollingPage(self.notebook)
         sizer = wx.BoxSizer(wx.VERTICAL)
 
         row, self.speech_rate_ctrl = self._labeled_row(
@@ -462,10 +512,11 @@ class PreferencesDialog(wx.Dialog):
         )
 
         panel.SetSizer(sizer)
+        panel.setup_scrolling()
         return panel
 
     def _build_audiobookshelf_tab(self):
-        panel = wx.Panel(self.notebook)
+        panel = _ScrollingPage(self.notebook)
         sizer = wx.BoxSizer(wx.VERTICAL)
 
         self._add_help_text(
@@ -517,21 +568,64 @@ class PreferencesDialog(wx.Dialog):
         sizer.Add(self.abs_status, 0, wx.EXPAND | wx.ALL, 6)
 
         panel.SetSizer(sizer)
+        panel.setup_scrolling()
         return panel
 
     def _on_abs_fetch_libraries(self, event):
+        """Ask the server for its libraries, using the draft settings.
+
+        Two things this must not do: write the edited URL and token into
+        the saved preferences (Cancel would then leave the new server
+        active), and run the request on the GUI thread (an unreachable
+        server froze the window, keyboard and screen reader for the full
+        30-second timeout).
+        """
+        draft = _DraftPrefs({
+            _p.KEY_ABS_URL: self.abs_url_ctrl.GetValue().strip(),
+            _p.KEY_ABS_TOKEN: self.abs_token_ctrl.GetValue().strip(),
+        })
+        self._abs_fetch_generation += 1
+        generation = self._abs_fetch_generation
+        self.abs_fetch_btn.Disable()
+        self.abs_status.SetLabel("Contacting the server...")
+        threading.Thread(
+            target=self._abs_fetch_worker, args=(draft, generation),
+            daemon=True, name="ficary-abs-fetch",
+        ).start()
+
+    def _abs_fetch_worker(self, draft, generation) -> None:
+        """WORKER THREAD. Only touches the frozen draft settings."""
         from .audiobookshelf import ABSConfigError, list_libraries
-        # Persist url/token first so list_libraries reads the fresh values.
-        self.prefs.set(_p.KEY_ABS_URL, self.abs_url_ctrl.GetValue().strip())
-        self.prefs.set(_p.KEY_ABS_TOKEN, self.abs_token_ctrl.GetValue().strip())
+
         try:
-            libraries = list_libraries(self.prefs)
+            libraries = list_libraries(draft)
         except ABSConfigError as exc:
-            self.abs_status.SetLabel(str(exc))
+            wx.CallAfter(self._on_abs_fetch_failed, generation, str(exc))
             return
         except Exception as exc:
-            self.abs_status.SetLabel(f"Couldn't reach the server: {exc}")
+            wx.CallAfter(
+                self._on_abs_fetch_failed, generation,
+                f"Couldn't reach the server: {exc}",
+            )
             return
+        wx.CallAfter(self._on_abs_fetch_done, generation, libraries)
+
+    def _abs_fetch_current(self, generation) -> bool:
+        """True while this dialog is alive and no newer fetch started."""
+        if not self:
+            return False
+        return generation == self._abs_fetch_generation
+
+    def _on_abs_fetch_failed(self, generation, message) -> None:
+        if not self._abs_fetch_current(generation):
+            return
+        self.abs_fetch_btn.Enable()
+        self.abs_status.SetLabel(message)
+
+    def _on_abs_fetch_done(self, generation, libraries) -> None:
+        if not self._abs_fetch_current(generation):
+            return
+        self.abs_fetch_btn.Enable()
         self._abs_libraries = libraries
         self._abs_library_ids = [lib["id"] for lib in libraries]
         self.abs_library_ctrl.Set([lib["name"] for lib in libraries] or ["(none)"])
@@ -555,7 +649,7 @@ class PreferencesDialog(wx.Dialog):
             self.abs_folder_ctrl.SetSelection(0)
 
     def _build_notifications_tab(self):
-        panel = wx.Panel(self.notebook)
+        panel = _ScrollingPage(self.notebook)
         sizer = wx.BoxSizer(wx.VERTICAL)
 
         self._add_help_text(
@@ -609,10 +703,11 @@ class PreferencesDialog(wx.Dialog):
         self._add_help_text(sizer, panel, _EMAIL_HELP)
 
         panel.SetSizer(sizer)
+        panel.setup_scrolling()
         return panel
 
     def _build_watchlist_tab(self):
-        panel = wx.Panel(self.notebook)
+        panel = _ScrollingPage(self.notebook)
         sizer = wx.BoxSizer(wx.VERTICAL)
 
         self._add_help_text(
@@ -648,10 +743,11 @@ class PreferencesDialog(wx.Dialog):
         )
 
         panel.SetSizer(sizer)
+        panel.setup_scrolling()
         return panel
 
     def _build_logging_tab(self):
-        panel = wx.Panel(self.notebook)
+        panel = _ScrollingPage(self.notebook)
         sizer = wx.BoxSizer(wx.VERTICAL)
 
         row, self.log_level_ctrl = self._labeled_row(
@@ -693,6 +789,7 @@ class PreferencesDialog(wx.Dialog):
         )
 
         panel.SetSizer(sizer)
+        panel.setup_scrolling()
         return panel
 
     # ── Load / save ────────────────────────────────────────────

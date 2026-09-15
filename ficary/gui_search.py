@@ -356,6 +356,10 @@ class SearchFrame(wx.Frame):
         # whose generation no longer matches, so a slow first request
         # can't overwrite the results of a faster second request.
         self._search_generation = 0
+        # Token identifying this window's claim on the main frame's
+        # global busy flag. Held by the frame, not by this window, so a
+        # search whose window is closed mid-flight still releases it.
+        self._busy_token = None
         # Set False on close so worker-thread CallAfter callbacks
         # (search results, error MessageBoxes) become no-ops on a
         # destroyed frame. An erotica fan-out can take 30+ seconds; if
@@ -564,6 +568,31 @@ class SearchFrame(wx.Frame):
         sizer.Add(dl_row, 0, wx.ALL, pad)
 
         panel.SetSizer(sizer)
+        self._fit_to_content(panel, sizer)
+
+    def _fit_to_content(self, panel, sizer) -> None:
+        """Open wide enough for the filter row, and never narrower.
+
+        The filter grid is a fixed number of columns, so on some sites
+        its natural width exceeds the window's shipped 820px and the
+        right-hand filters were drawn off the edge with no scrollbar to
+        reach them. Size to the content instead, clamped to the display
+        so a small screen still gets a usable window.
+        """
+        needed = sizer.GetMinSize()
+        try:
+            area = wx.Display(
+                max(0, wx.Display.GetFromWindow(self))
+            ).GetClientArea()
+            max_w, max_h = area.width, area.height
+        except Exception:
+            max_w, max_h = 1366, 768
+        width = min(max(needed.width, 820), max_w)
+        height = min(max(needed.height, 640), max_h)
+        # Below this, controls clip rather than reflow.
+        self.SetMinSize((min(needed.width, max_w), 420))
+        self.SetSize((width, height))
+        panel.Layout()
 
     # ── Delegates ─────────────────────────────────────────────
 
@@ -815,7 +844,10 @@ class SearchFrame(wx.Frame):
         ):
             self._log("Error: Please enter a search query.")
             return
-        self.main_frame._set_busy(True, kind="search")
+        self._busy_token = object()
+        self.main_frame._set_busy(
+            True, kind="search", owner=self._busy_token,
+        )
         self.results_ctrl.DeleteAllItems()
         self.summary_ctrl.SetValue("")
         self.results = []
@@ -859,7 +891,10 @@ class SearchFrame(wx.Frame):
     def _on_load_more(self):
         if self.main_frame._downloading or self.last_query is None:
             return
-        self.main_frame._set_busy(True, kind="search")
+        self._busy_token = object()
+        self.main_frame._set_busy(
+            True, kind="search", owner=self._busy_token,
+        )
         self._log(f"Loading page {self.next_page}...")
         self._spawn_search_worker(
             self.last_query, self.last_filters,
@@ -926,12 +961,19 @@ class SearchFrame(wx.Frame):
                 wx.CallAfter(
                     self._on_search_finished, job, None, 0, str(exc), tb,
                 )
+            else:
+                self._release_busy()
             return
         if self._alive:
             wx.CallAfter(
                 self._on_search_finished,
                 job, page_results, next_page, None, None,
             )
+        else:
+            # The window closed while this search was running. Nobody
+            # will run the completion callback, so settle the busy flag
+            # here or the whole app stays blocked until restart.
+            self._release_busy()
 
     def _on_search_finished(self, job, page_results, next_page, error, tb):
         """Single main-thread completion callback for the search worker.
@@ -947,6 +989,7 @@ class SearchFrame(wx.Frame):
           and trigger a partial double-search.
         """
         if not self or not self._alive:
+            self._release_busy()
             return
         if job.generation != self._search_generation:
             return
@@ -959,7 +1002,7 @@ class SearchFrame(wx.Frame):
                 return
             self._populate_results(page_results, next_page, job.append)
         finally:
-            self.main_frame._set_busy(False)
+            self._release_busy()
 
     def _show_search_error(self, message: str) -> None:
         # ``not self`` catches the wx C++ peer being torn down via
@@ -1453,11 +1496,32 @@ class SearchFrame(wx.Frame):
 
     # ── Close ─────────────────────────────────────────────────
 
+    def _release_busy(self) -> None:
+        """Give up this window's claim on the global busy flag.
+
+        Safe from any thread and safe to call more than once: the main
+        frame ignores a release from an owner that no longer holds it,
+        so a straggling worker cannot unblock a newer operation.
+        """
+        token = self._busy_token
+        if token is None:
+            return
+        self._busy_token = None
+        try:
+            self.main_frame._set_busy(False, owner=token)
+        except RuntimeError:
+            # Main frame torn down; nothing left to unblock.
+            pass
+
     def _on_close(self, event):
         # Flip _alive *before* event.Skip() so any worker-thread
         # CallAfter that fires between here and Destroy() short-circuits
         # at its first line.
         self._alive = False
+        # A search still running owns the app's busy flag. Releasing it
+        # here is what stops a closed search window from leaving every
+        # download and search blocked until restart.
+        self._release_busy()
         try:
             self.save_state()
         except Exception:

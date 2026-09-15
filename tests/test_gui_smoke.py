@@ -562,10 +562,21 @@ def test_updating_a_file_does_not_change_saved_download_settings(
         monkeypatch.setattr(
             frame, "_run_download", lambda *a, **kw: recorded.update(kw),
         )
-        monkeypatch.setattr(frame, "_enqueue_site_job", lambda url, job: job())
+        # The queue call now carries the export intent, so a second
+        # request for the same story with a different format or
+        # destination is not silently joined to this one.
+        enqueued = {}
+
+        def fake_enqueue(url, job, **kwargs):
+            enqueued.update(kwargs)
+            return job()
+
+        monkeypatch.setattr(frame, "_enqueue_site_job", fake_enqueue)
 
         frame._begin_update_for_path(str(story))
 
+        assert enqueued["update_path"] == story
+        assert enqueued["params"].fmt == "txt"
         assert recorded["params"].raw_output_dir == str(story.parent)
         assert recorded["params"].fmt == "txt"
         assert frame.output_ctrl.GetValue() == "/tmp/library"

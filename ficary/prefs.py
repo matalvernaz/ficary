@@ -8,7 +8,13 @@ behaves the same as it always has. Either way the accessor methods
 below stay identical.
 """
 
+import logging
 import re as _re
+from pathlib import Path
+
+from . import portable
+
+logger = logging.getLogger(__name__)
 
 
 def llm_provider_pref_keys(provider: str) -> tuple[str, str, str]:
@@ -271,6 +277,63 @@ DEFAULTS = {
 }
 
 
+def _native_config_collides(wx) -> bool:
+    """Would wx's native per-user config file be our data *directory*?
+
+    On Linux ``wx.FileConfig.GetLocalFileName("ficary")`` is
+    ``~/.ficary`` — the same path :mod:`ficary.portable` uses for the
+    data directory. wx then tries to write a file over a directory,
+    every ``Flush`` fails with "Is a directory", and settings looked
+    saved until the next launch. Where the native location is a real
+    file (Windows registry, macOS preferences) it is left alone.
+    """
+    if wx.GetApp() is None:
+        # Without a running app wx cannot resolve the standard paths,
+        # and constructing a FileConfig raises. Leave the decision to
+        # the caller's fallback.
+        return False
+    try:
+        native = Path(wx.FileConfig.GetLocalFileName("ficary"))
+    except Exception:
+        return False
+    if native.is_dir():
+        return True
+    try:
+        return native.resolve() == portable.portable_root().resolve()
+    except OSError:
+        return False
+
+
+def _migrate_native_wx_config(cfg) -> None:
+    """Copy anything readable from the native store into our own file.
+
+    Only fires into an empty store. On the platform this exists for the
+    native store never persisted anything, so this is usually a no-op —
+    but a user whose native path *did* work before must not lose their
+    settings when the file moves.
+    """
+    try:
+        import wx
+
+        if cfg.GetNumberOfEntries() > 0:
+            return
+        native = wx.Config("ficary")
+        more, key, index = native.GetFirstEntry()
+        copied = 0
+        while more:
+            cfg.Write(key, native.Read(key, ""))
+            copied += 1
+            more, key, index = native.GetNextEntry(index)
+        if copied:
+            cfg.Flush()
+            logger.info(
+                "Migrated %d preference(s) from the native store to %s",
+                copied, portable.settings_file(),
+            )
+    except Exception:
+        logger.debug("native preference migration failed", exc_info=True)
+
+
 def _migrate_legacy_wx_config(cfg) -> None:
     """First run under the new name: copy prefs from the pre-rename
     ``wx.Config("ffn-dl")`` store so pip/dev users keep their settings.
@@ -321,8 +384,7 @@ class Prefs:
     """Thin wrapper over wx.Config with string and bool accessors."""
 
     def __init__(self):
-        from . import portable
-
+        self.last_save_error = ""
         # Portable frozen build: keep settings.ini next to the exe
         # (or in the writable-fallback dir). Pip-installed / dev mode
         # uses the platform default so users keep their existing prefs.
@@ -337,14 +399,25 @@ class Prefs:
         except ImportError:
             return
 
-        if portable.is_frozen():
-            self._cfg = wx.FileConfig(
-                appName="ficary",
-                localFilename=str(portable.settings_file()),
-                style=wx.CONFIG_USE_LOCAL_FILE,
-            )
-        else:
-            self._cfg = wx.Config("ficary")
+        try:
+            if portable.is_frozen() or _native_config_collides(wx):
+                self._cfg = wx.FileConfig(
+                    appName="ficary",
+                    localFilename=str(portable.settings_file()),
+                    style=wx.CONFIG_USE_LOCAL_FILE,
+                )
+                if not portable.is_frozen():
+                    _migrate_native_wx_config(self._cfg)
+            else:
+                self._cfg = wx.Config("ficary")
+        except Exception:
+            # wx is importable but unusable here — most often a CLI
+            # process with no wx.App. Same read-only fallback as a
+            # wx-less install: defaults in, sets ignored.
+            logger.debug("preferences store unavailable", exc_info=True)
+            self._cfg = None
+            return
+        if not portable.is_frozen():
             _migrate_legacy_wx_config(self._cfg)
 
         _migrate_output_dir_to_library(self._cfg)
@@ -358,8 +431,8 @@ class Prefs:
     def set(self, key: str, value) -> None:
         if self._cfg is None:
             return
-        self._cfg.Write(key, "" if value is None else str(value))
-        self._cfg.Flush()
+        written = self._cfg.Write(key, "" if value is None else str(value))
+        self._record_save_result(key, written and self._cfg.Flush())
 
     def get_bool(self, key: str, default: bool = None) -> bool:
         if default is None:
@@ -371,8 +444,24 @@ class Prefs:
     def set_bool(self, key: str, value: bool) -> None:
         if self._cfg is None:
             return
-        self._cfg.WriteBool(key, bool(value))
-        self._cfg.Flush()
+        written = self._cfg.WriteBool(key, bool(value))
+        self._record_save_result(key, written and self._cfg.Flush())
+
+    def _record_save_result(self, key: str, ok) -> None:
+        """Remember a failed write instead of letting it pass silently.
+
+        ``Write``/``Flush`` return False when the store cannot be
+        written. Ignoring that is how a whole session's settings could
+        appear saved and be gone at the next launch.
+        """
+        if ok:
+            self.last_save_error = ""
+            return
+        self.last_save_error = (
+            f"Could not save the {key!r} setting. Check that "
+            f"{portable.settings_file()} is writable."
+        )
+        logger.warning("%s", self.last_save_error)
 
     def flush(self) -> None:
         """Force any in-memory wx.Config buffer to disk/registry now.

@@ -106,21 +106,25 @@ everything.
 ## Getting started
 
 Start Ficary — double-click the app, or run `ficary` with no
-arguments. The main window is a download form:
+arguments. The main window is your library. To download a story:
 
-1. Paste a story link into the URL box.
-2. Pick an output format — EPUB, HTML, plain text, or audiobook.
-3. Press **Download**.
+1. Open **File → Add Story...** (Ctrl+D).
+2. Paste a story link into the URL box.
+3. Pick an output format — EPUB, HTML, plain text, or audiobook.
+4. Press **Download**.
 
-The finished file lands in your output folder. If you've set a
-library folder in Preferences, downloads are sorted into fandom
-subfolders automatically (see [Your library](#your-library)).
+The first download asks where your library folder should live if you
+haven't chosen one yet. After that, downloads are sorted into fandom
+subfolders automatically (see [Your library](#your-library)), and the
+new story appears in the library list behind the Add Story window.
 
 A quick tour of the menus:
 
-- **File** — update a single downloaded file with new chapters
-  (Ctrl+Shift+F), re-download one from scratch (Ctrl+Shift+R), or
-  download a whole list of links from a text file (Ctrl+Shift+L).
+- **File** — open the Add Story window (Ctrl+D), update a single
+  downloaded file with new chapters (Ctrl+Shift+F), re-download one
+  from scratch (Ctrl+Shift+R), or add every story behind a listing
+  page — an author profile, AO3 series, tag listing, FFN community or
+  Wattpad reading list (Ctrl+Shift+L).
 - **Edit** — Preferences (Ctrl+,) and Optional Features.
 - **Search** — find stories without leaving the app; see the next
   section.
@@ -210,8 +214,8 @@ screen reader and audiobook export work exactly the same.
 Point Ficary at a folder of downloaded stories and it becomes a
 library: every story is indexed with its title, author, fandom, and
 source, and a set of tools builds on top of that. Set your library
-folder in Preferences or the Library window (Ctrl+L), then scan it
-once (the window's Scan button, or `ficary --scan-library ~/Fanfic`).
+folder in the Library window (Ctrl+L), then scan it once (the
+window's Scan button, or `ficary --scan-library ~/Fanfic`).
 
 ### Browsing
 

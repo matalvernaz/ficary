@@ -444,6 +444,10 @@ class MainFrame(wx.Frame):
         # manual AO3 download can run while an FFN sweep is in flight.
         self._global_busy = False
         self._busy_kind = None
+        # Which operation currently holds the global busy flag, when it
+        # claimed ownership. Lets a late callback tell "still mine" from
+        # "somebody else started something".
+        self._busy_owner = None
         # Picker-flow ownership transfer flag. ``_run_picker_download``
         # runs on a raw worker thread (not the per-site queue) and
         # spawns a follow-up ``_run_picked_batch`` thread when the user
@@ -1191,7 +1195,7 @@ class MainFrame(wx.Frame):
         # queue snapshot, so those writes silently no-op.
         pass
 
-    def _set_busy(self, busy, kind=None):
+    def _set_busy(self, busy, kind=None, owner=None):
         """Toggle the *global* busy flag — used by operations that
         don't route through the per-site download queue (searches,
         voice previews, batch picker flows, series-merge runs).
@@ -1203,6 +1207,12 @@ class MainFrame(wx.Frame):
         (or ``None`` when clearing). It drives the close-confirmation
         prompt's message so users see *what* they're cancelling, not a
         generic "work in progress" banner.
+
+        ``owner`` identifies the operation holding busy. A caller that
+        passes one may only clear busy while it still owns it, so a
+        late callback from a job the user already finished with cannot
+        unblock the app in the middle of a newer one. Callers that pass
+        no owner keep the old unconditional behaviour.
         """
         # Flip the busy state SYNCHRONOUSLY so callers that immediately
         # read ``self._global_busy`` see the updated value. Earlier the
@@ -1211,8 +1221,13 @@ class MainFrame(wx.Frame):
         # and both spawn workers. Bool assignment is atomic in CPython
         # so cross-thread sets are safe; only the UI refresh has to
         # marshal back to the main thread.
+        if not busy and owner is not None:
+            current = getattr(self, "_busy_owner", None)
+            if current is not None and current is not owner:
+                return
         self._global_busy = bool(busy)
         self._busy_kind = kind if busy else None
+        self._busy_owner = owner if busy else None
         wx.CallAfter(self._refresh_busy_ui)
 
     def _refresh_busy_ui(self):
@@ -3277,9 +3292,16 @@ class MainFrame(wx.Frame):
             self.output_ctrl.SetValue(best_root)
             self._log(f"Library root set: {best_root}")
 
-    def _export_story(self, story, params: _DownloadParams):
+    def _export_story(self, story, params: _DownloadParams,
+                      update_path=None):
         """Run the configured exporter for ``story`` using the snapshot
         in ``params``.
+
+        ``update_path`` is the exact file an update must replace. Without
+        it the exporter re-derived the name from the upstream title and
+        the filename template, so updating a book the user had renamed
+        left the original untouched and wrote a second copy under the
+        templated name.
 
         Worker-thread safe: every value that used to be read live from
         ``self.<x>_ctrl`` now comes from the immutable snapshot. Audio
@@ -3288,7 +3310,11 @@ class MainFrame(wx.Frame):
         path never has to call ``self._selected_attribution_backend``
         or ``self._llm_config_for_render`` off-main.
         """
-        output_dir = self._resolve_output_dir(story, params)
+        # An update owns its destination; autosort must not move it.
+        output_dir = (
+            str(Path(update_path).parent) if update_path
+            else self._resolve_output_dir(story, params)
+        )
 
         if params.fmt == "audio":
             from .tts import generate_audiobook
@@ -3371,6 +3397,7 @@ class MainFrame(wx.Frame):
             chapter_notes=params.chapter_notes,
             llm_config=an_llm_config,
             progress=self._log,
+            output_path=update_path,
         )
         self._auto_index_download(path)
         return path
@@ -3600,7 +3627,7 @@ class MainFrame(wx.Frame):
             self._log(f"  Author:   {story.author}")
             self._log(f"  Chapters: {len(story.chapters)}")
 
-            path = self._export_story(story, params)
+            path = self._export_story(story, params, update_path=update_path)
             self._log(f"\nDone! Saved to: {path}")
             # Hand back what was written. Another caller may be joined to
             # this job through the per-site queue's single-flight

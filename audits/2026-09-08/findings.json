@@ -7,8 +7,8 @@
   "counts": {
     "P1": 15,
     "P2": 35,
-    "open": 25,
-    "fixed": 25,
+    "open": 9,
+    "fixed": 41,
     "rejected": 0
   },
   "counting_note": "50 confirmed findings, including linked failure modes; not 50 independent root causes. Distribution observations, dependency advisory records, static concerns and UX proposals are separate. Probe success means reproduction completed, not defect repaired.",
@@ -301,7 +301,7 @@
       "id": "L01",
       "priority": "P1",
       "title": "restoring the oldest retained backup deletes it before reading",
-      "status": "open",
+      "status": "fixed",
       "verification": "confirmed_by_targeted_local_probe",
       "detail": "LIBRARY.md#l01",
       "detail_line": 19,
@@ -310,13 +310,14 @@
       "evidence_files": [
         "evidence/library_repros.py",
         "evidence/library_repros.log"
-      ]
+      ],
+      "resolved_in": "6432a83"
     },
     {
       "id": "L02",
       "priority": "P2",
       "title": "a poll completion undoes concurrent user edits to a watch",
-      "status": "open",
+      "status": "fixed",
       "verification": "confirmed_by_targeted_local_probe",
       "detail": "LIBRARY.md#l02",
       "detail_line": 27,
@@ -325,13 +326,14 @@
       "evidence_files": [
         "evidence/library_repros.py",
         "evidence/library_repros.log"
-      ]
+      ],
+      "resolved_in": "6432a83"
     },
     {
       "id": "L03",
       "priority": "P2",
       "title": "failed auto-downloads are forgotten rather than retried",
-      "status": "open",
+      "status": "fixed",
       "verification": "confirmed_by_targeted_local_probe",
       "detail": "LIBRARY.md#l03",
       "detail_line": 35,
@@ -340,13 +342,14 @@
       "evidence_files": [
         "evidence/library_repros.py",
         "evidence/library_repros.log"
-      ]
+      ],
+      "resolved_in": "6432a83"
     },
     {
       "id": "L04",
       "priority": "P2",
       "title": "notification failures silently consume the alert",
-      "status": "open",
+      "status": "fixed",
       "verification": "confirmed_by_targeted_local_probe",
       "detail": "LIBRARY.md#l04",
       "detail_line": 43,
@@ -355,13 +358,14 @@
       "evidence_files": [
         "evidence/library_repros.py",
         "evidence/library_repros.log"
-      ]
+      ],
+      "resolved_in": "6432a83"
     },
     {
       "id": "L05",
       "priority": "P2",
       "title": "toggling autopoll off then on during a poll leaves it stopped",
-      "status": "open",
+      "status": "fixed",
       "verification": "confirmed_by_targeted_local_probe",
       "detail": "LIBRARY.md#l05",
       "detail_line": 51,
@@ -370,13 +374,14 @@
       "evidence_files": [
         "evidence/library_repros.py",
         "evidence/library_repros.log"
-      ]
+      ],
+      "resolved_in": "6432a83"
     },
     {
       "id": "L06",
       "priority": "P2",
       "title": "normal rescans erase manual adult and abandoned marks",
-      "status": "open",
+      "status": "fixed",
       "verification": "confirmed_by_targeted_local_probe",
       "detail": "LIBRARY.md#l06",
       "detail_line": 59,
@@ -387,13 +392,14 @@
         "evidence/library_repros.log",
         "evidence/library_integration_repros.py",
         "evidence/library_integration_repros.log"
-      ]
+      ],
+      "resolved_in": "6432a83"
     },
     {
       "id": "L07",
       "priority": "P2",
       "title": "doctor heals stale cache signatures without refreshing cached metadata",
-      "status": "open",
+      "status": "fixed",
       "verification": "confirmed_by_targeted_local_probe",
       "detail": "LIBRARY.md#l07",
       "detail_line": 67,
@@ -402,13 +408,14 @@
       "evidence_files": [
         "evidence/library_repros.py",
         "evidence/library_repros.log"
-      ]
+      ],
+      "resolved_in": "6432a83"
     },
     {
       "id": "L08",
       "priority": "P2",
       "title": "cache quarantine failures fall back to irreversible deletion",
-      "status": "open",
+      "status": "fixed",
       "verification": "confirmed_by_targeted_local_probe",
       "detail": "LIBRARY.md#l08",
       "detail_line": 75,
@@ -417,13 +424,14 @@
       "evidence_files": [
         "evidence/library_repros.py",
         "evidence/library_repros.log"
-      ]
+      ],
+      "resolved_in": "6432a83"
     },
     {
       "id": "L09",
       "priority": "P2",
       "title": "fresh watch downloads bypass the configured library and adult routing",
-      "status": "open",
+      "status": "fixed",
       "verification": "confirmed_by_targeted_local_probe",
       "detail": "LIBRARY.md#l09",
       "detail_line": 83,
@@ -432,13 +440,14 @@
       "evidence_files": [
         "evidence/library_integration_repros.py",
         "evidence/library_integration_repros.log"
-      ]
+      ],
+      "resolved_in": "6432a83"
     },
     {
       "id": "L10",
       "priority": "P2",
       "title": "joining a successful GUI download reports auto-download failure",
-      "status": "open",
+      "status": "fixed",
       "verification": "confirmed_by_targeted_local_probe",
       "detail": "LIBRARY.md#l10",
       "detail_line": 93,
@@ -447,13 +456,14 @@
       "evidence_files": [
         "evidence/library_integration_repros.py",
         "evidence/library_integration_repros.log"
-      ]
+      ],
+      "resolved_in": "6432a83"
     },
     {
       "id": "L11",
       "priority": "P2",
       "title": "two first-time index writers silently overwrite one another",
-      "status": "open",
+      "status": "fixed",
       "verification": "confirmed_by_targeted_local_probe",
       "detail": "LIBRARY.md#l11",
       "detail_line": 101,
@@ -462,13 +472,14 @@
       "evidence_files": [
         "evidence/library_integration_repros.py",
         "evidence/library_integration_repros.log"
-      ]
+      ],
+      "resolved_in": "6432a83"
     },
     {
       "id": "L12",
       "priority": "P2",
       "title": "malformed index files still crash recovery-facing consumers",
-      "status": "open",
+      "status": "fixed",
       "verification": "confirmed_by_targeted_local_probe",
       "detail": "LIBRARY.md#l12",
       "detail_line": 109,
@@ -477,13 +488,14 @@
       "evidence_files": [
         "evidence/library_integration_repros.py",
         "evidence/library_integration_repros.log"
-      ]
+      ],
+      "resolved_in": "6432a83"
     },
     {
       "id": "L13",
       "priority": "P2",
       "title": "doctor drops a story even when an indexed duplicate still exists",
-      "status": "open",
+      "status": "fixed",
       "verification": "confirmed_by_targeted_local_probe",
       "detail": "LIBRARY.md#l13",
       "detail_line": 117,
@@ -492,13 +504,14 @@
       "evidence_files": [
         "evidence/library_integration_repros.py",
         "evidence/library_integration_repros.log"
-      ]
+      ],
+      "resolved_in": "6432a83"
     },
     {
       "id": "L14",
       "priority": "P2",
       "title": "library template length limits count characters rather than filesystem bytes",
-      "status": "open",
+      "status": "fixed",
       "verification": "confirmed_by_targeted_local_probe",
       "detail": "LIBRARY.md#l14",
       "detail_line": 125,
@@ -507,13 +520,14 @@
       "evidence_files": [
         "evidence/library_integration_repros.py",
         "evidence/library_integration_repros.log"
-      ]
+      ],
+      "resolved_in": "6432a83"
     },
     {
       "id": "L15",
       "priority": "P2",
       "title": "reorganization and removal leave stale full-text results",
-      "status": "open",
+      "status": "fixed",
       "verification": "confirmed_by_targeted_local_probe",
       "detail": "LIBRARY.md#l15",
       "detail_line": 133,
@@ -522,13 +536,14 @@
       "evidence_files": [
         "evidence/library_integration_repros.py",
         "evidence/library_integration_repros.log"
-      ]
+      ],
+      "resolved_in": "6432a83"
     },
     {
       "id": "L16",
       "priority": "P2",
       "title": "silent-edit scans reuse cached chapters and miss the edits they seek",
-      "status": "open",
+      "status": "fixed",
       "verification": "confirmed_by_targeted_local_probe",
       "detail": "LIBRARY.md#l16",
       "detail_line": 141,
@@ -537,7 +552,8 @@
       "evidence_files": [
         "evidence/library_integration_repros.py",
         "evidence/library_integration_repros.log"
-      ]
+      ],
+      "resolved_in": "6432a83"
     },
     {
       "id": "UX-01",
