@@ -109,6 +109,16 @@ def _job_intent(params, update_path=None) -> str:
     return "\x1f".join(parts)
 
 
+class _RenderCancelled(Exception):
+    """An audiobook render stopped because the user pressed Cancel.
+
+    Distinct from a failure: the download path reports it as the
+    cancellation it is rather than as an error. Defined here so the
+    handler does not have to import the audio stack, which costs about
+    a third of a second at application startup.
+    """
+
+
 logger = logging.getLogger(__name__)
 
 _LOG_FLUSH_INTERVAL_MS = 100
@@ -3317,7 +3327,7 @@ class MainFrame(wx.Frame):
         )
 
         if params.fmt == "audio":
-            from .tts import generate_audiobook
+            from .tts import AudiobookCancelled, generate_audiobook
 
             def audio_progress(current, total, title):
                 self._log(f"  Synthesizing [{current}/{total}] {title}")
@@ -3349,20 +3359,28 @@ class MainFrame(wx.Frame):
                 self._render_cancel = cancel
             wx.CallAfter(self.cancel_render_btn.Enable)
             try:
-                m4b = generate_audiobook(
-                    story, output_dir,
-                    progress_callback=audio_progress,
-                    speech_rate=rate,
-                    attribution_backend=backend,
-                    attribution_model_size=size,
-                    attribution_llm_config=llm_config,
-                    llm_an_config=an_config,
-                    enabled_tts_providers=list(params.enabled_tts_providers),
-                    strip_notes=params.strip_notes,
-                    hr_as_stars=params.hr_as_stars,
-                    chapter_notes=params.chapter_notes,
-                    cancel_event=cancel,
-                )
+                try:
+                    m4b = generate_audiobook(
+                        story, output_dir,
+                        progress_callback=audio_progress,
+                        speech_rate=rate,
+                        attribution_backend=backend,
+                        attribution_model_size=size,
+                        attribution_llm_config=llm_config,
+                        llm_an_config=an_config,
+                        enabled_tts_providers=list(
+                            params.enabled_tts_providers
+                        ),
+                        strip_notes=params.strip_notes,
+                        hr_as_stars=params.hr_as_stars,
+                        chapter_notes=params.chapter_notes,
+                        cancel_event=cancel,
+                    )
+                except AudiobookCancelled as exc:
+                    # Translate here, where tts is already imported, so
+                    # the outer handler doesn't drag the whole audio
+                    # stack into application startup.
+                    raise _RenderCancelled(str(exc)) from exc
             finally:
                 with self._render_cancel_lock:
                     if cancel in self._render_cancels:
@@ -3636,6 +3654,11 @@ class MainFrame(wx.Frame):
                 ok=True, saved_paths=[str(path)] if path else [],
             )
 
+        except _RenderCancelled as exc:
+            # The user asked for this. Reporting it as an error reads
+            # like the render broke.
+            self._log(f"\n{exc}")
+            return DownloadOutcome(ok=False, reason="cancelled")
         except Exception as e:
             self._log(f"\nError: {e}")
             return DownloadOutcome(ok=False, reason=str(e))

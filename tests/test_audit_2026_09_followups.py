@@ -250,3 +250,97 @@ def test_a_cancelled_library_sweep_does_not_report_completion():
     assert "cancelled" in joined
     assert "update-all complete" not in joined
     assert "not checked" in joined, "say how much of the library was skipped"
+
+
+def test_a_cancelled_render_is_reported_as_cancelled_not_as_an_error():
+    """Pressing Cancel is not a failure, and must not read like one."""
+    import sys
+    from types import SimpleNamespace
+    from unittest.mock import MagicMock, patch
+
+    from ficary import gui as gui_mod, tts
+
+    frame = MagicMock()
+    frame._render_cancel = None
+    frame._render_cancels = []
+    frame._render_cancel_lock = __import__("threading").Lock()
+    logged: list[str] = []
+    frame._log = logged.append
+    frame._resolve_output_dir.return_value = "/tmp/unused"
+
+    # The production snapshot type, so this exercises the real call
+    # path instead of a stand-in that drifts from it.
+    params = gui_mod._DownloadParams(
+        fmt="audio", raw_output_dir="/tmp/unused",
+        filename_template="{title}", hr_as_stars=False, strip_notes=False,
+        llm_strip_notes=False, audio_backend="builtin", speech_rate=0,
+    )
+
+    from ficary.models import Chapter, Story
+
+    story = Story(
+        1, "A Story", "Author", "", "https://www.fanfiction.net/s/1",
+        chapters=[Chapter(1, "One", "<p>text</p>")],
+    )
+
+    class _Scraper:
+        """A plain double: a MagicMock answers every predicate truthily
+        and the download is routed into the author/series branches."""
+
+        site_name = "ffn"
+
+        def download(self, *a, **k):
+            return story
+
+        @staticmethod
+        def parse_story_id(url_or_id):
+            return 1
+
+        @staticmethod
+        def is_author_url(url):
+            return False
+
+        @staticmethod
+        def is_series_url(url):
+            return False
+
+        @staticmethod
+        def is_bookmarks_url(url):
+            return False
+
+    frame._scraper_for.return_value = _Scraper()
+    frame._url_opens_picker.return_value = False
+    # The real export, so the translation from the audio stack's
+    # cancellation to the download path's is actually exercised.
+    frame._export_story = lambda *a, **k: gui_mod.MainFrame._export_story(
+        frame, *a, **k,
+    )
+
+    def cancelled(*a, **k):
+        raise tts.AudiobookCancelled("Audiobook render cancelled by user.")
+
+    with patch.object(tts, "generate_audiobook", cancelled), \
+         patch("ficary.gui.wx.CallAfter", side_effect=lambda cb, *a, **k: cb(*a, **k)):
+        outcome = gui_mod.MainFrame._run_download(
+            frame, "https://www.fanfiction.net/s/1", params=params,
+        )
+
+    assert outcome.ok is False
+    assert outcome.reason == "cancelled"
+    joined = "\n".join(logged)
+    assert "cancelled" in joined.lower()
+    assert "Error:" not in joined
+
+
+def test_the_audio_stack_is_not_imported_at_application_startup():
+    """It costs about a third of a second, and most launches never
+    render audio."""
+    import subprocess
+    import sys
+
+    out = subprocess.run(
+        [sys.executable, "-c",
+         "import sys, ficary.gui; print('ficary.tts' in sys.modules)"],
+        capture_output=True, text=True, check=True,
+    )
+    assert out.stdout.strip() == "False"
