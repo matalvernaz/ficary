@@ -1318,6 +1318,7 @@ class SearchFrame(wx.Frame):
             url,
             lambda u=url, p=dl_params:
                 self.main_frame._run_download(u, params=p),
+            params=dl_params,
         )
 
     def _download_batch(self, rows: list[dict]) -> None:
@@ -1446,6 +1447,7 @@ class SearchFrame(wx.Frame):
                     picked,
                     lambda p=picked, dp=dl_params:
                         self.main_frame._run_download(p, params=dp),
+                    params=dl_params,
                 )
         dlg.Destroy()
 

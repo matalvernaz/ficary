@@ -73,6 +73,41 @@ class _DownloadParams:
     # Prefs-only, same rationale as html_style.
     chapter_notes: str = "keep"
 
+    def export_identity(self) -> tuple:
+        """The settings that decide which artifact this job produces.
+
+        Two clicks on the same story are only the same job when they
+        would write the same file. Deduplicating on the story URL alone
+        meant asking for an EPUB and then a TXT of the same fic silently
+        returned the EPUB twice: the second request was joined to the
+        first and its format and destination were discarded.
+        """
+        return (
+            self.fmt,
+            self.raw_output_dir,
+            self.filename_template,
+            self.hr_as_stars,
+            self.strip_notes,
+            self.html_style,
+            self.chapter_notes,
+            self.send_to_abs,
+        )
+
+
+def _job_intent(params, update_path=None) -> str:
+    """A tag naming the artifact a queued download job will produce.
+
+    Empty when the caller has no snapshot to offer, which keeps the old
+    "same story URL" behaviour for callers that genuinely mean the same
+    job (an accidental double-click).
+    """
+    parts = []
+    if params is not None and hasattr(params, "export_identity"):
+        parts.extend(str(v) for v in params.export_identity())
+    if update_path is not None:
+        parts.append(f"update:{update_path}")
+    return "\x1f".join(parts)
+
 
 logger = logging.getLogger(__name__)
 
@@ -1219,7 +1254,8 @@ class MainFrame(wx.Frame):
             # here. Nothing sensible to do besides drop it.
             pass
 
-    def _enqueue_site_job(self, url, job_fn, *, kind="download"):
+    def _enqueue_site_job(self, url, job_fn, *, kind="download",
+                          params=None, update_path=None):
         """Queue ``job_fn`` on the per-site worker for ``url``'s host.
 
         The body runs on a ``dlq-<site>`` thread, so any ``self._log``
@@ -1247,8 +1283,13 @@ class MainFrame(wx.Frame):
                 )
         # Single-flight: a double-click, or a manual download of a story
         # a bulk update already queued, joins the in-flight job instead
-        # of downloading it twice.
+        # of downloading it twice. The requested artifact is part of the
+        # identity — same story, different format or folder, is a
+        # different job.
         dedupe_key = canonical_url(url) or url
+        intent = _job_intent(params, update_path)
+        if intent:
+            dedupe_key = f"{dedupe_key}|{intent}"
         return DownloadQueues.enqueue(site_name, job_fn, dedupe_key=dedupe_key)
 
     def _is_batch_url(self, url) -> bool:
@@ -2401,6 +2442,7 @@ class MainFrame(wx.Frame):
         self._log(f"Starting download: {url}")
         self._enqueue_site_job(
             url, lambda u=url, p=params: self._run_download(u, params=p),
+            params=params,
         )
         self._dismiss_add_story()
 
@@ -2454,6 +2496,7 @@ class MainFrame(wx.Frame):
             self._enqueue_site_job(
                 url,
                 lambda u=url, p=params: self._run_download(u, params=p),
+                params=params,
             )
 
     def _on_preview_voices(self, event):
@@ -2624,6 +2667,8 @@ class MainFrame(wx.Frame):
                 refetch_all=refetch_all,
                 params=params,
             ),
+            params=params,
+            update_path=update_path,
         )
 
     def _on_update_refetch_all(self, event):
@@ -2858,6 +2903,7 @@ class MainFrame(wx.Frame):
         self._enqueue_site_job(
             url,
             lambda u=url, p=params: self._run_download(u, params=p),
+            params=params,
         )
 
     # ── Download worker ──────────────────────────────────────

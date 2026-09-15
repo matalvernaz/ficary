@@ -6,7 +6,10 @@
   "application_changes": false,
   "counts": {
     "P1": 15,
-    "P2": 35
+    "P2": 35,
+    "open": 28,
+    "fixed": 22,
+    "rejected": 0
   },
   "counting_note": "50 confirmed findings, including linked failure modes; not 50 independent root causes. Distribution observations, dependency advisory records, static concerns and UX proposals are separate. Probe success means reproduction completed, not defect repaired.",
   "repair_groups": [
@@ -120,7 +123,7 @@
       "id": "CORE-01",
       "priority": "P1",
       "title": "filename collisions overwrite different stories; update staging can delete an unrelated book",
-      "status": "open",
+      "status": "fixed",
       "verification": "confirmed_by_targeted_local_probe",
       "detail": "CORE.md#core-01",
       "detail_line": 11,
@@ -131,13 +134,14 @@
         "evidence/core_repros.json",
         "evidence/core_entrypoint_repros.py",
         "evidence/core_entrypoint_repros.json"
-      ]
+      ],
+      "resolved_in": "b485762"
     },
     {
       "id": "CORE-02",
       "priority": "P1",
       "title": "ordinal chapter caches substitute old content after insertion/reordering",
-      "status": "open",
+      "status": "fixed",
       "verification": "confirmed_by_targeted_local_probe",
       "detail": "CORE.md#core-02",
       "detail_line": 21,
@@ -146,13 +150,14 @@
       "evidence_files": [
         "evidence/core_repros.py",
         "evidence/core_repros.json"
-      ]
+      ],
+      "resolved_in": "b485762"
     },
     {
       "id": "CORE-03",
       "priority": "P1",
       "title": "ScribbleHub TOC failure silently turns a recent-chapter excerpt into a complete book",
-      "status": "open",
+      "status": "fixed",
       "verification": "confirmed_by_targeted_local_probe",
       "detail": "CORE.md#core-03",
       "detail_line": 29,
@@ -161,13 +166,14 @@
       "evidence_files": [
         "evidence/core_repros.py",
         "evidence/core_repros.json"
-      ]
+      ],
+      "resolved_in": "b485762"
     },
     {
       "id": "CORE-04",
       "priority": "P2",
       "title": "SubscribeStar CLI audiobook command raises NameError; its progress callback also has the wrong arity",
-      "status": "open",
+      "status": "fixed",
       "verification": "confirmed_by_targeted_local_probe",
       "detail": "CORE.md#core-04",
       "detail_line": 37,
@@ -176,13 +182,14 @@
       "evidence_files": [
         "evidence/core_repros.py",
         "evidence/core_repros.json"
-      ]
+      ],
+      "resolved_in": "b485762"
     },
     {
       "id": "CORE-05",
       "priority": "P1",
       "title": "merged SubscribeStar stories lose their source identity and cannot be updated correctly",
-      "status": "open",
+      "status": "fixed",
       "verification": "confirmed_by_targeted_local_probe",
       "detail": "CORE.md#core-05",
       "detail_line": 45,
@@ -191,13 +198,14 @@
       "evidence_files": [
         "evidence/core_repros.py",
         "evidence/core_repros.json"
-      ]
+      ],
+      "resolved_in": "b485762"
     },
     {
       "id": "CORE-06",
       "priority": "P2",
       "title": "Google Doc plain text is reinterpreted as HTML and loses literal content",
-      "status": "open",
+      "status": "fixed",
       "verification": "confirmed_by_targeted_local_probe",
       "detail": "CORE.md#core-06",
       "detail_line": 53,
@@ -206,13 +214,14 @@
       "evidence_files": [
         "evidence/core_repros.py",
         "evidence/core_repros.json"
-      ]
+      ],
+      "resolved_in": "b485762"
     },
     {
       "id": "CORE-07",
       "priority": "P2",
       "title": "newer sites are absent from the shared paste/clipboard story registry",
-      "status": "open",
+      "status": "fixed",
       "verification": "confirmed_by_targeted_local_probe",
       "detail": "CORE.md#core-07",
       "detail_line": 61,
@@ -221,7 +230,8 @@
       "evidence_files": [
         "evidence/core_repros.py",
         "evidence/core_repros.json"
-      ]
+      ],
+      "resolved_in": "b485762"
     },
     {
       "id": "CORE-08",
@@ -272,7 +282,7 @@
       "id": "CORE-11",
       "priority": "P1",
       "title": "debug diagnostics write session cookies into logs",
-      "status": "open",
+      "status": "fixed",
       "verification": "confirmed_by_targeted_local_probe",
       "detail": "CORE.md#core-11",
       "detail_line": 99,
@@ -281,7 +291,8 @@
       "evidence_files": [
         "evidence/core_logging_probe.py",
         "evidence/core_logging_probe.json"
-      ]
+      ],
+      "resolved_in": "b485762"
     },
     {
       "id": "L01",
@@ -665,7 +676,7 @@
       "id": "AUD-A01",
       "priority": "P1",
       "title": "SMTP TLS never verifies the mail server certificate",
-      "status": "open",
+      "status": "fixed",
       "verification": "confirmed_by_targeted_local_probe",
       "detail": "AUDIO.md#aud-a01",
       "detail_line": 23,
@@ -674,13 +685,14 @@
       "evidence_files": [
         "evidence/audio-boundaries-probe.py",
         "evidence/audio-boundaries-probe.txt"
-      ]
+      ],
+      "resolved_in": "b485762"
     },
     {
       "id": "AUD-A02",
       "priority": "P1",
       "title": "Piper binary installation fails on nested Unix archives and then reports a directory as installed",
-      "status": "open",
+      "status": "fixed",
       "verification": "confirmed_by_targeted_local_probe",
       "detail": "AUDIO.md#aud-a02",
       "detail_line": 32,
@@ -689,13 +701,14 @@
       "evidence_files": [
         "evidence/audio-boundaries-probe.py",
         "evidence/audio-boundaries-probe.txt"
-      ]
+      ],
+      "resolved_in": "b485762"
     },
     {
       "id": "AUD-A03",
       "priority": "P1",
       "title": "local-only synthesis can silently send story text to Edge",
-      "status": "open",
+      "status": "fixed",
       "verification": "confirmed_by_targeted_local_probe",
       "detail": "AUDIO.md#aud-a03",
       "detail_line": 42,
@@ -704,13 +717,14 @@
       "evidence_files": [
         "evidence/audio-boundaries-probe.py",
         "evidence/audio-boundaries-probe.txt"
-      ]
+      ],
+      "resolved_in": "b485762"
     },
     {
       "id": "AUD-A04",
       "priority": "P2",
       "title": "app voice ignores restored/bookmarked location and does not persist listening progress",
-      "status": "open",
+      "status": "fixed",
       "verification": "confirmed_by_targeted_local_probe",
       "detail": "AUDIO.md#aud-a04",
       "detail_line": 51,
@@ -719,13 +733,14 @@
       "evidence_files": [
         "evidence/audio-reader-probe.py",
         "evidence/audio-reader-probe.txt"
-      ]
+      ],
+      "resolved_in": "b485762"
     },
     {
       "id": "AUD-A05",
       "priority": "P2",
       "title": "delayed voice resolution can restart speech after Stop or a mode switch",
-      "status": "open",
+      "status": "fixed",
       "verification": "confirmed_by_targeted_local_probe",
       "detail": "AUDIO.md#aud-a05",
       "detail_line": 60,
@@ -734,13 +749,14 @@
       "evidence_files": [
         "evidence/audio-reader-probe.py",
         "evidence/audio-reader-probe.txt"
-      ]
+      ],
+      "resolved_in": "b485762"
     },
     {
       "id": "AUD-A06",
       "priority": "P1",
       "title": "incomplete audiobooks are reported successful and their missing speech is permanently cached",
-      "status": "open",
+      "status": "fixed",
       "verification": "confirmed_by_targeted_local_probe",
       "detail": "AUDIO.md#aud-a06",
       "detail_line": 73,
@@ -749,13 +765,14 @@
       "evidence_files": [
         "evidence/audio-cache-race-probe.py",
         "evidence/audio-cache-race-probe.txt"
-      ]
+      ],
+      "resolved_in": "b485762"
     },
     {
       "id": "AUD-A07",
       "priority": "P2",
       "title": "cancellation is ignored during final assembly; preprocessing has no cancellation checkpoints",
-      "status": "open",
+      "status": "fixed",
       "verification": "confirmed_by_targeted_local_probe",
       "detail": "AUDIO.md#aud-a07",
       "detail_line": 83,
@@ -764,13 +781,14 @@
       "evidence_files": [
         "evidence/audio-cache-race-probe.py",
         "evidence/audio-cache-race-probe.txt"
-      ]
+      ],
+      "resolved_in": "b485762"
     },
     {
       "id": "AUD-A08",
       "priority": "P2",
       "title": "an obsolete soundscape build stops the newly selected soundscape",
-      "status": "open",
+      "status": "fixed",
       "verification": "confirmed_by_targeted_local_probe",
       "detail": "AUDIO.md#aud-a08",
       "detail_line": 92,
@@ -779,13 +797,14 @@
       "evidence_files": [
         "evidence/audio-cache-race-probe.py",
         "evidence/audio-cache-race-probe.txt"
-      ]
+      ],
+      "resolved_in": "b485762"
     },
     {
       "id": "AUD-A09",
       "priority": "P2",
       "title": "failed LLM attribution is cached as a successful result and never retried",
-      "status": "open",
+      "status": "fixed",
       "verification": "confirmed_by_targeted_local_probe",
       "detail": "AUDIO.md#aud-a09",
       "detail_line": 102,
@@ -794,13 +813,14 @@
       "evidence_files": [
         "evidence/audio-attribution-probe.py",
         "evidence/audio-attribution-probe.txt"
-      ]
+      ],
+      "resolved_in": "b485762"
     },
     {
       "id": "AUD-A10",
       "priority": "P2",
       "title": "choosing LLM speaker attribution does nothing unless unrelated note stripping is enabled",
-      "status": "open",
+      "status": "fixed",
       "verification": "confirmed_by_targeted_local_probe",
       "detail": "AUDIO.md#aud-a10",
       "detail_line": 112,
@@ -809,13 +829,14 @@
       "evidence_files": [
         "evidence/audio-gui-probe.py",
         "evidence/audio-gui-probe.txt"
-      ]
+      ],
+      "resolved_in": "b485762"
     },
     {
       "id": "AUD-A11",
       "priority": "P2",
       "title": "concurrent audiobook renders overwrite and clear each other's Cancel control",
-      "status": "open",
+      "status": "fixed",
       "verification": "confirmed_by_targeted_local_probe",
       "detail": "AUDIO.md#aud-a11",
       "detail_line": 121,
@@ -824,13 +845,14 @@
       "evidence_files": [
         "evidence/audio-gui-probe.py",
         "evidence/audio-gui-probe.txt"
-      ]
+      ],
+      "resolved_in": "b485762"
     },
     {
       "id": "AUD-A12",
       "priority": "P2",
       "title": "the live-TTS generation token does not prevent playback after Stop",
-      "status": "open",
+      "status": "fixed",
       "verification": "confirmed_by_targeted_local_probe",
       "detail": "AUDIO.md#aud-a12",
       "detail_line": 131,
@@ -839,13 +861,14 @@
       "evidence_files": [
         "evidence/audio-live-stop-probe.py",
         "evidence/audio-live-stop-probe.txt"
-      ]
+      ],
+      "resolved_in": "b485762"
     },
     {
       "id": "AUD-A13",
       "priority": "P2",
       "title": "naturally completed chapters leak live-TTS temporary audio when advancing",
-      "status": "open",
+      "status": "fixed",
       "verification": "confirmed_by_targeted_local_probe",
       "detail": "AUDIO.md#aud-a13",
       "detail_line": 141,
@@ -854,13 +877,14 @@
       "evidence_files": [
         "evidence/audio-reader-probe.py",
         "evidence/audio-reader-probe.txt"
-      ]
+      ],
+      "resolved_in": "b485762"
     },
     {
       "id": "AUD-A14",
       "priority": "P2",
       "title": "reader selects the first installed voice regardless of enabled provider or language",
-      "status": "open",
+      "status": "fixed",
       "verification": "confirmed_by_targeted_local_probe",
       "detail": "AUDIO.md#aud-a14",
       "detail_line": 151,
@@ -869,7 +893,8 @@
       "evidence_files": [
         "evidence/audio-reader-probe.py",
         "evidence/audio-reader-probe.txt"
-      ]
+      ],
+      "resolved_in": "b485762"
     }
   ],
   "distribution_report": "DISTRIBUTION.md"

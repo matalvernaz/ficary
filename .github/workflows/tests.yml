@@ -57,3 +57,31 @@ jobs:
         # xvfb-run gives the GUI smoke tests a virtual display; the rest of
         # the suite ignores it.
         run: xvfb-run -a python -m pytest tests/ -v
+
+      - name: Lint for undefined names and syntax errors
+        # The suite cannot catch a NameError on a branch it never runs;
+        # an unimported ``generate_audiobook`` shipped that way. F/E9 only
+        # — this gate is for real defects, not style.
+        run: |
+          python -m pip install ruff
+          ruff check --select F821,F811,E9 ficary/
+
+  python-floor:
+    # The declared minimum Python must actually be able to import the
+    # application. A PEP 604 annotation in evaluated position made the
+    # previously declared floor fail on a real interpreter, and nothing
+    # noticed because CI only ever ran the newest version.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.10"
+      - name: Install without optional extras
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[epub]"
+      - name: Import and run the CLI
+        run: |
+          python -c "import ficary.cli, ficary.entrypoint"
+          python -m ficary --help
