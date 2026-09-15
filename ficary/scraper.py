@@ -252,6 +252,20 @@ class CookieAuthMixin:
         return bool(getattr(self, "_auth_cookies", None))
 
 
+def _normalise_chapter_title(title: str) -> str:
+    """Fold a chapter title for comparison.
+
+    Sites re-render the same title with different whitespace and case
+    between the listing and the chapter page, and a numeric prefix
+    ("3. Homecoming" vs "Homecoming") moves with the ordinal. Comparing
+    the fuzzy form keeps a cosmetic difference from forcing a refetch
+    of an entire story.
+    """
+    text = (title or "").strip().lower()
+    text = re.sub(r"^\s*\d+\s*[.):-]\s*", "", text)
+    return re.sub(r"\s+", " ", text)
+
+
 def chapter_cache_key(chapter_url) -> Optional[str]:
     """A stable per-chapter cache stem derived from its canonical URL.
 
@@ -1388,7 +1402,21 @@ class BaseScraper:
             )
 
     def _load_chapter_cache(self, story_id, chap_num: int, *,
-                            cache_key: Optional[str] = None) -> Optional[Chapter]:
+                            cache_key: Optional[str] = None,
+                            expect_title: Optional[str] = None,
+                            ) -> Optional[Chapter]:
+        """Return the cached chapter, or ``None`` to fetch it.
+
+        ``expect_title`` is the title the site's *current* chapter list
+        gives this ordinal. Sites that number chapters by position and
+        offer no stable per-chapter id (FFN and the erotica archives
+        built the same way) cannot key the cache on anything better than
+        the ordinal, so an author inserting a chapter silently shifts
+        every later one and the ordinal would serve its predecessor's
+        text. Comparing the title catches that shift: a mismatch is
+        treated as a miss and the chapter is refetched. Pass ``None`` or
+        an empty string when the site offers no title to compare.
+        """
         if not self.use_cache:
             return None
         cache_dir = self._story_cache_dir(story_id)
@@ -1421,7 +1449,20 @@ class BaseScraper:
             data = json.loads(path.read_text(encoding="utf-8"))
             if not isinstance(data, dict):
                 raise TypeError(f"expected JSON object, got {type(data).__name__}")
-            return Chapter(number=chap_num, title=data["title"], html=data["html"])
+            cached_title = data["title"]
+            if (
+                expect_title
+                and cached_title
+                and _normalise_chapter_title(cached_title)
+                != _normalise_chapter_title(expect_title)
+            ):
+                logger.info(
+                    "Chapter %d is now titled %r (cache holds %r); "
+                    "refetching rather than serving the old text",
+                    chap_num, expect_title, cached_title,
+                )
+                return None
+            return Chapter(number=chap_num, title=cached_title, html=data["html"])
         except (ValueError, UnicodeDecodeError, OSError, KeyError, TypeError,
                 RecursionError) as exc:
             # RecursionError: see _load_meta_cache — deeply-nested JSON
@@ -2486,7 +2527,9 @@ class FFNScraper(BaseScraper):
                 continue
             ch_title = chapter_titles.get(str(chap_num), f"Chapter {chap_num}")
 
-            cached = self._load_chapter_cache(story_id, chap_num)
+            cached = self._load_chapter_cache(
+                story_id, chap_num, expect_title=ch_title,
+            )
             if cached is not None:
                 story.chapters.append(cached)
                 if progress_callback:

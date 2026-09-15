@@ -188,7 +188,9 @@ class TGStorytimeScraper(BaseScraper):
                 continue
             ch_title = chapter_titles.get(str(chap_num), f"Chapter {chap_num}")
 
-            cached = self._load_chapter_cache(sid, chap_num)
+            cached = self._load_chapter_cache(
+                sid, chap_num, expect_title=ch_title,
+            )
             if cached is not None:
                 story.chapters.append(cached)
                 if progress_callback:

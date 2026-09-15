@@ -180,7 +180,9 @@ class GiantessWorldScraper(BaseScraper):
                 continue
             ch_title = chapter_titles.get(str(i), "")
 
-            cached = self._load_chapter_cache(sid, i)
+            cached = self._load_chapter_cache(
+                sid, i, expect_title=ch_title,
+            )
             if cached is not None:
                 story.chapters.append(cached)
                 if progress_callback:

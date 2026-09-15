@@ -380,6 +380,74 @@ def _migrate_output_dir_to_library(cfg) -> None:
         pass
 
 
+class _FileStore:
+    """A wx-free reader/writer for ``settings.ini``.
+
+    ``wx.Config`` needs a running ``wx.App``, which a command-line run
+    does not have, so ``ficary <url>`` used to read no preferences at
+    all: the library folder, download format, cookies and auto-sort
+    settings the user had configured in the app were all invisible to
+    it. The GUI's own store is a flat ``key=value`` file, so reading it
+    directly gives both halves of the application the same settings.
+
+    Values are written in wx's format (bools as ``1``/``0``, no section
+    header) so the GUI reads back anything the CLI writes.
+    """
+
+    def __init__(self, path):
+        self._path = Path(path)
+        self._values: dict[str, str] = {}
+        self._load()
+
+    def _load(self) -> None:
+        try:
+            text = self._path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            return
+        for line in text.splitlines():
+            line = line.strip()
+            if not line or line.startswith(("#", ";", "[")):
+                continue
+            key, sep, value = line.partition("=")
+            if sep:
+                self._values[key.strip()] = value.strip()
+
+    def Read(self, key, default=""):
+        return self._values.get(key, default)
+
+    def ReadBool(self, key, default=False):
+        raw = self._values.get(key)
+        if raw is None:
+            return default
+        return raw.strip().lower() in ("1", "true", "yes", "on")
+
+    def Write(self, key, value) -> bool:
+        self._values[str(key)] = "" if value is None else str(value)
+        return True
+
+    def WriteBool(self, key, value) -> bool:
+        return self.Write(key, "1" if value else "0")
+
+    def DeleteEntry(self, key, *a, **k) -> bool:
+        self._values.pop(str(key), None)
+        return True
+
+    def GetNumberOfEntries(self, *a, **k) -> int:
+        return len(self._values)
+
+    def Flush(self) -> bool:
+        from .atomic import atomic_write_text
+
+        body = "".join(f"{k}={v}\n" for k, v in sorted(self._values.items()))
+        try:
+            self._path.parent.mkdir(parents=True, exist_ok=True)
+            atomic_write_text(self._path, body)
+        except OSError:
+            logger.debug("could not write %s", self._path, exc_info=True)
+            return False
+        return True
+
+
 class Prefs:
     """Thin wrapper over wx.Config with string and bool accessors."""
 
@@ -397,6 +465,16 @@ class Prefs:
         try:
             import wx
         except ImportError:
+            # No wx at all (a CLI-only install): read the same file the
+            # app writes rather than returning bare defaults.
+            self._cfg = _FileStore(portable.settings_file())
+            return
+
+        if wx.GetApp() is None and not portable.is_frozen():
+            # A command-line run. wx cannot resolve its standard paths
+            # without an app and prints an assertion on every read, so
+            # go straight to the file the app writes.
+            self._cfg = _FileStore(portable.settings_file())
             return
 
         try:
@@ -412,10 +490,11 @@ class Prefs:
                 self._cfg = wx.Config("ficary")
         except Exception:
             # wx is importable but unusable here — most often a CLI
-            # process with no wx.App. Same read-only fallback as a
-            # wx-less install: defaults in, sets ignored.
-            logger.debug("preferences store unavailable", exc_info=True)
-            self._cfg = None
+            # process with no wx.App. Fall back to reading the settings
+            # file directly so a command-line run honours the same
+            # library folder, format and credentials as the app.
+            logger.debug("wx preferences store unavailable", exc_info=True)
+            self._cfg = _FileStore(portable.settings_file())
             return
         if not portable.is_frozen():
             _migrate_legacy_wx_config(self._cfg)

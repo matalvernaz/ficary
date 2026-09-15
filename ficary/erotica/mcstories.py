@@ -255,7 +255,9 @@ class MCStoriesScraper(BaseScraper):
                 continue
             ch_title = chapter_titles.get(str(i), f"Chapter {i}")
 
-            cached = self._load_chapter_cache(story_id, i)
+            cached = self._load_chapter_cache(
+                story_id, i, expect_title=ch_title,
+            )
             if cached is not None:
                 story.chapters.append(cached)
                 if progress_callback:
