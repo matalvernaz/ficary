@@ -15,7 +15,7 @@ import time
 
 import wx
 
-from ..audio.engine import CHANNEL_AMBIENT, get_engine
+from ..audio.engine import get_engine
 from ..audio.events import Event, ReaderEvent
 from ..soundscape import library as _sc_library
 from ..soundscape.session import SoundscapeSession

@@ -1589,7 +1589,7 @@ def _handle_update_all(args: argparse.Namespace) -> None:
         if args.skip_complete:
             try:
                 status = extract_status(path)
-            except (OSError, ValueError) as exc:
+            except (OSError, ValueError):
                 logger.debug("extract_status failed for %s", path, exc_info=True)
                 status = ""
             status_lc = status.strip().lower()
@@ -1899,7 +1899,11 @@ def _run_update_queue(
         rel = entry["rel"]
         if entry.get("cancelled"):
             progress(f"[{i}/{total}] {rel}")
-            progress(f"  Cancelled before probe.")
+            progress("  Cancelled before probe.")
+            # A sweep stopped during probing has checked nothing. Record
+            # it, or the summary reports "complete — 0 updated, 0 up to
+            # date", which reads as "your library is current".
+            cancelled = True
             continue
         if entry.get("cf_skipped"):
             site = _detect_site(entry["url"]).site_name
@@ -2118,11 +2122,26 @@ def _run_update_queue(
             for name, local, remote in would_update:
                 progress(f"  {name}  ({local} -> {remote})")
     else:
+        # Say so when the run was cut short. The counts below describe
+        # what was reached, not the whole library, and reporting a
+        # cancelled sweep as "complete" invites the user to believe
+        # everything was checked.
+        headline = f"{label} cancelled" if cancelled else f"{label} complete"
         progress(
-            f"{label} complete — {len(updated)} updated, "
+            f"{headline} — {len(updated)} updated, "
             f"{len(up_to_date)} up to date, {len(failed)} failed, "
             f"{skipped_count} skipped."
         )
+        if cancelled:
+            remaining = total - (
+                len(updated) + len(up_to_date) + len(failed) + skipped_count
+            )
+            if remaining > 0:
+                progress(
+                    f"{remaining} of {total} entr"
+                    f"{'y' if remaining == 1 else 'ies'} were not checked. "
+                    "Re-run to continue."
+                )
     for site in sorted(set(cf_skipped_probes) | set(cf_skipped_downloads)):
         probes = cf_skipped_probes.get(site, 0)
         downloads = cf_skipped_downloads.get(site, 0)
@@ -2930,7 +2949,7 @@ def _handle_list_backups() -> None:
     if not backups:
         print(f"No backups for {idx_path}.")
         sys.exit(0)
-    print(f"Library-index backups (newest first):")
+    print("Library-index backups (newest first):")
     for p in backups:
         size = p.stat().st_size
         print(f"  {p.name}  ({size} bytes)")
@@ -3476,7 +3495,7 @@ def _handle_watch(args: argparse.Namespace) -> None:
             if ok:
                 print(f"\nDone. Still watching... ({len(downloaded)} downloaded so far)\n")
             else:
-                print(f"\nFailed. Still watching...\n")
+                print("\nFailed. Still watching...\n")
 
     except KeyboardInterrupt:
         print(f"\nStopped. Downloaded {len(downloaded)} stories this session.")

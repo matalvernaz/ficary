@@ -18,7 +18,6 @@ import json
 import logging
 import threading
 from dataclasses import dataclass
-from typing import Any
 
 import wx
 

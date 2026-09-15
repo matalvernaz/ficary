@@ -16,7 +16,7 @@ they accept an argparse Namespace or a DownloadJob interchangeably.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Optional
 
 

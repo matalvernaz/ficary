@@ -218,3 +218,35 @@ def test_a_synthesised_chapter_title_is_not_used_as_a_guard():
                 f"{path.name} guards the chapter cache with a possibly "
                 "synthesised title; pass the site's own title instead"
             )
+
+
+def test_a_cancelled_library_sweep_does_not_report_completion():
+    """The counts describe what was reached, not the whole library."""
+    import threading
+    from types import SimpleNamespace
+
+    from ficary import cli
+
+    lines: list[str] = []
+    cancel = threading.Event()
+    cancel.set()   # already cancelled: the wait loop exits on its first pass
+
+    # The real job shape, so this exercises the production call path
+    # rather than a hand-built stand-in that drifts from it.
+    from ficary.jobs import DownloadJob
+
+    args = DownloadJob(dry_run=False, skip_complete=False)
+    queue = [
+        {"path": f"/tmp/story-{n}.epub", "rel": f"story-{n}.epub",
+         "url": f"https://www.fanfiction.net/s/{n}", "local": 1}
+        for n in range(3)
+    ]
+    cli._run_update_queue(
+        queue, args, workers=1, skipped_count=0,
+        progress=lines.append, cancel_event=cancel,
+    )
+
+    joined = "\n".join(lines).lower()
+    assert "cancelled" in joined
+    assert "update-all complete" not in joined
+    assert "not checked" in joined, "say how much of the library was skipped"

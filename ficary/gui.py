@@ -16,9 +16,9 @@ import time
 import wx
 import webbrowser
 from collections import deque
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Any, Optional
+from typing import Optional
 
 
 @dataclass(frozen=True)
