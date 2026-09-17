@@ -1,5 +1,60 @@
 # Changelog
 
+## 2.20.1 — 2026-09-16
+
+**The desktop stays responsive under a screen reader, and a FanFiction.net hiccup no longer fails a story**
+
+*Screen reader lag*
+
+* Moving between controls with NVDA lagged badly while a library update
+  ran. The Library window wrote every progress line into its status pane
+  the moment it arrived: one per probed story, one per chapter, and a
+  fast-path download reports several hundred chapters in the same
+  instant. Each write was a separate hop onto the interface thread that
+  the screen reader also had to observe, so every focus move waited
+  behind the backlog. Progress lines are now queued and written ten
+  times a second, the pane keeps its most recent five thousand lines,
+  and the Optional Features installer log and the LLM dialog's action
+  log work the same way.
+* Every refresh of the main window's library list rebuilt the whole list
+  and then moved the cursor to the first row. A refresh arrives whenever
+  a download finishes, so a screen reader user reading the list was
+  pulled to the top and re-announced each time. The list now keeps the
+  row you are on, rewrites only the cells that changed when the same
+  stories are still listed, and folds a burst of refresh requests into
+  one. Typing in the search box applies the filter when you pause
+  instead of rebuilding the list on every letter, and arrowing through
+  the list no longer rewrites the details pane and the button labels
+  twice per row.
+
+*FanFiction.net*
+
+* FanFiction.net sometimes answers a request for a chapter that exists
+  with its "Chapter not found" notice, then serves the chapter a minute
+  later. One such answer failed the whole story with "Could not find
+  story text on page"; a single library update lost eleven stories to
+  it in an hour. The notice is now retried with a growing wait, about
+  two minutes in all, and only then reported, in words that say what
+  happened and that the next update run will retry the story.
+* When a FanFiction.net page has no story text, the log now quotes what
+  the page says instead of the first four hundred characters of its
+  stylesheet.
+
+*Windows desktop*
+
+* Version 2.20.0 started the desktop build as a console program and
+  detached the console at launch, but left the standard output streams
+  pointing at the console it had just left. Every message the shared
+  command-line code printed afterwards raised "[WinError 6] The handle
+  is invalid": the log filled with a failed auto-index after every
+  download, and a download that failed for a real reason failed a
+  second time inside its own error handler, hiding the reason. Those
+  messages now go to the log instead, and a child process the app
+  starts inherits working handles.
+* A failed download in a library update now names its reason in the
+  status pane, where before it said only "download failed (see log
+  above)" with nothing above to see.
+
 ## 2.20.0 — 2026-09-15
 
 **A stabilisation release: things that lost your work, quietly**
