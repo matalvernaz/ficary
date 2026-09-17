@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import io
 import logging
 import threading
 import time
@@ -9,6 +10,7 @@ import time
 import pytest
 
 from ficary.logging_utils import (
+    LoggingStream,
     correlation_context,
     current_correlation_id,
     install_correlation_filter,
@@ -452,3 +454,74 @@ class TestForbiddenRetryLogLevels:
         assert len(summaries) == 1
         assert summaries[0].levelname == "INFO"
         assert "1 transient 403 retry " in summaries[0].getMessage()
+
+
+class TestLoggingStream:
+    """``sys.stdout``/``sys.stderr`` stand-in for the detached desktop
+    process: complete lines become log records, nothing raises."""
+
+    def _records(self, caplog, name):
+        return [r for r in caplog.records if r.name == name]
+
+    def test_complete_lines_become_records_at_the_given_level(self, caplog):
+        caplog.set_level(logging.DEBUG, logger="ficary.stdout")
+        stream = LoggingStream("ficary.stdout", logging.INFO)
+        stream.write("hello ")
+        stream.write("world\nsecond\n")
+        records = self._records(caplog, "ficary.stdout")
+        assert [r.getMessage() for r in records] == ["hello world", "second"]
+        assert {r.levelno for r in records} == {logging.INFO}
+
+    def test_flush_emits_the_unterminated_tail(self, caplog):
+        caplog.set_level(logging.DEBUG, logger="ficary.stdout")
+        stream = LoggingStream("ficary.stdout", logging.INFO)
+        stream.write("no newline yet")
+        assert self._records(caplog, "ficary.stdout") == []
+        stream.flush()
+        assert [r.getMessage() for r in self._records(caplog, "ficary.stdout")] == [
+            "no newline yet",
+        ]
+
+    def test_blank_lines_are_dropped(self, caplog):
+        caplog.set_level(logging.DEBUG, logger="ficary.stdout")
+        stream = LoggingStream("ficary.stdout", logging.INFO)
+        stream.write("\n\n   \n")
+        stream.flush()
+        assert self._records(caplog, "ficary.stdout") == []
+
+    def test_a_handler_writing_back_to_the_stream_does_not_recurse(self, caplog):
+        """logging's own error path writes to ``sys.stderr`` — which is
+        this stream once installed. That write must be swallowed, not
+        turned into another record that fails the same way forever."""
+        caplog.set_level(logging.DEBUG, logger="ficary.stderr")
+        stream = LoggingStream("ficary.stderr", logging.WARNING)
+        logger = logging.getLogger("ficary.stderr")
+
+        class Complains(logging.Handler):
+            def emit(self, record):
+                stream.write("handler complaint\n")
+
+        handler = Complains()
+        logger.addHandler(handler)
+        try:
+            stream.write("first\n")
+        finally:
+            logger.removeHandler(handler)
+        messages = [r.getMessage() for r in self._records(caplog, "ficary.stderr")]
+        assert messages == ["first"]
+
+    def test_reports_itself_as_a_utf8_non_tty_writer(self):
+        stream = LoggingStream("ficary.stdout", logging.INFO, fd=1)
+        assert stream.writable() and not stream.readable()
+        assert not stream.isatty()
+        assert stream.encoding == "utf-8"
+        assert stream.fileno() == 1
+        with pytest.raises(io.UnsupportedOperation):
+            LoggingStream("ficary.stdout", logging.INFO).fileno()
+
+    def test_non_string_writes_are_coerced_not_raised(self, caplog):
+        caplog.set_level(logging.DEBUG, logger="ficary.stdout")
+        stream = LoggingStream("ficary.stdout", logging.INFO)
+        stream.write(42)
+        stream.write("\n")
+        assert [r.getMessage() for r in self._records(caplog, "ficary.stdout")] == ["42"]

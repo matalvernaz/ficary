@@ -72,6 +72,18 @@ FORBIDDEN_SLOW_RETRY_S = 30
 """Wait on the last two 403 retries, paired with a browser rotation —
 gives Cloudflare fingerprints time to age out."""
 
+TRANSIENT_PAGE_RETRY_S = 10
+"""First wait after a site answers HTTP 200 with a page saying the
+content is not there *yet* (FanFiction.net's "Chapter not found" for a
+chapter its own chapter menu lists). Doubles per attempt up to
+``TRANSIENT_PAGE_MAX_RETRY_S``."""
+
+TRANSIENT_PAGE_MAX_RETRY_S = 60
+"""Cap on the transient-page wait. FFN's own notice puts propagation at
+"up to 15 minutes"; a library sweep cannot park on one chapter for that
+long, so after roughly two minutes the story fails with a clear
+message, stays queued, and the next run retries it."""
+
 RATE_LIMIT_JITTER_FRAC = 0.1
 """Jitter added to each 429/503 backoff (fraction of the backoff)."""
 
@@ -126,6 +138,19 @@ class RateLimitError(Exception):
 
 class StoryNotFoundError(Exception):
     """Raised when the story does not exist."""
+
+
+class TransientPageError(ValueError):
+    """The site answered HTTP 200 with a page saying the content is not
+    available *yet* — a condition to retry, not a verdict.
+
+    Raised by a scraper's :meth:`BaseScraper._check_for_transient`;
+    the fetch loop retries with a growing wait and re-raises it with
+    the attempt count once the budget is spent. Subclasses
+    :class:`ValueError` so the download path's existing
+    ``except ValueError`` reporting shows the message carried here
+    instead of a generic parse failure.
+    """
 
 
 class CloudflareBlockError(Exception):
@@ -495,6 +520,17 @@ class BaseScraper:
                 "Try increasing delays or waiting before retrying."
             )
 
+    def _check_for_transient(self, html: str, url: str) -> None:
+        """Raise :class:`TransientPageError` if ``html`` is a 200 that
+        says "not yet" rather than delivering the page.
+
+        Runs in the fetch loop after :meth:`_check_for_blocks`, so a
+        site adapter that recognises its own "try again shortly" page
+        gets a retry with backoff instead of a parse failure that
+        fails the whole story. The base class recognises nothing.
+        """
+        return None
+
     def _log_fetch_diagnostic(self, resp, sess, label: str, url: str) -> None:
         """Emit a DEBUG line describing a response, for 403 root-causing.
 
@@ -749,6 +785,10 @@ class BaseScraper:
         # generic RateLimitError, and we skip the futile slow-retry tier.
         saw_cf_challenge = False
         logged_cf_challenge = False
+        # Backoff for a 200 whose body says the content is not there
+        # yet (``_check_for_transient``); doubles per attempt.
+        transient_wait = TRANSIENT_PAGE_RETRY_S
+        transient_waited = 0.0
         for attempt in range(self.max_retries):
             try:
                 resp = sess.get(url, timeout=self.timeout)
@@ -872,6 +912,26 @@ class BaseScraper:
                         wait, attempt + 1, self.max_retries,
                     )
                     time.sleep(wait)
+                    continue
+                try:
+                    self._check_for_transient(resp.text, url)
+                except TransientPageError as exc:
+                    if attempt >= self.max_retries - 1:
+                        raise TransientPageError(
+                            f"{exc} Still the same answer after "
+                            f"{self.max_retries} attempts over "
+                            f"{transient_waited:.0f}s; the story stays "
+                            "queued and the next update run retries it."
+                        ) from exc
+                    logger.warning(
+                        "%s Retrying in %.0fs (attempt %d/%d).",
+                        exc, transient_wait, attempt + 1, self.max_retries,
+                    )
+                    time.sleep(transient_wait)
+                    transient_waited += transient_wait
+                    transient_wait = min(
+                        transient_wait * 2, TRANSIENT_PAGE_MAX_RETRY_S,
+                    )
                     continue
                 if last_was_403:
                     self._log_fetch_diagnostic(
@@ -1896,6 +1956,34 @@ def _ffn_row_to_work(row, story_id, section):
 _FFN_APEX_RE = re.compile(r"(?<=://)fanfiction\.net(?=[:/?#]|$)", re.I)
 
 
+_FFN_CHAPTER_NOT_FOUND = (
+    "Chapter not found. Please check to see you are not using an outdated url."
+)
+"""Text of FFN's message panel for a chapter its own chapter menu lists
+but one of its backends cannot serve yet. The same chapter URL was seen
+answering with this page and, minutes later, with the chapter
+(2026-09-16); the panel itself says new uploads take up to 15 minutes
+to appear."""
+
+
+def _ffn_page_message(soup) -> str:
+    """What an FFN page without story text actually says: its message
+    panel when there is one, else the title, else a text snippet."""
+    texts: list[str] = []
+    for panel in soup.find_all(
+        ["div", "span"], class_=re.compile(r"^(?:panel_|gui_)"),
+    ):
+        text = panel.get_text(" ", strip=True)
+        # A gui_* span sits inside its panel_* div; keep the outer text.
+        if text and not any(text in seen for seen in texts):
+            texts.append(text)
+    if texts:
+        return " | ".join(texts)[:400]
+    if soup.title is not None and soup.title.get_text(strip=True):
+        return soup.title.get_text(strip=True)[:400]
+    return " ".join(soup.get_text(" ", strip=True).split())[:400] or "(empty page)"
+
+
 class FFNScraper(BaseScraper):
     """Scraper for fanfiction.net."""
 
@@ -1942,6 +2030,18 @@ class FFNScraper(BaseScraper):
             raise StoryNotFoundError("Story does not exist or has been removed.")
         if "panel_warning" in html and "Story Not Found" in html:
             raise StoryNotFoundError("Story does not exist or has been removed.")
+
+    def _check_for_transient(self, html, url):
+        # Chapter numbers come from FFN's own chapter menu, so "Chapter
+        # not found" for one of them is the site lagging behind itself,
+        # not a missing chapter. Left to the parser this failed the whole
+        # story with "Could not find story text on page".
+        if _FFN_CHAPTER_NOT_FOUND in html and "storytext" not in html:
+            raise TransientPageError(
+                f"FanFiction.net answered 'Chapter not found' for {url}, "
+                "which it does for chapters that exist while an upload "
+                "propagates (its notice says up to 15 minutes)."
+            )
 
     @staticmethod
     def parse_story_id(url_or_id):
@@ -2106,15 +2206,13 @@ class FFNScraper(BaseScraper):
     def _parse_chapter_html(soup):
         storytext = soup.find("div", id="storytext")
         if not storytext:
-            # Cloudflare occasionally serves an interstitial as HTTP 200
-            # with markup that doesn't contain ``div#storytext`` — neither
-            # ``_check_for_blocks`` nor the 404 path catches that. Log a
-            # snippet so a maintainer triaging "download failed
-            # randomly" reports has something to act on.
-            snippet = str(soup)[:400].replace("\n", " ")
+            # A 200 without ``div#storytext`` is a Cloudflare interstitial
+            # or one of FFN's own message panels. Log what the page *says*:
+            # its first 400 characters were the panel's stylesheet and
+            # told a maintainer nothing.
             logger.warning(
-                "FFN page returned 200 but had no #storytext; first 400 "
-                "chars: %s", snippet,
+                "FFN page returned 200 but had no #storytext; the page "
+                "says: %s", _ffn_page_message(soup),
             )
             raise ValueError("Could not find story text on page.")
         return storytext.decode_contents()

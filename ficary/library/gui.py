@@ -27,6 +27,7 @@ logger = logging.getLogger(__name__)
 
 from .. import prefs as _prefs
 from ..gui_help import set_help
+from ..gui_status_log import StatusLogCtrl
 from .gui_logic import format_move_label
 from .index import LibraryIndex
 from .refresh import build_refresh_queue, default_refresh_args
@@ -234,11 +235,11 @@ class LibraryFrame(wx.Frame):
             wx.StaticText(panel, label="S&tatus:"),
             0, wx.LEFT | wx.RIGHT, 8,
         )
-        self.status_ctrl = wx.TextCtrl(
-            panel,
-            style=wx.TE_MULTILINE | wx.TE_READONLY,
-            size=(-1, 120),
-        )
+        # Batched: a library update posts one line per probe and one per
+        # chapter, from several worker threads at once. Writing each as
+        # it arrived kept the UI thread busy enough that a screen reader
+        # user felt every focus move lag behind the backlog.
+        self.status_ctrl = StatusLogCtrl(panel, size=(-1, 120))
         self.status_ctrl.SetName("Library status")
         set_help(
             self.status_ctrl,
@@ -448,7 +449,7 @@ class LibraryFrame(wx.Frame):
             opener()
 
     def _append_status(self, line: str) -> None:
-        self.status_ctrl.AppendText(line + "\n")
+        self.status_ctrl.post_line(line)
 
     def _set_busy(self, busy: bool) -> None:
         self.scan_btn.Enable(not busy)
@@ -492,11 +493,9 @@ class LibraryFrame(wx.Frame):
         site = site_from_thread_name(threading.current_thread().name)
         if site and line and line.strip():
             line = f"[{site}] {line}"
-        wx.CallAfter(self._append_status_if_alive, line)
-
-    def _append_status_if_alive(self, line: str) -> None:
-        if self._alive:
-            self._append_status(line)
+        # The pane queues from any thread and writes on its own timer,
+        # so there is no per-line hop onto the UI thread any more.
+        self.status_ctrl.post_line(line)
 
     def _on_scan(self, event: wx.Event) -> None:
         root = self._current_path()

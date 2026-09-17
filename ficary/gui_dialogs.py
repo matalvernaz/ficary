@@ -20,6 +20,8 @@ import threading
 import wx
 from pathlib import Path
 
+from .gui_status_log import StatusLogCtrl
+
 
 class VoicePreviewDialog(wx.Dialog):
     """Show detected characters, their assigned voices, and let users play
@@ -981,10 +983,10 @@ class OptionalFeaturesDialog(wx.Dialog):
             wx.StaticText(panel, label="&Installer log:"),
             0, wx.LEFT | wx.RIGHT | wx.TOP, 8,
         )
-        self.log_ctrl = wx.TextCtrl(
-            panel,
-            style=wx.TE_MULTILINE | wx.TE_READONLY | wx.TE_DONTWRAP,
-        )
+        # Batched: pip narrates an install a line at a time, thousands
+        # of lines for torch, and each write used to be its own hop onto
+        # the UI thread.
+        self.log_ctrl = StatusLogCtrl(panel)
         self.log_ctrl.SetName("Installer log")
         outer.Add(self.log_ctrl, 1, wx.EXPAND | wx.ALL, 8)
 
@@ -1076,12 +1078,13 @@ class OptionalFeaturesDialog(wx.Dialog):
         threading.Thread(target=run, daemon=True).start()
 
     def _log_from_thread(self, line: str) -> None:
-        wx.CallAfter(self._append_log, line)
+        # The log control queues from any thread; no marshalling needed.
+        self._append_log(line)
 
     def _append_log(self, line: str) -> None:
         if not self._alive:
             return
-        self.log_ctrl.AppendText(line.rstrip() + "\n")
+        self.log_ctrl.post_line(line)
 
     def _after_install(self, feature: str, ok: bool) -> None:
         if not self._alive:
@@ -1602,11 +1605,7 @@ class LlmSettingsDialog(wx.Dialog):
         # READONLY mode is reliably picked up by NVDA.
         log_label = wx.StaticText(root, label="Status:")
         sizer.Add(log_label, 0, wx.LEFT | wx.TOP, pad)
-        self.status_ctrl = wx.TextCtrl(
-            root,
-            style=wx.TE_MULTILINE | wx.TE_READONLY | wx.TE_DONTWRAP,
-            size=(-1, 110),
-        )
+        self.status_ctrl = StatusLogCtrl(root, size=(-1, 110))
         self.status_ctrl.SetName("LLM action log")
         sizer.Add(self.status_ctrl, 1, wx.EXPAND | wx.ALL, pad)
 
@@ -1899,12 +1898,11 @@ class LlmSettingsDialog(wx.Dialog):
         self._refresh_actions()
 
     def _append_status(self, line: str) -> None:
-        """Append a line to the read-only status log. Always called
-        on the GUI thread; worker threads marshal here via
-        ``wx.CallAfter``."""
+        """Queue a line for the read-only status log. Safe from any
+        thread; the control writes its backlog on a timer."""
         if not self._alive:
             return
-        self.status_ctrl.AppendText(line.rstrip() + "\n")
+        self.status_ctrl.post_line(line)
 
     def _confirm_close_during_pull(self) -> bool:
         """Return ``True`` when it's safe to close the dialog. When a

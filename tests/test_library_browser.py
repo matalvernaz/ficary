@@ -476,3 +476,165 @@ def test_gui_resolve_output_dir_routes_adult_to_separate_root(
         # first-time-fandom-folder modal, which can't be answered headless.)
     finally:
         frame.Destroy()
+
+
+# ── Background refreshes must not move the user's cursor ───────────────
+#
+# Every reload used to rebuild the whole list and then select and focus
+# row 0. With a screen reader that is a focus announcement per reload,
+# and during a library update a reload arrived every time a story
+# finished — the user was yanked to the top of the list mid-read.
+
+
+def test_reload_keeps_the_selected_row_and_edits_cells_in_place(
+    wx_app, monkeypatch, tmp_path,
+):
+    from ficary.library.browser import LibraryBrowserFrame
+
+    main_root = tmp_path / "lib"
+    adult_root = tmp_path / "adult"
+    main_root.mkdir()
+    adult_root.mkdir()
+    _install_index(monkeypatch, main_root, adult_root)
+
+    parent = wx.Frame(None)
+    frame = LibraryBrowserFrame(parent, _StubPrefs(str(adult_root)))
+    try:
+        row = _select_by_title(frame, "Two")
+        idx_two = frame._visible.index(row)
+        rebuilt = []
+        monkeypatch.setattr(
+            frame.list_ctrl, "DeleteAllItems",
+            lambda: rebuilt.append("rebuild"),
+        )
+
+        _entry(main_root, _AO3)["story_updated"] = "2026-09-16"
+        frame.reload()
+
+        assert rebuilt == [], "same rows in the same order: no rebuild"
+        assert frame.list_ctrl.GetFirstSelected() == idx_two
+        assert frame.list_ctrl.GetFocusedItem() == idx_two
+        assert frame.list_ctrl.GetItemText(idx_two, 6) == "2026-09-16"
+        assert "Story updated: 2026-09-16" in frame.summary_ctrl.GetValue()
+    finally:
+        frame.Destroy()
+        parent.Destroy()
+
+
+def test_reload_that_changes_the_rows_still_keeps_the_selection(
+    wx_app, monkeypatch, tmp_path,
+):
+    from ficary.library.browser import LibraryBrowserFrame
+
+    main_root = tmp_path / "lib"
+    adult_root = tmp_path / "adult"
+    main_root.mkdir()
+    adult_root.mkdir()
+    _install_index(monkeypatch, main_root, adult_root)
+
+    parent = wx.Frame(None)
+    frame = LibraryBrowserFrame(parent, _StubPrefs(str(adult_root)))
+    try:
+        _select_by_title(frame, "Two")
+        # A new story that sorts first, so "Two" moves down a row.
+        LibraryIndex.load()._library(main_root)["stories"][
+            "https://www.fanfiction.net/s/3/"
+        ] = {
+            "relpath": "HP/Alpha - D.epub", "title": "Alpha", "author": "D",
+            "fandoms": ["Harry Potter"], "format": "epub", "adapter": "ffn",
+        }
+        frame.reload()
+
+        assert [r.title for r in frame._visible] == ["Alpha", "One", "Two"]
+        selected = frame.list_ctrl.GetFirstSelected()
+        assert frame._visible[selected].title == "Two"
+        assert frame.list_ctrl.GetFocusedItem() == selected
+        assert "Title: Two" in frame.summary_ctrl.GetValue()
+    finally:
+        frame.Destroy()
+        parent.Destroy()
+
+
+def test_refresh_soon_coalesces_a_burst_into_one_reload(
+    wx_app, monkeypatch, tmp_path,
+):
+    from ficary.library.browser import LibraryBrowserFrame
+
+    main_root = tmp_path / "lib"
+    adult_root = tmp_path / "adult"
+    main_root.mkdir()
+    adult_root.mkdir()
+    _install_index(monkeypatch, main_root, adult_root)
+
+    parent = wx.Frame(None)
+    frame = LibraryBrowserFrame(parent, _StubPrefs(str(adult_root)))
+    try:
+        reloads = []
+        monkeypatch.setattr(frame.panel, "reload", lambda: reloads.append(1))
+        for _ in range(3):
+            frame.refresh_soon()
+        assert reloads == [], "debounced: nothing runs synchronously"
+        assert frame.flush_pending_refresh() is True
+        assert reloads == [1]
+        assert frame.flush_pending_refresh() is False
+    finally:
+        frame.Destroy()
+        parent.Destroy()
+
+
+def test_search_typing_is_debounced(wx_app, monkeypatch, tmp_path):
+    from ficary.library.browser import LibraryBrowserFrame
+
+    main_root = tmp_path / "lib"
+    adult_root = tmp_path / "adult"
+    main_root.mkdir()
+    adult_root.mkdir()
+    _install_index(monkeypatch, main_root, adult_root)
+
+    parent = wx.Frame(None)
+    frame = LibraryBrowserFrame(parent, _StubPrefs(str(adult_root)))
+    try:
+        frame.search_ctrl.SetValue("naruto")
+        frame._on_search(None)
+        # The keystroke schedules the filter; it has not run yet.
+        assert [r.title for r in frame._visible] == ["One", "Two"]
+        assert frame.flush_pending_filter() is True
+        assert [r.title for r in frame._visible] == ["Two"]
+        assert frame.flush_pending_filter() is False
+    finally:
+        frame.Destroy()
+        parent.Destroy()
+
+
+def test_summary_and_button_labels_only_rewrite_when_they_change(
+    wx_app, monkeypatch, tmp_path,
+):
+    """Arrowing raises the focused and the selected event for the same
+    row; each used to rewrite the details pane and both toggle-button
+    labels, and every rewrite is an event the screen reader has to
+    process. The second pass over an unchanged row must be a no-op."""
+    from ficary.library.browser import LibraryBrowserFrame
+
+    main_root = tmp_path / "lib"
+    adult_root = tmp_path / "adult"
+    main_root.mkdir()
+    adult_root.mkdir()
+    _install_index(monkeypatch, main_root, adult_root)
+
+    parent = wx.Frame(None)
+    frame = LibraryBrowserFrame(parent, _StubPrefs(str(adult_root)))
+    try:
+        row = _select_by_title(frame, "Two")
+        frame._update_summary(row)
+        writes = []
+        monkeypatch.setattr(
+            frame.summary_ctrl, "SetValue", lambda text: writes.append(text),
+        )
+        monkeypatch.setattr(
+            frame.adult_btn, "SetLabel", lambda text: writes.append(text),
+        )
+        frame._update_summary(row)
+        assert writes == []
+    finally:
+        frame.Destroy()
+        parent.Destroy()

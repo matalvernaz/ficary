@@ -84,6 +84,13 @@ def ffn_story_not_found_html():
 
 
 @pytest.fixture(scope="session")
+def ffn_chapter_not_found_html():
+    """FFN's 200 "Chapter not found" message panel, captured 2026-09-16
+    for a chapter number the same story's chapter menu listed."""
+    return _load("ffn_chapter_not_found.html")
+
+
+@pytest.fixture(scope="session")
 def ffn_search_html():
     return _load("ffn_search.html")
 

@@ -3457,12 +3457,16 @@ class MainFrame(wx.Frame):
             logger.debug("auto-index after download failed", exc_info=True)
 
     def _refresh_library_panel(self):
-        """Reload the embedded library list from the index. Main-thread
-        only; no-op if the panel isn't up yet (early startup)."""
+        """Ask the embedded library list to reload from the index soon.
+
+        Main-thread only; no-op if the panel isn't up yet (early
+        startup). Requests within a few hundred milliseconds collapse
+        into one reload: concurrent per-site downloads finish in bursts,
+        and each used to trigger its own full rebuild of the list."""
         panel = getattr(self, "library_panel", None)
         if panel is not None:
             try:
-                panel.reload()
+                panel.refresh_soon()
             except Exception:
                 logger.debug("library panel refresh failed", exc_info=True)
 

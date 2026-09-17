@@ -75,6 +75,18 @@ _COLUMN_SORT_ATTRS = ("title", "author", "fandom", "fmt", "library_label",
 
 _REEXPORT_FORMATS = ("epub", "html", "txt")
 
+REFRESH_DEBOUNCE_MS = 400
+"""How long a background refresh request waits before the list reloads.
+Downloads finish in bursts — one per site queue, plus the library
+update's own refresh — and each asked for a reload of its own. Within
+this window they collapse into one index read and one list update."""
+
+FILTER_DEBOUNCE_MS = 150
+"""How long after the last keystroke in the search box the filter is
+applied. Filtering rebuilds the list; a person typing a word does not
+need one rebuild per letter, and with a screen reader attached each
+rebuild is work the reader has to observe too."""
+
 
 def _added_display(added_at: str) -> str:
     """Human column value for an ISO ``added_at`` stamp: just the date
@@ -136,6 +148,11 @@ class LibraryPanel(wx.Panel):
         self._adult_hidden = 0            # count hidden by the adult filter, for the status line
         self._sort_attr = "title"         # current sort field (row attribute)
         self._sort_desc = False
+        # Pending debounce timers (wx.CallLater) for background refreshes
+        # and search-as-you-type; None when nothing is scheduled.
+        self._refresh_later = None
+        self._filter_later = None
+        self.Bind(wx.EVT_WINDOW_DESTROY, self._on_destroy)
         self._build_ui()
         self.reload()
 
@@ -387,6 +404,66 @@ class LibraryPanel(wx.Panel):
         self._apply_sort()
         self._apply_filter()
 
+    # ── Deferred refreshes ─────────────────────────────────────
+
+    def refresh_soon(self) -> None:
+        """Reload from the index shortly, coalescing bursts of requests.
+
+        The main window calls this when a download has been indexed and
+        when the Library window finishes a scan or an update. Several
+        such requests inside :data:`REFRESH_DEBOUNCE_MS` produce one
+        :meth:`reload`."""
+        self._refresh_later = self._schedule(
+            self._refresh_later, REFRESH_DEBOUNCE_MS, self._run_pending_refresh,
+        )
+
+    def flush_pending_refresh(self) -> bool:
+        """Run a scheduled refresh now. Returns whether one was pending."""
+        later, self._refresh_later = self._refresh_later, None
+        if later is None or not later.IsRunning():
+            return False
+        later.Stop()
+        self.reload()
+        return True
+
+    def flush_pending_filter(self) -> bool:
+        """Apply a scheduled search filter now. Returns whether one was
+        pending."""
+        later, self._filter_later = self._filter_later, None
+        if later is None or not later.IsRunning():
+            return False
+        later.Stop()
+        self._apply_filter()
+        return True
+
+    @staticmethod
+    def _schedule(existing, delay_ms: int, fn):
+        """Arm (or re-arm) a one-shot timer for ``fn``."""
+        if existing is not None and existing.IsRunning():
+            existing.Restart(delay_ms)
+            return existing
+        return wx.CallLater(delay_ms, fn)
+
+    def _run_pending_refresh(self) -> None:
+        self._refresh_later = None
+        if not self:
+            return
+        self.reload()
+
+    def _run_pending_filter(self) -> None:
+        self._filter_later = None
+        if not self:
+            return
+        self._apply_filter()
+
+    def _on_destroy(self, event: wx.Event) -> None:
+        if event.GetEventObject() is self:
+            for later in (self._refresh_later, self._filter_later):
+                if later is not None:
+                    later.Stop()
+            self._refresh_later = self._filter_later = None
+        event.Skip()
+
     def _apply_sort(self) -> None:
         """Sort ``self._rows`` by the current field/direction. Strings
         compare case-insensitively; the ISO ``added_at`` stamps compare
@@ -475,23 +552,29 @@ class LibraryPanel(wx.Panel):
         self._adult_hidden = sum(
             1 for r in self._rows if r.is_adult and not show_adult
         )
-        self._visible = [r for r in self._rows if matches(r)]
+        # What the list shows right now, and which row the user is on,
+        # captured before either changes.
+        previous = self._visible
+        selected = self._selected_row()
+        keep_url = selected.url if selected is not None else None
+        visible = [r for r in self._rows if matches(r)]
+        self._visible = visible
 
-        self.list_ctrl.DeleteAllItems()
-        for i, row in enumerate(self._visible):
-            self.list_ctrl.InsertItem(i, row.title)
-            self.list_ctrl.SetItem(i, 1, row.author)
-            self.list_ctrl.SetItem(i, 2, row.fandom)
-            self.list_ctrl.SetItem(i, 3, row.fmt)
-            self.list_ctrl.SetItem(i, 4, row.library_label)
-            self.list_ctrl.SetItem(i, 5, _added_display(row.added_at))
-            self.list_ctrl.SetItem(i, 6, _added_display(row.story_updated))
+        # Same rows in the same order: rewrite only the cells whose text
+        # changed. A full rebuild fires a create event per row at the
+        # screen reader and drops the user's place in the list; a story
+        # finishing its update in the background deserves neither.
+        if (
+            [r.url for r in visible] == [r.url for r in previous]
+            and self.list_ctrl.GetItemCount() == len(previous)
+        ):
+            self._refresh_cells(visible)
+        else:
+            self._rebuild_list(visible)
 
         self._update_count()
-        if self._visible:
-            self.list_ctrl.Select(0)
-            self.list_ctrl.Focus(0)
-            self._update_summary(self._visible[0])
+        if visible:
+            self._restore_selection(keep_url)
             self._enable_actions(True)
         else:
             self._enable_actions(False)
@@ -502,6 +585,59 @@ class LibraryPanel(wx.Panel):
                 )
             else:
                 self._set_summary("No stories match the current filter.")
+
+    @staticmethod
+    def _cells(row: _Row) -> tuple[str, ...]:
+        """Column texts for ``row``, in ``_COLUMNS`` order."""
+        return (
+            row.title,
+            row.author,
+            row.fandom,
+            row.fmt,
+            row.library_label,
+            _added_display(row.added_at),
+            _added_display(row.story_updated),
+        )
+
+    def _rebuild_list(self, visible: list[_Row]) -> None:
+        """Replace every list item. Frozen so the control repaints once."""
+        self.list_ctrl.Freeze()
+        try:
+            self.list_ctrl.DeleteAllItems()
+            for i, row in enumerate(visible):
+                cells = self._cells(row)
+                self.list_ctrl.InsertItem(i, cells[0])
+                for col, text in enumerate(cells[1:], start=1):
+                    self.list_ctrl.SetItem(i, col, text)
+        finally:
+            self.list_ctrl.Thaw()
+
+    def _refresh_cells(self, visible: list[_Row]) -> None:
+        """Update the existing items in place, touching only changed cells."""
+        for i, row in enumerate(visible):
+            for col, text in enumerate(self._cells(row)):
+                if self.list_ctrl.GetItemText(i, col) != text:
+                    self.list_ctrl.SetItem(i, col, text)
+
+    def _restore_selection(self, keep_url: Optional[str]) -> None:
+        """Put the cursor back on ``keep_url`` if it is still listed,
+        otherwise on the first row.
+
+        Select and Focus are skipped when the row is already current:
+        each is a focus event to a screen reader, and re-announcing the
+        row the user is already on is exactly the interruption a
+        background refresh must not cause."""
+        target = 0
+        if keep_url is not None:
+            for i, row in enumerate(self._visible):
+                if row.url == keep_url:
+                    target = i
+                    break
+        if self.list_ctrl.GetFirstSelected() != target:
+            self.list_ctrl.Select(target)
+        if self.list_ctrl.GetFocusedItem() != target:
+            self.list_ctrl.Focus(target)
+        self._update_summary(self._visible[target])
 
     def _update_count(self) -> None:
         total = len(self._rows)
@@ -536,6 +672,31 @@ class LibraryPanel(wx.Panel):
         self._on_open(event)
 
     def _update_summary(self, row: _Row) -> None:
+        text = self._summary_text(row)
+        # Only rewrite what changed. Arrowing through the list raises both
+        # the focused and the selected event for one row, and the update
+        # after a background reload lands on the row the user is already
+        # reading; a rewrite is a value-change event to the screen reader
+        # either way.
+        if self.summary_ctrl.GetValue() != text:
+            self._set_summary(text)
+        # Each toggle button states the action it will take on this story.
+        self._set_label_if_changed(
+            self.adult_btn,
+            "Mark Not Ad&ult" if row.is_adult else "Mark Ad&ult",
+        )
+        self._set_label_if_changed(
+            self.abandon_btn,
+            "&Revive Story" if row.is_abandoned else "Mark A&bandoned",
+        )
+
+    @staticmethod
+    def _set_label_if_changed(button: wx.Button, label: str) -> None:
+        if button.GetLabel() != label:
+            button.SetLabel(label)
+
+    @staticmethod
+    def _summary_text(row: _Row) -> str:
         if row.is_adult:
             adult_state = (
                 "yes (you set this)" if row.adult_overridden
@@ -546,7 +707,7 @@ class LibraryPanel(wx.Panel):
                 "no (you set this)" if row.adult_overridden
                 else "no"
             )
-        self._set_summary("\n".join([
+        return "\n".join([
             f"Title: {row.title}",
             f"Author: {row.author or '(unknown)'}",
             f"Fandom: {row.fandom or '(none)'}",
@@ -558,14 +719,7 @@ class LibraryPanel(wx.Panel):
             f"Story updated: {_added_display(row.story_updated) or '(unknown)'}",
             f"File: {row.abs_path or '(missing path)'}",
             f"Source: {row.url}",
-        ]))
-        # Each toggle button states the action it will take on this story.
-        self.adult_btn.SetLabel(
-            "Mark Not Ad&ult" if row.is_adult else "Mark Ad&ult"
-        )
-        self.abandon_btn.SetLabel(
-            "&Revive Story" if row.is_abandoned else "Mark A&bandoned"
-        )
+        ])
 
     def _set_summary(self, text: str) -> None:
         self.summary_ctrl.SetValue(text)
@@ -883,7 +1037,10 @@ class LibraryPanel(wx.Panel):
         self.reload()
 
     def _on_search(self, event: wx.Event) -> None:
-        self._apply_filter()
+        # Debounced: see FILTER_DEBOUNCE_MS.
+        self._filter_later = self._schedule(
+            self._filter_later, FILTER_DEBOUNCE_MS, self._run_pending_filter,
+        )
 
     def _on_toggle_adult(self, event: wx.Event) -> None:
         self._apply_filter()

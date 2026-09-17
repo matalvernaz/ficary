@@ -919,6 +919,19 @@ def _download_one(
     scraper = _build_scraper(url, args)
     status = status_callback if status_callback is not None else print
 
+    def report_error(msg: str) -> None:
+        """Say why the download failed where the caller will see it.
+
+        The command line reads stderr. A GUI passes ``status_callback``
+        and never looks at stderr, so a reason printed there vanished:
+        a library update summarised such a story as "download failed
+        (see log above)" with nothing above to see.
+        """
+        if status_callback is not None:
+            status_callback(msg)
+        else:
+            print(msg, file=sys.stderr)
+
     def progress(current, total, title, cached):
         tag = " (cached)" if cached else ""
         status(f"  [{current}/{total}] {title}{tag}")
@@ -1151,10 +1164,10 @@ def _download_one(
                 send_file(args.send_to_kindle, path)
                 status(f"Emailed to: {args.send_to_kindle}")
             except SMTPConfigError as exc:
-                print(f"Could not send: {exc}", file=sys.stderr)
+                report_error(f"Could not send: {exc}")
             except (OSError, RuntimeError) as exc:
                 logger.debug("Kindle email failed", exc_info=True)
-                print(f"Email failed: {exc}", file=sys.stderr)
+                report_error(f"Email failed: {exc}")
 
         if getattr(args, "send_to_abs", False) and path.suffix.lower() == ".m4b":
             # Same non-fatal contract as the kindle block — a failed
@@ -1171,11 +1184,10 @@ def _download_one(
                 )
                 status("Uploaded to Audiobookshelf.")
             except ABSConfigError as exc:
-                print(f"Could not upload to Audiobookshelf: {exc}",
-                      file=sys.stderr)
+                report_error(f"Could not upload to Audiobookshelf: {exc}")
             except (OSError, RuntimeError) as exc:
                 logger.debug("Audiobookshelf upload failed", exc_info=True)
-                print(f"Audiobookshelf upload failed: {exc}", file=sys.stderr)
+                report_error(f"Audiobookshelf upload failed: {exc}")
 
         if args.clean_cache:
             scraper.clean_cache(story_id)
@@ -1183,32 +1195,29 @@ def _download_one(
         return True
 
     except (ValueError, FileNotFoundError) as exc:
-        print(f"Error: {exc}", file=sys.stderr)
+        report_error(f"Error: {exc}")
         return False
     except StoryNotFoundError as exc:
-        print(f"Error: {exc}", file=sys.stderr)
+        report_error(f"Error: {exc}")
         return False
     except AO3LockedError as exc:
-        print(f"Locked: {exc}", file=sys.stderr)
+        report_error(f"Locked: {exc}")
         return False
     except WattpadPaidStoryError as exc:
-        print(f"Paywalled: {exc}", file=sys.stderr)
+        report_error(f"Paywalled: {exc}")
         return False
     except WebnovelLockedStoryError as exc:
-        print(f"Paywalled: {exc}", file=sys.stderr)
+        report_error(f"Paywalled: {exc}")
         return False
     except CloudflareBlockError as exc:
-        print(f"Blocked: {exc}", file=sys.stderr)
+        report_error(f"Blocked: {exc}")
         return False
     except RateLimitError as exc:
-        print(f"\nRate limited: {exc}", file=sys.stderr)
-        print(
-            "Try increasing --delay-min / --delay-max or wait before retrying.",
-            file=sys.stderr,
-        )
+        report_error(f"\nRate limited: {exc}")
+        report_error("Try increasing --delay-min / --delay-max or wait before retrying.")
         return False
     except ImportError as exc:
-        print(f"Missing dependency: {exc}", file=sys.stderr)
+        report_error(f"Missing dependency: {exc}")
         return False
 
 

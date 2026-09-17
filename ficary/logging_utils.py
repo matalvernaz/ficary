@@ -42,7 +42,9 @@ from __future__ import annotations
 
 import contextlib
 import contextvars
+import io
 import logging
+import threading
 import uuid
 from typing import Generator, Optional
 
@@ -270,3 +272,95 @@ def install_correlation_filter() -> None:
         return
     logging.setLogRecordFactory(_correlation_record_factory())
     _FILTER_INSTALLED = True
+
+
+class LoggingStream(io.TextIOBase):
+    """A write-only text stream that turns each complete line into a
+    log record.
+
+    Installed as ``sys.stdout``/``sys.stderr`` in the desktop app once
+    it has detached from its console (see
+    :func:`ficary.entrypoint._quiet_std_streams`). The command-line
+    helpers the GUI shares report some things with ``print``; with the
+    console gone those writes raised ``OSError`` and the messages were
+    lost. Through this stream they become log records, which the GUI's
+    status pane and log file already display.
+
+    ``fileno`` reports the descriptor the stream stands in for (by then
+    pointed at the null device), so a subprocess handed ``sys.stdout``
+    inherits something writable rather than failing to start.
+
+    Re-entrancy: a logging handler that fails writes its complaint to
+    ``sys.stderr`` — this object. A thread-local guard turns such
+    nested writes into no-ops instead of a recursion.
+    """
+
+    def __init__(self, logger_name: str, level: int, *, fd: Optional[int] = None):
+        super().__init__()
+        self._logger = logging.getLogger(logger_name)
+        self._level = level
+        self._fd = fd
+        self._buffer = ""
+        self._lock = threading.Lock()
+        self._local = threading.local()
+
+    # ── io.TextIOBase surface ───────────────────────────────
+
+    def writable(self) -> bool:
+        return True
+
+    def readable(self) -> bool:
+        return False
+
+    def seekable(self) -> bool:
+        return False
+
+    def isatty(self) -> bool:
+        return False
+
+    @property
+    def encoding(self) -> str:
+        return "utf-8"
+
+    def fileno(self) -> int:
+        if self._fd is None:
+            raise io.UnsupportedOperation("fileno")
+        return self._fd
+
+    def write(self, text) -> int:
+        if not isinstance(text, str):
+            text = str(text)
+        if getattr(self._local, "emitting", False):
+            return len(text)
+        with self._lock:
+            self._buffer += text
+            lines = self._buffer.split("\n")
+            self._buffer = lines.pop()
+        for line in lines:
+            self._emit(line)
+        return len(text)
+
+    def flush(self) -> None:
+        with self._lock:
+            pending, self._buffer = self._buffer, ""
+        if pending:
+            self._emit(pending)
+
+    def close(self) -> None:
+        # The process-wide std streams are never really closed; a caller
+        # that does so should not lose the last unterminated line.
+        self.flush()
+
+    # ── Internals ───────────────────────────────────────────
+
+    def _emit(self, line: str) -> None:
+        line = line.rstrip("\r")
+        if not line.strip():
+            return
+        self._local.emitting = True
+        try:
+            self._logger.log(self._level, "%s", line)
+        except Exception:
+            pass
+        finally:
+            self._local.emitting = False

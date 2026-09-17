@@ -1,12 +1,19 @@
 """FFN scraper — URL parsing, metadata, search, author URL variants."""
 
+import logging
 from unittest import mock
 
 from bs4 import BeautifulSoup
 
 import pytest
 
-from ficary.scraper import FFNScraper, StoryNotFoundError
+from ficary.scraper import (
+    TRANSIENT_PAGE_MAX_RETRY_S,
+    TRANSIENT_PAGE_RETRY_S,
+    FFNScraper,
+    StoryNotFoundError,
+    TransientPageError,
+)
 from ficary.search import _parse_results
 
 
@@ -439,3 +446,105 @@ class TestSearchFetchRetries:
                 "https://www.fanfiction.net/book/Harry-Potter/?srt=1",
             )
         assert len(attempts) == search_mod._SEARCH_FETCH_MAX_RETRIES
+
+
+class _Page:
+    """A 200 response with a given body, shaped as ``_fetch`` reads it."""
+
+    status_code = 200
+    encoding = None
+    headers: dict = {}
+
+    def __init__(self, text: str):
+        self.text = text
+
+
+class _Session:
+    """Serves ``pages`` in order and records the URLs asked for."""
+
+    def __init__(self, pages):
+        self.pages = list(pages)
+        self.urls = []
+
+    def get(self, url, timeout=None):
+        self.urls.append(url)
+        return self.pages.pop(0)
+
+
+class TestChapterNotFoundIsTransient:
+    """FFN answers HTTP 200 with a "Chapter not found" message panel for
+    chapters its own chapter menu lists — the same URL was seen giving
+    this page and, minutes later, the chapter (2026-09-16). One such
+    answer used to fail the whole story with "Could not find story text
+    on page"; a library update run lost fifteen stories to it in an
+    hour. It is now retried with a growing wait and only then reported,
+    in words that say what happened."""
+
+    URL = "https://www.fanfiction.net/s/12485917/53/"
+
+    def test_message_panel_is_recognised(self, ffn_chapter_not_found_html):
+        scraper = FFNScraper(use_cache=False)
+        with pytest.raises(TransientPageError):
+            scraper._check_for_transient(ffn_chapter_not_found_html, self.URL)
+
+    def test_message_panel_is_not_mistaken_for_a_dead_story(
+        self, ffn_chapter_not_found_html,
+    ):
+        # "Story Not Found" is definitive and must keep raising; this
+        # page must not trip that check.
+        FFNScraper(use_cache=False)._check_for_blocks(ffn_chapter_not_found_html)
+
+    def test_a_real_chapter_page_passes(self, ffn_story_html):
+        FFNScraper(use_cache=False)._check_for_transient(ffn_story_html, self.URL)
+
+    def test_fetch_retries_until_the_chapter_appears(
+        self, monkeypatch, ffn_chapter_not_found_html, ffn_story_html,
+    ):
+        sleeps = []
+        monkeypatch.setattr("ficary.scraper.time.sleep", sleeps.append)
+        scraper = FFNScraper(use_cache=False)
+        sess = _Session([
+            _Page(ffn_chapter_not_found_html),
+            _Page(ffn_chapter_not_found_html),
+            _Page(ffn_story_html),
+        ])
+        assert scraper._fetch(self.URL, session=sess) == ffn_story_html
+        assert len(sess.urls) == 3
+        assert sleeps == [TRANSIENT_PAGE_RETRY_S, TRANSIENT_PAGE_RETRY_S * 2]
+
+    def test_fetch_gives_up_with_a_message_that_says_what_happened(
+        self, monkeypatch, ffn_chapter_not_found_html,
+    ):
+        sleeps = []
+        monkeypatch.setattr("ficary.scraper.time.sleep", sleeps.append)
+        scraper = FFNScraper(use_cache=False)
+        sess = _Session(
+            [_Page(ffn_chapter_not_found_html)] * scraper.max_retries,
+        )
+        with pytest.raises(TransientPageError) as info:
+            scraper._fetch(self.URL, session=sess)
+        # The download path reports ValueErrors; this must be one so the
+        # message below is what the user reads.
+        assert isinstance(info.value, ValueError)
+        message = str(info.value)
+        assert "Chapter not found" in message
+        assert f"{scraper.max_retries} attempts" in message
+        assert "next update run" in message
+        assert len(sess.urls) == scraper.max_retries
+        # 10, 20, 40, then capped.
+        expected, wait = [], TRANSIENT_PAGE_RETRY_S
+        for _ in range(scraper.max_retries - 1):
+            expected.append(wait)
+            wait = min(wait * 2, TRANSIENT_PAGE_MAX_RETRY_S)
+        assert sleeps == expected
+        assert max(sleeps) == TRANSIENT_PAGE_MAX_RETRY_S
+
+    def test_parse_diagnostic_quotes_the_panel_not_its_stylesheet(
+        self, caplog, ffn_chapter_not_found_html,
+    ):
+        soup = BeautifulSoup(ffn_chapter_not_found_html, "lxml")
+        with caplog.at_level(logging.WARNING, logger="ficary.scraper"):
+            with pytest.raises(ValueError):
+                FFNScraper._parse_chapter_html(soup)
+        assert "Chapter not found" in caplog.text
+        assert ".panel_error {" not in caplog.text
