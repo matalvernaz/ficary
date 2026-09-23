@@ -789,6 +789,7 @@ class BaseScraper:
         # yet (``_check_for_transient``); doubles per attempt.
         transient_wait = TRANSIENT_PAGE_RETRY_S
         transient_waited = 0.0
+        transient_retries = 0
         for attempt in range(self.max_retries):
             try:
                 resp = sess.get(url, timeout=self.timeout)
@@ -917,12 +918,27 @@ class BaseScraper:
                     self._check_for_transient(resp.text, url)
                 except TransientPageError as exc:
                     if attempt >= self.max_retries - 1:
+                        # Say so before raising. Everything above this
+                        # point is a "retrying..." warning, so without
+                        # this line the log's last word on a story that
+                        # never came back is an optimistic "attempt
+                        # 4/5" — indistinguishable from one that
+                        # recovered on the attempt after it, since that
+                        # path was silent too. The exception itself
+                        # only ever reached the update window's status
+                        # pane, which is gone once it closes.
+                        logger.warning(
+                            "Gave up on %s after %d attempts over %.0fs "
+                            "— this chapter was not downloaded.",
+                            url, self.max_retries, transient_waited,
+                        )
                         raise TransientPageError(
                             f"{exc} Still the same answer after "
                             f"{self.max_retries} attempts over "
                             f"{transient_waited:.0f}s; the story stays "
                             "queued and the next update run retries it."
                         ) from exc
+                    transient_retries = attempt + 1
                     logger.warning(
                         "%s Retrying in %.0fs (attempt %d/%d).",
                         exc, transient_wait, attempt + 1, self.max_retries,
@@ -941,6 +957,17 @@ class BaseScraper:
                     record_transient_403()
                 if hit_rate_limit:
                     self._bump_delay_up(snapshot=delay_at_throttle)
+                if transient_retries:
+                    # The counterpart to the give-up line above: a
+                    # recovery used to be silent, so a reader could not
+                    # tell whether a story whose log ends mid-retry came
+                    # back or died there.
+                    logger.info(
+                        "%s came back after %d retr%s (%.0fs).",
+                        url, transient_retries,
+                        "y" if transient_retries == 1 else "ies",
+                        transient_waited,
+                    )
                 return resp.text
 
             if resp.status_code in (429, 503):

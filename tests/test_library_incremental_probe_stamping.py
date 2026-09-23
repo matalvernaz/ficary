@@ -289,3 +289,46 @@ def test_a_message_less_probe_failure_still_names_the_fault():
     assert _failure_reason(RuntimeError("   ")) == "RuntimeError"
     # A real message is always preferred over the class name.
     assert _failure_reason(ValueError("no topic id")) == "no topic id"
+
+
+def test_the_failure_summary_reaches_the_log_not_only_the_screen(
+    monkeypatch, caplog,
+):
+    """A sweep's outcomes must survive the window that showed them.
+
+    ``_run_update_queue`` speaks entirely through its ``progress``
+    callback, and the library window points that at its status pane and
+    nowhere else. So "12 updated, 3 failed" and the reasons behind it
+    existed only on screen: close the window and the record of which
+    stories failed was gone, leaving nothing to read afterwards.
+    """
+    from pathlib import Path
+
+    from ficary import cli
+    from ficary.scraper import StoryNotFoundError
+
+    fake = _fake_scraper([StoryNotFoundError("story gone"), 10])
+    monkeypatch.setattr(cli, "_build_scraper", lambda url, args: fake)
+    monkeypatch.setattr(cli, "_detect_site", lambda url: _FakeSiteClass)
+
+    probe_queue = [
+        {
+            "path": Path(f"/tmp/x{i}.epub"), "rel": f"x{i}.epub",
+            "url": f"https://example.com/s/{i}", "local": 5,
+        }
+        for i in (1, 2)
+    ]
+    args = types.SimpleNamespace(dry_run=True, format="html")
+    with caplog.at_level("INFO"):
+        cli._run_update_queue(
+            probe_queue, args, workers=1, skipped_count=0,
+            label="Library update", progress=lambda _: None,
+        )
+
+    text = "\n".join(r.getMessage() for r in caplog.records)
+    assert "Library update:" in text, "the run's counts must be logged"
+    assert "1 failed" in text
+    # And the failure has to be named, or the count alone is no more
+    # use than the empty "probe failed:" line was.
+    assert "x1.epub failed" in text
+    assert "story gone" in text

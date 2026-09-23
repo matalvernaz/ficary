@@ -539,6 +539,67 @@ class TestChapterNotFoundIsTransient:
         assert sleeps == expected
         assert max(sleeps) == TRANSIENT_PAGE_MAX_RETRY_S
 
+    def test_giving_up_is_written_to_the_log(
+        self, monkeypatch, caplog, ffn_chapter_not_found_html,
+    ):
+        """The last word in the log must not be an optimistic retry.
+
+        Every attempt logs "Retrying ... (attempt N/5)", and the final
+        give-up used to raise without logging, so a story that never
+        came back left "attempt 4/5" as its last trace — identical to
+        one that recovered on the attempt after (also silent). The
+        exception text only ever reached the update window's status
+        pane, which is gone once the window closes, so afterwards there
+        was no way to tell which stories had actually failed.
+        """
+        monkeypatch.setattr("ficary.scraper.time.sleep", lambda s: None)
+        scraper = FFNScraper(use_cache=False)
+        sess = _Session(
+            [_Page(ffn_chapter_not_found_html)] * scraper.max_retries,
+        )
+        with caplog.at_level("WARNING"):
+            with pytest.raises(TransientPageError):
+                scraper._fetch(self.URL, session=sess)
+        gave_up = [
+            r for r in caplog.records if "Gave up" in r.getMessage()
+        ]
+        assert gave_up, "the give-up must be logged, not only raised"
+        assert self.URL in gave_up[0].getMessage()
+        assert "not downloaded" in gave_up[0].getMessage()
+
+    def test_coming_back_after_retries_is_written_to_the_log(
+        self, monkeypatch, caplog, ffn_chapter_not_found_html, ffn_story_html,
+    ):
+        """The counterpart: a recovery has to be visible too, or the
+        give-up line above is the only way to tell the two apart and a
+        truncated log still reads as a failure."""
+        monkeypatch.setattr("ficary.scraper.time.sleep", lambda s: None)
+        scraper = FFNScraper(use_cache=False)
+        sess = _Session([
+            _Page(ffn_chapter_not_found_html),
+            _Page(ffn_chapter_not_found_html),
+            _Page(ffn_story_html),
+        ])
+        with caplog.at_level("INFO"):
+            assert scraper._fetch(self.URL, session=sess) == ffn_story_html
+        came_back = [
+            r for r in caplog.records if "came back" in r.getMessage()
+        ]
+        assert came_back, "a recovery after retries must say so"
+        assert "2 retries" in came_back[0].getMessage()
+
+    def test_a_clean_fetch_says_nothing_about_retries(
+        self, monkeypatch, caplog, ffn_story_html,
+    ):
+        """Don't add a line to the overwhelming majority of fetches."""
+        monkeypatch.setattr("ficary.scraper.time.sleep", lambda s: None)
+        scraper = FFNScraper(use_cache=False)
+        with caplog.at_level("INFO"):
+            scraper._fetch(self.URL, session=_Session([_Page(ffn_story_html)]))
+        assert not [
+            r for r in caplog.records if "came back" in r.getMessage()
+        ]
+
     def test_parse_diagnostic_quotes_the_panel_not_its_stylesheet(
         self, caplog, ffn_chapter_not_found_html,
     ):

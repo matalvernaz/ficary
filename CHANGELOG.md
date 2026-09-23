@@ -1,5 +1,29 @@
 # Changelog
 
+## 2.20.4 — 2026-09-23
+
+**A library update now leaves a record of what failed**
+
+*Update logging*
+
+* An update reported its results only to the window showing them.
+  Which stories were updated, which were already current, which failed
+  and why: all of it lived in that pane and was gone once the window
+  closed. Asking afterwards which stories had failed was unanswerable.
+  The counts and every failure with its reason are now written to the
+  log as well.
+* A story whose chapter kept coming back "not found" logged a line per
+  retry, and then nothing at all when it finally gave up. The last
+  entry was an optimistic "attempt 4 of 5", which looked exactly like a
+  story that recovered on the attempt after, because that was silent
+  too. Both are now recorded: giving up says which chapter was not
+  downloaded, and coming back says how many tries it took. A fetch that
+  never had trouble adds nothing, as before.
+
+These are the reason a run that reported several failures could not be
+explained after the fact. Nothing about how updates work has changed;
+what changed is that the outcome is now written down.
+
 ## 2.20.3 — 2026-09-23
 
 **SubscribeStar stories can be checked for updates, and a failed check says why**

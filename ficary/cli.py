@@ -2229,6 +2229,20 @@ def _run_update_queue(
                 progress(f"    → {reason}")
             else:
                 progress(f"  {entry}")
+    # The whole run so far has spoken only through ``progress``, which
+    # the library window points at its status pane and nowhere else, so
+    # the record of which stories failed and why died with the window.
+    # Someone asking "a few of those failed, which ones?" afterwards had
+    # nothing to read. Counts and failures go to the log as well.
+    logger.info(
+        "%s: %d updated, %d up to date, %d failed, %d skipped.",
+        label, len(updated), len(up_to_date), len(failed), skipped_count,
+    )
+    for entry in failed:
+        if isinstance(entry, tuple) and len(entry) == 2:
+            logger.warning("%s failed: %s", entry[0], entry[1])
+        else:
+            logger.warning("%s failed.", entry)
     progress('='*60)
     return 0 if not failed else 1
 
