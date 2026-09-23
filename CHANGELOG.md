@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 2.20.2 — 2026-09-23
 
 **Stories from The Mousepad are tracked one by one again**
 

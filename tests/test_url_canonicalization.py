@@ -414,6 +414,18 @@ def test_idless_forum_entry_is_dropped_on_load(tmp_path: Path, caplog):
                         "adapter": "mousepad",
                         "confidence": "high",
                         "format": "epub",
+                        # Tracking state the pre-fix merge had pooled
+                        # across every story on the board: a chapter
+                        # count from one story, a status from another.
+                        # None of it describes the entry it ended up on,
+                        # so none of it may survive onto the rebuilt
+                        # entries — a stale remote count would report a
+                        # phantom update, and a stale "Complete" would
+                        # make the update sweep skip the story for good.
+                        "remote_chapter_count": 77,
+                        "last_probed": "2026-09-20T00:00:00Z",
+                        "chapter_hashes": ["deadbeef"],
+                        "status": "Complete",
                     },
                     # A healthy entry on the same board must survive.
                     "https://www.tapatalk.com/groups/themousepad/"
@@ -446,3 +458,10 @@ def test_idless_forum_entry_is_dropped_on_load(tmp_path: Path, caplog):
     assert "perma-single.epub" in caplog.text
     assert "college-days.epub" in caplog.text
     assert "Re-scan" in caplog.text
+    # The pooled tracking state goes with the record; the next scan
+    # rebuilds each story from its own file and probes it afresh.
+    survivor = stories[
+        "https://www.tapatalk.com/groups/themousepad/viewtopic.php?t=57803"
+    ]
+    assert "remote_chapter_count" not in survivor
+    assert survivor.get("status") is None
