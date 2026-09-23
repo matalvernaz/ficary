@@ -1336,6 +1336,8 @@ class MainFrame(wx.Frame):
             return True
         scraper_cls = detect_scraper(url)
         scraper = scraper_cls()
+        if scraper.is_forum_url(url):
+            return True
         if scraper.is_author_url(url):
             return True
         if (
@@ -1357,7 +1359,13 @@ class MainFrame(wx.Frame):
             return True
         if AO3Scraper.is_reading_list_url(url):
             return True
-        return detect_scraper(url)().is_author_url(url)
+        scraper = detect_scraper(url)()
+        # A forum section answers with the same story picker an author
+        # page does (via the section picker first, when the URL names the
+        # board rather than one of its sections).
+        if scraper.is_forum_url(url):
+            return True
+        return scraper.is_author_url(url)
 
     def _on_browse(self, event):
         dlg = wx.DirDialog(
@@ -3544,6 +3552,16 @@ class MainFrame(wx.Frame):
                 )
                 return
 
+            if not is_update and scraper.is_forum_url(url):
+                # Forum-backed sites (The Mousepad) keep their stories in
+                # sections rather than under an author. Runs before the
+                # author check for the same reason the bookmarks check
+                # does: is_author_url is the broad catch-all.
+                self._run_picker_download(
+                    url, scraper, kind="forum", params=params,
+                )
+                return
+
             if not is_update and scraper.is_author_url(url):
                 self._run_picker_download(
                     url, scraper, kind="author", params=params,
@@ -3714,6 +3732,60 @@ class MainFrame(wx.Frame):
             story_urls, scraper, summary_label="Author batch", params=params,
         )
 
+    def _ask_forum_section(self, forums):
+        """Ask which forum section to list, from a worker thread.
+
+        Returns the chosen forum dict, or None if the user cancelled.
+        Blocks on an Event the same way the story picker does — the
+        dialog has to be built and shown on the main thread, and the
+        worker must not race ahead and start listing a section nobody
+        picked.
+        """
+        if not forums:
+            return None
+        result: list = []
+        done = threading.Event()
+        with self._pending_worker_dialogs_lock:
+            self._pending_worker_dialogs.add(done)
+
+        def show():
+            try:
+                choices = []
+                for f in forums:
+                    count = f.get("topics")
+                    # "unknown" rather than a confident 0 when the count
+                    # didn't come back; both mean "can't tell you", but
+                    # only one of them is a lie.
+                    threads = (
+                        f"{count} threads" if isinstance(count, int)
+                        else "thread count unknown"
+                    )
+                    desc = (f.get("description") or "").strip()
+                    line = f"{f['name']} ({threads})"
+                    if desc:
+                        line += f" — {desc}"
+                    choices.append(line)
+                dlg = wx.SingleChoiceDialog(
+                    self, "Choose a story section to list:",
+                    "The Mousepad sections", choices,
+                )
+                try:
+                    if dlg.ShowModal() == wx.ID_OK:
+                        result.append(forums[dlg.GetSelection()])
+                finally:
+                    dlg.Destroy()
+            except Exception as exc:
+                logger.exception("Forum section picker failed: %s", exc)
+                self._log(f"Could not show the section list: {exc}")
+            finally:
+                done.set()
+
+        wx.CallAfter(show)
+        done.wait()
+        with self._pending_worker_dialogs_lock:
+            self._pending_worker_dialogs.discard(done)
+        return result[0] if result else None
+
     def _run_picker_download(self, url, scraper, *, kind, params: Optional[_DownloadParams] = None):
         """Fetch a work list (author page or AO3 bookmarks) and open the
         picker so the user can choose which works to download before we
@@ -3731,6 +3803,7 @@ class MainFrame(wx.Frame):
         label = {
             "bookmarks": "bookmarks",
             "readings": "reading list",
+            "forum": "forum section",
         }.get(kind, "author page")
         self._log(f"Fetching {label}: {url}")
         try:
@@ -3740,6 +3813,24 @@ class MainFrame(wx.Frame):
             elif kind == "readings":
                 owner, works = scraper.scrape_reading_list_works(url)
                 title = f"Reading list: {owner}"
+            elif kind == "forum":
+                section_url = url
+                if not scraper.parse_forum_id(section_url):
+                    # The URL named the board, not one of its sections,
+                    # so ask which one before listing thousands of
+                    # threads from the wrong place.
+                    self._log("Reading the list of story sections...")
+                    forums = scraper.story_forums(progress=self._log)
+                    chosen = self._ask_forum_section(forums)
+                    if chosen is None:
+                        self._log("(No section chosen — nothing listed.)")
+                        return
+                    section_url = chosen["url"]
+                    self._log(f"Section: {chosen['name']}")
+                owner, works = scraper.scrape_forum_works(
+                    section_url, progress=self._log,
+                )
+                title = f"Stories in {owner}"
             elif isinstance(scraper, FFNScraper):
                 owner, works = scraper.scrape_author_works(
                     url, include_favorites=True,
@@ -3893,7 +3984,10 @@ class MainFrame(wx.Frame):
                 except Exception as exc:
                     self._log(f"  Error: {exc}")
                     failed.append(story_url)
-            label = "Bookmarks batch" if kind == "bookmarks" else "Author batch"
+            label = {
+                "bookmarks": "Bookmarks batch",
+                "forum": "Forum section batch",
+            }.get(kind, "Author batch")
             self._log(
                 f"\n{label} complete: {succeeded} succeeded, "
                 f"{len(failed)} failed out of {len(urls)}."

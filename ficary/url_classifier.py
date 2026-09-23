@@ -49,6 +49,11 @@ _PRECEDENCE: tuple[tuple[str, str, str], ...] = (
     ("is_tag_url", "tag", "scrape_tag_works"),
     ("is_search_url", "search", "scrape_search_works"),
     ("is_community_url", "community", "scrape_community_works"),
+    # A forum section is one address standing for many stories, the
+    # forum-backed equivalent of an author page. Ahead of author for the
+    # same reason bookmarks are: a section URL has no author in it, and
+    # the author predicate is the broad catch-all below.
+    ("is_forum_url", "forum", "scrape_forum_works"),
     ("is_reading_list_url", "reading_list", "scrape_reading_list_works"),
     # Author works is the broadest list-shape match — it catches the
     # bare ``/users/X`` AO3 URL, ``/u/12345`` FFN URL, etc. Run after
@@ -98,6 +103,24 @@ _SCRAPER_CLS_TO_NAME = {
     "ChyoaScraper": "chyoa",
     "DarkWandererScraper": "darkwanderer",
     "GreatFeetScraper": "greatfeet",
+    "MousepadScraper": "mousepad",
+    "SexStoriesScraper": "sexstories",
+    "MCStoriesScraper": "mcstories",
+    "LushStoriesScraper": "lushstories",
+    "FictionmaniaScraper": "fictionmania",
+    "TGStorytimeScraper": "tgstorytime",
+    "ChyoaScraper": "chyoa",
+    "DarkWandererScraper": "darkwanderer",
+    "BDSMLibraryScraper": "bdsmlibrary",
+    "ReadOnlyMindScraper": "readonlymind",
+    "GiantessWorldScraper": "giantessworld",
+    "ChastityMansionScraper": "chastitymansion",
+    "TicklingForumScraper": "ticklingforum",
+    "ScribbleHubScraper": "scribblehub",
+    "SubscribeStarScraper": "subscribestar",
+    "WebnovelScraper": "webnovel",
+    "StoriesOnlineScraper": "storiesonline",
+    "NiftyScraper": "nifty",
 }
 
 

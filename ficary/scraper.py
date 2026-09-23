@@ -1629,6 +1629,21 @@ class BaseScraper:
         """
         return False
 
+    @staticmethod
+    def is_forum_url(url):
+        """True if ``url`` is a forum section listing many story threads.
+
+        Forum-backed sites publish their stories as threads inside a
+        section rather than under an author, so "everything in here" is
+        a section, not a person. Default False; The Mousepad overrides.
+        Override together with :meth:`scrape_forum_works`.
+
+        Must stay false for a *thread* URL even when the section id
+        rides along in the query string, or pasting a single story would
+        open the section picker instead of downloading it.
+        """
+        return False
+
     def download(
         self,
         url_or_id,
@@ -1698,6 +1713,22 @@ class BaseScraper:
         raise NotImplementedError(
             f"{type(self).__name__} does not support author-work listings. "
             "Check is_author_url(url) before calling."
+        )
+
+    def scrape_forum_works(self, url, progress=None):
+        """Return ``(forum_name, [work_dict, ...])`` for a forum section.
+
+        Same dict shape as :meth:`scrape_author_works`, so the GUI
+        picker renders either without caring which it got.
+
+        Listing a forum is a paged walk over thousands of threads rather
+        than one page fetch, so ``progress`` (a one-argument callable
+        taking a status line) reports each window as it lands. Callers
+        must gate on :meth:`is_forum_url` first.
+        """
+        raise NotImplementedError(
+            f"{type(self).__name__} does not support forum listings. "
+            "Check is_forum_url(url) before calling."
         )
 
     def scrape_series_works(self, url):

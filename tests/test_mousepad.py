@@ -546,3 +546,270 @@ def test_lift_title_plain_chapter_line():
     # A sentence merely starting with "Chapter" mid-flow isn't a title.
     prose = "Chapter after chapter she read on with no br until much later " * 3
     assert mp._lift_title(prose) == ("", prose)
+
+
+# ── Forum sections: listing the board, listing a section ─────────
+
+
+def forum_node(fid: str, name: str, desc: str = "", *,
+               sub_only: bool = False, children: list | None = None) -> dict:
+    """One node of a ``get_forum`` reply. Categories set ``sub_only``
+    and hold no threads of their own."""
+    return {
+        "forum_id": B(fid),
+        "forum_name": B(name),
+        "description": B(desc),
+        "sub_only": "true" if sub_only else "false",
+        "child": children or [],
+    }
+
+
+# The board's real shape (verified live 2026-09-23): the fiction
+# category holds Stories, which in turn nests Story Requests and the
+# Classic Story Library; Experiences sits beside Stories. Everything
+# outside the fiction category is off-topic and must not be listed.
+BOARD_TREE = [
+    forum_node("133", "Fetish", sub_only=True, children=[
+        forum_node("66", "Foot Model Content"),
+    ]),
+    forum_node("135", "Stories", sub_only=True, children=[
+        forum_node("72", "Stories", "Share your foot stories here.",
+                   children=[
+                       forum_node("94", "Story Requests", "Request old ones."),
+                       forum_node("97", "Classic Story Library", "An archive."),
+                   ]),
+        forum_node("96", "Experiences and Anecdotes", "Quick accounts."),
+    ]),
+    forum_node("129", "International Pads", sub_only=True, children=[
+        forum_node("74", "Das MausPad"),
+    ]),
+]
+
+
+class FakeBoard:
+    """``mobiquo_call`` stand-in answering get_forum and get_topic."""
+
+    def __init__(self, tree, listings, *, forum_error: bool = False):
+        self.tree = tree
+        self.listings = listings
+        self.forum_error = forum_error
+        self.calls: list[tuple] = []
+
+    def __call__(self, method, *params):
+        self.calls.append((method, *params))
+        if method == "get_forum":
+            if self.forum_error:
+                raise OSError("board unreachable")
+            return self.tree
+        assert method == "get_topic"
+        forum_id, start, end = params
+        rows = self.listings.get(forum_id, [])
+        if start >= len(rows):  # live server clamps instead of emptying
+            window = rows[-2:]
+        else:
+            window = rows[start:end + 1]
+        return {
+            "total_topic_num": len(rows),
+            "forum_name": B(f"Forum {forum_id}"),
+            "topics": window,
+        }
+
+
+@pytest.fixture
+def fake_forum_board(monkeypatch):
+    listings = {
+        "72": [
+            topic_row(str(100 + i), f"Story {i}", "Bardo",
+                      "20260709T15:46:58", "teaser")
+            for i in range(120)
+        ],
+        "94": [topic_row("300", "Looking for a story", "Asker",
+                         "20260101T00:00:00")],
+        "96": [topic_row("400", "At the beach", "Walker",
+                         "20260101T00:00:00")],
+        "97": [topic_row("500", "Classic: The Duchess", "OldHand",
+                         "20250101T12:00:00")],
+    }
+    board = FakeBoard(BOARD_TREE, listings)
+    monkeypatch.setattr(mp, "mobiquo_call", board)
+    return board
+
+
+@pytest.mark.parametrize(
+    "url, expected_id",
+    [
+        # Permalink shape the address bar shows while browsing.
+        ("https://www.tapatalk.com/groups/themousepad/stories-f72/", "72"),
+        (
+            "https://www.tapatalk.com/groups/themousepad/"
+            "classic-story-library-f97/",
+            "97",
+        ),
+        # phpBB's own section URL.
+        ("https://www.tapatalk.com/groups/themousepad/viewforum.php?f=94", "94"),
+        # The board front page names no section.
+        ("https://www.tapatalk.com/groups/themousepad/", ""),
+        ("https://www.tapatalk.com/groups/themousepad", ""),
+    ],
+)
+def test_forum_urls_are_recognised(url, expected_id):
+    assert MousepadScraper.is_forum_url(url) is True
+    assert MousepadScraper.parse_forum_id(url) == expected_id
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://www.tapatalk.com/groups/themousepad/viewtopic.php?t=198149",
+        # A story link followed out of a section listing carries the
+        # section id too. Treating this as a section would open the
+        # picker instead of downloading the story the user clicked.
+        "https://www.tapatalk.com/groups/themousepad/viewtopic.php?f=72&t=198149",
+        "https://www.tapatalk.com/groups/themousepad/some-slug-t198149.html",
+        "https://www.tapatalk.com/groups/themousepad/some-slug-t198149-s20.html",
+    ],
+)
+def test_topic_urls_are_not_forum_urls(url):
+    assert MousepadScraper.is_forum_url(url) is False
+    # And they must still resolve as stories.
+    assert MousepadScraper.parse_story_id(url) == "198149"
+
+
+def test_story_forums_lists_the_fiction_sections_only(fake_forum_board):
+    """Only the fiction category's sections are offered. The board also
+    carries picture and non-English sections, which aren't stories."""
+    forums = MousepadScraper.story_forums()
+    assert [(f["id"], f["name"]) for f in forums] == [
+        ("72", "Stories"),
+        ("94", "Story Requests"),
+        ("97", "Classic Story Library"),
+        ("96", "Experiences and Anecdotes"),
+    ]
+    # Categories hold no threads and must not be offered as a download.
+    assert "135" not in {f["id"] for f in forums}
+    assert forums[0]["url"] == (
+        "https://www.tapatalk.com/groups/themousepad/viewforum.php?f=72"
+    )
+    assert forums[0]["topics"] == 120
+    assert forums[2]["topics"] == 1
+
+
+def test_story_forums_can_skip_the_count_requests(fake_forum_board):
+    forums = MousepadScraper.story_forums(with_counts=False)
+    assert all(f["topics"] is None for f in forums)
+    assert [c[0] for c in fake_forum_board.calls] == ["get_forum"]
+
+
+def test_story_forums_falls_back_when_the_board_is_unreachable(monkeypatch):
+    """An empty section list would read as "this board has no stories".
+    A slightly stale list is the better lie, and the failure is said out
+    loud rather than swallowed."""
+    board = FakeBoard(BOARD_TREE, {}, forum_error=True)
+    monkeypatch.setattr(mp, "mobiquo_call", board)
+    said: list[str] = []
+    forums = MousepadScraper.story_forums(
+        with_counts=False, progress=said.append,
+    )
+    assert [f["id"] for f in forums] == ["72", "94", "97", "96"]
+    assert any("Couldn't read the forum list" in line for line in said)
+
+
+def test_scrape_forum_works_pages_through_the_whole_section(fake_forum_board):
+    scraper = MousepadScraper()
+    name, works = scraper.scrape_forum_works(
+        "https://www.tapatalk.com/groups/themousepad/stories-f72/",
+    )
+    assert name == "Forum 72"
+    assert len(works) == 120
+    # Every thread exactly once: the live server clamps an out-of-range
+    # window to the listing's tail, so a walk that trusted the server to
+    # run dry would re-collect the last rows forever.
+    assert len({w["url"] for w in works}) == 120
+    assert works[0]["url"].endswith("viewtopic.php?t=100")
+    assert works[0]["section"] == "Forum 72"
+    assert works[0]["updated"] == "2026-07-09T15:46:58"
+    # reply_number counts everyone's posts, not the author's, so the
+    # picker must show no chapter count rather than a wrong one.
+    assert works[0]["chapters"] == ""
+
+
+def test_scrape_forum_works_reports_each_window(fake_forum_board):
+    said: list[str] = []
+    MousepadScraper().scrape_forum_works(
+        "https://www.tapatalk.com/groups/themousepad/stories-f72/",
+        progress=said.append,
+    )
+    assert said, "a minute-long listing must not run in silence"
+    assert "listed 50 of 120" in said[0]
+    assert "listed 120 of 120" in said[-1]
+
+
+def test_scrape_forum_works_keeps_a_partial_listing_and_says_so(monkeypatch):
+    """A section that fails half way through is worth keeping — but the
+    caller has to be told it's half, or a partial listing is
+    indistinguishable from a short section."""
+    listings = {
+        "72": [
+            topic_row(str(100 + i), f"Story {i}", "Bardo",
+                      "20260709T15:46:58")
+            for i in range(120)
+        ],
+    }
+    board = FakeBoard(BOARD_TREE, listings)
+    calls = {"n": 0}
+    real = board.__call__
+
+    def flaky(method, *params):
+        if method == "get_topic":
+            calls["n"] += 1
+            if calls["n"] > 1:
+                raise OSError("connection reset")
+        return real(method, *params)
+
+    monkeypatch.setattr(mp, "mobiquo_call", flaky)
+    said: list[str] = []
+    name, works = MousepadScraper().scrape_forum_works(
+        "https://www.tapatalk.com/groups/themousepad/stories-f72/",
+        progress=said.append,
+    )
+    assert len(works) == 50
+    assert any("stopped after 50 of 120" in line for line in said)
+
+
+def test_scrape_forum_works_rejects_the_board_front_page(fake_forum_board):
+    """The front page names no section, so there is nothing to list.
+    Callers answer it with the section list instead."""
+    with pytest.raises(ValueError, match="names the board"):
+        MousepadScraper().scrape_forum_works(
+            "https://www.tapatalk.com/groups/themousepad/",
+        )
+
+
+def test_forum_url_classifies_as_a_forum_list_page():
+    from ficary.url_classifier import classify
+
+    ref = classify("https://www.tapatalk.com/groups/themousepad/stories-f72/")
+    assert ref.kind == "forum"
+    assert ref.extractor == "scrape_forum_works"
+    assert ref.site_name == "mousepad"
+    assert ref.scraper_cls is MousepadScraper
+
+
+def test_sites_is_forum_url_only_fires_for_sections():
+    from ficary.sites import is_forum_url
+
+    assert is_forum_url(
+        "https://www.tapatalk.com/groups/themousepad/stories-f72/"
+    )
+    assert not is_forum_url(
+        "https://www.tapatalk.com/groups/themousepad/viewtopic.php?t=1"
+    )
+    assert not is_forum_url("https://www.fanfiction.net/s/12345")
+
+
+def test_search_fan_out_still_covers_only_the_two_fiction_archives():
+    """Requests and Experiences are reachable from the section picker on
+    purpose, but they must stay out of the search fan-out: one is
+    want-ads, the other blog-style anecdotes, and both would surface as
+    stories in an unrelated keyword search."""
+    assert es._MOUSEPAD_STORY_FORUMS == ("72", "97")

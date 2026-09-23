@@ -34,6 +34,7 @@ from .sites import (
     detect_scraper as _detect_site,
     extract_story_url,
     is_author_url as _is_author_url,
+    is_forum_url as _is_forum_url,
     is_series_url as _is_series_url,
 )
 from .updater import (
@@ -263,6 +264,47 @@ def _scrape_series_works(
     """Scrape an AO3 series and return (series_name, [work_urls])."""
     scraper = _build_scraper(url, args)
     return scraper.scrape_series_works(url)
+
+
+def _scrape_forum_works(
+    url: str, args: argparse.Namespace,
+) -> tuple[str, list[dict]]:
+    """List one forum section and return (section_name, [work_dicts]).
+
+    Progress goes to stderr so a shell pipeline collecting story URLs
+    off stdout isn't polluted by the sixty seconds of listing chatter a
+    large section produces.
+    """
+    scraper = _build_scraper(url, args)
+    return scraper.scrape_forum_works(
+        url, progress=lambda line: print(line, file=sys.stderr),
+    )
+
+
+def _print_forum_sections(url: str, args: argparse.Namespace) -> None:
+    """Print the board's story sections and how to download each.
+
+    Reached when the user passes a board address with no section in it.
+    Listing every section's threads would be tens of thousands of rows
+    nobody asked for, so answer the question the address actually poses:
+    what is here?
+    """
+    scraper = _build_scraper(url, args)
+    sections = scraper.story_forums()
+    if not sections:
+        print(f"No story sections found at {url}", file=sys.stderr)
+        return
+    print("Story sections:")
+    for section in sections:
+        count = section.get("topics")
+        threads = f"{count} threads" if isinstance(count, int) else "threads: ?"
+        print(f"\n  {section['name']}  ({threads})")
+        if section.get("description"):
+            print(f"    {section['description']}")
+        print(f"    {section['url']}")
+    print(
+        "\nPass one of those addresses to download from that section.",
+    )
 
 
 def _bulk_extract(
@@ -5027,7 +5069,10 @@ def _expand_author_and_series_urls(
     """Resolve any author-page or series-page URLs into per-story URLs.
 
     Each author URL expands to the author's own-stories list; each
-    AO3/Literotica series URL expands to its constituent works.
+    AO3/Literotica series URL expands to its constituent works; each
+    forum-section URL expands to the section's story threads (a board
+    address with no section in it prints the section list and exits,
+    since it names no stories to download).
     Raises SystemExit on fetch failure — the caller treats these as
     fatal because the user explicitly asked for a collection.
     """
@@ -5049,6 +5094,32 @@ def _expand_author_and_series_urls(
             print(f"Author: {author_name}")
             print(f"Found {len(story_urls)} stories.")
             expanded.extend(story_urls)
+        elif _is_forum_url(url):
+            from .sites import detect_scraper
+
+            if not detect_scraper(url)().parse_forum_id(url):
+                # The address names the board, not a section. Show what's
+                # there and stop; guessing a section would download
+                # thousands of threads the user never named.
+                _print_forum_sections(url, args)
+                sys.exit(0)
+            try:
+                forum_name, works = _scrape_forum_works(url, args)
+            except NotImplementedError as exc:
+                print(f"Forum listings aren't supported for {url}: {exc}",
+                      file=sys.stderr)
+                sys.exit(1)
+            except (RateLimitError, CloudflareBlockError, StoryNotFoundError) as exc:
+                print(f"Error listing forum section {url}: {exc}",
+                      file=sys.stderr)
+                sys.exit(1)
+            if not works:
+                print(f"No stories found in forum section: {url}",
+                      file=sys.stderr)
+                sys.exit(1)
+            print(f"Section: {forum_name}")
+            print(f"Found {len(works)} stories.")
+            expanded.extend(w["url"] for w in works)
         elif _is_series_url(url):
             try:
                 series_name, work_urls = _scrape_series_works(url, args)

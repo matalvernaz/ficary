@@ -285,6 +285,10 @@ class VoicePreviewDialog(wx.Dialog):
             _shutil.rmtree(self._tmp_dir, ignore_errors=True)
 
 
+# Matches the library list's own typing debounce (library/browser.py).
+_FILTER_DEBOUNCE_MS = 150
+
+
 class StoryPickerDialog(wx.Dialog):
     """Multi-select picker for an author's works or a bookmarks list.
 
@@ -315,6 +319,8 @@ class StoryPickerDialog(wx.Dialog):
         self._prefs = prefs
         self._sort_key = self._load_saved_sort_key()
         self._section_filter = "all"
+        self._text_filter = ""
+        self._filter_later = None
         self._picked = []
         # Authoritative set of checked URLs. Refresh and OK derive
         # from this rather than the visible widget state, so checked
@@ -375,6 +381,18 @@ class StoryPickerDialog(wx.Dialog):
         else:
             self.filter_ctrl = None
 
+        # Type-to-narrow. A forum section runs to thousands of threads,
+        # which is not a list anyone arrows through — least of all by
+        # ear. Matches title and author.
+        controls.Add(
+            wx.StaticText(panel, label="&Find:"),
+            0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 4,
+        )
+        self.find_ctrl = wx.TextCtrl(panel)
+        self.find_ctrl.SetName("Find in this list")
+        self.find_ctrl.Bind(wx.EVT_TEXT, self._on_find_text)
+        controls.Add(self.find_ctrl, 1, wx.RIGHT, 16)
+
         select_all = wx.Button(panel, label="&Select All")
         select_all.Bind(wx.EVT_BUTTON, lambda e: self._set_all(True))
         controls.Add(select_all, 0, wx.RIGHT, 4)
@@ -414,7 +432,9 @@ class StoryPickerDialog(wx.Dialog):
             panel,
             label=(
                 "Use the arrow keys to move, space to tick or untick, "
-                "and press Download to fetch every ticked story."
+                "and press Download to fetch every ticked story. Type in "
+                "Find to narrow the list by title or author; ticks you "
+                "have already made are kept while you narrow."
             ),
         )
         sizer.Add(hint, 0, wx.ALL, 8)
@@ -476,6 +496,7 @@ class StoryPickerDialog(wx.Dialog):
 
     def _visible_indices(self):
         idxs = []
+        needle = self._text_filter
         for i in self._order:
             w = self._works[i]
             if self._section_filter == "own" and w.get("section") != "own":
@@ -484,8 +505,47 @@ class StoryPickerDialog(wx.Dialog):
                 "favorites", "bookmarks",
             ):
                 continue
+            if needle and not self._matches_text(w, needle):
+                continue
             idxs.append(i)
         return idxs
+
+    @staticmethod
+    def _matches_text(work, needle: str) -> bool:
+        """Substring match over title and author, both lowercased.
+
+        Deliberately not the summary: on a forum listing the summary is
+        the last post in the thread, so matching it would surface
+        stories whose title has nothing to do with what was typed.
+        """
+        title = str(work.get("title") or "").lower()
+        author = str(work.get("author") or "").lower()
+        return needle in title or needle in author
+
+    def _on_find_text(self, event):
+        """Re-filter shortly after typing stops.
+
+        Rebuilding a several-thousand-row list on every keystroke makes
+        the dialog stutter and floods a screen reader with list-changed
+        events mid-word, so the work is deferred until the typing
+        pauses.
+        """
+        if self._filter_later is not None and self._filter_later.IsRunning():
+            self._filter_later.Restart(_FILTER_DEBOUNCE_MS)
+        else:
+            self._filter_later = wx.CallLater(
+                _FILTER_DEBOUNCE_MS, self._apply_text_filter,
+            )
+
+    def _apply_text_filter(self):
+        self._filter_later = None
+        if not self:
+            return
+        needle = self.find_ctrl.GetValue().strip().lower()
+        if needle == self._text_filter:
+            return
+        self._text_filter = needle
+        self._refresh()
 
     def _refresh(self):
         idxs = self._visible_indices()

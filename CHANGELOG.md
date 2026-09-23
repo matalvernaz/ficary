@@ -29,6 +29,32 @@
   identity in the query part of its address. Every supported site is now
   checked against that, so a new one cannot be added with this fault.
 
+*Downloading a whole Mousepad section*
+
+* Pasting the address of a story section, such as the Stories forum,
+  reported that it could not find a story there. A section is now
+  recognised for what it is: it gets listed, and every thread in it is
+  offered in the same tick-list picker an author page uses, so a whole
+  section or any part of one can be fetched in a single go. Listing a
+  large section takes about a minute and reports its progress as it
+  goes; if the connection drops part way, what was listed is kept and
+  says how far it got.
+* Pasting the board's own address now shows the story sections it has,
+  with a one-line description and a thread count for each, and asks
+  which one to list. Four are offered: Stories, Story Requests, the
+  Classic Story Library, and Experiences and Anecdotes. On the command
+  line the same address prints that list and the address of each
+  section.
+* Searching The Mousepad from the Erotic Story Search window is
+  unchanged, and still covers Stories and the Classic Story Library
+  only. The other two sections hold requests and personal accounts
+  rather than fiction, so they would crowd out real results; they stay
+  reachable by choosing them directly.
+* The story picker now has a Find box that narrows the list by title or
+  author as you type. The largest section runs to over five thousand
+  threads, which is not a list anyone can work through by arrow key.
+  Stories already ticked stay ticked while the list is narrowed.
+
 ## 2.20.1 — 2026-09-16
 
 **The desktop stays responsive under a screen reader, and a FanFiction.net hiccup no longer fails a story**

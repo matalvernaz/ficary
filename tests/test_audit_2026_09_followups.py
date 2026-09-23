@@ -304,6 +304,10 @@ def test_a_cancelled_render_is_reported_as_cancelled_not_as_an_error():
             return False
 
         @staticmethod
+        def is_forum_url(url):
+            return False
+
+        @staticmethod
         def is_series_url(url):
             return False
 

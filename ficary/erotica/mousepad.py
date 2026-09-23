@@ -37,8 +37,10 @@ from bs4 import BeautifulSoup, MarkupResemblesLocatorWarning
 from ..models import Chapter, Story, chapter_in_spec
 from ..scraper import BaseScraper
 from .tapatalk import (
+    MOUSEPAD_BASE,
     MOUSEPAD_GROUP,
     THREAD_WINDOW,
+    TOPIC_WINDOW,
     decode_value,
     iso_datetime,
     mobiquo_call,
@@ -60,6 +62,47 @@ MP_SLUG_URL_RE = re.compile(
     r"tapatalk\.com/groups/" + MOUSEPAD_GROUP
     + r"/[a-z0-9_-]+-t(?P<id>\d+)(?:-s\d+)?(?:\.html)?",
     re.I,
+)
+
+# Forum-section URL shapes. Tapatalk renders every section as a
+# ``<slug>-f<id>/`` permalink (what the address bar shows while you
+# browse) and still answers phpBB's own ``viewforum.php?f=<id>``.
+MP_VIEWFORUM_URL_RE = re.compile(
+    r"tapatalk\.com/groups/" + MOUSEPAD_GROUP
+    + r"/viewforum\.php\?(?:[^#\s]*&)?f=(?P<id>\d+)",
+    re.I,
+)
+MP_SLUG_FORUM_URL_RE = re.compile(
+    r"tapatalk\.com/groups/" + MOUSEPAD_GROUP
+    + r"/[a-z0-9_-]+-f(?P<id>\d+)(?:-s\d+)?(?:\.html)?/?$",
+    re.I,
+)
+# The board's front page. Pasting it means "show me what's here", which
+# is answered with the section list rather than a download.
+MP_GROUP_ROOT_RE = re.compile(
+    r"tapatalk\.com/groups/" + MOUSEPAD_GROUP + r"/?$",
+    re.I,
+)
+
+# The board groups its sections under named categories; this is the one
+# holding fiction. Matched by id first and by name second so a
+# re-numbering upstream doesn't silently empty the section list.
+STORY_CATEGORY_ID = "135"
+STORY_CATEGORY_NAME = "stories"
+
+# Used when ``get_forum`` is unreachable or returns a shape we don't
+# recognise. Ids verified live 2026-09-23; the descriptions are the
+# board's own. Without this a transient API failure would present an
+# empty section list, which reads as "this board has no stories".
+FALLBACK_STORY_FORUMS: tuple[tuple[str, str, str], ...] = (
+    ("72", "Stories",
+     "Share your foot stories here, fiction or non-fiction!"),
+    ("94", "Story Requests",
+     "Request old stories and post ideas for other writers to work on."),
+    ("97", "Classic Story Library",
+     "An archive of the most popular stories in MousePad history."),
+    ("96", "Experiences and Anecdotes",
+     "Quick accounts of things that have happened to you."),
 )
 
 SUMMARY_MAX_CHARS = 300
@@ -202,6 +245,217 @@ class MousepadScraper(BaseScraper):
     @classmethod
     def cache_key_for_url(cls, url_or_id):
         return int(cls.parse_story_id(url_or_id))
+
+    # ── Forum sections ───────────────────────────────────────────
+
+    @staticmethod
+    def parse_forum_id(url_or_id) -> str:
+        """Return the forum id in ``url_or_id``, or ``""``.
+
+        ``""`` means "a section wasn't named" — the board's front page.
+        Callers answer that with the section list rather than a
+        download, so the empty string is a real answer here, not a
+        failure.
+        """
+        text = str(url_or_id).strip()
+        for pattern in (MP_VIEWFORUM_URL_RE, MP_SLUG_FORUM_URL_RE):
+            m = pattern.search(text)
+            if m:
+                return m.group("id")
+        return ""
+
+    @staticmethod
+    def is_forum_url(url) -> bool:
+        """True for a section listing or the board's front page.
+
+        A thread carries the section id in ``?f=`` alongside its own
+        ``?t=``, so the topic patterns are tried first: without that,
+        every story link followed out of a forum listing would open the
+        section picker instead of downloading the story.
+        """
+        text = str(url).strip()
+        for topic_pattern in (MP_VIEWTOPIC_URL_RE, MP_SLUG_URL_RE):
+            if topic_pattern.search(text):
+                return False
+        return bool(
+            MP_VIEWFORUM_URL_RE.search(text)
+            or MP_SLUG_FORUM_URL_RE.search(text)
+            or MP_GROUP_ROOT_RE.search(text)
+        )
+
+    @staticmethod
+    def forum_url(forum_id) -> str:
+        """Canonical section URL. The slug-free ``viewforum.php`` form
+        survives a section rename, same reasoning as
+        :func:`~ficary.erotica.tapatalk.topic_url`."""
+        return f"{MOUSEPAD_BASE}/viewforum.php?f={int(str(forum_id))}"
+
+    @classmethod
+    def _walk_forum_tree(cls, nodes, wanted: bool = False) -> list[dict]:
+        """Flatten the fiction part of ``get_forum``'s nested reply.
+
+        ``wanted`` turns true once the walk enters the fiction category
+        and stays true for everything below it, which is what picks up
+        the sections nested one level deeper (Story Requests and the
+        Classic Story Library both hang off Stories, not off the
+        category). Categories themselves carry ``sub_only`` and hold no
+        threads, so they're descended into but never listed.
+        """
+        out: list[dict] = []
+        for node in nodes or []:
+            fid = decode_value(node.get("forum_id"))
+            name = decode_value(node.get("forum_name"))
+            in_story_tree = wanted or (
+                fid == STORY_CATEGORY_ID
+                or name.strip().lower() == STORY_CATEGORY_NAME
+            )
+            is_category = str(node.get("sub_only")).lower() == "true"
+            if in_story_tree and not is_category and fid:
+                out.append({
+                    "id": fid,
+                    "name": name or f"Forum {fid}",
+                    "description": decode_value(node.get("description")),
+                })
+            out.extend(cls._walk_forum_tree(node.get("child"), in_story_tree))
+        return out
+
+    @classmethod
+    def story_forums(cls, *, with_counts: bool = True,
+                     progress=None) -> list[dict]:
+        """List the board's story sections, newest-activity order intact.
+
+        Each dict is ``{"id", "name", "description", "topics", "url"}``.
+        ``topics`` is ``None`` when the count wasn't asked for or the
+        section didn't answer, so a display can tell "none" from
+        "unknown" instead of printing a confident zero.
+
+        Falls back to :data:`FALLBACK_STORY_FORUMS` if ``get_forum`` is
+        unreachable — an empty list would read as "this board has no
+        stories", which is a worse lie than a slightly stale one.
+        """
+        def report(line: str) -> None:
+            logger.info("%s", line)
+            if progress:
+                progress(line)
+
+        forums: list[dict] = []
+        try:
+            resp = mobiquo_call("get_forum")
+            nodes = resp if isinstance(resp, list) else (resp.get("list") or [])
+            forums = cls._walk_forum_tree(nodes)
+        except Exception as exc:
+            report(
+                f"Couldn't read the forum list from the board ({exc}); "
+                "using the sections known at build time."
+            )
+        if not forums:
+            forums = [
+                {"id": fid, "name": name, "description": desc}
+                for fid, name, desc in FALLBACK_STORY_FORUMS
+            ]
+        for f in forums:
+            f["url"] = cls.forum_url(f["id"])
+            f["topics"] = None
+        if not with_counts:
+            return forums
+        for f in forums:
+            try:
+                resp = mobiquo_call("get_topic", f["id"], 0, 0)
+                f["topics"] = int(resp.get("total_topic_num") or 0)
+            except Exception as exc:
+                # Leave ``topics`` as None; the section is still
+                # listed and still downloadable.
+                logger.warning(
+                    "Mousepad: no topic count for forum %s: %s", f["id"], exc,
+                )
+        return forums
+
+    def scrape_forum_works(self, url, progress=None):
+        """Return ``(forum_name, [work_dict, ...])`` for one section.
+
+        Walks the section's topic listing in
+        :data:`~ficary.erotica.tapatalk.TOPIC_WINDOW` chunks, newest
+        activity first. The board's biggest section runs to thousands of
+        threads, so each window is reported as it lands rather than
+        leaving the caller in silence for a minute.
+
+        A window that fails part-way through returns what was collected
+        so far, saying plainly how much of the section that is — the
+        alternative is throwing away a minute of listing, and a silent
+        partial would be indistinguishable from a short section.
+        """
+        forum_id = self.parse_forum_id(url)
+        if not forum_id:
+            raise ValueError(
+                f"{url} names the board, not one of its sections. "
+                "Use MousepadScraper.story_forums() to list them."
+            )
+
+        def report(line: str) -> None:
+            logger.info("%s", line)
+            if progress:
+                progress(line)
+
+        works: list[dict] = []
+        seen: set[str] = set()
+        forum_name = f"Forum {forum_id}"
+        total = 0
+        start = 0
+        while True:
+            try:
+                resp = mobiquo_call(
+                    "get_topic", forum_id, start, start + TOPIC_WINDOW - 1,
+                )
+            except Exception as exc:
+                report(
+                    f"Listing stopped after {len(works)} of "
+                    f"{total or 'an unknown number of'} threads in "
+                    f"{forum_name}: {exc}"
+                )
+                break
+            name = decode_value(resp.get("forum_name"))
+            if name:
+                forum_name = name
+            # The server clamps an out-of-range offset to the listing's
+            # tail rather than returning nothing, so walking past the
+            # end re-serves the same rows forever. Bound it ourselves
+            # against the reported total.
+            total = int(resp.get("total_topic_num") or 0) or total
+            if total and start >= total:
+                break
+            rows = resp.get("topics") or []
+            if not rows:
+                break
+            for t in rows:
+                topic_id = decode_value(t.get("topic_id"))
+                title = decode_value(t.get("topic_title"))
+                if not topic_id or not title or topic_id in seen:
+                    continue
+                seen.add(topic_id)
+                works.append({
+                    "title": title,
+                    "author": decode_value(t.get("topic_author_name")),
+                    "url": topic_url(topic_id),
+                    "summary": decode_value(t.get("short_content")),
+                    # Chapters are the author's posts, which can only be
+                    # counted by opening the thread. ``reply_number``
+                    # counts everyone's posts, so reporting it as a
+                    # chapter count would be a wrong number, not a
+                    # rough one.
+                    "words": "", "chapters": "", "rating": "M",
+                    "fandom": "", "status": "",
+                    "section": forum_name,
+                    "site": "mousepad",
+                    "updated": iso_datetime(t.get("post_time")),
+                })
+            start += len(rows)
+            report(
+                f"  {forum_name}: listed {len(works)} of {total} threads"
+            )
+            if start >= total:
+                break
+            self._delay()
+        return forum_name, works
 
     def _fetch_thread(self, topic_id: str) -> tuple[dict, list[dict]]:
         """Walk the thread's post windows and return

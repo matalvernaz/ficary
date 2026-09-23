@@ -377,6 +377,16 @@ def is_series_url(url: str) -> bool:
     return AO3Scraper.is_series_url(url) or LiteroticaScraper.is_series_url(url)
 
 
+def is_forum_url(url: str) -> bool:
+    """Return True if ``url`` is a forum section listing story threads.
+
+    Forum-backed sites publish stories as threads in a section, so this
+    is their equivalent of an author page: one address standing for many
+    stories. The Mousepad is the only site with sections today.
+    """
+    return any(cls.is_forum_url(url) for cls in ALL_SCRAPERS)
+
+
 def extract_story_url(text: str) -> Optional[str]:
     """Return the first supported story URL found in ``text``, or None.
 
