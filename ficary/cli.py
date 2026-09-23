@@ -1671,6 +1671,21 @@ _FMT_MAP = {".epub": "epub", ".html": "html", ".txt": "txt"}
 _CF_BREAKER_THRESHOLD = 3
 
 
+def _failure_reason(exc: BaseException) -> str:
+    """Describe ``exc`` in a way that is never blank.
+
+    The update sweep reports a failed probe as ``probe failed: {exc}``,
+    and some exceptions carry no message at all — a bare
+    ``raise NotImplementedError`` stringifies to ``""``, so the line
+    arrived as "probe failed:" and stopped. That is worse than useless
+    read aloud: it says something went wrong and withholds the only
+    part that would let anyone act on it. Falling back to the exception
+    type at least names the fault.
+    """
+    text = str(exc).strip()
+    return text or type(exc).__name__
+
+
 def _run_update_queue(
     probe_queue: list[dict],
     args,
@@ -1838,11 +1853,11 @@ def _run_update_queue(
                 probe_answered = True
             except _PROBE_EXPECTED_ERRORS as exc:
                 entry["error"] = exc
-                outcome = f"probe failed: {exc}"
+                outcome = f"probe failed: {_failure_reason(exc)}"
             except (OSError, RuntimeError) as exc:
                 logger.debug("Chapter-count probe failed", exc_info=True)
                 entry["error"] = exc
-                outcome = f"probe failed: {exc}"
+                outcome = f"probe failed: {_failure_reason(exc)}"
             with probe_progress_lock:
                 completed_count[0] += 1
                 progress(

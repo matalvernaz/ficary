@@ -1670,8 +1670,18 @@ class BaseScraper:
         Used by update-mode to decide whether to fetch anything else.
         Subclasses must override with a site-specific implementation that
         does not pull full chapter bodies.
+
+        The message matters: the update sweep catches this and prints
+        nothing but ``str(exc)``, so a bare ``raise NotImplementedError``
+        reaches the user as "probe failed:" with an empty reason. That
+        is what a missing implementation looked like in the field —
+        every story on the site silently un-updatable, with no clue why.
         """
-        raise NotImplementedError
+        raise NotImplementedError(
+            f"{self.site_name} can't report a chapter count, so stories "
+            "from it can't be checked for updates. Re-download the story "
+            "to pick up new chapters."
+        )
 
     def probe_chapter_count(self, url_or_id):
         """:meth:`get_chapter_count` behind the scraper's pacing gate.

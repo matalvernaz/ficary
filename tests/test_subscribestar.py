@@ -272,3 +272,120 @@ class TestStoryMerge:
         ) == "<p>inline</p>"
         # neither → None
         assert sc._resolve_body({"doc_url": None, "body_html": ""}) is None
+
+
+class TestChapterCountProbe:
+    """Update checks probe the chapter count before downloading.
+
+    SubscribeStar had no implementation, so the base class's bare
+    ``raise NotImplementedError`` reached the update sweep. Because
+    ``NotImplementedError`` subclasses ``RuntimeError`` it was caught by
+    the sweep's catch-all and, having no message, printed as
+    ``probe failed:`` with nothing after the colon — so a SubscribeStar
+    story could never be updated and never said why. Seen in a real log
+    on 2026-09-23.
+    """
+
+    @staticmethod
+    def _posts():
+        return [
+            {"title": "Wrecking the Homewrecker Pt.24", "doc_url": "", "body_html": "x"},
+            {"title": "Wrecking the Homewrecker Pt.22", "doc_url": "", "body_html": "x"},
+            {"title": "Wrecking the Homewrecker Pt.23", "doc_url": "", "body_html": "x"},
+            # A different serial by the same creator must not be counted.
+            {"title": "From Soccer to Sucker Pt.60", "doc_url": "", "body_html": "x"},
+            # An un-numbered post can't be placed in the sequence.
+            {"title": "Wrecking the Homewrecker", "doc_url": "", "body_html": "x"},
+        ]
+
+    def test_counts_only_this_serials_numbered_parts(self, monkeypatch):
+        sc = SubscribeStarScraper()
+        monkeypatch.setattr(sc, "_enumerate_posts", lambda h: self._posts())
+        url = (
+            "https://subscribestar.adult/fibaro/story/"
+            "Wrecking%20the%20Homewrecker"
+        )
+        assert sc.get_chapter_count(url) == 3
+
+    def test_a_reposted_part_is_not_counted_twice(self, monkeypatch):
+        sc = SubscribeStarScraper()
+        posts = self._posts() + [
+            {"title": "Wrecking the Homewrecker Pt.23", "doc_url": "",
+             "body_html": "re-post"},
+        ]
+        monkeypatch.setattr(sc, "_enumerate_posts", lambda h: posts)
+        url = (
+            "https://subscribestar.adult/fibaro/story/"
+            "Wrecking%20the%20Homewrecker"
+        )
+        assert sc.get_chapter_count(url) == 3
+
+    def test_a_single_post_is_one_chapter_without_a_fetch(self, monkeypatch):
+        """A ``/posts/<id>`` work is one post and always will be, so the
+        probe must not walk the creator's whole feed to say so."""
+        sc = SubscribeStarScraper()
+
+        def explode(*a, **k):  # pragma: no cover - must never run
+            raise AssertionError("probing a single post must not enumerate")
+
+        monkeypatch.setattr(sc, "_enumerate_posts", explode)
+        monkeypatch.setattr(sc, "_fetch", explode)
+        assert sc.get_chapter_count(
+            "https://subscribestar.adult/posts/2563358"
+        ) == 1
+
+    def test_missing_serial_is_reported_as_story_not_found(self, monkeypatch):
+        """StoryNotFoundError is one of the probe's expected answers, so
+        the sweep records the story as gone instead of retrying it
+        forever behind a blank error."""
+        from ficary.scraper import StoryNotFoundError
+
+        sc = SubscribeStarScraper()
+        monkeypatch.setattr(sc, "_enumerate_posts", lambda h: [])
+        with pytest.raises(StoryNotFoundError):
+            sc.get_chapter_count(
+                "https://subscribestar.adult/fibaro/story/Gone"
+            )
+
+
+def test_every_downloadable_site_can_be_update_probed():
+    """A scraper that can download but not report a chapter count is a
+    story the library can never update.
+
+    This is the sweep for the SubscribeStar bug: the gap was invisible
+    because the base class raises rather than being abstract, so nothing
+    failed until a real library hit it two years later.
+    """
+    from ficary.scraper import BaseScraper
+    from ficary.sites import ALL_SCRAPERS, EROTICA_SCRAPERS, _HOSTNAME_TO_SCRAPER
+
+    classes = {cls for _, cls in _HOSTNAME_TO_SCRAPER}
+    classes.update(ALL_SCRAPERS)
+    classes.update(EROTICA_SCRAPERS)
+    missing = sorted(
+        cls.__name__ for cls in classes
+        if cls.get_chapter_count is BaseScraper.get_chapter_count
+    )
+    assert not missing, (
+        f"{missing} can download stories but not probe them for updates — "
+        "implement get_chapter_count"
+    )
+
+
+def test_unimplemented_probe_explains_itself():
+    """The base class must not raise a message-less exception.
+
+    ``probe failed:`` with an empty reason is what the user heard. The
+    site name and the reason have to be in the message itself, because
+    that message is all the update sweep prints.
+    """
+    from ficary.scraper import BaseScraper
+
+    class _Bare(BaseScraper):
+        site_name = "examplesite"
+
+    with pytest.raises(NotImplementedError) as excinfo:
+        _Bare().get_chapter_count("https://example.com/s/1")
+    message = str(excinfo.value)
+    assert message.strip(), "a bare raise prints as an empty failure reason"
+    assert "examplesite" in message

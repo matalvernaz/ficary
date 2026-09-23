@@ -550,6 +550,22 @@ class SearchFrame(wx.Frame):
             self.pick_multi_btn.Hide()
         dl_row.Add(self.pick_multi_btn, 0, wx.RIGHT, 8)
 
+        # The Mousepad publishes its stories as forum threads grouped
+        # into sections, which a keyword search can't show you — you
+        # have to be able to look at what is there. It belongs in this
+        # window rather than the Search menu because these are erotic
+        # stories and this is where they are looked for.
+        self.browse_forum_btn = wx.Button(
+            panel, label="&Browse The Mousepad...",
+        )
+        self.browse_forum_btn.SetName("Browse The Mousepad story sections")
+        self.browse_forum_btn.Bind(
+            wx.EVT_BUTTON, lambda e: self._on_browse_forum(),
+        )
+        if self.site_key != "erotica":
+            self.browse_forum_btn.Hide()
+        dl_row.Add(self.browse_forum_btn, 0, wx.RIGHT, 8)
+
         self.load_more_btn = wx.Button(panel, label="Load &More")
         self.load_more_btn.Bind(
             wx.EVT_BUTTON, lambda e: self._on_load_more(),
@@ -1439,6 +1455,16 @@ class SearchFrame(wx.Frame):
         self.main_frame._open_picker(
             title, works, self._handle_picker_selection,
         )
+
+    def _on_browse_forum(self):
+        """Open The Mousepad's story sections.
+
+        Hands straight off to the main window, which owns the download
+        machinery and already answers the board's address with the
+        section list. Keeping one implementation means the button and
+        a pasted address can't drift apart.
+        """
+        self.main_frame._on_browse_mousepad(None)
 
     def _handle_picker_selection(self, picked_urls):
         """Callback from the picker dialog — kick off a batch download

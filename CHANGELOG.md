@@ -1,5 +1,33 @@
 # Changelog
 
+## 2.20.3 — 2026-09-23
+
+**SubscribeStar stories can be checked for updates, and a failed check says why**
+
+*Update checks*
+
+* Stories from SubscribeStar were never checked for updates. The site
+  had no way to report how many parts a serial has, so every check
+  failed the moment it started. It now counts the creator's numbered
+  posts for that story, which is the same list a download merges, while
+  stopping short of fetching any of them.
+* A failed check could report an empty reason: the line read "probe
+  failed:" and stopped. That is the worst possible form for anyone
+  reading the log, and it is what the SubscribeStar failure looked
+  like, which is why the cause went unnoticed. A check that fails
+  without an explanation now at least names the fault, and the
+  unsupported-site case explains itself in full.
+* Every site Ficary can download from is now checked against this. A
+  site that can fetch stories but not report a chapter count means a
+  library that quietly never updates, and nothing used to catch it.
+
+*Browsing The Mousepad*
+
+* The story sections added in 2.20.2 could only be reached by knowing
+  the board's web address and pasting it in. Erotic Story Search now
+  has a Browse The Mousepad button that opens the section list
+  directly.
+
 ## 2.20.2 — 2026-09-23
 
 **Stories from The Mousepad are tracked one by one again**

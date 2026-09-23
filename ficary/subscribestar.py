@@ -375,6 +375,45 @@ class SubscribeStarScraper(CookieAuthMixin, BaseScraper):
             story.chapters.append(Chapter(number=1, title=title, html=body))
         return story
 
+    def get_chapter_count(self, url_or_id):
+        """Count the parts upstream, without resolving any of them.
+
+        A merged serial's chapters are the creator's numbered posts for
+        that story, so the count is how many distinct part numbers the
+        feed carries — the same set :meth:`download_creator_story`
+        merges, but stopping before the expensive bit (each part's body
+        is a separate Google Doc or post fetch).
+
+        A plain ``/posts/<id>`` work is a single post and always will
+        be, so it answers 1 without touching the network at all.
+
+        Counts parts, not successfully-resolved bodies: a part whose
+        document can't be read is still a part the creator published,
+        and reporting fewer would hide genuinely new instalments. The
+        cost is that a permanently unreadable part keeps the story
+        looking one behind.
+        """
+        m = _STORY_URL_RE.search(str(url_or_id))
+        if not m:
+            # Validates the URL and raises the usual parse error for
+            # anything that isn't a SubscribeStar work.
+            self.parse_story_id(url_or_id)
+            return 1
+        handle = m.group(1)
+        want = _base_title(unquote(m.group(2)))
+        parts = {
+            n for p in self._enumerate_posts(handle)
+            if _base_title(p["title"]) == want
+            and (n := _part_number(p["title"])) is not None
+        }
+        if not parts:
+            raise StoryNotFoundError(
+                f"No numbered posts matched {unquote(m.group(2))!r} for "
+                f"creator {handle!r} — the serial may have been renamed, "
+                "unpublished, or moved behind a tier this account can't see."
+            )
+        return len(parts)
+
     def download_creator_story(self, url_or_handle, base_title, *,
                                progress_callback=None):
         """Enumerate a creator's posts, keep the ones whose base title

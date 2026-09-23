@@ -271,3 +271,21 @@ def test_final_flush_handles_remainder_under_batch_size(tmp_path):
         if e.get("last_probed")
     ]
     assert len(stamped) == 10
+
+
+def test_a_message_less_probe_failure_still_names_the_fault():
+    """A failed probe is reported as ``probe failed: {exc}``, and some
+    exceptions carry no message.
+
+    A bare ``raise NotImplementedError`` stringifies to "", so the line
+    arrived as "probe failed:" and stopped — it announced a failure and
+    withheld the only part anyone could act on. Hit in a real log on
+    2026-09-23, where every SubscribeStar story in a library failed this
+    way on every sweep.
+    """
+    from ficary.cli import _failure_reason
+
+    assert _failure_reason(NotImplementedError()) == "NotImplementedError"
+    assert _failure_reason(RuntimeError("   ")) == "RuntimeError"
+    # A real message is always preferred over the class name.
+    assert _failure_reason(ValueError("no topic id")) == "no topic id"

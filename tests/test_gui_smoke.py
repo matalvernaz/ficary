@@ -864,3 +864,80 @@ def test_save_to_folder_does_not_persist(wx_app):
         assert frame.output_ctrl.GetValue() == "/library/root"
     finally:
         frame.Destroy()
+
+
+def test_mousepad_sections_are_reachable_from_erotic_story_search(wx_app):
+    """The story sections must be findable without knowing a URL.
+
+    Pasting the board's web address into Add Story opens the same flow,
+    but only for someone who already knows the address and knows that
+    pasting it does anything, so the sections were effectively
+    undiscoverable. The button lives in Erotic Story Search because
+    that is where these stories are looked for.
+    """
+    from ficary import gui, gui_search
+
+    frame = gui.MainFrame()
+    try:
+        search = gui_search.SearchFrame(
+            frame, "erotica", gui._erotica_search_spec(),
+        )
+        try:
+            assert search.browse_forum_btn.IsShown()
+            assert "Mousepad" in search.browse_forum_btn.GetLabel()
+        finally:
+            search.Destroy()
+
+        # Per-site frames have no forum sections to browse.
+        ffn = gui_search.SearchFrame(frame, "ffn", gui._ffn_search_spec())
+        try:
+            assert not ffn.browse_forum_btn.IsShown()
+        finally:
+            ffn.Destroy()
+    finally:
+        frame.Destroy()
+
+
+def test_browse_button_hands_off_to_the_board_address(wx_app, monkeypatch):
+    """The button and a pasted board address must run one flow.
+
+    Asserting on the URL handed to the worker keeps the two entry
+    points from drifting: the browse button is only correct as long as
+    it asks for the same thing pasting the address asks for.
+    """
+    import threading
+
+    from ficary import gui
+    from ficary.erotica.tapatalk import MOUSEPAD_BASE
+
+    frame = gui.MainFrame()
+    try:
+        monkeypatch.setattr(
+            gui.MainFrame, "_require_save_target", lambda self: True,
+        )
+        started = {}
+
+        class _NoThread:
+            def __init__(self, target=None, args=(), kwargs=None, daemon=None):
+                started["target"] = target
+                started["args"] = args
+
+            def start(self):
+                started["started"] = True
+
+        monkeypatch.setattr(threading, "Thread", _NoThread)
+        frame._on_browse_mousepad(None)
+
+        assert started.get("started") is True
+        assert started["target"] == frame._run_download
+        url = started["args"][0]
+        assert url.startswith(MOUSEPAD_BASE)
+        # It must be the board address, not a section or a topic: the
+        # board address is what produces the section list.
+        from ficary.erotica.mousepad import MousepadScraper
+
+        assert MousepadScraper.is_forum_url(url)
+        assert MousepadScraper.parse_forum_id(url) == ""
+    finally:
+        frame._set_busy(False)
+        frame.Destroy()

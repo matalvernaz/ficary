@@ -2506,6 +2506,40 @@ class MainFrame(wx.Frame):
             event.Veto()      # user close — keep the window alive, hidden
         self._dismiss_add_story()
 
+    def _on_browse_mousepad(self, event):
+        """Open The Mousepad's story sections from the menu.
+
+        The same flow answers the board's web address pasted into Add
+        Story, but that requires knowing the address and knowing that
+        pasting it does anything — so the only way to discover the
+        sections was to be told. This is the entry point that makes
+        them findable: pick a section, then pick stories from it.
+
+        Deliberately routed through ``_run_download`` rather than
+        calling the picker directly, so the section browse behaves
+        exactly like the pasted-address path (same busy handling, same
+        cookie and format settings, one code path to keep correct).
+        """
+        from .erotica.tapatalk import MOUSEPAD_BASE
+
+        if not self._require_save_target():
+            return
+        if self._global_busy:
+            # Same reasoning as the batch branch in _on_download: a
+            # muted return reads as a dead menu item.
+            self._log(
+                "Busy with another search or batch — wait for it to "
+                "finish, then browse again."
+            )
+            return
+        params = self._snapshot_download_params()
+        self._set_busy(True, kind="download")
+        self._log("Browsing The Mousepad story sections...")
+        threading.Thread(
+            target=self._run_download, args=(f"{MOUSEPAD_BASE}/",),
+            kwargs={"params": params}, daemon=True,
+        ).start()
+
     def _on_add_from_url_list(self, event):
         """Open the bulk URL-list picker; enqueue every fic the user
         ticks through the same per-site queue a single download uses."""
