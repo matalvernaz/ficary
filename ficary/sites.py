@@ -531,6 +531,16 @@ _GW_SID_RE = re.compile(r"(?:^|[?&])sid=(\d+)", re.I)
 # Chastity Mansion runs XenForo without friendly URLs: the thread ref
 # IS the query string (``index.php?threads/<slug>.<tid>/page-N``).
 _CM_THREADS_RE = re.compile(r"^threads/([^/.]+\.\d+)", re.I)
+# Tapatalk Groups boards keep the topic id in ``?t=<N>`` on viewtopic.php
+# and in a ``-t<N>`` suffix on the SEO permalink Tapatalk renders for
+# every topic. The board slug has to survive canonicalisation too —
+# tapatalk.com hosts thousands of independent forums under
+# ``/groups/<board>/``, so the group is part of a topic's identity.
+_TAPATALK_GROUP_RE = re.compile(r"^/groups/([^/]+)(?:/|$)", re.I)
+_TAPATALK_T_RE = re.compile(r"(?:^|[?&])t=(\d+)")
+_TAPATALK_SLUG_T_RE = re.compile(
+    r"^/groups/[^/]+/[a-z0-9_-]+-t(\d+)(?:-s\d+)?(?:\.html)?/?$", re.I,
+)
 
 
 def canonical_url(url: str) -> str:
@@ -633,6 +643,34 @@ def canonical_url(url: str) -> str:
                 "/stories/story.php",
                 f"storyid={m.group(1)}", "",
             ))
+
+    # Tapatalk Groups (The Mousepad and any future board): the topic id
+    # is the only thing that identifies a story, and it lives in the
+    # query string or in the permalink slug's ``-t<N>`` suffix. Without
+    # this rule the generic "drop the query" cleanup below reduced every
+    # topic on a board to the bare ``viewtopic.php`` — so the library
+    # index held one entry for the whole site, filed every other story
+    # as that entry's duplicate, and handed the update probe a URL with
+    # no story in it. Emitting the ``viewtopic.php?t=<N>`` form keeps
+    # ``MousepadScraper.parse_story_id`` able to read the canonical URL
+    # back, which is what the update sweep feeds it.
+    if "tapatalk.com" in netloc:
+        group_m = _TAPATALK_GROUP_RE.match(path)
+        if group_m:
+            group = group_m.group(1).lower()
+            slug_m = _TAPATALK_SLUG_T_RE.match(path)
+            if slug_m:
+                topic_id = slug_m.group(1)
+            elif path.lower().endswith("/viewtopic.php"):
+                query_m = _TAPATALK_T_RE.search(parts.query or "")
+                topic_id = query_m.group(1) if query_m else ""
+            else:
+                topic_id = ""
+            if topic_id:
+                return urlunsplit((
+                    "https", "www.tapatalk.com",
+                    f"/groups/{group}/viewtopic.php", f"t={topic_id}", "",
+                ))
 
     for host_fragment, canonical_host, path_re, path_template in _CANONICAL_RULES:
         if host_fragment not in netloc:

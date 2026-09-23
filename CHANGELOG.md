@@ -1,5 +1,34 @@
 # Changelog
 
+## Unreleased
+
+**Stories from The Mousepad are tracked one by one again**
+
+*Library tracking and update checks*
+
+* Every story saved from The Mousepad shared a single slot in the
+  library. The forum puts a story's identity in the topic number at the
+  end of its web address, and that part was being discarded when the
+  address was filed, so all of them reduced to the same entry. The first
+  story downloaded held the slot and every one after it was recorded as
+  a duplicate copy of that story rather than being tracked in its own
+  right, which is why checking for updates never found anything: the one
+  address left in the library named the forum, not a story.
+* Topic numbers are now kept, so each story gets its own entry, its own
+  chapter count, and a working update check. The three shapes a
+  Mousepad link arrives in (the plain address, one followed out of a
+  forum listing, and the readable permalink) all resolve to the same
+  entry, so saving the same story from two different links no longer
+  files it twice.
+* **Existing libraries need one re-scan.** The collapsed entry cannot be
+  repaired on its own because the topic numbers are not in it. Opening
+  the library now removes that entry and says so in the log, naming
+  every file it had absorbed. Run Scan (or "Import existing folder") once
+  and each story is registered properly, with no downloading required.
+* The same failure would have hit any future site that keeps a story's
+  identity in the query part of its address. Every supported site is now
+  checked against that, so a new one cannot be added with this fault.
+
 ## 2.20.1 — 2026-09-16
 
 **The desktop stays responsive under a screen reader, and a FanFiction.net hiccup no longer fails a story**

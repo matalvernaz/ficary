@@ -50,6 +50,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterator
@@ -664,6 +665,9 @@ def _migrate_non_canonical_keys(raw: dict) -> None:
         rekeyed: dict[str, dict] = {}
         for old_key, entry in stories.items():
             new_key = canonical_url(old_key) or old_key
+            if _is_idless_forum_key(new_key):
+                _warn_idless_forum_entry(new_key, entry)
+                continue
             existing = rekeyed.get(new_key)
             if existing is None:
                 rekeyed[new_key] = entry
@@ -672,6 +676,53 @@ def _migrate_non_canonical_keys(raw: dict) -> None:
             _merge_secondary_into_primary(primary, secondary)
             rekeyed[new_key] = primary
         lib["stories"] = rekeyed
+
+
+# A correctly canonicalised Tapatalk topic URL always carries its topic
+# id in ``?t=<N>``. Anything else under ``/groups/<board>/`` is the
+# id-less wreckage described in :func:`_is_idless_forum_key`.
+_TAPATALK_CANONICAL_TOPIC_RE = re.compile(
+    r"^https://www\.tapatalk\.com/groups/[^/]+/viewtopic\.php\?t=\d+$", re.I,
+)
+
+
+def _is_idless_forum_key(key: str) -> bool:
+    """True for an index key that names a site but no particular story.
+
+    Before the Tapatalk canonicalisation rule existed, ``canonical_url``
+    dropped the query string from a Mousepad topic URL, so every story
+    on the board canonicalised to the bare ``.../viewtopic.php``. The
+    index is keyed by that string, so the whole board collapsed into a
+    single entry and each further story was filed as that entry's
+    duplicate rather than tracked in its own right.
+
+    Such a key cannot be repaired in place — the topic id it needed is
+    simply not in it. The entry is dropped here and the library scan
+    rebuilds it correctly from the URL embedded in each file, which is
+    the same path a first-time scan takes.
+    """
+    if "tapatalk.com" not in key.lower():
+        return False
+    return not _TAPATALK_CANONICAL_TOPIC_RE.match(key)
+
+
+def _warn_idless_forum_entry(key: str, entry: dict) -> None:
+    """Name every file the dropped entry was standing in for.
+
+    Dropping an index entry silently would read to the user as stories
+    vanishing from the library, so this says what went, why, and what
+    to do about it. The files themselves are untouched on disk.
+    """
+    affected = [entry.get("relpath")] + list(
+        entry.get("duplicate_relpaths") or []
+    )
+    names = [a for a in affected if a]
+    logger.warning(
+        "Library index: dropping the forum entry %r, which had collapsed "
+        "%d file(s) onto one untrackable record: %s. Re-scan the library "
+        "to track each story separately.",
+        key, len(names), ", ".join(names) or "(none recorded)",
+    )
 
 
 def _merge_secondary_into_primary(primary: dict, secondary: dict) -> None:

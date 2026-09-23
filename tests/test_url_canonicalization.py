@@ -233,3 +233,216 @@ def test_load_migrates_non_canonical_keys(tmp_path):
     assert primary["relpath"] == "Harry Potter/fic.html"
     assert primary["duplicate_relpaths"] == ["misc/fic.html"]
     assert primary["chapter_count"] == 17
+
+
+# ---------------------------------------------------------------------------
+# Registry-wide invariant: a canonical URL must stay downloadable
+# ---------------------------------------------------------------------------
+
+# One representative story URL per host in ``sites._HOSTNAME_TO_SCRAPER``.
+# These are URL *shapes*, not live stories — nothing here hits the network.
+_HOST_SAMPLE_URLS: dict[str, str] = {
+    "ficwad.com": "https://ficwad.com/story/100",
+    "archiveofourown.org": "https://archiveofourown.org/works/7",
+    "ao3.org": "https://ao3.org/works/7",
+    "royalroad.com": "https://www.royalroad.com/fiction/42/slug",
+    "scribblehub.com": "https://www.scribblehub.com/series/12345/some-slug/",
+    "subscribestar.adult": "https://subscribestar.adult/posts/123456",
+    "mediaminer.org": "https://www.mediaminer.org/fanfic/view_st.php/123456",
+    "literotica.com": "https://www.literotica.com/s/my-fic-ch-02",
+    "wattpad.com": "https://www.wattpad.com/story/42-some-title",
+    "webnovel.com": "https://www.webnovel.com/book/7931338406001705",
+    "adult-fanfiction.org": (
+        "https://anime.adult-fanfiction.org/story.php?no=600091"
+    ),
+    "storiesonline.net": "https://storiesonline.net/s/12345",
+    "nifty.org": "https://www.nifty.org/nifty/gay/college/story-name",
+    "sexstories.com": "https://www.sexstories.com/story/123456/title",
+    "mcstories.com": "https://mcstories.com/SomeStory/index.html",
+    "lushstories.com": (
+        "https://www.lushstories.com/stories/category/some-story-title"
+    ),
+    "fictionmania.tv": (
+        "https://fictionmania.tv/stories/readhtmlstory.html?storyID=123456"
+    ),
+    "tgstorytime.com": "https://www.tgstorytime.com/viewstory.php?sid=1234",
+    "chyoa.com": "https://chyoa.com/story/Some-Story.12345",
+    "darkwanderer.net": "https://darkwanderer.net/threads/some-thread.12345/",
+    "greatfeet.com": "https://www.greatfeet.com/stories/ts123.htm",
+    "bdsmlibrary.com": (
+        "https://www.bdsmlibrary.com/stories/story.php?storyid=1234"
+    ),
+    "tapatalk.com": (
+        "https://www.tapatalk.com/groups/themousepad/viewtopic.php?t=198149"
+    ),
+    "readonlymind.com": "https://readonlymind.com/@someone/some-story",
+    "giantessworld.net": "https://giantessworld.net/viewstory.php?sid=1234",
+    "chastitymansion.com": (
+        "https://chastitymansion.com/forums/index.php?threads/my-story.12345/"
+    ),
+    "ticklingforum.com": (
+        "https://www.ticklingforum.com/threads/some-thread.12345/"
+    ),
+}
+
+
+def _hostname_registry():
+    from ficary.sites import _HOSTNAME_TO_SCRAPER
+
+    return _HOSTNAME_TO_SCRAPER
+
+
+def test_every_registered_host_has_a_sample_url():
+    """Keeps :data:`_HOST_SAMPLE_URLS` honest as sites are added — a new
+    scraper with no sample would otherwise skip the invariant below
+    silently."""
+    missing = [
+        host for host, _ in _hostname_registry()
+        if host not in _HOST_SAMPLE_URLS
+    ]
+    assert not missing, (
+        f"add a sample story URL for {missing} to _HOST_SAMPLE_URLS"
+    )
+
+
+@pytest.mark.parametrize(
+    "host, cls",
+    [(h, c) for h, c in _hostname_registry()],
+    ids=[h for h, _ in _hostname_registry()],
+)
+def test_canonical_url_stays_parseable_by_its_scraper(host, cls):
+    """The canonical form of a story URL must still carry its story id.
+
+    The library index keys entries by ``canonical_url`` and the update
+    probe feeds that same stored string back to ``parse_story_id``. A
+    canonicalisation that drops the id therefore breaks three things at
+    once: every story on the site collapses onto one index key (the
+    second download is filed as a duplicate of the first), the update
+    probe can never resolve the story, and the download queue's
+    single-flight dedupe key stops distinguishing stories.
+
+    Hit for real on The Mousepad, whose ids live in ``?t=<N>`` — the
+    default canonicalisation drops query strings, so every topic
+    canonicalised to the bare ``viewtopic.php``. AFF, Fictionmania,
+    TGStorytime and Chastity Mansion each needed a hand-written rule
+    for the same reason; this test is the guard that makes the next one
+    fail loudly instead of silently eating a library.
+    """
+    sample = _HOST_SAMPLE_URLS[host]
+    canonical = canonical_url(sample)
+    cls.parse_story_id(canonical)
+
+
+@pytest.mark.parametrize(
+    "host",
+    list(_HOST_SAMPLE_URLS),
+    ids=list(_HOST_SAMPLE_URLS),
+)
+def test_canonical_url_is_idempotent(host):
+    """Canonicalising an already-canonical URL must be a no-op, or the
+    index key drifts depending on which form happened to be recorded."""
+    once = canonical_url(_HOST_SAMPLE_URLS[host])
+    assert canonical_url(once) == once
+
+
+def test_distinct_mousepad_topics_get_distinct_canonical_urls():
+    """Regression: two different Mousepad stories used to canonicalise
+    to the identical string, so the library index held one entry for
+    the whole site and filed every other story as its duplicate."""
+    first = canonical_url(
+        "https://www.tapatalk.com/groups/themousepad/viewtopic.php?t=198149"
+    )
+    second = canonical_url(
+        "https://www.tapatalk.com/groups/themousepad/viewtopic.php?t=198606"
+    )
+    assert first != second
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "https://www.tapatalk.com/groups/themousepad/viewtopic.php?t=198149",
+        "http://tapatalk.com/groups/themousepad/viewtopic.php?t=198149",
+        # phpBB puts the forum id in front of the topic id on links
+        # followed out of a forum listing.
+        "https://www.tapatalk.com/groups/themousepad/viewtopic.php?f=72&t=198149",
+        # SEO permalink shape Tapatalk renders for every topic, with and
+        # without the paging offset.
+        (
+            "https://www.tapatalk.com/groups/themousepad/"
+            "the-keyholders-college-days-t198149.html"
+        ),
+        (
+            "https://www.tapatalk.com/groups/themousepad/"
+            "the-keyholders-college-days-t198149-s20.html"
+        ),
+    ],
+)
+def test_mousepad_url_variants_collapse_to_one_key(raw):
+    """Every shape a Mousepad topic link arrives in — pasted from the
+    address bar, followed out of a forum listing, or copied as an SEO
+    permalink — must collapse to the same index key, or one story lands
+    in the library twice."""
+    assert canonical_url(raw) == (
+        "https://www.tapatalk.com/groups/themousepad/viewtopic.php?t=198149"
+    )
+
+
+def test_idless_forum_entry_is_dropped_on_load(tmp_path: Path, caplog):
+    """An index written before the Tapatalk rule existed holds one
+    id-less ``viewtopic.php`` entry standing in for the whole board, with
+    every other Mousepad story demoted into its ``duplicate_relpaths``.
+
+    The key carries no topic id, so it can't be repaired in place — load
+    drops it (loudly, naming the files) and the next library scan
+    rebuilds one entry per story from the URL inside each file.
+    """
+    path = tmp_path / "library-index.json"
+    lib_root = tmp_path / "lib"
+    raw = {
+        "version": SCHEMA_VERSION,
+        "libraries": {
+            str(lib_root): {
+                "last_scan": "2026-09-01T00:00:00Z",
+                "stories": {
+                    "https://tapatalk.com/groups/themousepad/viewtopic.php": {
+                        "relpath": "Adult/perma-single.epub",
+                        "duplicate_relpaths": ["Adult/college-days.epub"],
+                        "title": "Perma Single",
+                        "author": "txkenpo1",
+                        "chapter_count": 1,
+                        "adapter": "mousepad",
+                        "confidence": "high",
+                        "format": "epub",
+                    },
+                    # A healthy entry on the same board must survive.
+                    "https://www.tapatalk.com/groups/themousepad/"
+                    "viewtopic.php?t=57803": {
+                        "relpath": "Adult/evil-employment.epub",
+                        "title": "The Evil Employment Epic",
+                        "author": "darrio",
+                        "chapter_count": 77,
+                        "adapter": "mousepad",
+                        "confidence": "high",
+                        "format": "epub",
+                    },
+                },
+                "untrackable": [],
+            }
+        },
+    }
+    path.write_text(json.dumps(raw), encoding="utf-8")
+
+    with caplog.at_level("WARNING"):
+        idx = LibraryIndex.load(path)
+
+    stories = idx.library_state(lib_root)["stories"]
+    assert list(stories) == [
+        "https://www.tapatalk.com/groups/themousepad/viewtopic.php?t=57803"
+    ]
+    # The drop must be audible: both orphaned filenames are named so the
+    # user can see what needs re-scanning rather than noticing two
+    # stories missing from the library list.
+    assert "perma-single.epub" in caplog.text
+    assert "college-days.epub" in caplog.text
+    assert "Re-scan" in caplog.text
