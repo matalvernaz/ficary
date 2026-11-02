@@ -34,9 +34,9 @@ jobs:
     # Macs run it but a native Intel build would need macos-13.
     runs-on: macos-26
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@v7
         with:
           # Keep in sync with neural_env.PYTHON_EMBED_VERSION (ABI match
           # for optional-feature wheels installed into deps/).
