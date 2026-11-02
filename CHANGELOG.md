@@ -1,5 +1,23 @@
 # Changelog
 
+## 2.20.5 — 2026-11-02
+
+**The command line no longer stops on a title the Windows console cannot show**
+
+*Command line*
+
+* On a Windows console using an older code page such as cp1252,
+  printing a story title or search result that held an arrow, CJK text
+  or another character outside that code page stopped the program with
+  an encoding error. A library update died at the first such title,
+  often close to the end of the run, and search results failed the same
+  way. Setting PYTHONUTF8 or PYTHONIOENCODING did not help the packaged
+  build.
+* Those characters now print as the nearest plain text instead: an
+  arrow as "->", an accented letter the code page lacks as its base
+  letter, and anything with no sensible stand-in as "?". Consoles that
+  already use UTF-8 print every character exactly as before.
+
 ## 2.20.4 — 2026-09-23
 
 **A library update now leaves a record of what failed**

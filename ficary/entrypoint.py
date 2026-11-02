@@ -138,6 +138,11 @@ def _point_win32_std_handle_at(fd: int) -> None:
 def main(argv: list[str] | None = None) -> None:
     """Dispatch to the GUI or the CLI depending on the arguments."""
     _prepare_frozen_path()
+    # A console on a legacy code page (cp1252 and friends) would otherwise
+    # crash the first print of a title holding an arrow or CJK text.
+    from ficary.console_text import make_console_output_safe
+
+    make_console_output_safe()
     args = sys.argv[1:] if argv is None else list(argv)
     if args:
         from ficary.cli import main as cli_main
