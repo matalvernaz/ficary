@@ -1,5 +1,22 @@
 # Changelog
 
+## 2.20.6 — 2026-11-09
+
+**FanFiction.net categories and communities can be browsed from search**
+
+* The FFN search window now offers Stories, Communities, and Categories.
+  Browse Books, Anime / Manga, and the other sections, then open any fandom
+  from the complete directory. Fandoms sort by name or story count.
+* Browse a fandom's communities by followers, story count, creation date,
+  or staff count, or search community names and descriptions with relevance
+  or creation-date sorting. General communities are included.
+* Open a community to browse its stories by archive date, update date,
+  publication date, reviews, favorites, or follows. Supported story filters
+  remain available, and community URLs can be pasted directly into search.
+* Load More preserves the selected scope and native ordering. Back restores
+  the previous list, filters, selected row, and checked stories. Directory
+  entries open with Enter or Open Selected; story entries download as usual.
+
 ## 2.20.5 — 2026-11-02
 
 **The command line no longer stops on a title the Windows console cannot show**

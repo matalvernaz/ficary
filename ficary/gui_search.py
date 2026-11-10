@@ -22,6 +22,7 @@ from dataclasses import dataclass
 import wx
 
 from .gui_dialogs import MultiPickerDialog, SeriesPartsDialog
+from .gui_ffn_browse import FFNBrowseMixin
 
 
 @dataclass(frozen=True)
@@ -66,7 +67,7 @@ _SEARCH_COLUMNS = [
 
 
 def _ffn_search_spec():
-    """FFN search supports two modes:
+    """FFN search supports story searches plus category and community browsing:
 
     * **Keyword search** — type a query, optionally narrow with the
       choice filters (Rating / Language / Status / Genre / Words /
@@ -78,12 +79,15 @@ def _ffn_search_spec():
       resolves against (book / anime / movie / tv / etc.); leaving it
       on ``any`` triggers auto-detect across the popular categories
       in order.
+    * **Directories** — browse complete category/fandom lists or find
+      communities, then open their stories with native sorting and filters.
     """
     from .search import (
         FFN_CATEGORIES, FFN_CROSSOVER, FFN_GENRE, FFN_LANGUAGE,
         FFN_MATCH, FFN_RATING, FFN_SORT, FFN_STATUS, FFN_TIME,
-        FFN_TOP_FANDOMS, FFN_WORDS, search_ffn,
+        FFN_TOP_FANDOMS, FFN_WORDS,
     )
+    from .ffn_browse import search_catalog
     # Annotate each curated fandom with its category so users scanning
     # the picker can tell ``Naruto [anime]`` from any same-name book.
     annotated_fandoms = [
@@ -91,7 +95,7 @@ def _ffn_search_spec():
     ]
     return {
         "label": "Search FFN",
-        "search_fn": search_ffn,
+        "search_fn": search_catalog,
         "filters": [
             ("&Rating:", "rating", list(FFN_RATING)),
             ("&Language:", "language", list(FFN_LANGUAGE)),
@@ -111,6 +115,7 @@ def _ffn_search_spec():
         # chosen fandom at search time — mirror AO3's character field, so
         # no dynamic per-fandom dropdown is needed.
         "text_filters": [
+            ("Community &URL:", "community"),
             ("C&haracters (up to 4, comma-sep):", "characters"),
             ("World/&verse:", "world"),
             ("E&xclude characters (up to 2):", "exclude_characters"),
@@ -278,7 +283,7 @@ def _erotica_search_spec():
     }
 
 
-class SearchFrame(wx.Frame):
+class SearchFrame(FFNBrowseMixin, wx.Frame):
     """Non-modal per-site search window.
 
     Opened via the Search menu (Ctrl+1..5). Stays open alongside the
@@ -366,6 +371,8 @@ class SearchFrame(wx.Frame):
         # touch destroyed wx widgets.
         self._alive = True
 
+        if self.site_key == "ffn":
+            self._init_ffn_browse()
         self._build_ui()
         self._load_state()
         self.apply_busy(bool(self.main_frame._downloading))
@@ -376,6 +383,9 @@ class SearchFrame(wx.Frame):
         panel = wx.Panel(self)
         sizer = wx.BoxSizer(wx.VERTICAL)
         pad = 6
+
+        if self.site_key == "ffn":
+            self._build_ffn_navigation(panel, sizer, pad)
 
         # Query row
         q_row = wx.BoxSizer(wx.HORIZONTAL)
@@ -435,6 +445,8 @@ class SearchFrame(wx.Frame):
                 row.Add(ctrl, 1, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 4)
                 self.multi_options[mp_key] = list(mp_options)
                 btn = wx.Button(panel, label="Pic&k...")
+                if self.site_key == "ffn" and mp_key == "fandom":
+                    self._ffn_fandom_picker = btn
                 btn.Bind(
                     wx.EVT_BUTTON,
                     lambda evt, c=ctrl, t=mp_title, k=mp_key:
@@ -583,6 +595,8 @@ class SearchFrame(wx.Frame):
         sizer.Add(dl_row, 0, wx.ALL, pad)
 
         panel.SetSizer(sizer)
+        if self.site_key == "ffn":
+            self._bind_ffn_navigation()
         self._fit_to_content(panel, sizer)
 
     def _fit_to_content(self, panel, sizer) -> None:
@@ -648,6 +662,8 @@ class SearchFrame(wx.Frame):
             ctrl = self.checkbox_ctrls.get(key)
             if ctrl is not None:
                 ctrl.SetValue(bool(value))
+        if self.site_key == "ffn":
+            self._load_ffn_state(state)
 
     def save_state(self):
         state = {
@@ -664,6 +680,8 @@ class SearchFrame(wx.Frame):
                 for key, ctrl in self.checkbox_ctrls.items()
             },
         }
+        if self.site_key == "ffn":
+            self._ffn_state(state)
         self.main_frame.prefs.set(
             self._PREF_KEY_BY_SITE[self.site_key], json.dumps(state),
         )
@@ -701,6 +719,8 @@ class SearchFrame(wx.Frame):
         # result and aren't mid-download. The button is hidden on
         # per-site frames so we don't need a site-key check here.
         self.pick_multi_btn.Enable(not busy and bool(self.results))
+        if self.site_key == "ffn":
+            self._apply_ffn_busy(busy)
 
     # ── Multi-picker ──────────────────────────────────────────
 
@@ -766,18 +786,24 @@ class SearchFrame(wx.Frame):
     def _collect_filters(self):
         filters = {}
         for key, ctrl in self.filter_ctrls.items():
+            if self.site_key == "ffn" and not ctrl.IsEnabled():
+                continue
             idx = ctrl.GetSelection()
             if idx <= 0:
                 # First entry is always "any"/"all"/"best match" — no filter
                 continue
             filters[key] = ctrl.GetString(idx)
         for key, ctrl in self.text_ctrls.items():
+            if self.site_key == "ffn" and not ctrl.IsEnabled():
+                continue
             value = ctrl.GetValue().strip()
             if value:
                 filters[key] = value
         for key, ctrl in self.checkbox_ctrls.items():
-            if ctrl.GetValue():
+            if (self.site_key != "ffn" or ctrl.IsEnabled()) and ctrl.GetValue():
                 filters[key] = True
+        if self.site_key == "ffn":
+            return self._ffn_filters(filters)
         return filters
 
     def _on_search(self):
@@ -851,7 +877,10 @@ class SearchFrame(wx.Frame):
         # target. Mirrors the erotica tag-only flow.
         ffn_filter_only = (
             self.site_key == "ffn"
-            and bool(filters.get("fandom"))
+            and (
+                bool(filters.get("fandom") or filters.get("community"))
+                or filters.get("browse") in ("categories", "communities")
+            )
         )
         if not query and not (
             list_browse or rr_filter_only or erotica_filter_only
@@ -1104,10 +1133,20 @@ class SearchFrame(wx.Frame):
         ctrl.Freeze()
         try:
             ctrl.DeleteAllItems()
+            if self.site_key == "ffn":
+                ctrl.DeleteAllColumns()
+                for index, (label, width) in enumerate(self._ffn_result_columns()):
+                    ctrl.InsertColumn(index, label, width=width)
+                directory_rows = bool(self.results and self.results[0].get("kind"))
+                ctrl.EnableCheckBoxes(not directory_rows)
             for r in self.results:
                 row = ctrl.InsertItem(
                     ctrl.GetItemCount(), self._result_title(r),
                 )
+                if self.site_key == "ffn" and r.get("kind"):
+                    for column, value in enumerate(self._ffn_result_cells(r, self.last_filters)):
+                        ctrl.SetItem(row, column, str(value))
+                    continue
                 # Column 1 = Site. For per-site frames (FFN, AO3, …)
                 # the scraper populates ``site`` only on erotica
                 # fan-out rows — elsewhere we fall back to the frame's
@@ -1157,6 +1196,10 @@ class SearchFrame(wx.Frame):
         self.pick_multi_btn.Enable(
             bool(self.results) and not self.main_frame._downloading
         )
+        if self.site_key == "ffn":
+            from .gui import _announce_label
+            self._refresh_ffn_controls()
+            _announce_label(self.ffn_scope_ctrl, f"{self.ffn_scope_ctrl.GetLabel()}. {len(self.results)} results.")
         if not self.results:
             self._log(
                 "No results found." if not append else "No more results."
@@ -1235,6 +1278,8 @@ class SearchFrame(wx.Frame):
         return r.get("title", "")
 
     def _checked_rows(self) -> list[int]:
+        if self.site_key == "ffn" and self.results and self.results[0].get("kind"):
+            return []
         return [
             i for i in range(self.results_ctrl.GetItemCount())
             if self.results_ctrl.IsItemChecked(i)
@@ -1255,6 +1300,9 @@ class SearchFrame(wx.Frame):
         # keyboard users can tick the focused row. EVT_LIST_ITEM_CHECKED
         # still fires so the [x] prefix stays consistent.
         if event.GetKeyCode() == wx.WXK_SPACE:
+            if self.site_key == "ffn" and self.results and self.results[0].get("kind"):
+                event.Skip()
+                return
             row = self.results_ctrl.GetFocusedItem()
             if 0 <= row < self.results_ctrl.GetItemCount():
                 new_state = not self.results_ctrl.IsItemChecked(row)
@@ -1288,6 +1336,9 @@ class SearchFrame(wx.Frame):
         event.Skip()
 
     def _on_search_download(self, *, override_idx=None):
+        if self.site_key == "ffn" and self.results and self.results[0].get("kind"):
+            self._open_ffn_result()
+            return
         # ``override_idx`` is supplied by double-click / Enter activation
         # so an explicit row activation wins over implicit batch state.
         # Without it a user who'd ticked rows 1+2 and then double-clicked
@@ -1418,6 +1469,9 @@ class SearchFrame(wx.Frame):
         # instead of blindly kicking off a multi-part merge.
         idx = self.results_ctrl.GetFirstSelected()
         if 0 <= idx < len(self.results):
+            if self.site_key == "ffn" and self.results[idx].get("kind"):
+                self._open_ffn_result()
+                return
             if self.results[idx].get("is_series"):
                 self._on_show_parts()
                 return

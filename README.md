@@ -148,7 +148,7 @@ Each search window opens from the **Search** menu:
 
 - **FFN** (Ctrl+1) — the full FanFiction.net filter set: genre,
   rating, language, word count, status, world, up to four characters,
-  pairing, and exclusions.
+  pairing, and exclusions, plus category and community browsing.
 - **AO3** (Ctrl+2) — Archive of Our Own search; when a result is part
   of a series with two or more parts, the parts collapse into one row
   so you can grab the whole series at once.
@@ -160,6 +160,37 @@ Each search window opens from the **Search** menu:
 
 Results appear in a list you can arrow through; press Enter or the
 Download button on a row to fetch it.
+
+### Browsing FanFiction.net
+
+In the FFN search window, **Look for** selects Stories, Communities,
+or Categories. Categories lists sections such as Books and Anime / Manga.
+Open a section to see its complete fandom directory, including smaller
+fandoms outside the site's mobile top 200. Filter fandom names with the
+Query box and sort by name or story count. Enter or **Open Selected**
+opens a fandom's stories. **Communities for Fandom** opens its communities
+instead.
+
+Choose Communities to search community names and descriptions, or leave
+Query empty to browse categories and fandoms leading to their communities.
+General communities are available from that category list as well.
+Community directories sort by followers, story count, creation date, or
+staff count. Keyword searches use FFN's relevance or creation-date order.
+The community fandom directory sorts by name or community count.
+
+Open a community to browse its stories. Sort by the date a story was
+added to the community, last update, publication date, reviews, favorites,
+or follows. The rating, genre, word count, completion, and time filters
+apply; controls FFN does not support on community pages are disabled.
+A query within a community filters story titles and summaries as pages
+are fetched, so a narrow query may take longer. A community URL can also
+be pasted directly into the Community URL field in Stories mode.
+
+Story and community sorting happens on FFN before pages are fetched.
+**Load More** keeps the same scope and ordering. **Back** restores the
+previous results, filters, selected row, and checked stories without
+fetching them again. Directory rows open when activated; story rows
+retain the usual download action.
 
 ### The Erotic Story Search
 
