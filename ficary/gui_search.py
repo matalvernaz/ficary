@@ -56,8 +56,8 @@ _SEARCH_COLUMNS = [
     ("Ch", 40),
     ("Rating", 80),
     ("Status", 90),
-    # Last-activity date. Only forum-backed erotica sites (The
-    # Mousepad) expose one in their listings; blank everywhere else.
+    # The day the story last changed, as YYYY-MM-DD. Blank for the
+    # few sites whose listings give no date.
     ("Updated", 90),
 ]
 # Column ordering: Site sits second so it's visible even in narrow

@@ -1,5 +1,6 @@
 """Search fanfiction.net, Archive of Our Own, and Royal Road."""
 
+import datetime
 import logging
 import random
 import re
@@ -52,6 +53,97 @@ def _page_exhausted(page_results) -> bool:
     if flag is None:
         return not page_results
     return bool(flag)
+
+
+# ── Last-updated dates on result rows ─────────────────────────────
+# A result row may carry ``updated``: the day the story last changed,
+# as ``YYYY-MM-DD``. The search window shows it in its Updated column,
+# the command line prints it, and "Newest first" sorts on it. An empty
+# string means the site's listing gave no date for that row.
+#
+# Each site prints dates its own way. These helpers turn every shape
+# into that one form by hand rather than through ``strptime``, which
+# reads month names in whatever language the process is set to.
+
+_ISO_DATE_START_RE = re.compile(r"(\d{4})-(\d{2})-(\d{2})")
+_DAY_MONTH_YEAR_RE = re.compile(r"(\d{1,2})\s+([A-Za-z]{3})[A-Za-z]*\.?,?\s+(\d{4})")
+_MONTH_DAY_YEAR_RE = re.compile(r"(\d{1,2})/(\d{1,2})/(\d{4})")
+_ENGLISH_MONTH_NUMBERS = {
+    "jan": 1, "feb": 2, "mar": 3, "apr": 4, "may": 5, "jun": 6,
+    "jul": 7, "aug": 8, "sep": 9, "oct": 10, "nov": 11, "dec": 12,
+}
+
+
+def _iso_date_from_numbers(year, month, day) -> str:
+    """Return ``YYYY-MM-DD`` for a real calendar day, or ``""`` for an
+    impossible one such as the 31st of February."""
+    try:
+        return datetime.date(int(year), int(month), int(day)).isoformat()
+    except (TypeError, ValueError):
+        return ""
+
+
+def _iso_date_from_epoch(raw) -> str:
+    """Turn a Unix timestamp, the form FFN keeps in ``data-xutime``,
+    into ``YYYY-MM-DD``. The day is the UTC day, the same choice the
+    exported story's own Updated line makes. Returns ``""`` when the
+    value isn't a usable number: FFN has served empty timestamps
+    during outages, and one bad row must not sink the whole page."""
+    try:
+        seconds = int(str(raw).strip())
+        moment = datetime.datetime.fromtimestamp(seconds, tz=datetime.timezone.utc)
+    except (TypeError, ValueError, OverflowError, OSError):
+        return ""
+    return moment.strftime("%Y-%m-%d")
+
+
+def _iso_date_from_timestamp(raw) -> str:
+    """Keep the day from an ISO timestamp such as
+    ``2026-11-12T04:28:14Z``. Returns ``""`` when the text doesn't
+    start with a real date."""
+    match = _ISO_DATE_START_RE.match(str(raw or "").strip())
+    if not match:
+        return ""
+    return _iso_date_from_numbers(match.group(1), match.group(2), match.group(3))
+
+
+def _iso_date_from_day_month_year(raw) -> str:
+    """Turn a day-first date with an English month name, the way AO3
+    prints ``12 Nov 2018``, into ``2018-11-12``. Returns ``""`` when
+    the text isn't such a date."""
+    match = _DAY_MONTH_YEAR_RE.fullmatch(str(raw or "").strip())
+    if not match:
+        return ""
+    month_number = _ENGLISH_MONTH_NUMBERS.get(match.group(2).lower())
+    if month_number is None:
+        return ""
+    return _iso_date_from_numbers(match.group(3), month_number, match.group(1))
+
+
+def _iso_date_from_month_day_year(raw) -> str:
+    """Turn a month-first numeric date, the way Literotica prints
+    ``08/26/2017``, into ``2017-08-26``. Returns ``""`` when the text
+    isn't such a date."""
+    match = _MONTH_DAY_YEAR_RE.fullmatch(str(raw or "").strip())
+    if not match:
+        return ""
+    return _iso_date_from_numbers(match.group(3), match.group(1), match.group(2))
+
+
+def _newest_date(dates) -> str:
+    """Pick the latest of several ``YYYY-MM-DD`` strings, skipping
+    blanks. Returns ``""`` when none of them is dated. Dates in this
+    form sort correctly as plain text."""
+    dated = [value for value in dates if value]
+    if not dated:
+        return ""
+    return max(dated)
+
+
+def _newest_part_date(parts) -> str:
+    """The last-updated date for a series row: the newest date among
+    the parts that turned up in the results."""
+    return _newest_date(part.get("updated") or "" for part in parts)
 
 
 # ── Filter option tables ──────────────────────────────────────────
@@ -647,6 +739,18 @@ def _parse_results(html):
         if fandom_m:
             fandom = fandom_m.group(1).strip()
 
+        # FFN prints "Updated:" only when a story changed after it went
+        # up, and "Published:" always. Each carries its exact time in
+        # ``data-xutime``, so the newest of them is the day the story
+        # last changed.
+        updated = ""
+        if meta_div:
+            time_spans = meta_div.find_all("span", attrs={"data-xutime": True})
+            updated = _newest_date(
+                _iso_date_from_epoch(span.get("data-xutime"))
+                for span in time_spans
+            )
+
         results.append(
             {
                 "title": title,
@@ -658,6 +762,7 @@ def _parse_results(html):
                 "rating": rating_m.group(1) if rating_m else "?",
                 "fandom": fandom,
                 "status": "Complete" if status_m else "In-Progress",
+                "updated": updated,
             }
         )
 
@@ -1333,6 +1438,13 @@ def _parse_ao3_results(html):
         if rating_li:
             rating = rating_li.get("title") or rating_li.get_text(strip=True)
 
+        # Each blurb prints the day the work last changed, in the form
+        # "12 Nov 2018".
+        updated = ""
+        date_p = li.find("p", class_="datetime")
+        if date_p:
+            updated = _iso_date_from_day_month_year(date_p.get_text(" ", strip=True))
+
         # Series membership — AO3 blurbs show "Part N of <a>Series</a>"
         series_entries = []
         for s_li in li.select("ul.series li"):
@@ -1363,6 +1475,7 @@ def _parse_ao3_results(html):
                 "rating": rating,
                 "fandom": fandom,
                 "status": status,
+                "updated": updated,
                 "series": series_entries,
             }
         )
@@ -1744,6 +1857,15 @@ def _parse_rr_results(html):
             if desc_wrap:
                 summary = desc_wrap.get_text(" ", strip=True)
 
+        # Search and the rated lists show one date on each card, the
+        # time of the newest chapter. "Latest updates" lists the last
+        # few chapters with a time apiece, oldest first. Either way the
+        # newest time on the card is the day the story last changed.
+        updated = _newest_date(
+            _iso_date_from_timestamp(time_tag.get("datetime"))
+            for time_tag in item.find_all("time")
+        )
+
         results.append({
             "title": title,
             "author": author,
@@ -1754,6 +1876,7 @@ def _parse_rr_results(html):
             "rating": rating,
             "fandom": genre_or_fandom,
             "status": status,
+            "updated": updated,
             "_stubbed_unknown": stubbed_unknown,
         })
 
@@ -1951,7 +2074,7 @@ def _parse_literotica_results(html):
             results.append({
                 "title": title, "author": "", "url": href, "summary": "",
                 "words": "?", "chapters": "?", "rating": "?", "fandom": "",
-                "status": "",
+                "status": "", "updated": "",
             })
             continue
 
@@ -1989,6 +2112,21 @@ def _parse_literotica_results(html):
         if rating_span:
             rating = rating_span.get("data-value", "?")
 
+        # The card stamps the day the story went up in a <time> tag.
+        # A Literotica story is one submission that doesn't change
+        # afterwards (later chapters are separate stories), so that
+        # day is also the day it last changed. The tag's class name is
+        # randomised per build like the rest; its ``datetime``
+        # attribute is the steady part, with the printed
+        # "07/10/2026" as the fallback.
+        updated = ""
+        time_tag = card.find("time")
+        if time_tag:
+            updated = (
+                _iso_date_from_timestamp(time_tag.get("datetime"))
+                or _iso_date_from_month_day_year(time_tag.get_text(" ", strip=True))
+            )
+
         results.append({
             "title": title,
             "author": author,
@@ -1999,6 +2137,7 @@ def _parse_literotica_results(html):
             "rating": rating,
             "fandom": fandom,
             "status": "",
+            "updated": updated,
         })
     return results
 
@@ -2075,6 +2214,18 @@ def _parse_literotica_search_results(html):
         if cat_a:
             fandom = cat_a.get_text(" ", strip=True)
 
+        # The search host carries the publish day as microdata, month
+        # first ("08/26/2017"). See _parse_literotica_results for why
+        # that is also the day the story last changed.
+        updated = ""
+        date_meta = card.find("meta", attrs={"property": "datePublished"})
+        if date_meta:
+            published_text = date_meta.get("content") or ""
+            updated = (
+                _iso_date_from_month_day_year(published_text)
+                or _iso_date_from_timestamp(published_text)
+            )
+
         results.append({
             "title": title,
             "author": author,
@@ -2085,6 +2236,7 @@ def _parse_literotica_search_results(html):
             "rating": "?",
             "fandom": fandom,
             "status": "",
+            "updated": updated,
         })
     return results
 
@@ -2358,6 +2510,7 @@ def collapse_ao3_series(results):
 
     for row in seen_series.values():
         row["series_parts"].sort(key=_part_key)
+        row["updated"] = _newest_part_date(row["series_parts"])
     return collapsed
 
 
@@ -2519,6 +2672,7 @@ def collapse_literotica_series(results):
             "rating": anchor_r.get("rating", "?"),
             "fandom": anchor_r.get("fandom", ""),
             "status": "Series",
+            "updated": _newest_part_date(parts),
             "is_series": True,
             "series_id": f"lit:{group_key[1]}",
             "series_parts": parts,
@@ -2692,6 +2846,7 @@ def collapse_lushstories_series(results):
             "rating": anchor_r.get("rating", "?"),
             "fandom": anchor_r.get("fandom", ""),
             "status": "Series",
+            "updated": _newest_part_date(parts),
             "site": "lushstories",
             "is_series": True,
             "series_id": f"lush:{base_slug}",
@@ -2916,7 +3071,8 @@ def search_wattpad(query, *, page=1, **filters):
     fields = (
         "stories("
         "id,title,user,description,cover,completed,mature,numParts,"
-        "url,tags,language,paidModel,isPaywalled,length"
+        "url,tags,language,paidModel,isPaywalled,length,"
+        "modifyDate,lastPublishedPart(createDate)"
         ")"
     )
     qs = {
@@ -2990,6 +3146,15 @@ def search_wattpad(query, *, page=1, **filters):
         if paid:
             rating_bits.append("Paid")
         rating = " / ".join(rating_bits) or "GA"
+        # The day the newest part went up is what a reader means by
+        # "last updated". ``modifyDate`` also moves when the author
+        # edits the blurb or fixes a typo in an old part, so it is
+        # only the fallback for a story with no last part listed.
+        last_part = s.get("lastPublishedPart") or {}
+        updated = (
+            _iso_date_from_timestamp(last_part.get("createDate"))
+            or _iso_date_from_timestamp(s.get("modifyDate"))
+        )
         results.append({
             "title": s.get("title") or "Untitled",
             "author": author,
@@ -3000,5 +3165,6 @@ def search_wattpad(query, *, page=1, **filters):
             "rating": rating,
             "fandom": fandom_str,
             "status": "Complete" if is_complete else "In-Progress",
+            "updated": updated,
         })
     return SearchPage(results, exhausted=upstream_exhausted)

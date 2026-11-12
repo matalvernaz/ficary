@@ -1,5 +1,25 @@
 # Changelog
 
+## 2.20.7 — 2026-11-11
+
+**Search results show when each story was last updated**
+
+* The Updated column in the search window is now filled in for
+  FanFiction.net, Archive of Our Own, Royal Road and Wattpad, and in the
+  erotica search for Literotica, Archive of Our Own and BDSM Library. Most
+  other erotica sites already had it. The command line prints the same
+  date after each result.
+* The date is the day the story last changed, written year-month-day. A
+  FanFiction.net story that was never updated shows its publication date.
+  Royal Road shows the day of the newest chapter, and Wattpad the day the
+  newest part was published.
+* A series row shows the date of its newest part. With "Newest first" in
+  the erotica search, a series now sorts by that date instead of dropping
+  to the end of the list, and Literotica, Archive of Our Own and BDSM
+  Library results sort by date along with the rest.
+* Nifty results, and Wattpad results in the erotica search, stay blank:
+  those listings give no dates.
+
 ## 2.20.6 — 2026-11-09
 
 **FanFiction.net categories and communities can be browsed from search**

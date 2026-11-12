@@ -1423,8 +1423,9 @@ def _print_search_results(results: list, start_idx: int = 1) -> None:
             print(f"      by {r.get('author', '')} | {r.get('fandom', '')}")
         else:
             status_tag = " [Complete]" if r.get("status") == "Complete" else ""
-            # Fan-out rows carry their origin site; forum-backed rows
-            # also carry a last-activity date (what --sort date uses).
+            # Fan-out rows carry their origin site. Rows from a site
+            # whose listing gives a date also carry the day the story
+            # last changed (what --sort date uses).
             site_tag = f" [{r['site']}]" if r.get("site") else ""
             updated_tag = (
                 f" | updated {r['updated'][:10]}" if r.get("updated") else ""

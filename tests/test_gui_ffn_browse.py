@@ -292,3 +292,26 @@ def test_reopening_community_browse_restores_visible_scope_and_can_clear_it(brow
         assert replacement._collect_filters().get("community") is None
     finally:
         replacement.Destroy()
+
+
+def test_story_search_fills_the_updated_column(browser, monkeypatch):
+    frame, finish, _ = browser
+
+    def fetch_saved_search_page(url):
+        # One real page of 50 stories, with its Next link removed so the search stops there.
+        from bs4 import BeautifulSoup
+        soup = BeautifulSoup((FIXTURES / "ffn_search.html").read_text(encoding="utf-8", errors="replace"), "lxml")
+        for link in soup.find_all("a", string="Next »"):
+            link.decompose()
+        return str(soup)
+
+    monkeypatch.setattr(search, "_fetch_search_page", fetch_saved_search_page)
+    frame.query_ctrl.ChangeValue("harry potter")
+    frame._on_search()
+    finish()
+    titles = [row["title"] for row in frame.results]
+    never_updated = titles.index("harry potter and the attack of the harry potter")
+    updated_later = titles.index("Harry Potter: The Potters' Notes")
+    assert frame.results_ctrl.GetColumn(8).GetText() == "Updated"
+    assert frame.results_ctrl.GetItemText(never_updated, 8) == "2021-05-01"
+    assert frame.results_ctrl.GetItemText(updated_later, 8) == "2009-11-14"

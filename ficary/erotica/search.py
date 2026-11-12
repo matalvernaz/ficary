@@ -152,10 +152,11 @@ def erotica_sort_mode(value) -> str:
 def sort_rows_by_updated(rows: list) -> list:
     """Newest-first ordering on each row's ``updated`` ISO stamp.
 
-    Only forum-backed adapters populate ``updated`` (archives don't
-    expose listing dates), so undated rows sort after every dated one.
-    The sort is stable, so rows tied on date — and the whole undated
-    block — keep their incoming site-and-title order.
+    Most sites give a date in their listings and a series row takes
+    its newest part's. The few that give none (Nifty, Wattpad's tag
+    pages) leave ``updated`` empty, so their rows sort after every
+    dated one. The sort is stable, so rows tied on date — and the
+    whole undated block — keep their incoming site-and-title order.
     """
     return sorted(
         rows, key=lambda r: r.get("updated") or "", reverse=True,
@@ -2494,6 +2495,9 @@ def search_wattpad_erotica(query: str, *, page: int = 1,
     return out[window_start:]
 
 
+_BDSMLIBRARY_ADDED_RE = re.compile(r"\(Added on\s+([^)]+)\)")
+
+
 def search_bdsmlibrary(query: str, *, page: int = 1,
                        tags: Optional[list] = None,
                        **_: object) -> list[dict]:
@@ -2579,20 +2583,32 @@ def search_bdsmlibrary(query: str, *, page: int = 1,
         r'(?:.*?<a\s+href="/stories/author\.php\?authorid=\d+"[^>]*>([^<]+)</a>)?',
         re.DOTALL | re.IGNORECASE,
     )
-    for m in pattern.finditer(html):
+    matches = list(pattern.finditer(html))
+    for index, m in enumerate(matches):
         story_id, title, author = m.group(1), m.group(2).strip(), (m.group(3) or "").strip()
         if story_id in seen or not title:
             continue
         if not _matches_query(query, title, author):
             continue
         seen.add(story_id)
+        # The listing prints "(Added on Sep 12, 2017)" under each
+        # story, ahead of the next story's title link. The archive
+        # files a story once and doesn't revise it, so that is also
+        # the day it last changed.
+        next_index = index + 1
+        if next_index < len(matches):
+            row_end = matches[next_index].start()
+        else:
+            row_end = len(html)
+        added_m = _BDSMLIBRARY_ADDED_RE.search(html, m.end(), row_end)
+        updated = _iso_date(added_m.group(1)) if added_m else ""
         out.append({
             "title": title,
             "author": author,
             "url": f"{base}/stories/story.php?storyid={story_id}",
             "summary": "", "words": "?", "chapters": "?",
             "rating": "M", "fandom": "", "status": "",
-            "site": "bdsmlibrary",
+            "site": "bdsmlibrary", "updated": updated,
         })
         if len(out) >= PER_SITE_PAGE_MAX:
             break
