@@ -114,6 +114,10 @@ model is about 1 GB) when the container is replaced. A folder mounted
 there must be writable by user id 1000. The page has no sign-in of its
 own, so put it behind one before exposing it to the internet.
 
+BookNLP's large model can need several gigabytes on a long chapter. On
+a server without that to spare, add
+`-e FICARY_WEB_BOOKNLP_SIZES=small` to offer only the small one.
+
 ### Optional features
 
 The desktop downloads come with every feature already included except

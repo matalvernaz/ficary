@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import shutil
 import tempfile
 import threading
@@ -31,6 +32,16 @@ app = FastAPI(title="ficary", version=ficary.__version__)
 TEXT_FORMATS = ("epub", "html", "txt")
 AUDIO_FORMAT = "audio"
 ATTRIBUTION_BACKENDS = ("builtin", "fastcoref", "booknlp")
+
+# BookNLP model sizes the page offers, from FICARY_WEB_BOOKNLP_SIZES (comma-separated, default
+# both). The big model needs several times the memory and time of the small one, more than a
+# few gigabytes on a long chapter, so a small server can offer only "small".
+BOOKNLP_SIZE_LABELS = {
+    "small": "small (~150 MB, the desktop app's default)",
+    "big": "big (~1 GB, more accurate, much slower)",
+}
+_requested_sizes = os.environ.get("FICARY_WEB_BOOKNLP_SIZES", "small,big").split(",")
+ALLOWED_BOOKNLP_SIZES = tuple(size for size in BOOKNLP_SIZE_LABELS if size in {part.strip() for part in _requested_sizes}) or ("small",)
 
 
 # ── Job registry ──────────────────────────────────────────────────
@@ -157,8 +168,7 @@ LANDING = """<!doctype html>
    </label>
    <label>Model size
     <select name="model_size">
-     <option value="small" selected>small (~150 MB, the desktop app's default)</option>
-     <option value="big">big (~1 GB, more accurate, much slower)</option>
+__MODEL_SIZE_OPTIONS__
     </select>
    </label>
    <label>Speech rate %
@@ -241,6 +251,15 @@ async function poll(id) {
 """
 
 
+LANDING = LANDING.replace(
+    "__MODEL_SIZE_OPTIONS__",
+    "\n".join(
+        f'     <option value="{size}"{" selected" if index == 0 else ""}>{BOOKNLP_SIZE_LABELS[size]}</option>'
+        for index, size in enumerate(ALLOWED_BOOKNLP_SIZES)
+    ),
+)
+
+
 @app.get("/", response_class=HTMLResponse)
 def landing() -> str:
     return LANDING
@@ -291,8 +310,8 @@ def start_job(
     url: str = Form(...),
     format: str = Form(AUDIO_FORMAT),
     attribution: str = Form("booknlp"),
-    # Same default as the desktop app. The big model takes several times the memory and CPU.
-    model_size: str = Form("small"),
+    # Same default as the desktop app, small, unless this server doesn't offer it.
+    model_size: str = Form(ALLOWED_BOOKNLP_SIZES[0]),
     speech_rate: int = Form(0),
     strip_notes: str = Form("false"),
     hr_as_stars: str = Form("true"),
@@ -301,8 +320,8 @@ def start_job(
         raise HTTPException(400, "jobs endpoint is for audio format only")
     if attribution not in ATTRIBUTION_BACKENDS:
         raise HTTPException(400, f"attribution must be one of {ATTRIBUTION_BACKENDS}")
-    if model_size not in ("small", "big", ""):
-        raise HTTPException(400, "model_size must be 'small' or 'big'")
+    if model_size not in ALLOWED_BOOKNLP_SIZES + ("",):
+        raise HTTPException(400, f"model_size must be one of {ALLOWED_BOOKNLP_SIZES} on this server")
 
     try:
         check_format_deps(AUDIO_FORMAT)

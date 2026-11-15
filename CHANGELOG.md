@@ -1,5 +1,14 @@
 # Changelog
 
+## 2.20.10 — 2026-11-15
+
+**The Docker image's web page can offer only BookNLP's small model**
+
+* Setting `FICARY_WEB_BOOKNLP_SIZES=small` on the container takes
+  BookNLP's large model off the web page's menu. The large model can
+  need several gigabytes on a long chapter, more than a small server
+  can spare. The desktop app is unchanged.
+
 ## 2.20.9 — 2026-11-15
 
 **BookNLP and fastcoref speaker detection now actually help**

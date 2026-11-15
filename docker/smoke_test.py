@@ -67,6 +67,23 @@ for backend, size in BACKENDS:
 
 	print(f"{backend}: " + "; ".join(f"{segment.text[:25]!r} -> {segment.speaker}" for segment in after if attribution._is_dialogue_segment(segment)))
 
+# The web page's BookNLP size setting: FICARY_WEB_BOOKNLP_SIZES=small must take the big model off
+# the menu (and so off the jobs endpoint), and without it both sizes are offered. The page is
+# app.py in the image's working folder.
+import importlib  # noqa: E402
+import os  # noqa: E402
+
+sys.path.insert(0, "/app")
+os.environ["FICARY_WEB_BOOKNLP_SIZES"] = "small"
+import app as web_page  # noqa: E402
+
+if web_page.ALLOWED_BOOKNLP_SIZES != ("small",) or 'value="big"' in web_page.LANDING:
+	problems.append("FICARY_WEB_BOOKNLP_SIZES=small still offers BookNLP's big model on the web page")
+del os.environ["FICARY_WEB_BOOKNLP_SIZES"]
+importlib.reload(web_page)
+if web_page.ALLOWED_BOOKNLP_SIZES != ("small", "big") or 'value="big"' not in web_page.LANDING:
+	problems.append("without FICARY_WEB_BOOKNLP_SIZES the web page should offer both BookNLP sizes")
+
 if problems:
 	print("Speech attribution in this image is broken:", file=sys.stderr)
 	for problem in problems:
