@@ -78,7 +78,7 @@ jobs:
           cache-from: type=gha,scope=docker-${{ matrix.arch }}
           cache-to: type=gha,scope=docker-${{ matrix.arch }},mode=max
 
-      - name: Check that BookNLP really runs
+      - name: Check that BookNLP and fastcoref really run
         # The import check in the Dockerfile cannot see a backend that
         # imports and then fails on its first story, and the app hides
         # that by falling back to its built-in attribution. A failure

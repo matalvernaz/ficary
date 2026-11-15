@@ -17,6 +17,7 @@ unknown or uninstalled backends degrade silently to the builtin no-op.
 """
 from __future__ import annotations
 
+import contextlib
 import importlib
 import logging
 import re
@@ -874,6 +875,37 @@ _PRONOUN_TOKENS = {
     "it", "its",
 }
 
+_fastcoref_patched = False
+
+
+def _patch_fastcoref_for_transformers5() -> None:
+    """Let fastcoref 2.1.6 load its model under transformers 5.
+
+    2.1.6 is the last fastcoref release on PyPI (May 2023). Its
+    ``FCorefModel`` finishes construction with the old
+    ``init_weights()`` instead of ``post_init()``, so the
+    ``all_tied_weights_keys`` attribute transformers 5 sets in
+    ``post_init()`` never exists, and ``from_pretrained`` dies with
+    ``'FCorefModel' object has no attribute 'all_tied_weights_keys'``.
+    The model ties no weights, so an empty mapping is the true value.
+
+    Upstream fixed this on its main branch in May 2026 without
+    releasing it. A release that moves the class or sets the
+    attribute itself turns this into a no-op.
+    """
+    global _fastcoref_patched
+    if _fastcoref_patched:
+        return
+    try:
+        from fastcoref.coref_models.modeling_fcoref import FCorefModel
+    except ImportError:
+        # A later fastcoref moved or rewrote the model class; nothing to patch.
+        _fastcoref_patched = True
+        return
+    if getattr(FCorefModel, "all_tied_weights_keys", None) is None:
+        FCorefModel.all_tied_weights_keys = {}
+    _fastcoref_patched = True
+
 
 def _refine_with_fastcoref(segments, full_text):
     """Use fastcoref's coref clusters to remap pronoun speakers to the
@@ -887,11 +919,15 @@ def _refine_with_fastcoref(segments, full_text):
     """
     from fastcoref import FCoref
 
+    _patch_fastcoref_for_transformers5()
     model = FCoref(device="cpu")
     preds = model.predict(texts=[full_text])
     if not preds:
         return segments
-    clusters = preds[0].get_clusters()  # list[list[(start_char, end_char)]]
+    # Character spans, list[list[(start_char, end_char)]]. Called bare,
+    # get_clusters() returns the mention strings instead, and unpacking
+    # those below made this backend fall back on every story.
+    clusters = preds[0].get_clusters(as_strings=False)
     if not clusters:
         return segments
 
@@ -1290,10 +1326,85 @@ def _patch_booknlp_text_encoding() -> None:
     _booknlp_text_encoding_patched = True
 
 
+def _make_pkg_resources_stand_in():
+    """A module offering only ``resource_filename``, resolved the way
+    setuptools' ``pkg_resources`` does for a module on disk: the folder
+    holding that module, joined with the ``/``-separated resource path."""
+    import os
+    import types
+
+    def resource_filename(package_or_requirement, resource_name):
+        module = sys.modules.get(package_or_requirement)
+        if module is None:
+            module = importlib.import_module(package_or_requirement)
+        folder = os.path.dirname(module.__file__)
+        return os.path.join(folder, *resource_name.split("/"))
+
+    stand_in = types.ModuleType("pkg_resources")
+    stand_in.__doc__ = "ficary's stand-in for the removed setuptools pkg_resources (resource_filename only)."
+    stand_in.resource_filename = resource_filename
+    return stand_in
+
+
+@contextlib.contextmanager
+def _pkg_resources_for_booknlp_imports():
+    """Make ``import pkg_resources`` work for BookNLP's modules, and only them.
+
+    Four BookNLP modules ``import pkg_resources`` at the top and later
+    call ``pkg_resources.resource_filename(__name__, "data/...")`` to
+    find the data files shipped next to them. setuptools 82 (February
+    2026) removed ``pkg_resources``, so on any install that pulled a
+    current setuptools the first ``from booknlp.english import ...``
+    raised ImportError and every audiobook fell back to builtin.
+
+    When the real module imports, nothing changes. Otherwise the
+    stand-in sits in ``sys.modules`` only while the ``with`` block runs.
+    BookNLP's modules keep the reference they bound on import, so they
+    go on working afterwards, while anything else in the process that
+    imports ``pkg_resources`` later still gets the ImportError it knows
+    how to handle rather than a module missing everything it expects.
+    """
+    try:
+        import pkg_resources  # noqa: F401
+        real_one_imports = True
+    except ImportError:
+        real_one_imports = False
+    if real_one_imports:
+        yield
+        return
+
+    missing = object()
+    previous = sys.modules.get("pkg_resources", missing)
+    sys.modules["pkg_resources"] = _make_pkg_resources_stand_in()
+    logger.info("BookNLP: setuptools has no pkg_resources; lending BookNLP ficary's resource_filename")
+    try:
+        yield
+    finally:
+        if previous is missing:
+            sys.modules.pop("pkg_resources", None)
+        else:
+            sys.modules["pkg_resources"] = previous
+
+
+def _load_booknlp_modules() -> None:
+    """Import every BookNLP module that binds ``pkg_resources``, with the
+    stand-in lent for the duration. Must run before anything else
+    imports from ``booknlp``; afterwards the imports are cached."""
+    with _pkg_resources_for_booknlp_imports():
+        import booknlp.booknlp  # noqa: F401
+        from booknlp.english import (  # noqa: F401
+            english_booknlp,
+            entity_tagger,
+            litbank_coref,
+            name_coref,
+        )
+
+
 def _get_booknlp_model(model_size: str):
     if model_size in _booknlp_cache:
         return _booknlp_cache[model_size]
     _ensure_booknlp_models(model_size)
+    _load_booknlp_modules()
     _patch_booknlp_windows_paths()
     _patch_booknlp_state_dict()
     _patch_booknlp_text_encoding()

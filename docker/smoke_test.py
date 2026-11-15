@@ -1,12 +1,12 @@
-"""Runs BookNLP once inside the Docker image, so an image whose speech attribution no longer
-works is never published.
+"""Runs BookNLP and fastcoref once each inside the Docker image, so an image whose speech
+attribution no longer works is never published.
 
 The Dockerfile's import check can't catch a backend that imports fine and then fails on its
 first story, and the audiobook code hides that kind of failure on purpose by falling back to
-the built-in attribution. fastcoref is left out for now because it falls back on every story
-(see the note in docker/Dockerfile); add it to BACKENDS once that's fixed.
+the built-in attribution. Both backends have done exactly that: BookNLP once setuptools
+dropped pkg_resources, and fastcoref under transformers 5.
 
-Run it against an image (it downloads about 160 MB of BookNLP models):
+Run it against an image (it downloads about 160 MB of BookNLP and 360 MB of fastcoref models):
     docker run --rm -i ghcr.io/matalvernaz/ficary python - < docker/smoke_test.py
 """
 import sys
@@ -23,6 +23,7 @@ PASSAGE = (
 
 BACKENDS = (
     ("booknlp", "small"),
+    ("fastcoref", None),
 )
 
 segments = tts.parse_segments(PASSAGE)
@@ -35,6 +36,6 @@ for backend, size in BACKENDS:
 
 if failed:
     print("These attribution backends fell back to the built-in one: " + ", ".join(failed), file=sys.stderr)
-    print("The warning logged above says why. Fix the dependency in docker/Dockerfile.", file=sys.stderr)
+    print("The warning logged above says why; the run-time patches are in ficary/attribution.py.", file=sys.stderr)
     sys.exit(1)
 print("Every attribution backend in the smoke test ran: " + ", ".join(name for name, _ in BACKENDS))

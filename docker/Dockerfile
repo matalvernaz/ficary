@@ -29,14 +29,11 @@ RUN pip install --index-url https://download.pytorch.org/whl/cpu torch
 # the CPU build.
 # BookNLP goes in without its declared dependencies. It lists tensorflow, about 1.6 GB with
 # everything tensorflow brings, but never imports it. What it does import is torch,
-# transformers, spaCy, tqdm and pkg_resources, and pkg_resources was removed from setuptools
-# in version 82, hence the pin. Without it BookNLP fails to import and every audiobook quietly
-# falls back to the built-in attribution. docker/smoke_test.py runs BookNLP on every build and
-# fails it if BookNLP falls back.
-# fastcoref is installed so the option exists, but it currently falls back on every story: the
-# release on PyPI (2.1.6) can't load its model under transformers 4.46 or later, and ficary's
-# fastcoref step reads mention strings where it expects character spans. Both need fixing
-# before the smoke test can cover it.
+# transformers, spaCy, tqdm and pkg_resources; current setuptools has no pkg_resources, and
+# ficary supplies the one function BookNLP needs, the same as it does on the desktop.
+# Neither backend has had a release that works with current libraries as-is, so ficary
+# patches both at run time (ficary/attribution.py), and docker/smoke_test.py runs both on
+# every build and fails it if either one falls back to the built-in attribution.
 RUN pip install \
         fastapi \
         "uvicorn[standard]" \
@@ -44,7 +41,6 @@ RUN pip install \
         transformers \
         spacy \
         tqdm \
-        "setuptools<82" \
         fastcoref \
     && pip install --no-deps booknlp \
     && python -m spacy download en_core_web_sm
@@ -66,9 +62,9 @@ COPY docker/app.py /app/app.py
 
 # Import the server and everything the attribution backends load, once, so a dependency that
 # broke since the last release fails this build instead of the first audiobook. Importing the
-# app registers its form routes, which needs python-multipart; importing booknlp.booknlp is
-# what reaches pkg_resources.
-RUN python -c "import app, ficary.tts, ficary.attribution, fastcoref, booknlp.booknlp, spacy; spacy.load('en_core_web_sm')"
+# app registers its form routes, which needs python-multipart. BookNLP's own modules only
+# import once ficary has supplied pkg_resources, so the smoke test covers those.
+RUN python -c "import app, ficary.tts, ficary.attribution, fastcoref, booknlp, spacy; spacy.load('en_core_web_sm')"
 
 # Run as an ordinary user whose home is /data.
 RUN useradd --uid 1000 --user-group --home-dir /data --no-create-home --shell /usr/sbin/nologin ficary \

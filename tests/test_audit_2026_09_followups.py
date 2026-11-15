@@ -248,12 +248,9 @@ def test_the_docker_image_takes_torch_from_the_cpu_index():
     assert "--index-url https://download.pytorch.org/whl/cpu torch" in dockerfile
     # The build refuses an image that picked up GPU packages anyway.
     assert "nvidia-" in dockerfile and "triton==" in dockerfile
-    # BookNLP imports pkg_resources, which setuptools 82 removed.
-    assert '"setuptools<82"' in dockerfile
-    assert "booknlp.booknlp" in dockerfile
 
 
-def test_every_docker_build_runs_booknlp():
+def test_every_docker_build_runs_both_attribution_backends():
     """A backend that imports but fails on its first story must stop the image being tagged."""
     import yaml
     from pathlib import Path
@@ -267,7 +264,7 @@ def test_every_docker_build_runs_booknlp():
     assert names.index("build") < steps.index(smoke) < names.index("Record the digest")
 
     script = (root / "docker" / "smoke_test.py").read_text()
-    assert '("booknlp", "small")' in script
+    assert '("booknlp", "small")' in script and '("fastcoref", None)' in script
     assert "sys.exit(1)" in script
 
 

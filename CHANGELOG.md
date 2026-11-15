@@ -8,7 +8,18 @@
   container image for 64-bit x86 and ARM servers. It serves a small web
   page that downloads a story as EPUB, HTML or TXT, or makes an
   audiobook of it in the background. See "On a server (Docker)" in the
-  README. The desktop app and the command line are unchanged.
+  README.
+
+**BookNLP and fastcoref speaker detection fixed**
+
+* BookNLP loads on new installs. Since February 2026 a fresh install of
+  it failed to load, because setuptools, a library it relies on,
+  dropped the part BookNLP uses to find its own data files. Audiobooks
+  then used the built-in speaker detection without saying so.
+* fastcoref works. It fell back to the built-in speaker detection on
+  every story: its results were read in the wrong form, and its last
+  release can't load its model on current versions of the transformers
+  library.
 
 ## 2.20.7 — 2026-11-11
 
