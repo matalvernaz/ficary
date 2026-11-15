@@ -32,11 +32,14 @@ RUN pip install --index-url https://download.pytorch.org/whl/cpu torch
 # transformers, spaCy, tqdm and pkg_resources, and pkg_resources was removed from setuptools
 # in version 82, hence the pin. Without it BookNLP fails to import and every audiobook quietly
 # falls back to the built-in attribution.
+# transformers stays below 5: fastcoref 2.1.6 fails to load its model under 5.x
+# ('FCorefModel' object has no attribute 'all_tied_weights_keys') and falls back the same way.
+# docker/smoke_test.py runs both backends on every build and fails it if either one falls back.
 RUN pip install \
         fastapi \
         "uvicorn[standard]" \
         python-multipart \
-        transformers \
+        "transformers<5" \
         spacy \
         tqdm \
         "setuptools<82" \

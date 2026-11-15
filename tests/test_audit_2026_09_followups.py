@@ -251,6 +251,26 @@ def test_the_docker_image_takes_torch_from_the_cpu_index():
     # BookNLP imports pkg_resources, which setuptools 82 removed.
     assert '"setuptools<82"' in dockerfile
     assert "booknlp.booknlp" in dockerfile
+    # fastcoref 2.1.6 can't load its model under transformers 5.
+    assert '"transformers<5"' in dockerfile
+
+
+def test_every_docker_build_runs_both_attribution_backends():
+    """A backend that imports but fails on its first story must stop the image being tagged."""
+    import yaml
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1]
+    data = yaml.safe_load((root / ".github" / "workflows" / "build-docker.yml").read_text())
+    steps = data["jobs"]["build"]["steps"]
+    names = [step.get("name") or step.get("id") or step.get("uses") for step in steps]
+    smoke = next(step for step in steps if "smoke_test.py" in step.get("run", ""))
+    # It has to run after the image is built and before its digest is handed to publish.
+    assert names.index("build") < steps.index(smoke) < names.index("Record the digest")
+
+    script = (root / "docker" / "smoke_test.py").read_text()
+    assert '("booknlp", "small")' in script and '("fastcoref", None)' in script
+    assert "sys.exit(1)" in script
 
 
 def test_the_macos_build_fetches_an_arm64_ffmpeg():
