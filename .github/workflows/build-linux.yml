@@ -26,7 +26,12 @@ jobs:
 
   build:
     needs: test
-    runs-on: ubuntu-latest
+    # Pinned, not ubuntu-latest: wxPython's extras repo publishes Linux
+    # wheels per Ubuntu release and has none for 26.04, which
+    # ubuntu-latest became in November 2026. Move this when
+    # extras.wxpython.org/wxPython4/extras/linux/gtk3/ lists a newer one.
+    # It also keeps the binary's glibc floor where it was.
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
 
