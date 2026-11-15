@@ -1,5 +1,15 @@
 # Changelog
 
+## 2.20.8 — 2026-11-15
+
+**A Docker image of the web version, published with every release**
+
+* Each release now also publishes `ghcr.io/matalvernaz/ficary`, a
+  container image for 64-bit x86 and ARM servers. It serves a small web
+  page that downloads a story as EPUB, HTML or TXT, or makes an
+  audiobook of it in the background. See "On a server (Docker)" in the
+  README. The desktop app and the command line are unchanged.
+
 ## 2.20.7 — 2026-11-11
 
 **Search results show when each story was last updated**

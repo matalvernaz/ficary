@@ -97,6 +97,23 @@ If you'd rather install only what you need, the pieces are:
   headless Chromium via `playwright install chromium`), which is why
   `all` leaves it out.
 
+### On a server (Docker)
+
+Every release is also published as a container image that serves a
+small web page: paste a story link and get an EPUB, HTML or TXT file
+back, or start an audiobook and download it when it's done. It runs on
+64-bit x86 and ARM.
+
+```bash
+docker run -d -p 8000:8000 -v ficary-data:/data ghcr.io/matalvernaz/ficary
+```
+
+Then open `http://localhost:8000`. The `/data` volume keeps the
+download cache and the speaker-attribution models (BookNLP's large
+model is about 1 GB) when the container is replaced. A folder mounted
+there must be writable by user id 1000. The page has no sign-in of its
+own, so put it behind one before exposing it to the internet.
+
 ### Optional features
 
 The desktop downloads come with every feature already included except

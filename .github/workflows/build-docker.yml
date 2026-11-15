@@ -1,0 +1,150 @@
+name: Build Docker Image
+
+# Publishes the web front end (docker/Dockerfile) as
+# ghcr.io/matalvernaz/ficary for each v-tag release, for 64-bit x86
+# and ARM. Each architecture builds on a native runner: under QEMU
+# emulation the torch, spaCy and BookNLP install takes the better
+# part of an hour.
+#
+# Only a pushed vX.Y.Z tag moves `latest` and the version tag. A manual
+# run publishes the image under its commit hash alone (sha-<full
+# hash>), so a build can be pulled and tried before release without
+# anything that follows `latest` picking it up.
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Two tags pushed close together must not race each other to `latest`.
+concurrency:
+  group: docker-image
+  cancel-in-progress: false
+
+env:
+  IMAGE: ghcr.io/${{ github.repository }}
+
+jobs:
+  test:
+    # Same gate as the binary builds: nothing is published from a
+    # revision whose tests have not passed.
+    uses: ./.github/workflows/tests.yml
+
+  build:
+    needs: test
+    strategy:
+      matrix:
+        include:
+          - platform: linux/amd64
+            runner: ubuntu-latest
+            arch: amd64
+          - platform: linux/arm64
+            runner: ubuntu-24.04-arm
+            arch: arm64
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: docker/setup-buildx-action@v4
+
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ${{ env.IMAGE }}
+
+      - id: build
+        # Pushed by digest only; the publish job puts both
+        # architectures under the tags in one step.
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: docker/Dockerfile
+          platforms: ${{ matrix.platform }}
+          labels: ${{ steps.meta.outputs.labels }}
+          outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
+          cache-from: type=gha,scope=docker-${{ matrix.arch }}
+          cache-to: type=gha,scope=docker-${{ matrix.arch }},mode=max
+
+      - name: Record the digest
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/digests"
+          touch "$RUNNER_TEMP/digests/${DIGEST#sha256:}"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: digest-${{ matrix.arch }}
+          path: ${{ runner.temp }}/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          path: ${{ runner.temp }}/digests
+          pattern: digest-*
+          merge-multiple: true
+
+      - uses: docker/setup-buildx-action@v4
+
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Decide whether this is a release
+        # A release is a pushed tag of the form vX.Y.Z and nothing else.
+        # A manual run can also be pointed at an old tag, and a tag like
+        # v2.21.0-rc1 is not a release either; both get the commit tag
+        # alone, so neither can move `latest` or a version tag.
+        id: release
+        run: |
+          if [[ "$GITHUB_EVENT_NAME" == "push" && "$GITHUB_REF" =~ ^refs/tags/v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "is_release=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "is_release=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ${{ env.IMAGE }}
+          flavor: |
+            latest=false
+          tags: |
+            type=semver,pattern={{version}},enable=${{ steps.release.outputs.is_release == 'true' }}
+            type=raw,value=latest,enable=${{ steps.release.outputs.is_release == 'true' }}
+            type=sha,format=long
+
+      - name: Put both architectures under the tags
+        working-directory: ${{ runner.temp }}/digests
+        run: |
+          tags=$(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON")
+          sources=$(printf "$IMAGE@sha256:%s " *)
+          docker buildx imagetools create $tags $sources
+
+      - name: Show what was published
+        env:
+          FIRST_TAG: ${{ fromJSON(steps.meta.outputs.json).tags[0] }}
+        run: docker buildx imagetools inspect "$FIRST_TAG"

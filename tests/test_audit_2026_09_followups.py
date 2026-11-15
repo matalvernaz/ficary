@@ -178,11 +178,79 @@ def test_release_builds_gate_on_the_test_workflow():
     triggers = tests.get("on", tests.get(True))
     assert "workflow_call" in triggers, "tests.yml must be callable"
 
-    for name in ("build-linux.yml", "build-macos.yml", "build-windows.yml"):
+    for name in ("build-linux.yml", "build-macos.yml", "build-windows.yml", "build-docker.yml"):
         data = yaml.safe_load((workflows / name).read_text())
         build = data["jobs"]["build"]
         assert build.get("needs") == "test", f"{name} does not gate on tests"
         assert data["jobs"]["test"]["uses"].endswith("tests.yml")
+
+
+def test_only_a_version_tag_moves_the_docker_latest_tag():
+    """Whatever follows ``latest`` (Watchtower, for one) deploys it, so only a release may move it."""
+    import yaml
+    from pathlib import Path
+
+    workflow = Path(__file__).resolve().parents[1] / ".github" / "workflows" / "build-docker.yml"
+    data = yaml.safe_load(workflow.read_text())
+
+    # A branch push would publish an untagged commit. master is the landing-page mirror, so
+    # a trigger on it would ship whatever was mirrored there.
+    triggers = data.get("on", data.get(True))
+    assert set(triggers) == {"push", "workflow_dispatch"}
+    assert triggers["push"] == {"tags": ["v*"]}
+
+    # metadata-action must not add `latest` on its own, and the explicit `latest` and version
+    # tags must both wait on the release decision below.
+    steps = data["jobs"]["publish"]["steps"]
+    meta = next(step for step in steps if step.get("id") == "meta")
+    assert "latest=false" in meta["with"]["flavor"]
+    gated = "enable=${{ steps.release.outputs.is_release == 'true' }}"
+    for line in meta["with"]["tags"].splitlines():
+        if "value=latest" in line or "type=semver" in line:
+            assert line.endswith(gated), f"not gated on the release decision: {line}"
+
+
+def test_the_docker_release_decision(tmp_path):
+    """Only a pushed vX.Y.Z tag counts; a manual run aimed at a tag or a pre-release tag does not."""
+    import os
+    import shutil
+    import subprocess
+    import yaml
+    from pathlib import Path
+
+    workflow = Path(__file__).resolve().parents[1] / ".github" / "workflows" / "build-docker.yml"
+    steps = yaml.safe_load(workflow.read_text())["jobs"]["publish"]["steps"]
+    script = next(step for step in steps if step.get("id") == "release")["run"]
+    bash = shutil.which("bash")
+    assert bash, "bash is needed to run the workflow's own release check"
+
+    # Run the step exactly as the runner would, and read back what it wrote to GITHUB_OUTPUT.
+    def decide(event, ref):
+        output = tmp_path / f"output-{event}-{ref.replace('/', '_')}"
+        environment = {"PATH": os.environ.get("PATH", ""), "GITHUB_EVENT_NAME": event, "GITHUB_REF": ref, "GITHUB_OUTPUT": str(output)}
+        subprocess.run([bash, "-e", "-c", script], env=environment, check=True)
+        return output.read_text().strip()
+
+    assert decide("push", "refs/tags/v2.20.8") == "is_release=true"
+    assert decide("push", "refs/tags/v10.0.12") == "is_release=true"
+    assert decide("workflow_dispatch", "refs/tags/v2.20.8") == "is_release=false"
+    assert decide("workflow_dispatch", "refs/heads/reader") == "is_release=false"
+    assert decide("push", "refs/tags/v2.21.0-rc1") == "is_release=false"
+    assert decide("push", "refs/tags/vtest") == "is_release=false"
+    assert decide("push", "refs/tags/v2.20") == "is_release=false"
+
+
+def test_the_docker_image_takes_torch_from_the_cpu_index():
+    """PyPI's torch brings about 3.5 GB of CUDA libraries that no CPU-only server can use."""
+    from pathlib import Path
+
+    dockerfile = (Path(__file__).resolve().parents[1] / "docker" / "Dockerfile").read_text()
+    assert "--index-url https://download.pytorch.org/whl/cpu torch" in dockerfile
+    # The build refuses an image that picked up GPU packages anyway.
+    assert "nvidia-" in dockerfile and "triton==" in dockerfile
+    # BookNLP imports pkg_resources, which setuptools 82 removed.
+    assert '"setuptools<82"' in dockerfile
+    assert "booknlp.booknlp" in dockerfile
 
 
 def test_the_macos_build_fetches_an_arm64_ffmpeg():

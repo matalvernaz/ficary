@@ -1,0 +1,8 @@
+# The Docker image (docker/Dockerfile) needs only the package and the web front end, so the
+# build context is limited to those instead of sending the virtualenv, caches and tests.
+*
+!pyproject.toml
+!ficary/
+!docker/
+**/__pycache__
+**/*.py[cod]
