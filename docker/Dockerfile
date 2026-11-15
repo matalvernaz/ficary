@@ -29,8 +29,10 @@ RUN pip install --index-url https://download.pytorch.org/whl/cpu torch
 # the CPU build.
 # BookNLP goes in without its declared dependencies. It lists tensorflow, about 1.6 GB with
 # everything tensorflow brings, but never imports it. What it does import is torch,
-# transformers, spaCy, tqdm and pkg_resources; current setuptools has no pkg_resources, and
-# ficary supplies the one function BookNLP needs, the same as it does on the desktop.
+# transformers, spaCy, tqdm and pkg_resources. setuptools is lifted to a current release, which
+# has no pkg_resources: PyTorch's index ships an old one that still does, and with it the image
+# would never take the path a new desktop install takes, where ficary lends BookNLP the one
+# function it needs.
 # Neither backend has had a release that works with current libraries as-is, so ficary
 # patches both at run time (ficary/attribution.py), and docker/smoke_test.py runs both on
 # every build and fails it if either one falls back to the built-in attribution.
@@ -41,6 +43,7 @@ RUN pip install \
         transformers \
         spacy \
         tqdm \
+        "setuptools>=82" \
         fastcoref \
     && pip install --no-deps booknlp \
     && python -m spacy download en_core_web_sm

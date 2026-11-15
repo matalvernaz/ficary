@@ -26,6 +26,14 @@ BACKENDS = (
     ("fastcoref", None),
 )
 
+# Say which way BookNLP will find its data files. The Dockerfile installs a setuptools without
+# pkg_resources so that ficary's stand-in is the path being tested.
+try:
+    import pkg_resources  # noqa: F401
+    print("pkg_resources is installed, so BookNLP uses the real one.")
+except ImportError:
+    print("pkg_resources is missing, so BookNLP uses ficary's stand-in.")
+
 segments = tts.parse_segments(PASSAGE)
 failed = []
 for backend, size in BACKENDS:

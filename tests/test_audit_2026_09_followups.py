@@ -248,6 +248,8 @@ def test_the_docker_image_takes_torch_from_the_cpu_index():
     assert "--index-url https://download.pytorch.org/whl/cpu torch" in dockerfile
     # The build refuses an image that picked up GPU packages anyway.
     assert "nvidia-" in dockerfile and "triton==" in dockerfile
+    # A setuptools without pkg_resources, so the smoke test covers ficary's BookNLP stand-in.
+    assert '"setuptools>=82"' in dockerfile
 
 
 def test_every_docker_build_runs_both_attribution_backends():
