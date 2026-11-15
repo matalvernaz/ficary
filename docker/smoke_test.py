@@ -1,10 +1,11 @@
-"""Runs BookNLP and fastcoref once each inside the Docker image, so an image whose speech
-attribution no longer works is never published.
+"""Runs BookNLP and fastcoref inside the Docker image on a short original scene and checks the
+speakers they set, so an image whose speech attribution doesn't really work is never published.
 
-The Dockerfile's import check can't catch a backend that imports fine and then fails on its
-first story, and the audiobook code hides that kind of failure on purpose by falling back to
-the built-in attribution. Both backends have done exactly that: BookNLP once setuptools
-dropped pkg_resources, and fastcoref under transformers 5.
+"Didn't fall back" isn't enough: until 2.20.9 BookNLP ran without falling back and changed
+nothing, because its output was read from the wrong columns. So this checks real results: the
+lines BookNLP should correct, that neither backend gives narration a voice, and that every name
+either one sets belongs to the scene. The scene is tests/fixtures/booknlp/passage.txt, which the
+unit tests replay BookNLP's recorded output for.
 
 Run it against an image (it downloads about 160 MB of BookNLP and 360 MB of fastcoref models):
     docker run --rm -i ghcr.io/matalvernaz/ficary python - < docker/smoke_test.py
@@ -13,37 +14,62 @@ import sys
 
 from ficary import attribution, tts
 
-# A few lines of dialogue with named speakers, enough for every backend to do real work.
-PASSAGE = (
-    '"Where are you going?" Anna asked.\n\n'
-    '"To the station," said Ben. "The last train leaves at nine."\n\n'
-    'Anna frowned. "Then I am coming with you."\n\n'
-    '"Suit yourself," Ben said.\n'
+SCENE = (
+    "The bakery on Halloway Street smelled of burnt sugar when Margaret Ashby-Lowe pushed the door open. "
+    "Her brother Tom followed her in, shaking rain from his coat. "
+    "A card in the window still read \"OPEN\" in faded red letters.\n\n"
+    "“We’re closed,” said the woman behind the counter, without looking up from her dough.\n\n"
+    "“The sign says you’re open,” Margaret said.\n\n"
+    "The woman sighed and set down her rolling pin. “Then the sign is wrong. Come back tomorrow.”\n\n"
+    "“We only need one loaf,” Tom said. “It’s for our mother’s birthday.”\n\n"
+    "The woman looked at him for a long moment. “One loaf. And you didn’t get it from me.”\n\n"
+    "Margaret laughed. “Thank you.”\n\n"
+    "Tom held the door for his sister on the way out. “You could have smiled at her,” he said.\n\n"
+    "Outside, Tom waited until their cousin Sam was watching, then threw him the loaf. “Catch,” he said.\n\n"
+    "Sam caught it against his chest. “Next time, warn me first.”\n"
 )
+
+# Every name a backend may set: the scene's characters as the text names them.
+SCENE_NAMES = {"Margaret Ashby-Lowe", "Margaret", "Tom", "Sam"}
+
+# Lines the built-in parser gets wrong and BookNLP's output gets right.
+BOOKNLP_EXPECTED = {
+	"It’s for our mother’s birthday.": "Tom",
+	"Thank you.": "Margaret Ashby-Lowe",
+	"Catch,": "Tom",
+}
 
 BACKENDS = (
-    ("booknlp", "small"),
-    ("fastcoref", None),
+	("booknlp", "small"),
+	("fastcoref", None),
 )
 
-# Say which way BookNLP will find its data files. The Dockerfile installs a setuptools without
-# pkg_resources so that ficary's stand-in is the path being tested.
-try:
-    import pkg_resources  # noqa: F401
-    print("pkg_resources is installed, so BookNLP uses the real one.")
-except ImportError:
-    print("pkg_resources is missing, so BookNLP uses ficary's stand-in.")
-
-segments = tts.parse_segments(PASSAGE)
-failed = []
+problems = []
 for backend, size in BACKENDS:
-    # refine_speakers never raises; a failure shows up as has_failed() and a logged warning.
-    attribution.refine_speakers(list(segments), PASSAGE, backend=backend, model_size=size)
-    if attribution.has_failed(backend, size):
-        failed.append(backend)
+	before = tts.parse_segments(SCENE)
+	# refine_speakers never raises; a failure shows up as has_failed() and a logged warning.
+	after = attribution.refine_speakers(tts.parse_segments(SCENE), SCENE, backend=backend, model_size=size)
+	if attribution.has_failed(backend, size):
+		problems.append(f"{backend} fell back to the built-in attribution; the warning logged above says why")
+		continue
 
-if failed:
-    print("These attribution backends fell back to the built-in one: " + ", ".join(failed), file=sys.stderr)
-    print("The warning logged above says why; the run-time patches are in ficary/attribution.py.", file=sys.stderr)
-    sys.exit(1)
-print("Every attribution backend in the smoke test ran: " + ", ".join(name for name, _ in BACKENDS))
+	for old, new in zip(before, after):
+		if not attribution._is_dialogue_segment(old) and new.speaker is not None:
+			problems.append(f"{backend} gave narration a voice ({new.speaker}): {new.text[:60]!r}")
+		if new.speaker is not None and new.speaker not in SCENE_NAMES:
+			problems.append(f"{backend} set a speaker that isn't in the scene: {new.speaker!r}")
+
+	if backend == "booknlp":
+		speaker_of = {segment.text: segment.speaker for segment in after}
+		for line, speaker in BOOKNLP_EXPECTED.items():
+			if speaker_of.get(line) != speaker:
+				problems.append(f"booknlp gave {line!r} to {speaker_of.get(line)!r}, expected {speaker!r}")
+
+	print(f"{backend}: " + "; ".join(f"{segment.text[:25]!r} -> {segment.speaker}" for segment in after if attribution._is_dialogue_segment(segment)))
+
+if problems:
+	print("Speech attribution in this image is broken:", file=sys.stderr)
+	for problem in problems:
+		print("  " + problem, file=sys.stderr)
+	sys.exit(1)
+print("BookNLP and fastcoref both ran and set the speakers they should.")

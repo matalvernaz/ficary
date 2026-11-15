@@ -1,0 +1,41 @@
+COREF	start_token	end_token	prop	cat	text
+4	0	4	NOM	FAC	The bakery on Halloway Street
+0	3	4	PROP	FAC	Halloway Street
+1	10	13	PROP	PER	Margaret Ashby - Lowe
+1	19	19	PRON	PER	Her
+5	19	20	NOM	PER	Her brother
+2	21	21	PROP	PER	Tom
+1	23	23	PRON	PER	her
+2	29	29	PRON	PER	his
+12	48	48	PRON	PER	We
+6	54	58	NOM	PER	the woman behind the counter
+6	64	64	PRON	PER	her
+6	71	71	PRON	PER	you
+1	76	76	PROP	PER	Margaret
+7	79	80	NOM	PER	The woman
+7	85	85	PRON	PER	her
+12	102	102	PRON	PER	We
+2	109	109	PROP	PER	Tom
+12	116	116	PRON	PER	our
+13	116	117	NOM	PER	our mother
+7	122	123	NOM	PER	The woman
+2	126	126	PRON	PER	him
+6	137	137	PRON	PER	you
+7	143	143	PRON	PER	me
+1	146	146	PROP	PER	Margaret
+6	151	151	PRON	PER	you
+2	154	154	PROP	PER	Tom
+2	159	159	PRON	PER	his
+9	159	160	NOM	PER	his sister
+6	167	167	PRON	PER	You
+1	172	172	PRON	PER	her
+2	175	175	PRON	PER	he
+2	180	180	PROP	PER	Tom
+10	183	183	PRON	PER	their
+11	183	184	NOM	PER	their cousin
+3	185	185	PROP	PER	Sam
+3	191	191	PRON	PER	him
+2	199	199	PRON	PER	he
+3	202	202	PROP	PER	Sam
+2	206	206	PRON	PER	his
+3	214	214	PRON	PER	me

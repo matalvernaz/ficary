@@ -1,5 +1,25 @@
 # Changelog
 
+## 2.20.9 — 2026-11-15
+
+**BookNLP and fastcoref speaker detection now actually help**
+
+* BookNLP now sets who says each line. Its results were being read from
+  the wrong columns, so until now an audiobook made with BookNLP sounded
+  exactly like one made with the built-in detection. On test chapters it
+  now gets noticeably more lines right than the built-in detection does.
+  Character names come out as the story writes them ("Ashby-Lowe", not
+  "Ashby - Lowe").
+* fastcoref no longer names speakers after long phrases like "his
+  grandfather and Red", and no longer reads lines of narration in a
+  character's voice. 2.20.8 made fastcoref run again, but both problems
+  made it worse than the built-in detection; it now does a little better.
+* Characters a story never names, such as a shopkeeper, still get the
+  built-in detection's guess under BookNLP.
+* Speaker results saved by earlier versions are not reused, since they
+  came from the broken code. The first time each book is turned into an
+  audiobook again, its speaker detection runs again.
+
 ## 2.20.8 — 2026-11-15
 
 **A Docker image of the web version, published with every release**

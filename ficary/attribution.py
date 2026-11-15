@@ -878,6 +878,40 @@ _PRONOUN_TOKENS = {
 _fastcoref_patched = False
 
 
+def _is_dialogue_segment(segment):
+    """Whether a segment is a line of dialogue. parse_segments gives every
+    quote it attributed a speaker and keeps the quote marks on the ones it
+    couldn't attribute; narration has neither. The refinement passes only
+    touch dialogue: a narration segment given a speaker is read aloud in
+    that character's voice."""
+    if segment.speaker is not None:
+        return True
+    text = segment.text or ""
+    return len(text) >= 2 and text[0] in '"\u201c' and text[-1] in '"\u201d'
+
+# Short words that can sit inside a name without a capital ("Ludwig van Beethoven").
+_NAME_PARTICLES = {"de", "da", "del", "der", "di", "du", "la", "le", "of", "van", "von"}
+
+
+def _looks_like_a_name(span):
+    """Whether a coreference mention reads as a person's name: one to four
+    words, each capitalised apart from name particles, with no "and" or comma.
+    Titles with full stops ("Mrs. Figg") pass."""
+    if "," in span:
+        return False
+    words = span.split()
+    if not 1 <= len(words) <= 4:
+        return False
+    for word in words:
+        if word.lower() in ("and", "or"):
+            return False
+        if word.lower() in _NAME_PARTICLES:
+            continue
+        if not word[0].isupper():
+            return False
+    return True
+
+
 def _patch_fastcoref_for_transformers5() -> None:
     """Let fastcoref 2.1.6 load its model under transformers 5.
 
@@ -941,18 +975,20 @@ def _refine_with_fastcoref(segments, full_text):
                 pos_to_cluster[c] = idx
 
     def _cluster_canonical(cluster_idx):
-        # The longest non-pronoun mention is the canonical name.
-        best = None
+        # The cluster's name: the name-like mention it uses most, longer
+        # breaking ties. A cluster with no name gives no speaker. Taking the
+        # longest mention of any kind used to name speakers after phrases
+        # like "his grandfather and Red".
+        counts = {}
         for start, end in clusters[cluster_idx]:
-            span = full_text[start:end].strip()
-            if not span:
+            span = " ".join(full_text[start:end].split())
+            if not span or span.lower() in _PRONOUN_TOKENS:
                 continue
-            low = span.lower()
-            if low in _PRONOUN_TOKENS:
-                continue
-            if best is None or len(span) > len(best):
-                best = span
-        return best
+            if _looks_like_a_name(span):
+                counts[span] = counts.get(span, 0) + 1
+        if not counts:
+            return None
+        return max(counts, key=lambda name: (counts[name], len(name)))
 
     # Walk segments and refine. We need character offsets for each
     # segment; reconstruct by re-scanning full_text for each segment's
@@ -967,6 +1003,8 @@ def _refine_with_fastcoref(segments, full_text):
         if idx < 0:
             continue
         cursor = idx + len(seg.text)
+        if not _is_dialogue_segment(seg):
+            continue
 
         current = (seg.speaker or "").lower()
         needs_refine = (
@@ -1462,72 +1500,58 @@ def _refine_with_booknlp(segments, full_text, model_size="small"):
         model.process(str(infile), str(tmp), "book")
         logger.info("BookNLP: process() returned")
 
-        # BookNLP exposes ``byte_onset`` / ``byte_offset`` columns whose
-        # values are positions inside the UTF-8 encoded source, not
-        # Python codepoint indices. The downstream alignment uses
-        # ``full_text.find()`` (codepoint indices), so a chapter
-        # containing smart quotes, em-dashes, or accented names made
-        # the two desync starting at the first non-ASCII character.
-        # Build a byte→char lookup once so any byte offset BookNLP
-        # emits maps cleanly back to a character index.
-        encoded = full_text.encode("utf-8")
-        byte_to_char: list[int] = [0] * (len(encoded) + 1)
-        bpos = 0
-        for cpos, ch in enumerate(full_text):
-            ch_len = len(ch.encode("utf-8"))
-            for off in range(ch_len):
-                if bpos + off < len(byte_to_char):
-                    byte_to_char[bpos + off] = cpos
-            bpos += ch_len
-        byte_to_char[bpos] = len(full_text)
-
-        def _byte_to_char(b: int) -> int:
-            if b <= 0:
-                return 0
-            if b >= len(byte_to_char):
-                return len(full_text)
-            return byte_to_char[b]
-
-        # Token offsets → character offsets
+        # BookNLP's ``byte_onset`` / ``byte_offset`` columns are CHARACTER
+        # positions in the text it read, despite the names: its spaCy
+        # pipeline fills them from ``token.idx`` (booknlp/common/pipelines.py).
+        # Checked on a real chapter: all 6,603 tokens matched
+        # ``full_text[byte_onset:byte_offset]``, against 234 when read as
+        # UTF-8 bytes, which drift after the first curly quote or accent.
+        # They line up with ``full_text`` because book.txt is written from it
+        # and read back unchanged.
         tokens_file = tmp / "book.tokens"
-        tok_char = {}  # token_id → start_char
+        tok_char = {}  # token_id → start character
+        tok_end_char = {}  # token_id → end character, so a mention can be cut from full_text
         if tokens_file.exists():
             with open(tokens_file, encoding="utf-8") as f:
-                reader = csv.DictReader(f, delimiter="\t")
+                reader = csv.DictReader(f, delimiter="\t", quoting=csv.QUOTE_NONE)
                 for row in reader:
                     try:
                         token_id = int(row["token_ID_within_document"])
-                        raw_offset = int(
-                            row.get("byte_onset") or row.get("start_token") or 0
-                        )
+                        tok_char[token_id] = int(row["byte_onset"])
+                        tok_end_char[token_id] = int(row["byte_offset"])
                     except (KeyError, ValueError):
                         continue
-                    # When BookNLP fell back to ``start_token`` (an
-                    # earlier release without byte_onset) the value is
-                    # already a token index, not a byte offset, so the
-                    # mapping is a no-op for that case. For real
-                    # byte_onset values, fold through the byte→char map.
-                    tok_char[token_id] = (
-                        _byte_to_char(raw_offset)
-                        if "byte_onset" in row and row["byte_onset"]
-                        else raw_offset
-                    )
 
-        # Entity names per coref ID — pick longest PROP mention per group.
+        # Each character's name: the longest name (PROP) mention in its
+        # coreference chain, cut from the original text, because BookNLP's
+        # own text column joins tokens with spaces ("Verres - Evans").
+        # Chains with no name keep the built-in guess. Naming them by their
+        # longest noun phrase ("her mother", "our host") was tried: it gave
+        # never-named characters a voice, but just as often gave a named
+        # character a second one, and on fresh test chapters it lost
+        # accuracy overall.
         entities_file = tmp / "book.entities"
         canonical = {}  # coref_id → canonical name string
         if entities_file.exists():
             with open(entities_file, encoding="utf-8") as f:
-                reader = csv.DictReader(f, delimiter="\t")
+                reader = csv.DictReader(f, delimiter="\t", quoting=csv.QUOTE_NONE)
                 for row in reader:
-                    cat = row.get("cat", "")
-                    if cat != "PROP":
+                    # "prop" says whether a mention is a name (PROP), a noun phrase
+                    # (NOM) or a pronoun (PRON); "cat" is its entity type (PER, LOC...).
+                    if row.get("prop") != "PROP":
                         continue
                     try:
                         cid = int(row["COREF"])
+                        first_token = int(row["start_token"])
+                        last_token = int(row["end_token"])
                     except (KeyError, ValueError):
                         continue
-                    text = (row.get("text") or "").strip()
+                    text = ""
+                    if first_token in tok_char and last_token in tok_end_char:
+                        text = full_text[tok_char[first_token]:tok_end_char[last_token]]
+                    if not text.strip():
+                        text = row.get("text") or ""
+                    text = " ".join(text.split())
                     if not text:
                         continue
                     prev = canonical.get(cid)
@@ -1539,7 +1563,7 @@ def _refine_with_booknlp(segments, full_text, model_size="small"):
         quote_spans = []  # list of (start_char, end_char, speaker_name)
         if quotes_file.exists():
             with open(quotes_file, encoding="utf-8") as f:
-                reader = csv.DictReader(f, delimiter="\t")
+                reader = csv.DictReader(f, delimiter="\t", quoting=csv.QUOTE_NONE)
                 for row in reader:
                     try:
                         start_tok = int(row["quote_start"])
@@ -1571,6 +1595,8 @@ def _refine_with_booknlp(segments, full_text, model_size="small"):
             if idx < 0:
                 continue
             cursor = idx + len(seg.text)
+            if not _is_dialogue_segment(seg):
+                continue
             # Advance qi to the first span overlapping this segment
             while qi < len(quote_spans) and quote_spans[qi][1] < idx:
                 qi += 1

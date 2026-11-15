@@ -3061,7 +3061,11 @@ def _check_ffmpeg():
 # across different output directories. One file per chapter
 # (content-addressed by sha256) means concurrent renders never collide
 # and a single torn write only loses one chapter.
-_ATTR_CACHE_VERSION = 1
+# Version 2 (2.20.9): BookNLP results cached under version 1 were really
+# the built-in attribution (its output was read from the wrong columns),
+# and 2.20.8's fastcoref results named speakers after phrases like "his
+# grandfather and Red", so neither may be reused.
+_ATTR_CACHE_VERSION = 2
 
 
 def _attr_cache_root():

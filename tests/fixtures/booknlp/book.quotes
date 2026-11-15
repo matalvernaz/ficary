@@ -1,0 +1,12 @@
+quote_start	quote_end	mention_start	mention_end	mention_phrase	char_id	quote
+39	41	19	20	Her brother	5	" OPEN "
+47	52	54	58	the woman behind the counter	6	“ We ’re closed , ”
+67	75	76	76	Margaret	1	“ The sign says you ’re open , ”
+89	100	79	80	The woman	7	“ Then the sign is wrong . Come back tomorrow . ”
+101	108	109	109	Tom	2	“ We only need one loaf , ”
+112	121	109	109	Tom	2	“ It ’s for our mother ’s birthday . ”
+132	145	122	123	The woman	7	“ One loaf . And you did n’t get it from me . ”
+149	153	146	146	Margaret	1	“ Thank you . ”
+166	174	175	175	he	2	“ You could have smiled at her , ”
+195	198	199	199	he	2	“ Catch , ”
+209	217	202	202	Sam	3	“ Next time , warn me first . ”
