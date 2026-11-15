@@ -157,8 +157,8 @@ LANDING = """<!doctype html>
    </label>
    <label>Model size
     <select name="model_size">
-     <option value="big" selected>big (~1 GB, accurate)</option>
-     <option value="small">small (~150 MB)</option>
+     <option value="small" selected>small (~150 MB, the desktop app's default)</option>
+     <option value="big">big (~1 GB, more accurate, much slower)</option>
     </select>
    </label>
    <label>Speech rate %
@@ -291,7 +291,8 @@ def start_job(
     url: str = Form(...),
     format: str = Form(AUDIO_FORMAT),
     attribution: str = Form("booknlp"),
-    model_size: str = Form("big"),
+    # Same default as the desktop app. The big model takes several times the memory and CPU.
+    model_size: str = Form("small"),
     speech_rate: int = Form(0),
     strip_notes: str = Form("false"),
     hr_as_stars: str = Form("true"),
