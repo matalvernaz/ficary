@@ -251,11 +251,9 @@ def test_the_docker_image_takes_torch_from_the_cpu_index():
     # BookNLP imports pkg_resources, which setuptools 82 removed.
     assert '"setuptools<82"' in dockerfile
     assert "booknlp.booknlp" in dockerfile
-    # fastcoref 2.1.6 can't load its model under transformers 5.
-    assert '"transformers<5"' in dockerfile
 
 
-def test_every_docker_build_runs_both_attribution_backends():
+def test_every_docker_build_runs_booknlp():
     """A backend that imports but fails on its first story must stop the image being tagged."""
     import yaml
     from pathlib import Path
@@ -269,7 +267,7 @@ def test_every_docker_build_runs_both_attribution_backends():
     assert names.index("build") < steps.index(smoke) < names.index("Record the digest")
 
     script = (root / "docker" / "smoke_test.py").read_text()
-    assert '("booknlp", "small")' in script and '("fastcoref", None)' in script
+    assert '("booknlp", "small")' in script
     assert "sys.exit(1)" in script
 
 

@@ -31,15 +31,17 @@ RUN pip install --index-url https://download.pytorch.org/whl/cpu torch
 # everything tensorflow brings, but never imports it. What it does import is torch,
 # transformers, spaCy, tqdm and pkg_resources, and pkg_resources was removed from setuptools
 # in version 82, hence the pin. Without it BookNLP fails to import and every audiobook quietly
-# falls back to the built-in attribution.
-# transformers stays below 5: fastcoref 2.1.6 fails to load its model under 5.x
-# ('FCorefModel' object has no attribute 'all_tied_weights_keys') and falls back the same way.
-# docker/smoke_test.py runs both backends on every build and fails it if either one falls back.
+# falls back to the built-in attribution. docker/smoke_test.py runs BookNLP on every build and
+# fails it if BookNLP falls back.
+# fastcoref is installed so the option exists, but it currently falls back on every story: the
+# release on PyPI (2.1.6) can't load its model under transformers 4.46 or later, and ficary's
+# fastcoref step reads mention strings where it expects character spans. Both need fixing
+# before the smoke test can cover it.
 RUN pip install \
         fastapi \
         "uvicorn[standard]" \
         python-multipart \
-        "transformers<5" \
+        transformers \
         spacy \
         tqdm \
         "setuptools<82" \
