@@ -2,27 +2,39 @@
 
 ## Unreleased
 
-**The reader's app voice and soundscapes can play on Windows**
+**The reader's app voice and soundscapes can play**
 
-* The Windows download now includes the OpenAL sound library. It had
-  been left out of every release, so in the in-app reader the App voice
-  reading mode and soundscapes did nothing, whatever was installed.
-* When sound cannot play, the reader now says which thing is wrong: the
+* On Windows, the download now includes the OpenAL sound library. It
+  had been left out of every release, so in the in-app reader the App
+  voice reading mode and soundscapes did nothing, whatever was
+  installed.
+* On a Mac, Ficary now finds the system's own OpenAL. It could not
+  before, so the same two features were silent there as well.
+* On Linux they use the system's OpenAL library (`libopenal1` on Debian
+  and Ubuntu). The feature's description and the manual now say so.
+* When sound cannot play, the reader says which thing is wrong: the
   audio feature is not installed, the sound library is missing, or no
   sound output could be opened, each with what to do about it. The old
   message named two causes at once and advised installing a feature
-  the Windows download already had.
+  the downloads already had.
 * Pressing Play tries to start sound again before giving up, so
   speakers or headphones connected after the reader was opened are
   picked up without restarting.
+* If the voice cannot speak at all, because the voice service refuses
+  the request or the connection is down, the reader stops and says
+  why. Before, it reported the chapter's sections as skipped, moved on
+  to the next chapter and tried again, taking the reading position
+  with it. A single section that fails is still skipped; three in a
+  row end the chapter.
+* The Edge voices now require edge-tts 7.3.1 or newer, because
+  Microsoft's service has stopped accepting older versions. When
+  running from source, reinstalling "Audiobook synthesis (edge-tts)"
+  in Optional Features fetches a working one.
 * `ficary --check-reader-audio` reports whether the reader can play
   sound on this computer, and what is missing if it cannot.
 * Installing the reader's audio feature works with older versions of
   pip. Its requirement was written in a form they answer with "no
   matching distribution".
-* On Linux, the feature's description and the manual now say that it
-  also needs the system's OpenAL library (`libopenal1` on Debian and
-  Ubuntu).
 
 **The LLM author's-note check no longer hides its own failures**
 

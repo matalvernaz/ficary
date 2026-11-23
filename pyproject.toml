@@ -30,7 +30,10 @@ dependencies = [
 
 [project.optional-dependencies]
 epub = ["ebooklib>=0.18"]
-audio = ["edge-tts>=7.0"]
+# Microsoft's voice service stops accepting older clients from time to
+# time: on 2026-11-23 it refused edge-tts 7.2.8 with a 403 and served
+# 7.3.1. The floor is the oldest version known to work.
+audio = ["edge-tts>=7.3.1"]
 gui = ["wxPython>=4.2"]
 clipboard = ["pyperclip>=1.8"]
 cf-solve = ["playwright>=1.40"]
@@ -41,7 +44,7 @@ cf-solve = ["playwright>=1.40"]
 playback = ["PyOpenAL>=0.7.11a1"]
 # PyYAML: the release-plumbing tests parse the build workflows.
 dev = ["pytest>=7.0", "hypothesis>=6.100", "PyYAML>=6.0"]
-all = ["ebooklib>=0.18", "edge-tts>=7.0", "wxPython>=4.2", "pyperclip>=1.8", "PyOpenAL>=0.7.11a1"]
+all = ["ebooklib>=0.18", "edge-tts>=7.3.1", "wxPython>=4.2", "pyperclip>=1.8", "PyOpenAL>=0.7.11a1"]
 
 [project.scripts]
 ficary = "ficary.entrypoint:main"

@@ -54,7 +54,11 @@ jobs:
             libgtk-3-0 libsdl2-2.0-0 \
             libegl1 libgl1 libglu1-mesa \
             libnotify4 libsm6 libxkbcommon0 \
-            at-spi2-core
+            at-spi2-core \
+            libopenal1
+          # libopenal1 is not bundled into the release. It is here so
+          # the "sound library loads" check below has a system copy to
+          # find, the way a user's machine would.
 
       - name: Install ffmpeg (static build)
         # Static build, so the bundle works on any desktop Linux
@@ -161,16 +165,22 @@ jobs:
           find dist/ficary -name ffprobe -type f -exec {} -version \; \
             | head -n 1
 
-      - name: Report whether the reader's sound library loads
-        # Nothing is bundled for this on Linux: PyOpenAL looks for the
-        # system's OpenAL library (libopenal1 on Debian and Ubuntu).
-        # This step only reports what the frozen program finds on the
-        # build machine, so a change in that shows up in the log. It
-        # does not gate the build, because the answer depends on the
-        # machine the program later runs on.
+      - name: Check the reader's sound library loads
+        # Nothing is bundled for this on Linux: the program uses the
+        # system's OpenAL library, which the user installs (libopenal1
+        # on Debian and Ubuntu). The build machine has it installed for
+        # this one purpose, so the step proves the frozen program finds
+        # and loads a system copy. Exit status 0 means a sound device
+        # opened too; 2 means the library loaded but this machine has
+        # no sound device. Anything else fails the build.
         run: |
-          dist/ficary/ficary --check-reader-audio \
-            || echo "reader audio check exited with status $? (reported only)"
+          status=0
+          dist/ficary/ficary --check-reader-audio || status=$?
+          if [ "$status" -ne 0 ] && [ "$status" -ne 2 ]; then
+            echo "The reader's sound library did not load (exit status $status)."
+            exit 1
+          fi
+          echo "The sound library loaded (exit status $status)."
 
       - name: Package
         # tar.gz preserves the executable bit so the binary stays

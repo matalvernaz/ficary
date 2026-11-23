@@ -28,6 +28,7 @@ engine logic or the reader/soundscape that depend on it.
 """
 from __future__ import annotations
 
+import contextlib
 import logging
 import sys
 import threading
@@ -53,6 +54,9 @@ UNAVAILABLE_OTHER = "other"
 # The file PyOpenAL's 64-bit Windows wheel carries OpenAL Soft in, named
 # so a user told it is missing can check for it.
 _WINDOWS_OPENAL_DLL = "soft_oal_64.dll"
+
+# The name Apple's OpenAL framework answers to. See ``_openal_lookup_help``.
+_MACOS_OPENAL_NAME = "OpenAL"
 
 
 def ramp_values(start: float, end: float, steps: int) -> list[float]:
@@ -417,7 +421,8 @@ class _OpenALBackend(_Backend):
     available = True
 
     def __init__(self) -> None:
-        import openal  # noqa: F401  (import proves availability)
+        with _openal_lookup_help():
+            import openal  # noqa: F401  (import proves availability)
         self._openal = openal
         self._sources: dict[int, object] = {}
         self._decoded: dict[int, Path] = {}  # handle -> temp WAV to unlink
@@ -544,6 +549,44 @@ class _OpenALBackend(_Backend):
                 getattr(src, method)()
             except Exception:
                 pass
+
+
+@contextlib.contextmanager
+def _openal_lookup_help():
+    """While PyOpenAL is imported, help it find the OpenAL library on a
+    Mac. A no-op everywhere else.
+
+    PyOpenAL loads its library at import, by asking ``ctypes`` for
+    "soft_oal", "OpenAL32" and "openal". A Mac has Apple's own OpenAL,
+    filed as ``OpenAL.framework/OpenAL``, and since macOS 11 that file
+    is only in the system's shared library cache, where the lookup is
+    case-sensitive. Asked for "openal", it answers nothing; asked for
+    "OpenAL", it answers with the framework, which loads and opens a
+    sound device (checked on macOS 27). So when the ordinary lookup of
+    "openal" comes back empty, this asks again with the capitals.
+
+    The stand-in is in place only for the import and is taken away
+    again whatever happens, the same way BookNLP's is: a permanent
+    change to ``ctypes`` would be felt by every other library.
+    """
+    if sys.platform != "darwin":
+        yield
+        return
+    import ctypes.util
+
+    ordinary_lookup = ctypes.util.find_library
+
+    def lookup(name):
+        found = ordinary_lookup(name)
+        if found is None and isinstance(name, str) and name.lower() == "openal":
+            found = ordinary_lookup(_MACOS_OPENAL_NAME)
+        return found
+
+    ctypes.util.find_library = lookup
+    try:
+        yield
+    finally:
+        ctypes.util.find_library = ordinary_lookup
 
 
 def _classify_backend_failure(exc: Exception) -> str:

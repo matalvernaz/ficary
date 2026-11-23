@@ -37,6 +37,12 @@ _WAIT_SLICE_S = 0.2   # granularity of every stop-aware wait
 _JOIN_TIMEOUT_S = 0.5  # stop() gives the worker this long; beyond it the
                        # generation token makes the straggler harmless
 _SYNTH_ATTEMPTS = 2    # transient edge-tts errors get one retry
+# Chunks in a row that may fail before the chapter is given up on. One
+# bad chunk is skipped and the reading goes on. Several in a row means
+# the voice itself is not working (the service is refusing, or the
+# network is down), and every further chunk would only cost more failed
+# requests before the listener is told.
+_MAX_CONSECUTIVE_SYNTH_FAILURES = 3
 
 
 class _Slot:
@@ -51,14 +57,24 @@ class LiveTTSController:
     def __init__(self, engine: AudioEngine, *, voice: str, rate: str = "0",
                  on_highlight: Optional[Callable[[Chunk], None]] = None,
                  on_complete: Optional[Callable[[int], None]] = None,
+                 on_failed: Optional[Callable[[Optional[BaseException]], None]] = None,
                  story_key: Optional[str] = None,
                  synth: Optional[Callable[..., None]] = None,
                  tmp_dir: Optional[Path] = None):
+        """``on_complete(failed_chunks)`` fires when the chapter was read
+        to its end, with the number of chunks that had to be skipped.
+        ``on_failed(error)`` fires instead when the voice gave up on the
+        chapter: nothing could be spoken at all, or several chunks in a
+        row failed. ``error`` is the last synthesis error. Without an
+        ``on_failed`` the old behaviour holds and ``on_complete`` is
+        called for that case too."""
         self._engine = engine
         self._voice = voice
         self._rate = _to_edge_rate(rate)
         self._on_highlight = on_highlight
         self._on_complete = on_complete
+        self._on_failed = on_failed
+        self._last_synth_error: Optional[BaseException] = None
         self._story_key = story_key
         self._synth = synth or _default_synth
         self._owns_tmp = tmp_dir is None
@@ -155,6 +171,9 @@ class LiveTTSController:
     def _run(self, gen: int, chunks: list[Chunk]) -> None:
         self._emit(ReaderEvent.TTS_STARTED)
         failed = 0
+        played = 0
+        consecutive_failures = 0
+        gave_up = False
         completed = False
         try:
             for chunk in chunks:
@@ -173,7 +192,12 @@ class LiveTTSController:
                 self._prefetch(gen, i + 1)
                 if path is None:
                     failed += 1
+                    consecutive_failures += 1
+                    if consecutive_failures >= _MAX_CONSECUTIVE_SYNTH_FAILURES:
+                        gave_up = True
+                        break
                     continue
+                consecutive_failures = 0
                 # Pause may have arrived during the synth — honour it
                 # before starting the next clip, not one chunk late.
                 if not self._wait_stop_aware(self._resume, gen):
@@ -196,13 +220,24 @@ class LiveTTSController:
                     )
                 if not self._wait_stop_aware(self._done, gen):
                     return
+                played += 1
             completed = True
         finally:
             if completed and self._current(gen):
-                self._emit(ReaderEvent.TTS_STOPPED,
-                           payload={"reason": "completed", "failed_chunks": failed})
-                if self._on_complete:
-                    self._on_complete(failed)
+                # A chapter in which nothing could be spoken was not
+                # read, however many chunks were "skipped". Reporting it
+                # as completed made the reader move on to the next
+                # chapter and fail there too, one chapter per message.
+                voice_failed = gave_up or (failed > 0 and played == 0)
+                if voice_failed and self._on_failed:
+                    self._emit(ReaderEvent.TTS_STOPPED,
+                               payload={"reason": "failed", "failed_chunks": failed})
+                    self._on_failed(self._last_synth_error)
+                else:
+                    self._emit(ReaderEvent.TTS_STOPPED,
+                               payload={"reason": "completed", "failed_chunks": failed})
+                    if self._on_complete:
+                        self._on_complete(failed)
 
     def _ensure_synth(self, gen: int, index: int) -> Optional[Path]:
         if not (0 <= index < len(self._chunks)):
@@ -234,11 +269,16 @@ class LiveTTSController:
                 self._synth(self._voice, text, out, rate=self._rate)
                 path = out
                 break
-            except Exception:
-                logger.exception(
-                    "TTS synth failed for chunk %d (attempt %d/%d)",
-                    index, attempt, _SYNTH_ATTEMPTS,
+            except Exception as exc:  # noqa: BLE001 — any provider error
+                self._last_synth_error = exc
+                # One line per failure. The traceback is forty lines of
+                # network library for an error whose own text says it
+                # all, so it is kept for debug logging.
+                logger.warning(
+                    "TTS synth failed for chunk %d (attempt %d/%d): %s: %s",
+                    index, attempt, _SYNTH_ATTEMPTS, type(exc).__name__, exc,
                 )
+                logger.debug("TTS synth failure detail", exc_info=True)
         slot.path = path
         slot.event.set()
         return path if self._current(gen) else None

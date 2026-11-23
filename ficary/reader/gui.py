@@ -434,6 +434,8 @@ class ReaderFrame(wx.Frame):
             on_highlight=lambda c: wx.CallAfter(self._highlight_chunk, c, gen),
             on_complete=lambda failed: wx.CallAfter(
                 self._on_tts_complete, failed, gen),
+            on_failed=lambda error: wx.CallAfter(
+                self._on_tts_failed, error, gen),
             story_key=self.source.story_key,
         )
         self._live = controller
@@ -459,6 +461,26 @@ class ReaderFrame(wx.Frame):
         except RuntimeError:
             return self._listen_offset
         return caret if caret != self._listen_offset else self._listen_offset
+
+    def _on_tts_failed(self, error, gen: int | None = None) -> None:
+        """The voice gave up on this chapter. Say why, and stay put.
+
+        This is deliberately not routed through
+        :meth:`_on_tts_complete`: that one moves on to the next chapter,
+        and a voice that cannot speak would then walk through the whole
+        book one failed chapter at a time, taking the reading position
+        with it.
+        """
+        if gen is not None and not self._playback_current(gen):
+            return
+        if not self._alive:
+            return
+        from ..tts_providers import explain_synthesis_error
+        wx.MessageBox(
+            "Ficary could not read this chapter aloud. "
+            + explain_synthesis_error(error)
+            + "\n\nReading has stopped here; your place has not moved on.",
+            "Reader", wx.OK | wx.ICON_WARNING, self)
 
     def _on_tts_complete(self, failed_chunks: int, gen: int | None = None) -> None:
         """Natural end-of-chapter: announce any skipped sections, then

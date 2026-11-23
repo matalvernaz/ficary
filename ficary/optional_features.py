@@ -65,7 +65,10 @@ FEATURES: dict[str, dict] = {
     },
     "audio": {
         "extra": "audio",
-        "pip_name": "edge-tts>=7.0",
+        # The oldest version Microsoft's service still accepts (see
+        # pyproject.toml). Raising it is what makes "Reinstall" here
+        # fetch a working one.
+        "pip_name": "edge-tts>=7.3.1",
         "import_name": "edge_tts",
         "display": "Audiobook synthesis (edge-tts)",
         "size_hint": "~5 MB (plus ffmpeg on PATH)",
@@ -121,9 +124,9 @@ FEATURES: dict[str, dict] = {
             "reader: positional ambient audio, ducking under the "
             "narration, and fades. Without it the reader still works in "
             "screen-reader mode and offline audiobook export is "
-            "unaffected. The Windows download already includes it. On "
-            "Linux it also needs the system's OpenAL library (on Debian "
-            "or Ubuntu: sudo apt install libopenal1)."
+            "unaffected. The Windows and Mac downloads already include "
+            "it. On Linux it also needs the system's OpenAL library (on "
+            "Debian or Ubuntu: sudo apt install libopenal1)."
         ),
         "post_install": None,
     },

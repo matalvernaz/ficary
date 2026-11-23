@@ -160,6 +160,53 @@ def voice_by_id(value: str) -> VoiceInfo | None:
     return None
 
 
+# Error class names that mean the request never got an answer: no
+# network, no route, a name that will not resolve, a timeout. They are
+# matched by name because the network library they come from is an
+# optional dependency and may not be importable here.
+_UNREACHABLE_ERROR_NAMES = frozenset({
+    "ClientConnectorError",
+    "ClientConnectorDNSError",
+    "ClientOSError",
+    "ServerDisconnectedError",
+    "ServerTimeoutError",
+    "ConnectionTimeoutError",
+    "gaierror",
+})
+
+
+def explain_synthesis_error(error: BaseException | None) -> str:
+    """Why a voice could not turn text into speech, in words for the
+    user, with what to do about it where that is known.
+
+    The Edge voices go through a Microsoft service that from time to
+    time stops accepting older versions of the client. It answers them
+    with a 403 while the connection is being set up. Seen on
+    2026-11-23: edge-tts 7.2.8 was refused, 7.3.1 was served.
+    """
+    if error is None:
+        return "The voice produced no audio."
+    name = type(error).__name__
+    text = str(error)
+    if name == "WSServerHandshakeError" and "403" in text:
+        return (
+            "Microsoft's Edge voice service refused the request (403). "
+            "That usually means this copy of Ficary's Edge voice support "
+            "has gone out of date, and updating Ficary normally fixes it. "
+            "Piper voices run on this computer and are not affected."
+        )
+    if name in _UNREACHABLE_ERROR_NAMES or isinstance(
+        error, (TimeoutError, ConnectionError),
+    ):
+        return (
+            "The voice service could not be reached. Check the internet "
+            "connection, then press Play again."
+        )
+    if name == "NoAudioReceived":
+        return "The voice service sent back no audio for this text."
+    return f"The voice reported: {text or name}"
+
+
 def synthesize(
     voice: str, text: str, output_path: Path, *,
     rate: str | None = None,
