@@ -157,6 +157,10 @@
   quotes the provider's message, not the raw error body.
 * A log message that arrives after the window has closed no longer
   raises an error in the background thread that logged it.
+* A watchlist poll started by hand while another poll is running says
+  it is waiting for that one. It used to sit on "Polling..." for as
+  long as the other took, which can be minutes when the background
+  poll is downloading what it found.
 
 ## 2.20.10 — 2026-11-15
 

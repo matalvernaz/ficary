@@ -83,6 +83,15 @@ _ID_RUN_ALL = wx.NewIdRef()
 _ID_REFRESH = wx.NewIdRef()
 
 
+# Shown in the watchlist window's status line when a poll asked for by
+# hand finds another poll already running. That one can be downloading,
+# which takes minutes, and "Polling..." alone looked stuck.
+POLL_WAITING_MESSAGE = (
+    "Another poll is already running, probably the background one. "
+    "This one starts as soon as it finishes."
+)
+
+
 class WatchlistFrame(wx.Frame):
     """Non-modal watchlist manager."""
 
@@ -552,6 +561,7 @@ class WatchlistFrame(wx.Frame):
             results = run_once(
                 store, self.prefs, watch_ids=watch_ids,
                 downloader=downloader,
+                on_wait=self._on_poll_waiting,
             )
         except Exception as exc:
             logger.exception("Manual watchlist poll failed")
@@ -560,6 +570,19 @@ class WatchlistFrame(wx.Frame):
             return
         if self._alive:
             wx.CallAfter(self._on_poll_done, results, "", label)
+
+    def _on_poll_waiting(self):
+        """Called on the worker thread when another poll (the background
+        one, usually) is already running and this one has to wait."""
+        if self._alive:
+            wx.CallAfter(self._show_poll_waiting)
+
+    def _show_poll_waiting(self):
+        # Same guards as _on_poll_done: the window may have gone, or the
+        # poll may have finished, by the time this runs.
+        if not self or not self._alive or not self._polling:
+            return
+        self.status_ctrl.SetLabel(POLL_WAITING_MESSAGE)
 
     def _on_poll_done(self, results, fatal_error, label):
         # ``not self`` catches the wx C++ peer being torn down via a

@@ -30,6 +30,7 @@ logged, so one misconfigured channel can't silence the others.
 """
 from __future__ import annotations
 
+import contextlib
 import dataclasses
 import json
 import logging
@@ -560,6 +561,31 @@ _RUN_ONCE_LOCK = threading.Lock()
 _STORE_WRITE_LOCK = threading.RLock()
 
 
+@contextlib.contextmanager
+def _poll_turn(on_wait: Optional[Callable[[], None]]):
+    """Hold ``_RUN_ONCE_LOCK`` for one poll, saying so first when another
+    poll has it.
+
+    A poll that downloads can hold the lock for minutes. A second poll
+    started meanwhile used to wait with nothing to show for it, so a
+    check asked for by hand looked stuck. ``on_wait`` is called once,
+    on the calling thread, before the wait begins; it is not called
+    when the lock is free. A callback that raises is logged and the
+    poll goes ahead.
+    """
+    if not _RUN_ONCE_LOCK.acquire(blocking=False):
+        if on_wait is not None:
+            try:
+                on_wait()
+            except Exception:  # noqa: BLE001 — a status message must not stop the poll
+                logger.debug("Watchlist on_wait callback raised", exc_info=True)
+        _RUN_ONCE_LOCK.acquire()
+    try:
+        yield
+    finally:
+        _RUN_ONCE_LOCK.release()
+
+
 def run_once(
     store: WatchlistStore,
     prefs,
@@ -569,6 +595,7 @@ def run_once(
     notifier: Notifier = dispatch_notification,
     downloader: Optional[Callable[["Watch", "PollResult"], list]] = None,
     now: Callable[[], float] = time.time,
+    on_wait: Optional[Callable[[], None]] = None,
 ) -> list[PollResult]:
     """Poll every enabled watch once. Returns per-watch results.
 
@@ -595,8 +622,11 @@ def run_once(
     over a stale in-memory snapshot and silently overwrite the other
     poller's just-saved changes. Stores without a path (test doubles)
     are left as-is.
+
+    ``on_wait`` (optional) is called once if another poll is already
+    running and this one has to wait for it; see :func:`_poll_turn`.
     """
-    with _RUN_ONCE_LOCK:
+    with _poll_turn(on_wait):
         path = getattr(store, "path", None)
         if path is not None:
             try:
