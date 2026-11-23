@@ -101,10 +101,13 @@ class RoyalRoadScraper(BaseScraper):
             extra["cover_url"] = cover["src"]
 
         # "Original / Fanfiction", "ONGOING / COMPLETED / HIATUS / STUB", "N Chapters"
+        # INACTIVE is what Royal Road shows on a story that has gone a
+        # long time without a chapter; left out of this list, such a
+        # story's status came out as "Unknown".
         status = None
         for label in soup.find_all("span", class_="label"):
             text = label.get_text(strip=True).upper()
-            if text in ("ONGOING", "COMPLETED", "HIATUS", "STUB", "DROPPED"):
+            if text in ("ONGOING", "COMPLETED", "HIATUS", "STUB", "DROPPED", "INACTIVE"):
                 status = "Complete" if text == "COMPLETED" else text.title()
         if status:
             extra["status"] = status

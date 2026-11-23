@@ -1,5 +1,6 @@
 """Royal Road scraper tests."""
 
+import pytest
 from bs4 import BeautifulSoup
 from pathlib import Path
 
@@ -136,6 +137,34 @@ class TestMetadataAndChapters:
         assert status in (
             None, "Complete", "Ongoing", "Hiatus", "Stub", "Dropped"
         )
+
+
+class TestEveryStatusLabelIsRead:
+    """The labels Royal Road puts on a fiction page, and what each becomes in the book's details. One left out of the scraper's list made the status "Unknown"."""
+
+    @pytest.mark.parametrize(
+        "label, status",
+        [
+            ("ONGOING", "Ongoing"),
+            ("COMPLETED", "Complete"),
+            ("HIATUS", "Hiatus"),
+            ("STUB", "Stub"),
+            ("DROPPED", "Dropped"),
+            ("INACTIVE", "Inactive"),
+        ],
+    )
+    def test_the_label_becomes_the_status(self, label, status):
+        page = f"""
+        <html><body>
+          <div class="fic-title"><h1>A Story</h1><h4><a href="/profile/1">An Author</a></h4></div>
+          <span class="label label-default">Original</span>
+          <span class="label label-default">{label}</span>
+          <span class="label label-default">14 Chapters</span>
+          <div class="description"><p>About the story.</p></div>
+        </body></html>
+        """
+        meta = RoyalRoadScraper._parse_metadata(BeautifulSoup(page, "lxml"))
+        assert meta["extra"].get("status") == status
 
 
 class TestAntiPiracyStripping:

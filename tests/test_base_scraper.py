@@ -26,6 +26,16 @@ class _ProbeScraper(BaseScraper):
 
     site_name = "probe"
 
+    def _fetch_batches(self, urls):
+        """Hand over what the test's stand-in for ``_fetch_parallel``
+        returns as a single batch.
+
+        ``_materialise_chapters`` walks ``_fetch_batches``. Routing it
+        through the stand-in lets each test keep describing the network
+        as a function from the URLs to their bodies.
+        """
+        yield [(body, None) for body in self._fetch_parallel(urls)]
+
 
 @pytest.fixture
 def scraper(tmp_path):

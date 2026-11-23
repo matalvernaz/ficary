@@ -84,7 +84,11 @@ def cached_scraper(tmp_path):
         fetched.extend(urls)
         return [f"<p>Body for {u}</p>" for u in urls]
 
-    scraper._fetch_parallel = fetch
+    # ``_materialise_chapters`` walks ``_fetch_batches``; everything asked
+    # for is handed over as one batch.
+    scraper._fetch_batches = lambda urls: iter(
+        [[(body, None) for body in fetch(urls)]]
+    )
 
     def materialise(chapters):
         return scraper._materialise_chapters(

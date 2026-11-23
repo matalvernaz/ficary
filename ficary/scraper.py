@@ -1172,6 +1172,47 @@ class BaseScraper:
         concurrency is 1 or only one URL is provided, so subclasses
         can call this unconditionally.
 
+        This is :meth:`_fetch_batches` run to the end: nothing is
+        returned until every URL has been fetched, and a failure
+        discards what was fetched before it. A caller with something to
+        do per chapter (save it, report it) should walk
+        ``_fetch_batches`` itself, as ``_materialise_chapters`` does.
+
+        Args:
+            urls: Chapter / resource URLs to fetch, in order.
+
+        Returns:
+            List of response bodies indexed parallel to ``urls``.
+        """
+        results: list[str] = []
+        for batch in self._fetch_batches(urls):
+            for body, error in batch:
+                if error is not None:
+                    raise error
+                results.append(body)
+        return results
+
+    def _fetch_batches(self, urls: list[str]):
+        """Fetch ``urls`` a batch at a time, handing each batch over as
+        soon as it has settled.
+
+        A generator. Each batch is a list of ``(body, error)`` pairs in
+        the order of the URLs it covers, with exactly one of the two
+        set. The next batch is not fetched until the caller asks for
+        it, so whatever the caller does with a batch (parse it, save it
+        to the cache, report it) happens before more requests go out.
+
+        A batch holding an error is the last one: the caller is
+        expected to raise that error, after keeping what the batch did
+        deliver. Fetches that had already succeeded beside the failed
+        one are handed over rather than thrown away, so a transient
+        failure on one chapter doesn't multiply load on the server
+        when the user retries.
+
+        One generator covers the whole list, because the pacing
+        between batches and the concurrency back-off both carry from
+        one batch to the next.
+
         AIMD concurrency control: after each batch, compare the scraper's
         ``_current_delay`` to its value before the batch — if it rose,
         some request got a 429/503 and triggered ``_bump_delay_up``, so
@@ -1181,15 +1222,9 @@ class BaseScraper:
         stay at the reduced concurrency until the scraper is re-created).
         FFN uses concurrency=1 regardless because it captcha-bans on
         bulk regardless of pacing.
-
-        Args:
-            urls: Chapter / resource URLs to fetch, in order.
-
-        Returns:
-            List of response bodies indexed parallel to ``urls``.
         """
         if not urls:
-            return []
+            return
         if self.concurrency <= 1 or len(urls) == 1:
             # Sequential mode still has to honour the configured pacing
             # — this path is what FicWad / Royal Road / MediaMiner fall
@@ -1201,16 +1236,19 @@ class BaseScraper:
             # anything. ``first`` skips the leading delay so the very
             # first call after metadata isn't double-throttled by the
             # caller's own pre-fetch wait.
-            results: list[str] = []
             for idx, u in enumerate(urls):
                 if idx > 0:
                     self._delay()
-                results.append(self._fetch(u))
-            return results
+                try:
+                    body = self._fetch(u)
+                except Exception as exc:
+                    yield [(None, exc)]
+                    return
+                yield [(body, None)]
+            return
 
         import concurrent.futures
 
-        results = [None] * len(urls)
         concurrency = self.concurrency
         i = 0
         prev_batch_size = 0
@@ -1241,7 +1279,7 @@ class BaseScraper:
                 session = self._session()
                 return self._fetch(url, session=session)
 
-            first_error: BaseException | None = None
+            settled: list = [None] * len(batch)
             with concurrent.futures.ThreadPoolExecutor(
                 max_workers=len(batch),
             ) as executor:
@@ -1252,19 +1290,15 @@ class BaseScraper:
                 for future in concurrent.futures.as_completed(future_to_local):
                     local_i = future_to_local[future]
                     try:
-                        results[i + local_i] = future.result()
+                        settled[local_i] = (future.result(), None)
                     except BaseException as exc:
-                        # Previously a single failed fetch aborted the
-                        # whole batch — sibling fetches that had already
-                        # succeeded were thrown away when the executor
-                        # tore down. Now we keep the successes and only
-                        # re-raise after the batch settles, so a transient
-                        # failure on one chapter doesn't multiply load on
-                        # the server when the user retries.
-                        if first_error is None:
-                            first_error = exc
-            if first_error is not None:
-                raise first_error
+                        # One failed fetch does not throw away its
+                        # siblings: the batch is handed over whole and
+                        # the caller keeps what arrived.
+                        settled[local_i] = (None, exc)
+            # The pool is closed by now, so everything the caller does
+            # with this batch runs on the caller's own thread.
+            failed = any(error is not None for _body, error in settled)
 
             with self._state_lock:
                 delay_after = self._current_delay
@@ -1276,7 +1310,9 @@ class BaseScraper:
                 )
             i += len(batch)
 
-        return results
+            yield settled
+            if failed:
+                return
 
     # ── Chapter orchestration ─────────────────────────────────────
 
@@ -1296,9 +1332,10 @@ class BaseScraper:
         Site scrapers whose chapter pages are each a separate fetch
         (FicWad, Royal Road, MediaMiner) used to open-code this loop —
         it's the same shape every time: honour ``skip_chapters`` /
-        ``chapter_spec``, load what's cached, batch the rest through
-        ``_fetch_parallel``, parse through the site-specific body
-        extractor, and cache on the way out. Consolidating it here
+        ``chapter_spec``, load what's cached, fetch the rest a batch at
+        a time through ``_fetch_batches``, parse each batch through the
+        site-specific body extractor, cache it and report it before the
+        next batch is fetched. Consolidating it here
         means per-site changes (retry-on-parse-error, richer progress
         reporting, a different cache layout) land in one place.
 
@@ -1361,23 +1398,76 @@ class BaseScraper:
                 plan.append((number, info["title"], None, key))
                 fetch_urls.append(info["url"])
 
-        fetched = self._fetch_parallel(fetch_urls) if fetch_urls else []
-        cursor = 0
+        to_fetch = [entry for entry in plan if entry[2] is None]
+
+        def chapters_as_they_arrive():
+            """Yield the fetched chapters in order, a batch at a time,
+            each one saved to the cache before it is handed over.
+
+            Every chapter used to be fetched before any was saved or
+            reported. A long story then showed nothing for minutes and
+            printed every chapter line at once, and one chapter that
+            failed near the end threw away all the others, so the next
+            try started again from the first.
+            """
+            position = 0
+            for batch in self._fetch_batches(fetch_urls):
+                first_error = None
+                ready = []
+                for body, error in batch:
+                    number, title, _cached, key = to_fetch[position]
+                    position += 1
+                    if error is not None:
+                        if first_error is None:
+                            first_error = error
+                        continue
+                    try:
+                        html = parse_chapter(BeautifulSoup(body, "lxml"))
+                    except Exception:
+                        if first_error is None:
+                            raise
+                        # This chapter came after the one that failed
+                        # and was only being kept for the next try. The
+                        # failed fetch is the error to report, not this.
+                        logger.debug(
+                            "Chapter %s arrived beside a failed fetch but "
+                            "could not be read; not kept for the next try.",
+                            number, exc_info=True,
+                        )
+                        continue
+                    chapter = Chapter(number=number, title=title, html=html)
+                    self._save_chapter_cache(story_id, chapter, cache_key=key)
+                    if first_error is None:
+                        ready.append(chapter)
+                # The unbroken run before any failure is handed over,
+                # and so reported; what arrived after a failure waits in
+                # the cache for the next try.
+                yield from ready
+                if first_error is not None:
+                    raise first_error
+
+        fetched = chapters_as_they_arrive()
         result = []
-        for number, title, cached, key in plan:
-            if cached is not None:
-                result.append(cached)
+        try:
+            for number, title, cached, key in plan:
+                if cached is not None:
+                    result.append(cached)
+                    if progress_callback:
+                        progress_callback(number, total, cached.title, True)
+                    continue
+                chapter = next(fetched, None)
+                if chapter is None:
+                    raise RuntimeError(
+                        f"{self.site_name}: fewer chapters came back than "
+                        f"were asked for (stopped at chapter {number})."
+                    )
+                result.append(chapter)
                 if progress_callback:
-                    progress_callback(number, total, cached.title, True)
-                continue
-            body = fetched[cursor]
-            cursor += 1
-            html = parse_chapter(BeautifulSoup(body, "lxml"))
-            chapter = Chapter(number=number, title=title, html=html)
-            self._save_chapter_cache(story_id, chapter, cache_key=key)
-            result.append(chapter)
-            if progress_callback:
-                progress_callback(number, total, title, False)
+                    progress_callback(number, total, title, False)
+        finally:
+            # Stops the fetching if this loop ended early, for instance
+            # because the progress callback raised to cancel.
+            fetched.close()
         return result
 
     # ── Cache ─────────────────────────────────────────────────────

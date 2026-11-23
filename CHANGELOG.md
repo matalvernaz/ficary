@@ -82,6 +82,19 @@
   showed every line twice and a screen reader read it twice. Status
   lines now go to standard output only.
 
+**Royal Road, ScribbleHub, FicWad and MediaMiner downloads report and save as they go**
+
+* A story from one of these four sites was fetched whole before any of
+  it was reported. A long one showed "Downloading story..." and then
+  nothing for minutes, after which every chapter line appeared at
+  once. Chapters are now reported a few at a time, as they arrive.
+* A chapter that failed part-way threw away every chapter fetched
+  before it, so the next try started again from the first chapter.
+  Chapters are now saved as they arrive, and the next try fetches only
+  the ones still missing.
+* A Royal Road story marked Inactive shows that as its status. It came
+  out as "Unknown".
+
 **The web page (Docker image) makes one audiobook at a time and cleans up**
 
 * Audiobooks are made one at a time. Every request used to start
