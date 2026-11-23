@@ -82,6 +82,28 @@
   showed every line twice and a screen reader read it twice. Status
   lines now go to standard output only.
 
+**The web page (Docker image) makes one audiobook at a time and cleans up**
+
+* Audiobooks are made one at a time. Every request used to start
+  straight away, and two renders together can need more memory than a
+  small server has. A second request now waits its turn, and the page
+  says how many are ahead of it. `FICARY_WEB_MAX_AUDIO_JOBS` raises
+  the limit on a server with room to spare.
+* A finished audiobook is removed from the server a day after it was
+  made, and a failed one's files go at once.
+  `FICARY_WEB_KEEP_AUDIOBOOKS_HOURS` changes how long. Before, every
+  audiobook stayed inside the container until the container was
+  replaced.
+* The page tells a screen reader when an audiobook moves on: queued,
+  waiting for another to finish, downloading the story, being made,
+  ready to download, or failed and why. Each is said once. Before,
+  nothing was announced and the progress had to be found and read by
+  hand.
+* The two forms on the page each have a heading, "Download a story"
+  and "Make an audiobook".
+* Asking for an audiobook the server has already cleared out says so,
+  where it used to answer with a server error.
+
 **Smaller fixes**
 
 * A search window opens even when its saved filters are damaged. A

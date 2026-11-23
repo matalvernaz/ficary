@@ -84,8 +84,25 @@ importlib.reload(web_page)
 if web_page.ALLOWED_BOOKNLP_SIZES != ("small", "big") or 'value="big"' not in web_page.LANDING:
 	problems.append("without FICARY_WEB_BOOKNLP_SIZES the web page should offer both BookNLP sizes")
 
+# The web page's audiobook job settings: one job at a time and a day's keeping unless the
+# environment says otherwise. A setting that is not a number above zero falls back to the default
+# instead of stopping the server from starting.
+if web_page.MAX_AUDIO_JOBS != 1 or web_page.KEEP_AUDIOBOOKS_HOURS != 24.0:
+	problems.append(f"the web page's audiobook job defaults are {web_page.MAX_AUDIO_JOBS} at once kept {web_page.KEEP_AUDIOBOOKS_HOURS} hours, expected 1 and 24")
+os.environ["FICARY_WEB_MAX_AUDIO_JOBS"] = "2"
+os.environ["FICARY_WEB_KEEP_AUDIOBOOKS_HOURS"] = "72"
+importlib.reload(web_page)
+if web_page.MAX_AUDIO_JOBS != 2 or web_page.KEEP_AUDIOBOOKS_HOURS != 72.0:
+	problems.append("FICARY_WEB_MAX_AUDIO_JOBS and FICARY_WEB_KEEP_AUDIOBOOKS_HOURS are not being read")
+os.environ["FICARY_WEB_MAX_AUDIO_JOBS"] = "lots"
+importlib.reload(web_page)
+if web_page.MAX_AUDIO_JOBS != 1:
+	problems.append("a FICARY_WEB_MAX_AUDIO_JOBS that is not a number should fall back to one job at a time")
+del os.environ["FICARY_WEB_MAX_AUDIO_JOBS"]
+del os.environ["FICARY_WEB_KEEP_AUDIOBOOKS_HOURS"]
+
 if problems:
-	print("Speech attribution in this image is broken:", file=sys.stderr)
+	print("This image failed its checks:", file=sys.stderr)
 	for problem in problems:
 		print("  " + problem, file=sys.stderr)
 	sys.exit(1)

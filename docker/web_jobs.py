@@ -1,0 +1,221 @@
+"""Keeps track of the web page's audiobook jobs: which are waiting, which are running, and when a finished one and its file are thrown away.
+
+It exists apart from app.py so it can be tested without the web framework. Before it, every job started its own thread at once and nothing was ever removed: each finished audiobook stayed in the container's temporary folder, and each job stayed in memory, until the container was replaced. Two audiobooks at once could also need more memory than a small server has.
+"""
+from __future__ import annotations
+
+import logging
+import math
+import queue
+import shutil
+import threading
+import time
+from dataclasses import dataclass, field
+from typing import Any, Callable
+
+logger = logging.getLogger("ficary-web")
+
+# The states a job passes through. "queued" until a worker picks it up, then "downloading" and "synthesizing", ending in "done" or "error".
+STATUS_QUEUED = "queued"
+STATUS_DONE = "done"
+STATUS_ERROR = "error"
+FINISHED_STATUSES = (STATUS_DONE, STATUS_ERROR)
+
+DEFAULT_MAX_RUNNING_JOBS = 1
+DEFAULT_KEEP_FINISHED_HOURS = 24.0
+SECONDS_PER_HOUR = 3600.0
+
+# How often the background sweep looks for finished jobs that are old enough to remove.
+SWEEP_INTERVAL_SECONDS = 600.0
+
+
+@dataclass
+class Job:
+    id: str
+    url: str
+    format: str
+    attribution: str
+    model_size: str
+    speech_rate: int
+    strip_notes: bool
+    hr_as_stars: bool
+    status: str = STATUS_QUEUED  # queued | downloading | synthesizing | done | error
+    stage: str = ""
+    current: int = 0
+    total: int = 0
+    detail: str = ""
+    error: str | None = None
+    path: str | None = None
+    # The temporary folder the job writes into. Removed with the job, or straight away if the job fails.
+    folder: str | None = None
+    created: float = field(default_factory=time.time)
+    updated: float = field(default_factory=time.time)
+    finished: float | None = None
+
+
+def positive_number(text: str | None, default: float) -> float:
+    """Read a setting that has to be an ordinary number above zero. Anything else (missing, not a number, zero or less, "inf", "nan") gives the default, because a server that starts with a guessed setting is better than one that does not start."""
+    if text is None or not text.strip():
+        return default
+    try:
+        value = float(text)
+    except ValueError:
+        logger.warning("Setting %r is not a number; using %s", text, default)
+        return default
+    # float() accepts "inf" and "nan". Neither can be turned into a count of jobs, and "nan" compares false with everything, so it would get past the test below.
+    if not math.isfinite(value) or value <= 0:
+        logger.warning("Setting %r is not a number above zero; using %s", text, default)
+        return default
+    return value
+
+
+class JobRegistry:
+    """The jobs the page knows about, and the workers that run them.
+
+    ``run_job`` does the work of one job and must set its status to "done" or "error" itself (or raise, which counts as an error). At most ``max_running`` jobs run at a time; the rest wait their turn in the order they arrived. A finished job, and the folder its audiobook is in, is kept for ``keep_finished_seconds`` so it can be downloaded, then removed.
+    """
+
+    def __init__(
+        self,
+        run_job: Callable[[Job], None],
+        *,
+        max_running: int = DEFAULT_MAX_RUNNING_JOBS,
+        keep_finished_seconds: float = DEFAULT_KEEP_FINISHED_HOURS * SECONDS_PER_HOUR,
+        clock: Callable[[], float] = time.time,
+        remove_folder: Callable[[str], None] | None = None,
+    ) -> None:
+        self._run_job = run_job
+        self._max_running = max(1, int(max_running))
+        self._keep_finished_seconds = keep_finished_seconds
+        self._clock = clock
+        self._remove_folder = remove_folder or self._remove_folder_from_disk
+        self._jobs: dict[str, Job] = {}
+        self._waiting: "queue.Queue[Job]" = queue.Queue()
+        self._waiting_ids: list[str] = []
+        self._running_ids: set[str] = set()
+        self._workers: list[threading.Thread] = []
+        self._lock = threading.Lock()
+
+    # ── Looking jobs up ───────────────────────────────────────────
+
+    def get(self, job_id: str) -> Job | None:
+        with self._lock:
+            return self._jobs.get(job_id)
+
+    def jobs_ahead(self, job_id: str) -> int:
+        """How many jobs have to finish or start before this one gets its turn: the ones running now plus the ones waiting in front of it. Zero once it is running or finished, and for a job that is not known."""
+        with self._lock:
+            if job_id not in self._waiting_ids:
+                return 0
+            return len(self._running_ids) + self._waiting_ids.index(job_id)
+
+    def update(self, job: Job, **fields: Any) -> None:
+        """Change a job's fields. Done under the lock so a poll never reads a job half-updated."""
+        with self._lock:
+            for name, value in fields.items():
+                setattr(job, name, value)
+            now = self._clock()
+            job.updated = now
+            if job.status in FINISHED_STATUSES and job.finished is None:
+                job.finished = now
+
+    # ── Adding and running ────────────────────────────────────────
+
+    def add(self, job: Job) -> None:
+        """Register a job and queue it. Also a convenient moment to clear out old ones."""
+        self.sweep()
+        with self._lock:
+            # Stamped from the registry's own clock, so every time on a job is read off the same one.
+            job.created = self._clock()
+            job.updated = job.created
+            self._jobs[job.id] = job
+            self._waiting_ids.append(job.id)
+            self._waiting.put(job)
+            self._start_workers_if_needed()
+
+    def _start_workers_if_needed(self) -> None:
+        """Start worker threads up to the limit. Called with the lock held."""
+        self._workers = [worker for worker in self._workers if worker.is_alive()]
+        while len(self._workers) < self._max_running:
+            worker = threading.Thread(
+                target=self._work,
+                daemon=True,
+                name=f"audio-worker-{len(self._workers) + 1}",
+            )
+            self._workers.append(worker)
+            worker.start()
+
+    def _work(self) -> None:
+        """One worker: take the next waiting job, run it, repeat. Never exits, so the count of workers stays at the limit."""
+        while True:
+            job = self._waiting.get()
+            with self._lock:
+                if job.id in self._waiting_ids:
+                    self._waiting_ids.remove(job.id)
+                self._running_ids.add(job.id)
+            try:
+                self._run_job(job)
+            except Exception as error:  # noqa: BLE001 - a failed job must not take the worker down with it
+                logger.exception("audio job %s failed", job.id)
+                self.update(job, status=STATUS_ERROR, error=str(error))
+            finally:
+                with self._lock:
+                    self._running_ids.discard(job.id)
+            if job.status not in FINISHED_STATUSES:
+                # The job function returned without saying how it ended. Treat that as a failure rather than leave the page waiting forever.
+                self.update(job, status=STATUS_ERROR, error="The job stopped without a result.")
+            if job.status == STATUS_ERROR:
+                # Nothing to download from a failed job, so its half-written files go now.
+                self._discard_folder(job)
+
+    # ── Clearing out ──────────────────────────────────────────────
+
+    def sweep(self) -> list[str]:
+        """Remove finished jobs that have been kept long enough, with their folders. Returns the ids removed."""
+        now = self._clock()
+        with self._lock:
+            expired = [
+                job for job in self._jobs.values()
+                if job.finished is not None and now - job.finished >= self._keep_finished_seconds
+            ]
+            for job in expired:
+                del self._jobs[job.id]
+        for job in expired:
+            self._discard_folder(job)
+        if expired:
+            logger.info("Removed %d finished audiobook job(s) kept past their time", len(expired))
+        return [job.id for job in expired]
+
+    def _discard_folder(self, job: Job) -> None:
+        folder = job.folder
+        if not folder:
+            return
+        job.folder = None
+        try:
+            self._remove_folder(folder)
+        except OSError:
+            logger.warning("Could not remove %s", folder, exc_info=True)
+
+    @staticmethod
+    def _remove_folder_from_disk(folder: str) -> None:
+        shutil.rmtree(folder, ignore_errors=True)
+
+    def start_sweeping(
+        self,
+        interval_seconds: float = SWEEP_INTERVAL_SECONDS,
+        stop: threading.Event | None = None,
+    ) -> threading.Thread:
+        """Sweep on a timer, in a background thread, so audiobooks are cleared out even when nobody visits the page. The server never stops it; ``stop`` is there so a test can."""
+        stop_requested = stop if stop is not None else threading.Event()
+
+        def sweep_until_stopped() -> None:
+            # Event.wait returns False when the time runs out and True once the event is set.
+            while not stop_requested.wait(interval_seconds):
+                try:
+                    self.sweep()
+                except Exception:  # noqa: BLE001 - the timer has to survive one bad pass
+                    logger.exception("audiobook job sweep failed")
+
+        thread = threading.Thread(target=sweep_until_stopped, daemon=True, name="audio-job-sweep")
+        thread.start()
+        return thread

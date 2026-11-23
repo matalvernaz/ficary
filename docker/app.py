@@ -2,6 +2,9 @@
 
 - Text formats (epub, html, txt) are synchronous: POST /download returns the file.
 - Audio is asynchronous: POST /jobs queues a job, GET /jobs/{id} polls, GET /jobs/{id}/result downloads.
+  Audiobook jobs run one at a time unless FICARY_WEB_MAX_AUDIO_JOBS says otherwise, and a finished
+  one is kept for FICARY_WEB_KEEP_AUDIOBOOKS_HOURS (a day by default) and then removed with its file.
+  The bookkeeping for that is in web_jobs.py.
 """
 from __future__ import annotations
 
@@ -9,10 +12,7 @@ import logging
 import os
 import shutil
 import tempfile
-import threading
-import time
 import uuid
-from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -23,6 +23,9 @@ from starlette.background import BackgroundTask
 import ficary
 from ficary.exporters import EXPORTERS, check_format_deps
 from ficary.sites import detect_scraper
+
+import web_jobs
+from web_jobs import Job
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger("ficary-web")
@@ -46,36 +49,16 @@ ALLOWED_BOOKNLP_SIZES = tuple(size for size in BOOKNLP_SIZE_LABELS if size in {p
 
 # ── Job registry ──────────────────────────────────────────────────
 
-@dataclass
-class Job:
-    id: str
-    url: str
-    format: str
-    attribution: str
-    model_size: str
-    speech_rate: int
-    strip_notes: bool
-    hr_as_stars: bool
-    status: str = "queued"  # queued | downloading | synthesizing | done | error
-    stage: str = ""
-    current: int = 0
-    total: int = 0
-    detail: str = ""
-    error: str | None = None
-    path: str | None = None
-    created: float = field(default_factory=time.time)
-    updated: float = field(default_factory=time.time)
+# How many audiobooks are made at once. One, because a single render with BookNLP can use well over
+# a gigabyte and a small server has room for one. A server with memory to spare can raise it.
+MAX_AUDIO_JOBS = int(web_jobs.positive_number(os.environ.get("FICARY_WEB_MAX_AUDIO_JOBS"), web_jobs.DEFAULT_MAX_RUNNING_JOBS))
 
-
-_jobs: dict[str, Job] = {}
-_jobs_lock = threading.Lock()
+# How long a finished audiobook stays downloadable before it and its job are removed.
+KEEP_AUDIOBOOKS_HOURS = web_jobs.positive_number(os.environ.get("FICARY_WEB_KEEP_AUDIOBOOKS_HOURS"), web_jobs.DEFAULT_KEEP_FINISHED_HOURS)
 
 
 def _update(job: Job, **kw: Any) -> None:
-    with _jobs_lock:
-        for k, v in kw.items():
-            setattr(job, k, v)
-        job.updated = time.time()
+    JOBS.update(job, **kw)
 
 
 def _run_audio_job(job: Job) -> None:
@@ -96,6 +79,8 @@ def _run_audio_job(job: Job) -> None:
             _update(job, current=current, total=total, detail=title)
 
         out_dir = Path(tempfile.mkdtemp(prefix=f"ficary-{job.id}-"))
+        # Recorded so the folder can be removed with the job, or at once if the render fails.
+        _update(job, folder=str(out_dir))
         path = generate_audiobook(
             story,
             str(out_dir),
@@ -110,6 +95,14 @@ def _run_audio_job(job: Job) -> None:
     except Exception as exc:
         logger.exception("audio job %s failed", job.id)
         _update(job, status="error", error=str(exc))
+
+
+JOBS = web_jobs.JobRegistry(
+    _run_audio_job,
+    max_running=MAX_AUDIO_JOBS,
+    keep_finished_seconds=KEEP_AUDIOBOOKS_HOURS * web_jobs.SECONDS_PER_HOUR,
+)
+JOBS.start_sweeping()
 
 
 # ── HTTP endpoints ────────────────────────────────────────────────
@@ -130,12 +123,15 @@ LANDING = """<!doctype html>
  button { margin-top: 1.5rem; padding: .6rem 1.2rem; cursor: pointer; }
  #status { margin-top: 1.5rem; }
  progress { width: 100%; }
+ /* On the page for screen readers, off it for the eye. */
+ .visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 </style>
 </head>
 <body>
 <h1>ficary</h1>
 <p>Downloads stories from AO3, FanFiction.net, Royal Road, Wattpad, ScribbleHub, Webnovel, Literotica, and 20+ other sites.</p>
 
+<h2>Download a story</h2>
 <form id="text-form" method="post" action="/download" autocomplete="off">
  <label>Story URL
   <input type="url" name="url" required autofocus autocomplete="off" spellcheck="false" placeholder="https://archiveofourown.org/works/...">
@@ -152,6 +148,7 @@ LANDING = """<!doctype html>
  <button type="submit">Download</button>
 </form>
 
+<h2>Make an audiobook</h2>
 <fieldset>
  <legend><strong>Audiobook (async)</strong></legend>
  <form id="audio-form" autocomplete="off">
@@ -181,12 +178,45 @@ __MODEL_SIZE_OPTIONS__
   </div>
   <button type="submit">Start audiobook job</button>
  </form>
+ <!-- What a screen reader is told. It is in the page from the start and only its text ever
+      changes, which is what makes a change get announced. It changes when the job moves to a
+      new stage, not on every poll, so a long render is not narrated chapter by chapter. -->
+ <p id="announce" role="status" class="visually-hidden"></p>
+ <!-- What the eye sees: rebuilt on every poll, and deliberately not a live region. -->
  <div id="status"></div>
 </fieldset>
 
 <script>
 const $ = (s) => document.querySelector(s);
 const statusEl = $("#status");
+const announceEl = $("#announce");
+let lastAnnounced = "";
+// The job this page is following. Starting another audiobook makes that one the job followed;
+// the loop for the earlier one stops, so two loops never take turns rewriting the status.
+let followedJob = null;
+
+// Says something to a screen reader, once. The same sentence again is not repeated, so polling
+// every two seconds does not turn into speech every two seconds.
+function announce(text) {
+  if (text === lastAnnounced) return;
+  lastAnnounced = text;
+  announceEl.textContent = text;
+}
+
+// The stage a job is at, as a sentence. This is what gets announced when it changes.
+function stageSentence(j) {
+  if (j.status === "queued") {
+    if (!j.ahead) return "Audiobook job queued. It will start shortly.";
+    return j.ahead === 1
+      ? "Waiting for 1 other audiobook to finish first."
+      : "Waiting for " + j.ahead + " other audiobooks to finish first.";
+  }
+  if (j.status === "downloading") return "Downloading the story.";
+  if (j.status === "synthesizing") return "Making the audiobook. A long story can take an hour or more.";
+  if (j.status === "done") return "The audiobook is ready. The Download audiobook link is on the page.";
+  if (j.status === "error") return "The audiobook could not be made. " + (j.error || "");
+  return "";
+}
 
 $("#audio-form").addEventListener("submit", async (e) => {
   e.preventDefault();
@@ -195,9 +225,16 @@ $("#audio-form").addEventListener("submit", async (e) => {
   fd.set("strip_notes", e.target.strip_notes.checked ? "true" : "false");
   fd.set("hr_as_stars", e.target.hr_as_stars.checked ? "true" : "false");
   statusEl.textContent = "Queuing…";
+  lastAnnounced = "";
   const r = await fetch("/jobs", { method: "POST", body: fd });
-  if (!r.ok) { statusEl.textContent = "Error: " + await r.text(); return; }
+  if (!r.ok) {
+    const problem = "Error: " + await r.text();
+    statusEl.textContent = problem;
+    announce(problem);
+    return;
+  }
   const { id } = await r.json();
+  followedJob = id;
   poll(id);
 });
 
@@ -212,11 +249,22 @@ function addText(tag, text) {
 
 async function poll(id) {
   while (true) {
+    if (id !== followedJob) return;
     const r = await fetch("/jobs/" + id);
-    if (!r.ok) { statusEl.textContent = "Lost job " + id; return; }
+    if (id !== followedJob) return;
+    if (!r.ok) {
+      const lost = "The server no longer knows this audiobook job. If it was made more than a day ago it has been cleared out; start it again.";
+      statusEl.textContent = lost;
+      announce(lost);
+      return;
+    }
     const j = await r.json();
     const pct = j.total ? Math.round(100 * j.current / j.total) : 0;
     statusEl.replaceChildren();
+    announce(stageSentence(j));
+    if (j.status === "queued" && j.ahead) {
+      addText("p", stageSentence(j));
+    }
 
     // What the job is doing, then how far through it is.
     const summary = addText("p", "");
@@ -338,21 +386,20 @@ def start_job(
         strip_notes=strip_notes.lower() in ("1", "true", "yes", "on"),
         hr_as_stars=hr_as_stars.lower() in ("1", "true", "yes", "on"),
     )
-    with _jobs_lock:
-        _jobs[job.id] = job
-    threading.Thread(target=_run_audio_job, args=(job,), daemon=True, name=f"job-{job.id}").start()
+    JOBS.add(job)
     return JSONResponse({"id": job.id})
 
 
 @app.get("/jobs/{job_id}")
 def get_job(job_id: str):
-    with _jobs_lock:
-        job = _jobs.get(job_id)
+    job = JOBS.get(job_id)
     if not job:
         raise HTTPException(404, "unknown job")
     return {
         "id": job.id,
         "status": job.status,
+        # How many audiobooks have to finish or start before this one. Zero unless it is waiting.
+        "ahead": JOBS.jobs_ahead(job.id),
         "stage": job.stage,
         "current": job.current,
         "total": job.total,
@@ -365,11 +412,12 @@ def get_job(job_id: str):
 
 @app.get("/jobs/{job_id}/result")
 def get_result(job_id: str):
-    with _jobs_lock:
-        job = _jobs.get(job_id)
+    job = JOBS.get(job_id)
     if not job:
         raise HTTPException(404, "unknown job")
     if job.status != "done" or not job.path:
         raise HTTPException(409, f"job status is {job.status}")
     p = Path(job.path)
+    if not p.is_file():
+        raise HTTPException(410, "this audiobook is no longer on the server; make it again")
     return FileResponse(p, media_type="audio/mp4", filename=p.name)

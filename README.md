@@ -118,6 +118,12 @@ BookNLP's large model can need several gigabytes on a long chapter. On
 a server without that to spare, add
 `-e FICARY_WEB_BOOKNLP_SIZES=small` to offer only the small one.
 
+Audiobooks are made one at a time, and a second one waits its turn; the
+page says how many are ahead of it. On a server with memory for more,
+`-e FICARY_WEB_MAX_AUDIO_JOBS=2` runs two at once. A finished audiobook
+stays downloadable for a day and is then removed from the server;
+`-e FICARY_WEB_KEEP_AUDIOBOOKS_HOURS=72` keeps it for three.
+
 ### Optional features
 
 The desktop downloads come with every feature already included except

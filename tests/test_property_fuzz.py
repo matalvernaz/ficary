@@ -6,6 +6,8 @@ two production fixes these exercise — the canonical_url urlsplit guard
 and the cache-loader RecursionError tuple — ship in the same change, so
 this file is green on arrival.
 """
+import contextlib
+
 import pytest
 
 hypothesis = pytest.importorskip("hypothesis")
@@ -124,15 +126,16 @@ class TestUrlPredicateProperties:
 class TestCacheLoaderProperties:
     # tmp_path (a pytest fixture) can't be mixed with @given — hypothesis
     # binds strategies to the trailing params and would collide. Each
-    # example makes its own tempdir instead.
+    # example makes its own tempdir instead, and removes it when the
+    # example is over: these used to be left behind, about three hundred
+    # folders in the temporary directory for every run of the suite.
+    @contextlib.contextmanager
     def _scraper(self):
         import tempfile
         from pathlib import Path
         from ficary.scraper import FFNScraper
-        return FFNScraper(
-            cache_dir=Path(tempfile.mkdtemp(prefix="ficary-fuzz-")),
-            use_cache=True,
-        )
+        with tempfile.TemporaryDirectory(prefix="ficary-fuzz-") as folder:
+            yield FFNScraper(cache_dir=Path(folder), use_cache=True)
 
     @FUZZ
     @given(st.binary(max_size=2000))
@@ -143,29 +146,29 @@ class TestCacheLoaderProperties:
     @example(b"\xff\xfegarbage")
     @example(b'{"title": "only-title"}')  # KeyError branch
     def test_chapter_loader_never_raises(self, payload):
-        s = self._scraper()
-        cache_dir = s._story_cache_dir(1)
-        cache_dir.mkdir(parents=True, exist_ok=True)
-        path = cache_dir / "ch_0001.json"
-        path.write_bytes(payload)
-        result = s._load_chapter_cache(1, 1)  # must not raise
-        if result is None:
-            assert not path.exists()  # invalid file was unlinked
-        else:
-            from ficary.models import Chapter
-            assert isinstance(result, Chapter)
+        with self._scraper() as s:
+            cache_dir = s._story_cache_dir(1)
+            cache_dir.mkdir(parents=True, exist_ok=True)
+            path = cache_dir / "ch_0001.json"
+            path.write_bytes(payload)
+            result = s._load_chapter_cache(1, 1)  # must not raise
+            if result is None:
+                assert not path.exists()  # invalid file was unlinked
+            else:
+                from ficary.models import Chapter
+                assert isinstance(result, Chapter)
 
     @FUZZ
     @given(st.binary(max_size=2000))
     @example(b"[" * 20_000)
     def test_meta_loader_never_raises(self, payload):
-        s = self._scraper()
-        cache_dir = s._story_cache_dir(2)
-        cache_dir.mkdir(parents=True, exist_ok=True)
-        path = cache_dir / "meta.json"
-        path.write_bytes(payload)
-        result = s._load_meta_cache(2)
-        assert result is None or isinstance(result, dict)
+        with self._scraper() as s:
+            cache_dir = s._story_cache_dir(2)
+            cache_dir.mkdir(parents=True, exist_ok=True)
+            path = cache_dir / "meta.json"
+            path.write_bytes(payload)
+            result = s._load_meta_cache(2)
+            assert result is None or isinstance(result, dict)
 
 
 # ── (d) TTS chunking ──────────────────────────────────────────────
