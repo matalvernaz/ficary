@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 2.20.11 — 2026-11-23
 
 **The reader's app voice and soundscapes can play**
 
