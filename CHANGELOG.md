@@ -82,6 +82,26 @@
   showed every line twice and a screen reader read it twice. Status
   lines now go to standard output only.
 
+**Audiobooks say everything, in the order it was written**
+
+* Short narration is no longer moved or lost. To cut down on requests,
+  any piece of narration under thirty characters ("Tom asked", "she
+  said", "Two days later.") was added to the end of the nearest earlier
+  narration, however many spoken lines stood in between. In a quick
+  exchange the narrator read "Tom asked. said Margaret." before either
+  line had been spoken.
+* With scene dividers played as pauses, a short piece of narration
+  near the start of a scene was not moved but dropped: nothing earlier
+  in the scene was there to take it. A scene that opened "Two days
+  later." lost the line, and so did every "he said" until the scene's
+  first longer stretch of narration.
+* Such narration now stays where it was written and is spoken on its
+  own. A render makes more requests than before in dialogue-heavy
+  chapters. Chapters already made keep the audio they have; a book has
+  to be made again from scratch to pick this up.
+* The narration after a quote no longer has a space before its full
+  stop or comma ("Tom asked ." is "Tom asked.").
+
 **An audiobook stops, and says why, when its voices stop working**
 
 * When the voice service refused every request, or could not be

@@ -1741,17 +1741,29 @@ def _split_oversized_text(text, max_len=_MAX_SEGMENT_CHARS):
 
 
 def _merge_small_segments(segments, min_len=30):
-    """Merge short segments to reduce API calls and avoid errors.
+    """Tidy a chapter's pieces of speech before synthesis, without
+    changing what is said or the order it is said in.
 
-    Pass 1: merge adjacent narrator segments (bounded by
+    Pass 1: join narration that sits side by side (bounded by
     ``_MAX_SEGMENT_CHARS`` so giant prose blocks don't fuse into a
-    single payload edge-tts will reject).
-    Pass 2: absorb very short narrator fragments into the nearest
-    narrator segment (also bounded).
-    Pass 3: drop anything that's just punctuation.
-    Pass 4: split any remaining oversized segment at sentence
+    single payload edge-tts will reject). Fewer requests, same words.
+    Pass 2: drop anything that's just punctuation.
+    Pass 3: split any remaining oversized segment at sentence
     boundaries — covers segments that arrived already too big from
     upstream parsing.
+
+    There used to be a pass that took every short piece of narration
+    (under ``min_len`` characters: "Tom asked", "she said", "Two days
+    later.") and added it to the end of the nearest *earlier* piece of
+    narration, however many spoken lines stood in between. That said
+    things out of order: in a quick exchange the narrator read "Tom
+    asked. said Margaret." before either line had been spoken. And when
+    a scene break came before any earlier narration, the short piece
+    was not kept at all, so a scene that opened "Two days later." lost
+    the line. Short narration now stays where it was written and is
+    synthesised on its own, as a short line of dialogue always was.
+    ``min_len`` is kept so existing callers still work; it no longer
+    does anything.
     """
     if not segments:
         return []
@@ -1772,47 +1784,23 @@ def _merge_small_segments(segments, min_len=30):
             and len(merged[-1].text) + 1 + len(seg.text) <= _MAX_SEGMENT_CHARS
         )
         if can_merge:
-            merged[-1].text += " " + seg.text
+            # The narration after a quote often arrives as the words and
+            # then its full stop or comma as a piece of its own. Joined
+            # with a space that read "Tom asked ." and "Tom asked ,
+            # leaning on the wall".
+            joiner = "" if seg.text[:1] in ".,;:!?" else " "
+            merged[-1].text += joiner + seg.text
         else:
             merged.append(Segment(seg.text, seg.speaker, seg.emotion))
 
-    # Pass 2: absorb tiny narrator fragments (< min_len) into neighbors
-    cleaned = []
-    for i, seg in enumerate(merged):
-        if seg.scene_break:
-            cleaned.append(seg)
-            continue
-        if seg.speaker is None and len(seg.text) < min_len:
-            # Try to append to the previous narrator segment (but not
-            # across a scene-break marker — that would glue two scenes
-            # together and lose the pause). Respect the same size cap
-            # as Pass 1.
-            for prev in reversed(cleaned):
-                if prev.scene_break:
-                    break
-                if prev.speaker is None:
-                    if len(prev.text) + 1 + len(seg.text) <= _MAX_SEGMENT_CHARS:
-                        prev.text += " " + seg.text
-                        break
-                    # Previous narrator is already at the cap — keep
-                    # this fragment standalone rather than blowing past
-                    # the limit.
-                    cleaned.append(seg)
-                    break
-            else:
-                # No previous narrator — keep it, it'll merge forward later
-                cleaned.append(seg)
-        else:
-            cleaned.append(seg)
-
-    # Pass 3: drop empty / punctuation-only segments, but preserve
+    # Pass 2: drop empty / punctuation-only segments, but preserve
     # scene-break markers.
     filtered = [
-        s for s in cleaned
+        s for s in merged
         if s.scene_break or s.text.strip(".,;:!?-–—' \"")
     ]
 
-    # Pass 4: split any segment still over the cap at sentence
+    # Pass 3: split any segment still over the cap at sentence
     # boundaries. Covers oversized inputs (rare) and belt-and-braces
     # against earlier passes.
     result = []
