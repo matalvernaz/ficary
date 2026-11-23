@@ -175,6 +175,45 @@ _UNREACHABLE_ERROR_NAMES = frozenset({
 })
 
 
+def is_refusal(error: BaseException | None) -> bool:
+    """True when the Edge voice service turned the connection away with
+    a 401 or 403, which is what it does to a client it has stopped
+    accepting. Every request will get the same answer."""
+    if type(error).__name__ != "WSServerHandshakeError":
+        return False
+    text = str(error)
+    return "403" in text or "401" in text
+
+
+def is_unreachable(error: BaseException | None) -> bool:
+    """True when the voice service could not be reached at all."""
+    if error is None:
+        return False
+    return type(error).__name__ in _UNREACHABLE_ERROR_NAMES or isinstance(
+        error, (TimeoutError, ConnectionError),
+    )
+
+
+def voice_is_out(error: BaseException | None) -> bool:
+    """True when a failure says the voice itself is not working: the
+    service refused the connection, could not be reached, or the
+    provider is not installed.
+
+    False for everything else, and in particular for the service
+    answering with no audio. That is what it does with text a voice
+    cannot speak (a chapter in a language the voice does not know, say),
+    and a chapter of that is a chapter with gaps, not a voice that is
+    down."""
+    if error is None:
+        return False
+    if is_refusal(error) or is_unreachable(error):
+        return True
+    text = str(error)
+    return isinstance(error, RuntimeError) and (
+        "is not installed" in text or "is not registered" in text
+    )
+
+
 def explain_synthesis_error(
     error: BaseException | None,
     *,
@@ -203,9 +242,7 @@ def explain_synthesis_error(
             "has gone out of date, and updating Ficary normally fixes it. "
             "Piper voices run on this computer and are not affected."
         )
-    if name in _UNREACHABLE_ERROR_NAMES or isinstance(
-        error, (TimeoutError, ConnectionError),
-    ):
+    if is_unreachable(error):
         return (
             "The voice service could not be reached. Check the internet "
             f"connection, {retry_hint}."

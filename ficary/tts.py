@@ -2314,10 +2314,26 @@ def _voice_refused(error) -> bool:
     """True for a failure that will be the same on every request: the
     Edge voice service turning the connection away with a 401 or 403,
     which is what it does to a client it has stopped accepting."""
-    if type(error).__name__ != "WSServerHandshakeError":
-        return False
-    text = str(error)
-    return "403" in text or "401" in text
+    from .tts_providers import is_refusal
+
+    return is_refusal(error)
+
+
+def _voice_is_out(error) -> bool:
+    """True for a failure that says the voice itself is not working, as
+    opposed to one piece of text not coming out. See
+    ``tts_providers.voice_is_out``."""
+    from .tts_providers import voice_is_out
+
+    return voice_is_out(error)
+
+
+# A render that has not voiced anything at all gives up after this many
+# chapters in a row come back with no audio, whatever the reason. It is
+# the catch for a book the chosen voices cannot speak (the wrong
+# language for them, say), where each piece is answered with "no audio"
+# and nothing says the service is down.
+_SILENT_CHAPTERS_BEFORE_GIVING_UP = 3
 
 
 class _VoiceHealth:
@@ -2338,25 +2354,37 @@ class _VoiceHealth:
         self._clock = clock
         self._lock = threading.Lock()
         self.failures_in_a_row = 0
+        self.pieces_succeeded = 0
         self.last_error = None
         self.gave_up = False
         self._streak_started = None
 
     def piece_succeeded(self) -> None:
         with self._lock:
+            self.pieces_succeeded += 1
             self.failures_in_a_row = 0
             self._streak_started = None
 
     def piece_failed(self, error) -> None:
-        """Count a piece that raised on its last fallback. A piece with
+        """Note a piece that raised on its last fallback. A piece with
         nothing to say (punctuation alone) raises nothing and is not
-        reported here at all."""
+        reported here at all.
+
+        Only a failure that says the voice is out (refused, unreachable,
+        not installed) counts towards giving up. The service answering
+        "no audio" is what it does with text a voice cannot speak, and
+        a whole chapter of that used to cost the book that one chapter.
+        Counting it here ended the render instead, so the book was never
+        made at all. Such a failure neither adds to the count nor starts
+        it again."""
         with self._lock:
+            self.last_error = error
+            if not _voice_is_out(error):
+                return
             now = self._clock()
             if self.failures_in_a_row == 0:
                 self._streak_started = now
             self.failures_in_a_row += 1
-            self.last_error = error
             if self.failures_in_a_row < _VOICE_OUTAGE_MIN_FAILURES:
                 return
             lasted = now - self._streak_started
@@ -3337,7 +3365,9 @@ def _chapter_cache_root(story_id):
 # to clear it: every chapter of every audiobook ever made stayed, about
 # 22 MB for each hour of audio, which is as much disk again as the
 # audiobooks themselves. Chapter audio that no render has used for this
-# many days is now removed at the end of a render.
+# many days is now removed at the end of a render. Nothing is removed
+# for the first that-many days after the clean-up first runs on a cache;
+# see ``_CLEANUP_STARTED_NAME``.
 _CHAPTER_AUDIO_KEEP_DAYS = 30.0
 
 # Changes the number of days. 0, "forever" or "never" keeps everything,
@@ -3390,6 +3420,37 @@ def _mark_chapter_audio_used(path) -> None:
 # for that, because None is itself an answer: keep everything.
 _KEEP_DAYS_FROM_SETTING = object()
 
+# A small file in the cache folder holding the time the clean-up first
+# ran there. Before the clean-up existed a chapter was never marked when
+# it was reused, so the time on its file says when it was made, not when
+# it was last used: a book made two months ago and added to last week
+# has chapters that look two months unused. Nothing can tell those from
+# chapters that really are unused, so every file is treated as used no
+# earlier than this time, and nothing is removed until the keep time has
+# passed since it.
+_CLEANUP_STARTED_NAME = ".clean-up-started"
+
+
+def _cleanup_started(base, now):
+    """When the clean-up first ran on this cache, noting that down if
+    this is the first time. None when it can be neither read nor noted,
+    in which case nothing should be removed."""
+    marker = Path(base) / _CLEANUP_STARTED_NAME
+    try:
+        started = float(marker.read_text(encoding="utf-8").strip())
+    except (OSError, ValueError):
+        started = None
+    # A time that is not a number, or is later than now (the clock has
+    # been put back), cannot be trusted: start counting again from now.
+    if started is not None and started == started and started <= now:
+        return started
+    try:
+        marker.write_text(f"{now}\n", encoding="utf-8")
+    except OSError:
+        logger.debug("Could not note when the chapter audio clean-up started", exc_info=True)
+        return None
+    return now
+
 
 def _sweep_chapter_audio_cache(*, base=None, keep_days=_KEEP_DAYS_FROM_SETTING, now=None):
     """Remove cached chapter audio that no render has used for
@@ -3417,6 +3478,14 @@ def _sweep_chapter_audio_cache(*, base=None, keep_days=_KEEP_DAYS_FROM_SETTING, 
     try:
         version_folders = [p for p in base.iterdir() if p.is_dir() and not p.is_symlink()]
     except OSError:
+        return 0, 0
+    started = _cleanup_started(base, now)
+    if started is None or started > cutoff:
+        # Either it is not known when chapters began to be marked as
+        # used, or that was less than the keep time ago: nothing can be
+        # called unused for long enough yet. Once it is further back
+        # than the keep time, a file's own time is enough to go by: one
+        # not marked since before then has not been used since.
         return 0, 0
     for version_folder in version_folders:
         try:
@@ -3533,6 +3602,23 @@ class AudiobookVoiceUnavailable(RuntimeError):
     ``_VoiceHealth``), so it stops instead of trying every remaining
     piece of the book. The message says why and what was kept. Unwinds
     through the same cleanup paths as a cancel."""
+
+
+def _nothing_voiced_message(voice_health, *, chapters, total) -> str:
+    """What to tell the user when a render stops because its first
+    chapters all came back with no audio."""
+    from .tts_providers import explain_synthesis_error
+
+    return (
+        f"The audiobook was not made: the first {chapters} of its {total} "
+        "chapters produced no audio at all, so the rest were not tried. "
+        + explain_synthesis_error(
+            voice_health.last_error,
+            retry_hint="then make the audiobook again",
+        )
+        + " If the story is not in a language the chosen voices speak, "
+        "pick voices for its language."
+    )
 
 
 def _voice_gave_up_message(voice_health, *, chapter, total, chapters_made) -> str:
@@ -4020,6 +4106,8 @@ def _generate_audiobook_inner(
     # One tally for the whole render, so a voice service that is down
     # or refusing stops it within seconds instead of at the last chapter.
     voice_health = _VoiceHealth()
+    # Chapters that were attempted and came back with no audio at all.
+    silent_chapters = 0
 
     display_ns = _chapter_display_numbers(
         (i, c.title) for i, c in enumerate(story.chapters, 1)
@@ -4101,6 +4189,20 @@ def _generate_audiobook_inner(
                 incomplete.append((i, ch.title, attempted, attempted))
                 if tmp_body.exists():
                     tmp_body.unlink(missing_ok=True)
+                if attempted:
+                    silent_chapters += 1
+                nothing_voiced_yet = (
+                    cache_hits == 0 and voice_health.pieces_succeeded == 0
+                )
+                if (
+                    nothing_voiced_yet
+                    and silent_chapters >= _SILENT_CHAPTERS_BEFORE_GIVING_UP
+                ):
+                    raise AudiobookVoiceUnavailable(
+                        _nothing_voiced_message(
+                            voice_health, chapters=silent_chapters, total=total,
+                        )
+                    )
                 _safe_progress(progress_callback, i, total, ch.title)
                 continue
 

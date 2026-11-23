@@ -29,9 +29,18 @@ def cached(folder: Path, name: str, *, days_old: float, size: int = 1000) -> Pat
     return path
 
 
+def started(base: Path, *, days_ago: float, now: float = NOW) -> None:
+    """Note that the clean-up first ran on this cache ``days_ago`` days before ``now``."""
+    base.mkdir(parents=True, exist_ok=True)
+    (base / tts._CLEANUP_STARTED_NAME).write_text(f"{now - days_ago * DAY}\n", encoding="utf-8")
+
+
 @pytest.fixture
 def base(tmp_path):
-    return tmp_path / "cache" / "chapter_audio"
+    """A cache the clean-up has been running on for years, so the time on each file is the last time it was used."""
+    folder = tmp_path / "cache" / "chapter_audio"
+    started(folder, days_ago=1000)
+    return folder
 
 
 def sweep(base, keep_days=30.0):
@@ -76,6 +85,7 @@ class TestTheSweep:
         assert sweep(base) == (0, 0)
         for kept in (notes, beside_the_versions, beside_the_stories, deeper):
             assert kept.exists()
+        assert (base / tts._CLEANUP_STARTED_NAME).exists()
 
     def test_a_link_is_never_followed_or_removed(self, base, tmp_path):
         outside = tmp_path / "outside"
@@ -90,6 +100,7 @@ class TestTheSweep:
 
     def test_a_cache_that_is_not_there_is_nothing_to_do(self, tmp_path):
         assert sweep(tmp_path / "no-such-folder") == (0, 0)
+        assert not (tmp_path / "no-such-folder").exists()
 
     def test_keeping_forever_removes_nothing(self, base):
         ancient = cached(base / "v1" / "story", "aaa.mp3", days_old=2000)
@@ -130,6 +141,86 @@ class TestTheSweep:
         with caplog.at_level(logging.INFO, logger="ficary.tts"):
             sweep(base)
         assert "Chapter audio cache: removed" not in caplog.text
+
+
+class TestTheFirstThirtyDays:
+    """Before the clean-up existed a chapter was not marked when it was reused, so the time on its file is when it was made. A book made two months ago and added to last week looks two months unused. Nothing is removed until the keep time has passed since the clean-up first ran."""
+
+    @pytest.fixture
+    def fresh(self, tmp_path):
+        """A cache from before the clean-up existed: chapters, and no note of when it first ran."""
+        return tmp_path / "cache" / "chapter_audio"
+
+    def test_the_first_run_removes_nothing_however_old_the_audio(self, fresh):
+        ancient = cached(fresh / "v1" / "story", "aaa.mp3", days_old=700)
+        assert sweep(fresh) == (0, 0)
+        assert ancient.exists()
+
+    def test_the_first_run_notes_when_it_was(self, fresh):
+        cached(fresh / "v1" / "story", "aaa.mp3", days_old=700)
+        sweep(fresh)
+        assert float((fresh / tts._CLEANUP_STARTED_NAME).read_text(encoding="utf-8")) == NOW
+
+    def test_a_later_run_does_not_move_that_time(self, fresh):
+        cached(fresh / "v1" / "story", "aaa.mp3", days_old=700)
+        sweep(fresh)
+        tts._sweep_chapter_audio_cache(base=fresh, keep_days=30.0, now=NOW + 10 * DAY)
+        assert float((fresh / tts._CLEANUP_STARTED_NAME).read_text(encoding="utf-8")) == NOW
+
+    def test_a_book_added_to_last_week_on_the_old_version_keeps_its_chapters(self, fresh):
+        """Made 60 days ago, reused 5 days ago by a version that left no mark. Then another book is rendered on the new version."""
+        chapters = [cached(fresh / "v1" / "ongoing", f"chapter-{number}.mp3", days_old=60) for number in range(3)]
+        assert sweep(fresh) == (0, 0)
+        assert tts._sweep_chapter_audio_cache(base=fresh, keep_days=30.0, now=NOW + 29 * DAY) == (0, 0)
+        assert all(chapter.exists() for chapter in chapters)
+
+    def test_once_the_keep_time_has_passed_since_the_first_run_old_audio_goes(self, fresh):
+        unused = cached(fresh / "v1" / "finished", "aaa.mp3", days_old=60)
+        sweep(fresh)
+        assert tts._sweep_chapter_audio_cache(base=fresh, keep_days=30.0, now=NOW + 30 * DAY) == (1, 1000)
+        assert not unused.exists()
+
+    def test_a_chapter_reused_since_the_first_run_is_kept_by_its_own_time(self, fresh):
+        reused = cached(fresh / "v1" / "ongoing", "aaa.mp3", days_old=60)
+        unused = cached(fresh / "v1" / "finished", "bbb.mp3", days_old=60)
+        sweep(fresh)
+        # Ten days on, a render reuses one of them, which marks it.
+        os.utime(reused, (NOW + 10 * DAY,) * 2)
+        tts._sweep_chapter_audio_cache(base=fresh, keep_days=30.0, now=NOW + 35 * DAY)
+        assert reused.exists()
+        assert not unused.exists()
+        # And it goes in its turn, thirty days after that last use.
+        tts._sweep_chapter_audio_cache(base=fresh, keep_days=30.0, now=NOW + 40 * DAY)
+        assert not reused.exists()
+
+    def test_a_note_that_cannot_be_read_starts_the_count_again(self, fresh):
+        ancient = cached(fresh / "v1" / "story", "aaa.mp3", days_old=700)
+        (fresh / tts._CLEANUP_STARTED_NAME).write_text("last Tuesday\n", encoding="utf-8")
+        assert sweep(fresh) == (0, 0)
+        assert ancient.exists()
+        assert float((fresh / tts._CLEANUP_STARTED_NAME).read_text(encoding="utf-8")) == NOW
+
+    def test_a_note_from_the_future_starts_the_count_again(self, fresh):
+        """What a clock that has been put back looks like."""
+        ancient = cached(fresh / "v1" / "story", "aaa.mp3", days_old=700)
+        started(fresh, days_ago=-5)
+        assert sweep(fresh) == (0, 0)
+        assert ancient.exists()
+        assert float((fresh / tts._CLEANUP_STARTED_NAME).read_text(encoding="utf-8")) == NOW
+
+    def test_nothing_is_removed_when_the_note_cannot_be_written(self, fresh, monkeypatch):
+        ancient = cached(fresh / "v1" / "story", "aaa.mp3", days_old=700)
+        real_write = Path.write_text
+
+        def write_text(self, *args, **kwargs):
+            if self.name == tts._CLEANUP_STARTED_NAME:
+                raise PermissionError("the cache folder is read-only")
+            return real_write(self, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "write_text", write_text)
+        assert sweep(fresh) == (0, 0)
+        assert tts._sweep_chapter_audio_cache(base=fresh, keep_days=30.0, now=NOW + 400 * DAY) == (0, 0)
+        assert ancient.exists()
 
 
 class TestTheSetting:
@@ -191,6 +282,8 @@ def render(monkeypatch, tmp_path):
     monkeypatch.delenv("FICARY_CHAPTER_AUDIO_KEEP_DAYS", raising=False)
     monkeypatch.setattr(tts, "_check_ffmpeg", lambda *args, **kwargs: None)
     monkeypatch.setattr(tts, "_chapter_audio_cache_base", lambda: base)
+    # The clean-up has been running on this cache for a hundred days.
+    started(base, days_ago=100, now=time.time())
     monkeypatch.setattr(tts, "_attr_cache_root", lambda: tmp_path / "cache" / "attribution")
     monkeypatch.setattr(tts, "generate_chapter_audio", chapter_audio)
     monkeypatch.setattr(tts, "_synthesize_heading", no_heading)
@@ -236,6 +329,14 @@ class TestInARender:
         render(story(1, 2))
         assert not long_ago.exists()
         assert last_week.exists()
+
+    def test_the_first_render_after_updating_removes_nothing(self, render):
+        (render.base / tts._CLEANUP_STARTED_NAME).unlink()
+        long_ago = cached(render.base / "v1" / "2", "long-ago.mp3", days_old=0)
+        os.utime(long_ago, (time.time() - 600 * DAY,) * 2)
+        render(story(1, 2))
+        assert long_ago.exists()
+        assert (render.base / tts._CLEANUP_STARTED_NAME).exists()
 
     def test_asking_to_keep_everything_is_honoured(self, render, monkeypatch):
         monkeypatch.setenv("FICARY_CHAPTER_AUDIO_KEEP_DAYS", "forever")
