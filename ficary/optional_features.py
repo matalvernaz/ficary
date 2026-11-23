@@ -109,16 +109,21 @@ FEATURES: dict[str, dict] = {
     },
     "playback": {
         "extra": "playback",
-        "pip_name": "PyOpenAL>=0.7",
+        # Names a pre-release on purpose: every PyOpenAL release is
+        # one, and older versions of pip refuse a pre-release unless the
+        # requirement names one (see pyproject.toml).
+        "pip_name": "PyOpenAL>=0.7.11a1",
         "import_name": "openal",
         "display": "In-app reader audio (OpenAL)",
-        "size_hint": "~2 MB (plus OpenAL Soft, bundled in the .exe/.app)",
+        "size_hint": "~2 MB",
         "description": (
             "Enables app-voice reading and soundscapes in the in-app "
             "reader: positional ambient audio, ducking under the "
             "narration, and fades. Without it the reader still works in "
             "screen-reader mode and offline audiobook export is "
-            "unaffected."
+            "unaffected. The Windows download already includes it. On "
+            "Linux it also needs the system's OpenAL library (on Debian "
+            "or Ubuntu: sudo apt install libopenal1)."
         ),
         "post_install": None,
     },

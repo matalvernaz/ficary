@@ -15,7 +15,7 @@ import time
 
 import wx
 
-from ..audio.engine import get_engine
+from ..audio.engine import describe_unavailable, get_engine
 from ..audio.events import Event, ReaderEvent
 from ..soundscape import library as _sc_library
 from ..soundscape.session import SoundscapeSession
@@ -371,11 +371,16 @@ class ReaderFrame(wx.Frame):
                 self._live.pause()
                 self._paused = True
             return
-        if not self._engine.available:
+        # Try again before giving up: audio is started once per run of
+        # the app, and headphones connected since then deserve a look.
+        if not self._engine.available and not self._engine.retry_backend():
             wx.MessageBox(
-                "Audio playback isn't available — PyOpenAL or an audio "
-                "device is missing. Install the playback feature to use "
-                "app-voice reading; screen-reader mode works without it.",
+                describe_unavailable(
+                    self._engine.unavailable_reason,
+                    self._engine.unavailable_detail,
+                )
+                + "\n\nUntil then, Screen reader mode still works: your "
+                "own screen reader reads the chapter text.",
                 "Reader", wx.OK | wx.ICON_INFORMATION, self)
             return
         if self._resolving_voice:

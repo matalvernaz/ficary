@@ -3624,6 +3624,15 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Print the version and exit",
     )
     parser.add_argument(
+        "--check-reader-audio",
+        action="store_true",
+        help=(
+            "Check whether the in-app reader's app voice and soundscapes "
+            "can play on this computer, say what is missing if they "
+            "cannot, and exit"
+        ),
+    )
+    parser.add_argument(
         "url",
         nargs="*",
         help=(
@@ -5638,6 +5647,49 @@ def _handle_watchlist_test(channel: str) -> int:
     return _EXIT_OK
 
 
+# Exit statuses of ``--check-reader-audio``. A missing sound device gets
+# its own, because a build server has none and still needs to tell "the
+# library is in the bundle" apart from "the library is missing".
+_EXIT_READER_AUDIO_OK = 0
+_EXIT_READER_AUDIO_BROKEN = 1
+_EXIT_READER_AUDIO_NO_DEVICE = 2
+
+
+def _handle_check_reader_audio() -> int:
+    """Report, one fact per line, whether the reader can play sound.
+
+    The reader only finds out when someone presses Play, and then says
+    it in a message box. This puts the same answer on the command line,
+    where a release build can check its own bundle and a user can paste
+    the result into a bug report.
+    """
+    from .audio import engine as audio_engine
+
+    def found(yes: bool) -> str:
+        return "found" if yes else "NOT found"
+
+    probe = audio_engine.probe_audio()
+    print("Reader audio check")
+    print(f"  PyOpenAL package: {found(probe.package_found)}")
+    if probe.package_found:
+        print(f"  OpenAL sound library: {found(probe.library_found)}")
+    if probe.library_found:
+        print(
+            "  Sound output: "
+            + ("opened" if probe.device_opened else "could NOT be opened")
+        )
+    if probe.available:
+        print("Result: the reader's app voice and soundscapes can play.")
+        return _EXIT_READER_AUDIO_OK
+    print(
+        "Result: the reader's app voice and soundscapes cannot play. "
+        + audio_engine.describe_unavailable(probe.reason, probe.detail)
+    )
+    if probe.reason == audio_engine.UNAVAILABLE_NO_DEVICE:
+        return _EXIT_READER_AUDIO_NO_DEVICE
+    return _EXIT_READER_AUDIO_BROKEN
+
+
 def _was_not_already_printed(record: logging.LogRecord) -> bool:
     """Log filter for the console: drop a record whose text the status
     callback has already printed.
@@ -5674,6 +5726,9 @@ def main(argv: list[str] | None = None) -> None:
     args = parser.parse_args(argv)
 
     _configure_console_logging(args.verbose)
+
+    if getattr(args, "check_reader_audio", False):
+        sys.exit(_handle_check_reader_audio())
 
     if getattr(args, "install_attribution", None):
         sys.exit(_handle_install_attribution(args.install_attribution))

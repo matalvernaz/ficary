@@ -2,6 +2,28 @@
 
 ## Unreleased
 
+**The reader's app voice and soundscapes can play on Windows**
+
+* The Windows download now includes the OpenAL sound library. It had
+  been left out of every release, so in the in-app reader the App voice
+  reading mode and soundscapes did nothing, whatever was installed.
+* When sound cannot play, the reader now says which thing is wrong: the
+  audio feature is not installed, the sound library is missing, or no
+  sound output could be opened, each with what to do about it. The old
+  message named two causes at once and advised installing a feature
+  the Windows download already had.
+* Pressing Play tries to start sound again before giving up, so
+  speakers or headphones connected after the reader was opened are
+  picked up without restarting.
+* `ficary --check-reader-audio` reports whether the reader can play
+  sound on this computer, and what is missing if it cannot.
+* Installing the reader's audio feature works with older versions of
+  pip. Its requirement was written in a form they answer with "no
+  matching distribution".
+* On Linux, the feature's description and the manual now say that it
+  also needs the system's OpenAL library (`libopenal1` on Debian and
+  Ubuntu).
+
 **The LLM author's-note check no longer hides its own failures**
 
 * When the LLM provider turns a request away for a reason that applies

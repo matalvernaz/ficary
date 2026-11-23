@@ -261,8 +261,12 @@ downloaded story with **Reader → Open reader** (Ctrl+R).
 
 App-voice reading and soundscapes need the `playback` feature —
 already included in the desktop downloads, or one click away in
-**Edit → Optional Features...**. Without it, reading with your own
-screen reader and audiobook export work exactly the same.
+**Edit → Optional Features...**. On Linux they also need the system's
+OpenAL library (`sudo apt install libopenal1` on Debian or Ubuntu).
+Running `ficary --check-reader-audio` says whether sound can play on
+your computer, and what is missing if it cannot. Without the feature,
+reading with your own screen reader and audiobook export work exactly
+the same.
 
 ## Your library
 

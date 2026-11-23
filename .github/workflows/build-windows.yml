@@ -90,6 +90,14 @@ jobs:
         # maintaining an explicit hidden-import list. The --hidden-import
         # lines that remain are for third-party packages whose lazy
         # imports PyInstaller's static analysis doesn't see.
+        #
+        # --collect-binaries openal brings along soft_oal_64.dll, the
+        # OpenAL library PyOpenAL's Windows wheel keeps inside its own
+        # package folder and loads from there. PyInstaller copies a
+        # package's Python modules by itself but not a DLL sitting
+        # beside them, so every release up to 2.20.10 shipped PyOpenAL
+        # without it and the reader's app voice and soundscapes could
+        # not play. The check after the build is what proves it loads.
         run: |
           pyinstaller --onedir --name ficary --console \
             --add-binary "ffmpeg_bin/ffmpeg.exe;." \
@@ -102,6 +110,7 @@ jobs:
             --hidden-import wx \
             --collect-all curl_cffi \
             --collect-all wx \
+            --collect-binaries openal \
             ficary/__main__.py
 
       - name: Smoke-test executable
@@ -118,6 +127,26 @@ jobs:
           Get-ChildItem -Path dist\ficary -Recurse -Filter ffprobe.exe |
             Select-Object -First 1 |
             ForEach-Object { & $_.FullName -version | Select-Object -First 1 }
+
+      - name: Check the reader's sound library loads from the bundle
+        # The frozen program has to find and load its own OpenAL
+        # library. Exit status 0 means it also opened a sound device; 2
+        # means the library loaded but this machine has no sound device,
+        # which is the normal state of a build runner. Anything else
+        # means the library is missing from the bundle, and that fails
+        # the build.
+        shell: pwsh
+        run: |
+          Get-ChildItem -Path dist\ficary -Recurse -Filter "soft_oal*.dll" |
+            ForEach-Object { Write-Host "bundled: $($_.FullName) ($($_.Length) bytes)" }
+          dist\ficary\ficary.exe --check-reader-audio
+          $status = $LASTEXITCODE
+          if ($status -eq 0 -or $status -eq 2) {
+            Write-Host "The sound library loaded (exit status $status)."
+            exit 0
+          }
+          Write-Error "The reader's sound library did not load (exit status $status)."
+          exit 1
 
       # Drop the update helper alongside ficary.exe so the auto-updater
       # in ficary/self_update.py can copy it to %TEMP% and spawn it.

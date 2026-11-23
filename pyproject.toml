@@ -34,10 +34,14 @@ audio = ["edge-tts>=7.0"]
 gui = ["wxPython>=4.2"]
 clipboard = ["pyperclip>=1.8"]
 cf-solve = ["playwright>=1.40"]
-playback = ["PyOpenAL>=0.7"]
+# Every PyOpenAL release is a pre-release (0.7.11a1 is the newest), and
+# pip only picks a pre-release by itself in its newer versions: pip 25.1
+# answers "PyOpenAL>=0.7" with "no matching distribution". A requirement
+# that names a pre-release is accepted by every pip, so name one.
+playback = ["PyOpenAL>=0.7.11a1"]
 # PyYAML: the release-plumbing tests parse the build workflows.
 dev = ["pytest>=7.0", "hypothesis>=6.100", "PyYAML>=6.0"]
-all = ["ebooklib>=0.18", "edge-tts>=7.0", "wxPython>=4.2", "pyperclip>=1.8", "PyOpenAL>=0.7"]
+all = ["ebooklib>=0.18", "edge-tts>=7.0", "wxPython>=4.2", "pyperclip>=1.8", "PyOpenAL>=0.7.11a1"]
 
 [project.scripts]
 ficary = "ficary.entrypoint:main"

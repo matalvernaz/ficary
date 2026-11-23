@@ -161,6 +161,17 @@ jobs:
           find dist/ficary -name ffprobe -type f -exec {} -version \; \
             | head -n 1
 
+      - name: Report whether the reader's sound library loads
+        # Nothing is bundled for this on Linux: PyOpenAL looks for the
+        # system's OpenAL library (libopenal1 on Debian and Ubuntu).
+        # This step only reports what the frozen program finds on the
+        # build machine, so a change in that shows up in the log. It
+        # does not gate the build, because the answer depends on the
+        # machine the program later runs on.
+        run: |
+          dist/ficary/ficary --check-reader-audio \
+            || echo "reader audio check exited with status $? (reported only)"
+
       - name: Package
         # tar.gz preserves the executable bit so the binary stays
         # runnable after extraction.

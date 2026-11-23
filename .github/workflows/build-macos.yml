@@ -155,6 +155,16 @@ jobs:
           find dist/ficary.app -name ffprobe -type f -exec {} -version \; \
             | head -n 1
 
+      - name: Report whether the reader's sound library loads
+        # Nothing is bundled for this on macOS: PyOpenAL looks for an
+        # OpenAL library on the system. This step only reports what the
+        # frozen app finds on the build machine, so a change in that
+        # shows up in the log. It does not gate the build, because the
+        # answer depends on the machine the app later runs on.
+        run: |
+          dist/ficary.app/Contents/MacOS/ficary --check-reader-audio \
+            || echo "reader audio check exited with status $? (reported only)"
+
       - name: Package
         # ``ditto`` preserves macOS metadata (extended attributes,
         # the executable bit, resource forks) that a plain ``zip``

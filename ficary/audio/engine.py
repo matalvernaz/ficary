@@ -29,6 +29,7 @@ engine logic or the reader/soundscape that depend on it.
 from __future__ import annotations
 
 import logging
+import sys
 import threading
 from pathlib import Path
 from typing import Callable, Optional
@@ -41,6 +42,17 @@ CHANNEL_VOICE = "voice"      # live-TTS clips, full gain
 CHANNEL_AMBIENT = "ambient"  # soundscape loops, ducked while TTS speaks
 
 _FADE_STEPS = 20  # ramp granularity for a fade/duck
+
+# Why the engine could not start. Each needs a different thing from the
+# user, so the reason is kept and not just the fact.
+UNAVAILABLE_NO_PACKAGE = "package"  # PyOpenAL is not installed
+UNAVAILABLE_NO_LIBRARY = "library"  # PyOpenAL is; the OpenAL library it loads is not
+UNAVAILABLE_NO_DEVICE = "device"    # the library loaded, no sound output opened
+UNAVAILABLE_OTHER = "other"
+
+# The file PyOpenAL's 64-bit Windows wheel carries OpenAL Soft in, named
+# so a user told it is missing can check for it.
+_WINDOWS_OPENAL_DLL = "soft_oal_64.dll"
 
 
 def ramp_values(start: float, end: float, steps: int) -> list[float]:
@@ -75,6 +87,36 @@ class AudioEngine:
     @property
     def available(self) -> bool:
         return self._backend.available
+
+    @property
+    def unavailable_reason(self) -> Optional[str]:
+        """One of the ``UNAVAILABLE_*`` codes, or None when audio works."""
+        if self._backend.available:
+            return None
+        return getattr(self._backend, "reason", None) or UNAVAILABLE_OTHER
+
+    @property
+    def unavailable_detail(self) -> str:
+        """The underlying error text, for the log and for the one reason
+        that has no better explanation."""
+        if self._backend.available:
+            return ""
+        return getattr(self._backend, "detail", "") or ""
+
+    def retry_backend(self) -> bool:
+        """Try once more to start audio, and say whether it is available.
+
+        The engine is made once per run of the app, on the first reader
+        window. If headphones were not connected yet at that moment,
+        audio stayed off until the app was restarted. Trying again when
+        the user presses Play costs a moment and fixes that.
+        """
+        with self._lock:
+            if self._backend.available:
+                return True
+            # Safe to swap: a backend that never started holds no sounds.
+            self._backend = _make_backend()
+            return self._backend.available
 
     # ── event bus ─────────────────────────────────────────────────
     def subscribe(self, callback: Callable[[Event], None]) -> None:
@@ -357,8 +399,14 @@ class _Backend:
 
 
 class _NullBackend(_Backend):
-    """Used when PyOpenAL/an audio device isn't available. Everything no-ops."""
+    """Used when PyOpenAL/an audio device isn't available. Everything
+    no-ops. Remembers why, as an ``UNAVAILABLE_*`` code plus the error's
+    own text."""
     available = False
+
+    def __init__(self, reason: Optional[str] = None, detail: str = "") -> None:
+        self.reason = reason
+        self.detail = detail
 
 
 class _OpenALBackend(_Backend):
@@ -498,12 +546,145 @@ class _OpenALBackend(_Backend):
                 pass
 
 
-def _make_backend() -> _Backend:
+def _classify_backend_failure(exc: Exception) -> str:
+    """Which ``UNAVAILABLE_*`` code an error from starting OpenAL means.
+
+    PyOpenAL's own error classes are matched by name. They cannot be
+    imported to compare against: when the library is missing, importing
+    the package they live in is the very thing that fails.
+    """
+    if isinstance(exc, ImportError):
+        return UNAVAILABLE_NO_PACKAGE
+    error_name = type(exc).__name__
+    if error_name == "ExternalLibraryError":
+        return UNAVAILABLE_NO_LIBRARY
+    # Starting up only opens a device and makes a context on it, so an
+    # error from either is about the sound output. PyOpenAL raises
+    # ``OalError`` when the open returns nothing, and ``ALCError`` when
+    # OpenAL reports an error code first (seen as ALC_INVALID_VALUE
+    # with a driver that could not start).
+    if error_name in _OPENAL_DEVICE_ERROR_NAMES:
+        return UNAVAILABLE_NO_DEVICE
+    return UNAVAILABLE_OTHER
+
+
+_OPENAL_DEVICE_ERROR_NAMES = frozenset({"OalError", "ALCError"})
+
+
+def _make_backend(announce: bool = True) -> _Backend:
+    """Start OpenAL, or hand back a stand-in that remembers why not.
+
+    ``announce`` False keeps the reason out of the log, for a caller
+    that is about to report it in its own words.
+    """
+    # The catch is broad because this must never stop the reader from
+    # opening: whatever goes wrong, the reader falls back to
+    # screen-reader mode and the reason is kept for the user.
     try:
         return _OpenALBackend()
-    except Exception as exc:
-        logger.info("Audio engine unavailable (%s); soundscape/live-TTS disabled", exc)
-        return _NullBackend()
+    except Exception as exc:  # noqa: BLE001 — see comment above
+        reason = _classify_backend_failure(exc)
+        if announce:
+            # A package nobody installed is an ordinary state. The
+            # others mean something is wrong with this install or this
+            # machine.
+            level = (
+                logging.INFO if reason == UNAVAILABLE_NO_PACKAGE
+                else logging.WARNING
+            )
+            logger.log(
+                level,
+                "Audio engine unavailable (%s); soundscape/live-TTS disabled",
+                exc,
+            )
+        return _NullBackend(reason, str(exc))
+
+
+def describe_unavailable(reason: Optional[str], detail: str = "") -> str:
+    """Why the app voice and soundscapes cannot play, and what to do
+    about it, in words for the user.
+
+    The old message named two possible causes at once and told
+    everyone to "install the playback feature". On the Windows
+    download that feature was already installed and the fault was a
+    missing file, so the advice led nowhere.
+    """
+    if reason == UNAVAILABLE_NO_PACKAGE:
+        # Named the way the Optional Features window names it, so the
+        # user can find the row by the words in this message.
+        from ..optional_features import FEATURES
+        feature_name = FEATURES["playback"]["display"]
+        return (
+            "The reader's audio feature is not installed. Install "
+            f'"{feature_name}" from Edit > Optional Features, then '
+            "restart Ficary."
+        )
+    if reason == UNAVAILABLE_NO_LIBRARY:
+        if sys.platform == "win32":
+            return (
+                f"This copy of Ficary is missing its sound library "
+                f"({_WINDOWS_OPENAL_DLL}). Updating Ficary, or unzipping "
+                "a fresh copy of it, puts the file back."
+            )
+        if sys.platform == "darwin":
+            return (
+                "The OpenAL sound library could not be found on this Mac, "
+                "so Ficary has nothing to play sound through."
+            )
+        return (
+            "The OpenAL sound library is not installed on this computer. "
+            "Install it with your package manager (on Debian or Ubuntu: "
+            "sudo apt install libopenal1), then restart Ficary."
+        )
+    if reason == UNAVAILABLE_NO_DEVICE:
+        return (
+            "No sound output could be opened. Check that speakers or "
+            "headphones are connected and switched on, then press Play "
+            "again."
+        )
+    if detail:
+        return f"The sound system could not start ({detail})."
+    return "The sound system could not start."
+
+
+class AudioProbe:
+    """The result of :func:`probe_audio`: whether audio can play here,
+    and when it cannot, why."""
+
+    def __init__(self, available: bool, reason: Optional[str], detail: str) -> None:
+        self.available = available
+        self.reason = reason
+        self.detail = detail
+
+    @property
+    def package_found(self) -> bool:
+        return self.available or self.reason != UNAVAILABLE_NO_PACKAGE
+
+    @property
+    def library_found(self) -> bool:
+        return self.available or self.reason not in (
+            UNAVAILABLE_NO_PACKAGE, UNAVAILABLE_NO_LIBRARY,
+        )
+
+    @property
+    def device_opened(self) -> bool:
+        return self.available
+
+
+def probe_audio() -> AudioProbe:
+    """Start the audio backend, note what happened, and shut it down.
+
+    For the command-line self-check. It does not touch the app's shared
+    engine, so it is safe to call whether or not a reader is open.
+    """
+    backend = _make_backend(announce=False)
+    probe = AudioProbe(
+        backend.available,
+        None if backend.available else (getattr(backend, "reason", None) or UNAVAILABLE_OTHER),
+        "" if backend.available else getattr(backend, "detail", ""),
+    )
+    backend.shutdown()
+    return probe
 
 
 _engine: Optional[AudioEngine] = None
