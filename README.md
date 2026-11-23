@@ -382,6 +382,14 @@ an Audiobookshelf server (Preferences → Audiobookshelf, or
 The desktop downloads include everything audiobooks need. A pip
 install needs `ffmpeg` and `ffprobe` on the PATH.
 
+Each finished chapter's audio is kept in Ficary's cache folder, so a
+render that failed part-way carries on from where it stopped, and
+making a book again after new chapters arrive only voices the new
+ones. Chapter audio that no render has used for 30 days is deleted at
+the end of the next render. Set the environment variable
+`FICARY_CHAPTER_AUDIO_KEEP_DAYS` to another number of days, or to
+`forever` to keep it all.
+
 ### Voices
 
 Two voice providers are built in, and you can use either or both:

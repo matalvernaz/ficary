@@ -3314,17 +3314,144 @@ def _safe_progress(cb, i, total, title):
         )
 
 
-def _chapter_cache_root(story_id):
-    """Per-story cache dir for chapter body MP3s."""
+def _chapter_audio_cache_base():
+    """The folder every story's cached chapter audio lives under."""
     from . import portable
 
+    return portable.cache_dir() / "chapter_audio"
+
+
+def _chapter_cache_root(story_id):
+    """Per-story cache dir for chapter body MP3s."""
     safe_id = re.sub(r"[^A-Za-z0-9_\-]+", "_", str(story_id or "anon"))[:64]
     return (
-        portable.cache_dir()
-        / "chapter_audio"
+        _chapter_audio_cache_base()
         / f"v{_CHAPTER_CACHE_VERSION}"
         / safe_id
     )
+
+
+# Finished chapter audio is kept so that a render which failed part-way
+# can carry on, and so that a book can be made again when chapters are
+# added without synthesising the old ones a second time. Nothing used
+# to clear it: every chapter of every audiobook ever made stayed, about
+# 22 MB for each hour of audio, which is as much disk again as the
+# audiobooks themselves. Chapter audio that no render has used for this
+# many days is now removed at the end of a render.
+_CHAPTER_AUDIO_KEEP_DAYS = 30.0
+
+# Changes the number of days. 0, "forever" or "never" keeps everything,
+# which is how it used to be.
+_ENV_CHAPTER_AUDIO_KEEP_DAYS = "FICARY_CHAPTER_AUDIO_KEEP_DAYS"
+
+_SECONDS_PER_DAY = 86400.0
+
+
+def _chapter_audio_keep_days():
+    """How many days unused chapter audio is kept, or None for "never
+    remove any". A setting that cannot be read gives the usual number:
+    a typing mistake must not turn into keeping, or deleting, everything."""
+    raw = os.environ.get(_ENV_CHAPTER_AUDIO_KEEP_DAYS, "").strip().lower()
+    if not raw:
+        return _CHAPTER_AUDIO_KEEP_DAYS
+    if raw in ("forever", "never"):
+        return None
+    try:
+        days = float(raw)
+    except ValueError:
+        logger.warning(
+            "%s=%r is not a number of days; keeping chapter audio for %g days",
+            _ENV_CHAPTER_AUDIO_KEEP_DAYS, raw, _CHAPTER_AUDIO_KEEP_DAYS,
+        )
+        return _CHAPTER_AUDIO_KEEP_DAYS
+    if days != days or days in (float("inf"), float("-inf")) or days < 0:
+        logger.warning(
+            "%s=%r is not a number of days; keeping chapter audio for %g days",
+            _ENV_CHAPTER_AUDIO_KEEP_DAYS, raw, _CHAPTER_AUDIO_KEEP_DAYS,
+        )
+        return _CHAPTER_AUDIO_KEEP_DAYS
+    if days == 0:
+        return None
+    return days
+
+
+def _mark_chapter_audio_used(path) -> None:
+    """Note that a render has just used this cached chapter, by setting
+    its modified time to now. That time is what the clean-up goes by:
+    the "last opened" time is not kept up to date on Windows or on many
+    Linux disks."""
+    try:
+        os.utime(path, None)
+    except OSError:
+        logger.debug("Could not mark %s as used", path, exc_info=True)
+
+
+# Stands for "read the keep time from the setting". None cannot be used
+# for that, because None is itself an answer: keep everything.
+_KEEP_DAYS_FROM_SETTING = object()
+
+
+def _sweep_chapter_audio_cache(*, base=None, keep_days=_KEEP_DAYS_FROM_SETTING, now=None):
+    """Remove cached chapter audio that no render has used for
+    ``keep_days`` (None keeps everything; left out, the setting is
+    read). Returns ``(files removed, bytes freed)``.
+
+    Only ``.mp3`` files two folders down from the cache's own folder
+    (version, then story) are ever removed, and a story's folder once it
+    is empty. Links are left alone. Anything that cannot be read or
+    removed is skipped: clearing out a cache must never be the reason a
+    render fails.
+    """
+    if keep_days is _KEEP_DAYS_FROM_SETTING:
+        keep_days = _chapter_audio_keep_days()
+    if keep_days is None:
+        return 0, 0
+    if base is None:
+        base = _chapter_audio_cache_base()
+    base = Path(base)
+    if now is None:
+        now = time.time()
+    cutoff = now - keep_days * _SECONDS_PER_DAY
+    removed = 0
+    freed = 0
+    try:
+        version_folders = [p for p in base.iterdir() if p.is_dir() and not p.is_symlink()]
+    except OSError:
+        return 0, 0
+    for version_folder in version_folders:
+        try:
+            story_folders = [p for p in version_folder.iterdir() if p.is_dir() and not p.is_symlink()]
+        except OSError:
+            continue
+        for story_folder in story_folders:
+            try:
+                files = list(story_folder.iterdir())
+            except OSError:
+                continue
+            for file in files:
+                try:
+                    if file.suffix.lower() != ".mp3" or file.is_symlink() or not file.is_file():
+                        continue
+                    details = file.stat()
+                    if details.st_mtime > cutoff:
+                        continue
+                    file.unlink()
+                except OSError:
+                    continue
+                removed += 1
+                freed += details.st_size
+            try:
+                # Fails, harmlessly, while anything is left in it.
+                story_folder.rmdir()
+            except OSError:
+                pass
+    if removed:
+        logger.info(
+            "Chapter audio cache: removed %d chapter%s not used for %g days, "
+            "freeing %.0f MB (%s)",
+            removed, "" if removed == 1 else "s", keep_days, freed / 1e6, base,
+        )
+    return removed, freed
 
 
 def _chapter_cache_key(segs, voice_mapper, narrator, speech_rate):
@@ -3907,6 +4034,8 @@ def _generate_audiobook_inner(
 
         if body_path.exists() and body_path.stat().st_size > 0:
             cache_hits += 1
+            # So the clean-up at the end counts this chapter as in use.
+            _mark_chapter_audio_used(body_path)
         else:
             # Keep the .mp3 extension last so ffmpeg can infer the output
             # format; a trailing ".tmp" confuses the muxer with "Invalid
@@ -4009,6 +4138,14 @@ def _generate_audiobook_inner(
 
     if not chapter_files:
         raise RuntimeError("No chapter audio was generated.")
+
+    # Every chapter this render reused has been marked as used by now,
+    # so this only removes audio that belongs to books nobody has made
+    # or re-made lately.
+    try:
+        _sweep_chapter_audio_cache()
+    except Exception:  # noqa: BLE001 — tidying up must not fail the render
+        logger.debug("Chapter audio cache clean-up failed", exc_info=True)
 
     if incomplete:
         summary = _format_incomplete_report(incomplete, total)

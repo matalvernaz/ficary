@@ -1,5 +1,22 @@
 # Changelog
 
+## Unreleased
+
+**Old audiobook chapter audio is cleared out**
+
+* Every chapter of every audiobook ever made was kept in the cache
+  folder, about 22 MB for each hour of audio, and nothing removed it.
+  The cache is there so a render that failed part-way can carry on and
+  a book can be made again when chapters are added; kept for ever, it
+  took as much disk again as the audiobooks themselves.
+* Chapter audio that no render has used for 30 days is now deleted at
+  the end of a render. A chapter counts as used whenever a render
+  reuses it, so a book that is still being added to keeps its audio.
+  The first render after updating clears whatever is older than that,
+  and the log says how many chapters and how much space.
+* `FICARY_CHAPTER_AUDIO_KEEP_DAYS` changes the number of days.
+  `forever` (or 0) keeps everything, as before.
+
 ## 2.20.11 — 2026-11-23
 
 **The reader's app voice and soundscapes can play**
