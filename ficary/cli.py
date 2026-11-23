@@ -933,6 +933,26 @@ def _merge_with_existing(
     return new_story
 
 
+class DownloadCancelled(Exception):
+    """Raised out of :func:`_download_one` when its ``cancel_event`` is
+    set part-way through a story.
+
+    The check runs each time a chapter has been fetched, so a story
+    stops at its next chapter. Chapters fetched before that are already
+    in the download cache, and nothing has been written to the story's
+    file: that only happens once every chapter has arrived.
+
+    A plain ``Exception``, not a ``RuntimeError`` or one of the scraper
+    errors, so none of the handlers that report a failed download
+    catches it by accident.
+    """
+
+
+def _raise_if_download_cancelled(cancel_event) -> None:
+    if cancel_event is not None and cancel_event.is_set():
+        raise DownloadCancelled("Stopped part-way through the story.")
+
+
 def _download_one(
     url: str,
     args: argparse.Namespace,
@@ -942,6 +962,7 @@ def _download_one(
     existing_chapters: int = 0,
     status_callback: Callable[[str], None] | None = None,
     on_export: Callable[[Path], None] | None = None,
+    cancel_event: "threading.Event | None" = None,
 ) -> bool:
     """Download and export a single story. Returns True on success, False on error.
 
@@ -957,6 +978,11 @@ def _download_one(
     :class:`Path` right after a successful export — the watchlist
     auto-downloader uses it to collect saved paths for the
     notification, without parsing them back out of status lines.
+
+    ``cancel_event`` (if given) stops the story at the next chapter
+    once it is set, by raising :class:`DownloadCancelled`. An audiobook
+    render stops the same way, between pieces of speech. A story whose
+    chapters have all arrived is still saved.
     """
     scraper = _build_scraper(url, args)
     status = status_callback if status_callback is not None else print
@@ -977,6 +1003,10 @@ def _download_one(
     def progress(current, total, title, cached):
         tag = " (cached)" if cached else ""
         status(f"  [{current}/{total}] {title}{tag}")
+        # Scrapers report each chapter right after saving it to the
+        # cache, and none of them catches what this raises, so a cancel
+        # lands between chapters and keeps everything fetched so far.
+        _raise_if_download_cancelled(cancel_event)
 
     try:
         check_format_deps(args.format)
@@ -1070,6 +1100,9 @@ def _download_one(
                         "logged-in session."
                     )
 
+        # Reading the existing file can take a moment on a long story;
+        # a cancel that landed meanwhile stops before any request.
+        _raise_if_download_cancelled(cancel_event)
         story = scraper.download(
             url,
             progress_callback=progress,
@@ -1151,18 +1184,23 @@ def _download_one(
                 status(f"  Synthesizing [{current}/{total}] {title}")
 
             status("\nGenerating audiobook...")
-            path = generate_audiobook(
-                story, str(output_dir),
-                progress_callback=audio_progress,
-                speech_rate=args.speech_rate,
-                attribution_backend=args.attribution,
-                attribution_model_size=args.attribution_model_size,
-                attribution_llm_config=_llm_config_from_args(args),
-                enabled_tts_providers=_tts_providers_from_args(args),
-                strip_notes=args.strip_notes,
-                hr_as_stars=args.hr_as_stars,
-                chapter_notes=getattr(args, "chapter_notes", DEFAULT_CHAPTER_NOTES),
-            )
+            from .tts import AudiobookCancelled
+            try:
+                path = generate_audiobook(
+                    story, str(output_dir),
+                    progress_callback=audio_progress,
+                    speech_rate=args.speech_rate,
+                    attribution_backend=args.attribution,
+                    attribution_model_size=args.attribution_model_size,
+                    attribution_llm_config=_llm_config_from_args(args),
+                    enabled_tts_providers=_tts_providers_from_args(args),
+                    strip_notes=args.strip_notes,
+                    hr_as_stars=args.hr_as_stars,
+                    chapter_notes=getattr(args, "chapter_notes", DEFAULT_CHAPTER_NOTES),
+                    cancel_event=cancel_event,
+                )
+            except AudiobookCancelled as exc:
+                raise DownloadCancelled(str(exc)) from exc
         else:
             exporter = EXPORTERS[args.format]
             path = exporter(
@@ -1978,6 +2016,15 @@ def _run_update_queue(
     total = len(probe_queue)
     cancelled = False
     result_lock = threading.Lock()
+    # Stories this run started downloading and has not finished with.
+    # A cancel waits for this to reach nought before the summary, so no
+    # story is still running, and posting chapter lines, after the run
+    # has said it was cancelled. Read and changed under ``result_lock``;
+    # ``no_story_running`` is notified whenever it drops.
+    stories_running = [0]
+    no_story_running = threading.Condition(result_lock)
+    # Stories stopped part-way by a cancel. Their files are unchanged.
+    stopped: list[str] = []
 
     # Classify up front: entries that don't need a download (errors,
     # already up to date, dry-run) emit their progress lines
@@ -2072,8 +2119,21 @@ def _run_update_queue(
         so the GUI's ``_log`` helpers auto-prefix output with
         ``[<site>] ``. Exits promptly on cancel-event so a closed
         library window doesn't keep hammering upstream."""
-        if cancel_event is not None and cancel_event.is_set():
-            return
+        # Checked and counted in one go, under the lock the cancel path
+        # reads the count under: a story either sees the cancel and
+        # never starts, or is counted before the cancel path looks.
+        with result_lock:
+            if cancel_event is not None and cancel_event.is_set():
+                return
+            stories_running[0] += 1
+        try:
+            _run_entry_counted(entry)
+        finally:
+            with result_lock:
+                stories_running[0] -= 1
+                no_story_running.notify_all()
+
+    def _run_entry_counted(entry):
         rel = entry["rel"]
         local = entry["local"]
         remote = entry["remote"]
@@ -2102,6 +2162,7 @@ def _run_update_queue(
                 entry["url"], per_args, Path(per_args.output),
                 update_path=path, existing_chapters=local,
                 status_callback=progress,
+                cancel_event=cancel_event,
             )
             if not ok:
                 # _download_one swallowed an error and logged it; we
@@ -2112,6 +2173,14 @@ def _run_update_queue(
         except KeyboardInterrupt:
             # Re-raise so the outer wait loop sees the cancel.
             raise
+        except DownloadCancelled:
+            progress(
+                "  Stopped part-way through this story; its file was not "
+                "changed. The next update carries on with it."
+            )
+            with result_lock:
+                stopped.append(rel)
+            return
         except Exception as exc:
             if isinstance(exc, OSError):
                 # Raw OSErrors here have been Windows handle races we
@@ -2156,7 +2225,12 @@ def _run_update_queue(
 
     from .sites import canonical_url
 
+    from .download_queue import owns as _owns
+
     futures = []
+    # The futures this run queued itself, as opposed to ones it joined.
+    # Only these may be cancelled.
+    own_futures = set()
     for entry in downloadable:
         site_cls = _detect_site(entry["url"])
         site_name = getattr(site_cls, "site_name", "unknown")
@@ -2164,26 +2238,52 @@ def _run_update_queue(
         # already queued (e.g. a manual GUI download of a story this
         # bulk update also picked up), join that job instead of
         # double-fetching it.
+        job = (lambda e=entry: run_entry(e))
         fut = DownloadQueues.enqueue(
-            site_name, lambda e=entry: run_entry(e),
+            site_name, job,
             dedupe_key=canonical_url(entry["url"]) or entry["url"],
         )
         futures.append(fut)
+        if _owns(fut, job):
+            own_futures.add(fut)
+
+    def cancel_queued():
+        """Drop this run's downloads that have not started. A joined
+        download belongs to whoever queued it and is left alone."""
+        for queued in pending:
+            if queued in own_futures:
+                queued.cancel()
+
+    def wait_for_running_story():
+        """Wait until the story this run is downloading, if any, has
+        stopped. It stops at its next chapter, which is seconds away
+        unless the site is slow to answer."""
+        with result_lock:
+            if stories_running[0] == 0:
+                return
+        progress(
+            "Waiting for the story being downloaded to stop at the end "
+            "of its current chapter..."
+        )
+        with result_lock:
+            no_story_running.wait_for(lambda: stories_running[0] == 0)
 
     # Drain the futures with periodic cancel-event checks. ``wait``
     # with a timeout lets us surface a cancel even when the longest
     # in-flight download (FFN's 6s-per-chapter pacing on a 100-
-    # chapter story) is still grinding — pending jobs get cancelled
-    # immediately; the running one will notice the event at its next
-    # ``run_entry`` entrypoint check if it hasn't already started.
+    # chapter story) is still grinding. On a cancel, this run's queued
+    # jobs are dropped, and the story being downloaded stops at its next
+    # chapter (``_download_one`` checks the event after each one); the
+    # summary waits for that, so nothing is still running once it says
+    # the run was cancelled.
     pending = set(futures)
     try:
         while pending:
             if cancel_event is not None and cancel_event.is_set():
-                for fut in pending:
-                    fut.cancel()
+                cancel_queued()
                 progress(f"\n{label} cancelled by user.")
                 cancelled = True
+                wait_for_running_story()
                 break
             done, pending = wait(
                 pending, timeout=0.5, return_when=FIRST_COMPLETED,
@@ -2194,8 +2294,7 @@ def _run_update_queue(
                 except KeyboardInterrupt:
                     progress("\nCancelled.")
                     cancelled = True
-                    for f in pending:
-                        f.cancel()
+                    cancel_queued()
                     pending = set()
                     break
                 except Exception:
@@ -2204,8 +2303,7 @@ def _run_update_queue(
         # If we exit the wait loop with futures still outstanding
         # (unexpected), don't leave them orphaned on the queue —
         # cancel pending, let running ones finish naturally.
-        for fut in pending:
-            fut.cancel()
+        cancel_queued()
 
     progress(f"\n{'='*60}")
     if args.dry_run:
@@ -2224,14 +2322,18 @@ def _run_update_queue(
         # cancelled sweep as "complete" invites the user to believe
         # everything was checked.
         headline = f"{label} cancelled" if cancelled else f"{label} complete"
+        stopped_note = (
+            f", {len(stopped)} stopped part-way" if stopped else ""
+        )
         progress(
             f"{headline} — {len(updated)} updated, "
             f"{len(up_to_date)} up to date, {len(failed)} failed, "
-            f"{skipped_count} skipped."
+            f"{skipped_count} skipped{stopped_note}."
         )
         if cancelled:
             remaining = total - (
                 len(updated) + len(up_to_date) + len(failed) + skipped_count
+                + len(stopped)
             )
             if remaining > 0:
                 progress(

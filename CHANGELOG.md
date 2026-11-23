@@ -1,5 +1,25 @@
 # Changelog
 
+## Unreleased
+
+**Cancel in a library update stops the story being downloaded**
+
+* Cancel used to drop the stories still waiting, report the update as
+  cancelled and turn the window's buttons back on, while the story
+  already downloading carried on to its last chapter. On
+  FanFiction.net, at six seconds a chapter, that could be many minutes
+  of chapter lines arriving after the update had said it was
+  cancelled, and then the file was written anyway.
+* That story now stops at the end of the chapter it is on. Its file is
+  left as it was, the chapters already fetched stay in the download
+  cache, and the next update carries on with it. The update says it is
+  waiting for the story to stop, and only reports the update as
+  cancelled once it has. The summary counts the story as stopped
+  part-way, not as failed.
+* A story started by hand that the update found already waiting in the
+  queue, and so shared instead of queueing again, was cancelled along
+  with the update. It is now left to finish.
+
 ## 2.20.12 — 2026-11-23
 
 **An audiobook is no longer abandoned over a chapter the voices cannot speak**

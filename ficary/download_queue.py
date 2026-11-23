@@ -201,6 +201,10 @@ class _SiteQueue:
             )
         else:
             fut = Future()
+        # Lets a caller tell its own job from one it joined: see
+        # :func:`owns`. A joined future belongs to whoever queued it
+        # first, and only they may cancel it.
+        fut.ficary_job = job_fn
         with self._lock:
             self._q.put((fut, job_fn))
             self._pending += 1
@@ -277,6 +281,17 @@ class _SiteQueue:
                 with self._lock:
                     self._active -= 1
                 self._fire_state_change()
+
+
+def owns(future: Future, job_fn: Callable[[], object]) -> bool:
+    """True when ``future`` is the one queued for ``job_fn``, false when
+    the enqueue joined a download of the same story that someone else
+    had queued already (see the ``dedupe_key`` of ``enqueue``).
+
+    Cancelling a joined future would cancel the other caller's download:
+    a library update cancelled by its own Cancel button used to drop a
+    download of the same story that had been started by hand."""
+    return getattr(future, "ficary_job", None) is job_fn
 
 
 class DownloadQueues:
