@@ -42,6 +42,14 @@ def _owning_root(
     return None
 
 
+# Where the library folder is set, in the words on the screen: the menu
+# item that opens the library window, and the label of the box in it.
+# tests/test_library_autoindex.py checks both against the windows'
+# own source, so renaming either without updating these fails a test.
+LIBRARY_FOLDER_MENU_PATH = "Library > Library... (Ctrl+L)"
+LIBRARY_FOLDER_FIELD_NAME = "Library folder"
+
+
 def library_skip_reason(
     path: Path | str,
     library_root: str | Path | None,
@@ -66,9 +74,15 @@ def library_skip_reason(
         if r and str(r).strip()
     ]
     if not roots:
+        # The pointer has to name things that exist. It used to say
+        # "Settings → Library", and there is no Settings menu and no
+        # Library page in Preferences: the folder is set in the library
+        # window. The command line has no option for it, so the same
+        # words serve there.
         return (
-            "Not added to library index — no library folder is configured "
-            "(Settings → Library)."
+            "Not added to library index — no library folder is configured. "
+            f"Set one in the desktop app under {LIBRARY_FOLDER_MENU_PATH}, "
+            f"in the {LIBRARY_FOLDER_FIELD_NAME} box."
         )
     try:
         resolved = path.resolve(strict=True)

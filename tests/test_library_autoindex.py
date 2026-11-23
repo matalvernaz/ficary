@@ -212,3 +212,41 @@ def test_indexed_file_has_no_skip_reason_path(tmp_path: Path):
     assert record_downloaded_file(
         story, library_root=str(lib), index_path=_idx(tmp_path),
     ) is True
+
+
+def test_the_pointer_to_the_library_folder_names_things_that_exist():
+    """The message used to send people to "Settings → Library". There is no
+    Settings menu and no Library page in Preferences, and someone finding
+    their way by a screen reader cannot guess where else to look."""
+    from ficary.library import scanner
+
+    reason = scanner.library_skip_reason(Path("/tmp/story.epub"), "")
+    assert "Settings" not in reason
+    assert scanner.LIBRARY_FOLDER_MENU_PATH in reason
+    assert scanner.LIBRARY_FOLDER_FIELD_NAME in reason
+
+    package = Path(scanner.__file__).resolve().parent.parent
+    main_window = (package / "gui.py").read_text(encoding="utf-8")
+    library_window = (package / "library" / "gui.py").read_text(encoding="utf-8")
+    # The menu bar's "Library" menu, its "Library..." item with Ctrl+L,
+    # and the labelled box in the window that item opens.
+    assert 'bar.Append(library_menu, "&Library")' in main_window
+    assert '"&Library...\\tCtrl+L"' in main_window
+    assert 'label="Library &folder:"' in library_window
+    assert scanner.LIBRARY_FOLDER_MENU_PATH == "Library > Library... (Ctrl+L)"
+    assert scanner.LIBRARY_FOLDER_FIELD_NAME == "Library folder"
+
+
+def test_the_piper_failure_message_points_at_something_that_exists():
+    """It used to say "menu: View → Status log". The View menu has no such
+    item; the details are in the main window's status pane, which a
+    screen reader announces by the name checked here."""
+    pytest = __import__("pytest")
+    pytest.importorskip("wx")
+    from ficary import gui_dialogs
+
+    message = gui_dialogs.PIPER_INSTALL_FAILED_MESSAGE
+    assert "View" not in message
+    assert "Status log" in message
+    main_window = (Path(gui_dialogs.__file__).resolve().parent / "gui.py").read_text(encoding="utf-8")
+    assert 'self.log_ctrl.SetName("Status log")' in main_window

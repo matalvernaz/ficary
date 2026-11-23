@@ -1093,3 +1093,24 @@ class TestLongErrorBodies:
                 system_prompt="", user_prompt="",
             )
         assert len(str(raised.value)) < 600
+
+
+class TestSpeakerDetectionFailureMessage:
+    def test_a_refusal_is_logged_in_the_providers_words(self, monkeypatch, caplog):
+        """Speaker detection already stopped after one failure. Its log line still showed the raw error body."""
+        def refused(*args, **kwargs):
+            raise attribution.LLMRejected(400, "anthropic", ANTHROPIC_OUT_OF_CREDIT_BODY)
+
+        monkeypatch.setattr(attribution, "_refine_with_llm", refused)
+        monkeypatch.setattr(attribution, "is_installed", lambda backend: True)
+        attribution.clear_failures()
+        segments = ["unchanged"]
+        with caplog.at_level(logging.WARNING, logger="ficary.attribution"):
+            result = attribution.refine_speakers(
+                segments, "text", backend="llm", llm_config=anthropic_config(),
+            )
+        attribution.clear_failures()
+        assert result is segments
+        assert "Your credit balance is too low" in caplog.text
+        assert "request_id" not in caplog.text
+        assert '{"type"' not in caplog.text

@@ -504,10 +504,10 @@ def _default_launcher(url: str, timeout_s: float) -> tuple[list[dict], str]:
         # until a restart, or a missing transitive dep like greenlet), and
         # the real message is what tells the two apart in the log.
         raise ImportError(
-            f"Playwright isn't importable ({exc}). Install it via Optional "
-            "Features → Cloudflare challenge solver (or pip install "
-            "'ficary[cf-solve]' then 'playwright install chromium'), then "
-            "fully restart ficary."
+            f"Playwright isn't importable ({exc}). Install it from the "
+            "Edit menu > Optional Features, Cloudflare challenge solver "
+            "(or pip install 'ficary[cf-solve]' then 'playwright install "
+            "chromium'), then fully restart ficary."
         ) from exc
 
     # Allow a longer (or shorter) manual-solve window via env without a

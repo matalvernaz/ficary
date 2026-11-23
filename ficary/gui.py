@@ -218,9 +218,13 @@ class _WxLogHandler(logging.Handler):
             return
         try:
             wx.CallAfter(self._target, msg)
-        except RuntimeError:
-            # wx.App is already torn down (shutdown race). Nothing
-            # sensible to do — the log line is going to the void.
+        except (RuntimeError, AssertionError):
+            # wx.App is already torn down, or there is none (a worker
+            # thread that outlived the window). wx.CallAfter raises
+            # RuntimeError for the first and fails a plain ``assert``
+            # for the second. Nothing sensible to do — the log line is
+            # going to the void. Letting it raise would put a traceback
+            # in the worker thread for what was only a log message.
             pass
 
 
@@ -228,6 +232,7 @@ from . import legacy as _legacy
 from .download_queue import (
     DownloadOutcome,
     DownloadQueues,
+    site_slot,
     WORKER_THREAD_PREFIX,
     site_from_thread_name,
 )
@@ -1318,6 +1323,25 @@ class MainFrame(wx.Frame):
             dedupe_key = f"{dedupe_key}|{intent}"
         return DownloadQueues.enqueue(site_name, job_fn, dedupe_key=dedupe_key)
 
+    def _site_slot_for(self, url):
+        """The download slot of ``url``'s site, as a ``with`` block.
+
+        For the paths that download on their own thread instead of
+        through :meth:`_enqueue_site_job`. A queued job already holds
+        its site's slot; taking it again on that thread is harmless.
+        Says so in the status pane when it has to wait, since otherwise
+        the download just appears to hang.
+        """
+        from .sites import detect_scraper
+
+        site_name = getattr(detect_scraper(url), "site_name", "unknown")
+        return site_slot(
+            site_name,
+            on_wait=lambda: self._log(
+                f"  Waiting for another {site_name} download to finish..."
+            ),
+        )
+
     def _is_batch_url(self, url) -> bool:
         """True if ``url`` fans out to a picker or multi-work flow.
 
@@ -2373,6 +2397,26 @@ class MainFrame(wx.Frame):
 
     # ── Download ─────────────────────────────────────────────
 
+    def _save_target_ready(self) -> bool:
+        """Whether there is somewhere to save, without asking the user.
+
+        True when the Save-to box has a folder in it, or a library is
+        configured (in which case Save-to is filled in from it, as
+        :meth:`_require_save_target` does). For callers that must not
+        open a dialog, such as the clipboard watch's timer.
+
+        MAIN THREAD ONLY — it reads and may set a wx control.
+        """
+        from . import prefs as _p
+
+        if (self.output_ctrl.GetValue() or "").strip():
+            return True
+        library = (self.prefs.get(_p.KEY_LIBRARY_PATH, "") or "").strip()
+        if library:
+            self.output_ctrl.SetValue(library)
+            return True
+        return False
+
     def _require_save_target(self) -> bool:
         """Guarantee there's somewhere to save before a download starts.
 
@@ -2389,11 +2433,7 @@ class MainFrame(wx.Frame):
         """
         from . import prefs as _p
 
-        if (self.output_ctrl.GetValue() or "").strip():
-            return True
-        library = (self.prefs.get(_p.KEY_LIBRARY_PATH, "") or "").strip()
-        if library:
-            self.output_ctrl.SetValue(library)
+        if self._save_target_ready():
             return True
 
         with wx.DirDialog(
@@ -2629,9 +2669,10 @@ class MainFrame(wx.Frame):
             # One chapter is enough to get a speaker inventory for most
             # fics. Users running preview on a 500-chapter fic shouldn't
             # wait for a full fetch.
-            story = scraper.download(
-                url, progress_callback=progress, chapters=[(1, 1)],
-            )
+            with self._site_slot_for(url):
+                story = scraper.download(
+                    url, progress_callback=progress, chapters=[(1, 1)],
+                )
 
             from . import tts
             # output_dir is snapshotted on the main thread by
@@ -2857,9 +2898,10 @@ class MainFrame(wx.Frame):
                         scribblehub_cookie=params.scribblehub_cookie,
                         subscribestar_cookie=params.subscribestar_cookie,
                     )
-                    stories.append(
-                        work_scraper.download(work_url, progress_callback=progress)
-                    )
+                    with self._site_slot_for(work_url):
+                        stories.append(
+                            work_scraper.download(work_url, progress_callback=progress)
+                        )
                 except Exception as exc:
                     self._log(f"  Error: {exc}")
                     failed.append(work_url)
@@ -2892,6 +2934,16 @@ class MainFrame(wx.Frame):
 
     def _on_watch_toggle(self, event):
         if self.watch_btn.GetValue():
+            # Settle where to save now, while the user is at this
+            # window. The watch itself runs from a timer, and a folder
+            # picker opened from there would appear out of nowhere, in
+            # front of whatever they had switched to. Without a folder,
+            # a watched link used to download into whichever folder the
+            # program happened to be running from.
+            if not self._require_save_target():
+                self.watch_btn.SetValue(False)
+                self._log("Clipboard watch not started.")
+                return
             self._watching = True
             self._watch_seen.clear()
             self._last_clip = self._get_clipboard()
@@ -2939,6 +2991,18 @@ class MainFrame(wx.Frame):
         if not url:
             return
         if url in self._watch_seen:
+            return
+
+        if not self._save_target_ready():
+            # The Save-to folder was emptied after the watch started.
+            # This runs from a timer, so it cannot ask; and the link is
+            # not marked as seen, so copying it again once a folder is
+            # set downloads it.
+            self._log(
+                f"Clipboard: not downloading {url} because there is no "
+                "folder to save to. Fill in Save to, or press Download "
+                "once to choose a library folder."
+            )
             return
 
         if self._is_batch_url(url):
@@ -3638,9 +3702,12 @@ class MainFrame(wx.Frame):
                 initial_skip = 0
             else:
                 initial_skip = skip_chapters
-            story = scraper.download(
-                url, progress_callback=progress, skip_chapters=initial_skip,
-            )
+            # Queued jobs hold their site's slot already. This is for
+            # the times this method runs on a thread of its own.
+            with self._site_slot_for(url):
+                story = scraper.download(
+                    url, progress_callback=progress, skip_chapters=initial_skip,
+                )
 
             if is_update and not refetch_all and len(story.chapters) == 0:
                 self._log("Up to date. No new chapters.")
@@ -3693,9 +3760,10 @@ class MainFrame(wx.Frame):
                     self._log(
                         f"Found {new_count} new chapters. Re-exporting..."
                     )
-                    story = scraper.download(
-                        url, progress_callback=progress, skip_chapters=0,
-                    )
+                    with self._site_slot_for(url):
+                        story = scraper.download(
+                            url, progress_callback=progress, skip_chapters=0,
+                        )
 
             self._log(f"\n  Title:    {story.title}")
             self._log(f"  Author:   {story.author}")
@@ -4009,9 +4077,10 @@ class MainFrame(wx.Frame):
                     self._log(f"    [{current}/{total}] {t}{tag}")
 
                 try:
-                    story = scraper.download(
-                        story_url, progress_callback=progress,
-                    )
+                    with self._site_slot_for(story_url):
+                        story = scraper.download(
+                            story_url, progress_callback=progress,
+                        )
                     path = self._export_story(story, params)
                     self._log(f"  Saved: {path}")
                     succeeded += 1
@@ -4047,7 +4116,8 @@ class MainFrame(wx.Frame):
         for i, story_url in enumerate(story_urls, 1):
             self._log(f"\n[{i}/{len(story_urls)}] {story_url}")
             try:
-                story = scraper.download(story_url, progress_callback=progress)
+                with self._site_slot_for(story_url):
+                    story = scraper.download(story_url, progress_callback=progress)
                 path = self._export_story(story, params)
                 self._log(f"  Saved: {path}")
                 succeeded += 1

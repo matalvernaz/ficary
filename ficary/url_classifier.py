@@ -104,13 +104,6 @@ _SCRAPER_CLS_TO_NAME = {
     "DarkWandererScraper": "darkwanderer",
     "GreatFeetScraper": "greatfeet",
     "MousepadScraper": "mousepad",
-    "SexStoriesScraper": "sexstories",
-    "MCStoriesScraper": "mcstories",
-    "LushStoriesScraper": "lushstories",
-    "FictionmaniaScraper": "fictionmania",
-    "TGStorytimeScraper": "tgstorytime",
-    "ChyoaScraper": "chyoa",
-    "DarkWandererScraper": "darkwanderer",
     "BDSMLibraryScraper": "bdsmlibrary",
     "ReadOnlyMindScraper": "readonlymind",
     "GiantessWorldScraper": "giantessworld",
@@ -119,8 +112,6 @@ _SCRAPER_CLS_TO_NAME = {
     "ScribbleHubScraper": "scribblehub",
     "SubscribeStarScraper": "subscribestar",
     "WebnovelScraper": "webnovel",
-    "StoriesOnlineScraper": "storiesonline",
-    "NiftyScraper": "nifty",
 }
 
 

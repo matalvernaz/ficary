@@ -5,6 +5,25 @@ import wx
 from . import ffn_browse
 
 
+def saved_section(state: dict, name: str) -> dict:
+    """One named part of a search window's saved settings, or an empty
+    dict when it is missing or is not the object it should be.
+
+    The settings are a small JSON object kept in the preferences. Only
+    the outer value used to be checked, so a section of the wrong type
+    (a list or a string, from an older or newer version's settings, or
+    from an edit) raised while the window was being built, and that
+    site's search window could not be opened again. A section that
+    cannot be read is treated as not saved: the window opens with its
+    defaults for that part, and the next save writes it properly.
+
+    It lives in this module because the FFN mixin needs it and the
+    search window imports the mixin, not the other way round.
+    """
+    section = state.get(name)
+    return section if isinstance(section, dict) else {}
+
+
 class FFNBrowseMixin:
     def _init_ffn_browse(self):
         self._ffn_mode = "stories"
@@ -148,9 +167,7 @@ class FFNBrowseMixin:
         }
 
     def _load_ffn_state(self, state):
-        saved = state.get("ffn") or {}
-        if not isinstance(saved, dict):
-            return
+        saved = saved_section(state, "ffn")
         mode = saved.get("mode", "stories")
         self._ffn_mode = mode if mode in ("stories", "communities", "categories") else "stories"
         self.ffn_mode_ctrl.SetStringSelection(self._ffn_mode.title())
@@ -159,7 +176,7 @@ class FFNBrowseMixin:
             key: value for key, value in sorts.items() if isinstance(key, str) and isinstance(value, str)
         } if isinstance(sorts, dict) else {}
         # Older saved searches have a story sort but no per-view preferences.
-        saved_sort = (state.get("filters") or {}).get("sort", "best match")
+        saved_sort = saved_section(state, "filters").get("sort", "best match")
         self._ffn_sort_by_view.setdefault("stories", saved_sort if isinstance(saved_sort, str) else "best match")
         self._ffn_fandom_path = saved.get("fandom_path", "") if isinstance(saved.get("fandom_path", ""), str) else ""
         self._ffn_fandom_label = saved.get("fandom_label", "") if isinstance(saved.get("fandom_label", ""), str) else ""

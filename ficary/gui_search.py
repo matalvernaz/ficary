@@ -22,7 +22,7 @@ from dataclasses import dataclass
 import wx
 
 from .gui_dialogs import MultiPickerDialog, SeriesPartsDialog
-from .gui_ffn_browse import FFNBrowseMixin
+from .gui_ffn_browse import FFNBrowseMixin, saved_section
 
 
 @dataclass(frozen=True)
@@ -642,7 +642,7 @@ class SearchFrame(FFNBrowseMixin, wx.Frame):
             return
         # Ignore any legacy "query" a previous version wrote — query is
         # intentionally not persisted.
-        for key, value in (state.get("filters") or {}).items():
+        for key, value in saved_section(state, "filters").items():
             # A sort belongs to the query it was chosen for. Restoring
             # Royal Road's non-relevance sort into a fresh title search can
             # push the exact match hundreds of fuzzy rows down (for example,
@@ -654,11 +654,11 @@ class SearchFrame(FFNBrowseMixin, wx.Frame):
             ctrl = self.filter_ctrls.get(key)
             if ctrl and isinstance(value, str) and value:
                 ctrl.SetStringSelection(value)
-        for key, value in (state.get("text") or {}).items():
+        for key, value in saved_section(state, "text").items():
             ctrl = self.text_ctrls.get(key)
             if ctrl and isinstance(value, str):
                 ctrl.SetValue(value)
-        for key, value in (state.get("checks") or {}).items():
+        for key, value in saved_section(state, "checks").items():
             ctrl = self.checkbox_ctrls.get(key)
             if ctrl is not None:
                 ctrl.SetValue(bool(value))
@@ -1562,7 +1562,11 @@ class SearchFrame(FFNBrowseMixin, wx.Frame):
         dlg = SeriesPartsDialog(self, row["title"], parts)
         if dlg.ShowModal() == wx.ID_OK:
             picked = dlg.picked_url()
-            if picked:
+            # The same check every other download in this window makes.
+            # Without it, a part picked before any library folder had
+            # been chosen was saved into whichever folder the program
+            # happened to be running from.
+            if picked and self.main_frame._require_save_target():
                 self._log(f"Starting part download: {picked}")
                 dl_params = self.main_frame._snapshot_download_params()
                 self.main_frame._enqueue_site_job(

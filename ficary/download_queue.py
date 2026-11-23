@@ -7,12 +7,17 @@ honoured — while jobs on different sites run in parallel. That is,
 checking for updates on a library of 800 FFN stories no longer blocks
 a one-off AO3 download from the URL bar.
 
-Every download entry point funnels through this module: manual
-downloads, file updates, voice previews, the clipboard watcher, and
-the library-update Phase 3 loop. That way the manual and update-all
-code paths share one serialization policy per site, rather than
-each running its own parallel worker on top of the other and
-tripping the site's rate limit.
+Manual downloads, file updates, the clipboard watcher, the watchlist
+and the library-update Phase 3 loop are queued here. That way the
+manual and update-all code paths share one serialization policy per
+site, rather than each running its own parallel worker on top of the
+other and tripping the site's rate limit.
+
+Some paths download on a thread of their own and are not queued: a
+batch picked from an author page, a series, a voice preview. Those
+take the site's download slot (:func:`site_slot`) around each story,
+and the queue's worker holds the same slot while it runs a job. So
+whichever way a download was started, a site sees one at a time.
 
 Worker threads are named ``dlq-<site_name>``. The GUI's log helpers
 inspect :func:`threading.current_thread` to auto-prefix status lines
@@ -22,6 +27,7 @@ two sites are emitting progress concurrently.
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import queue
 import threading
@@ -93,6 +99,44 @@ def site_from_thread_name(name: str) -> str | None:
     if not name.startswith(WORKER_THREAD_PREFIX):
         return None
     return name[len(WORKER_THREAD_PREFIX):] or None
+
+
+# One lock per site: its download slot. Reentrant, because a queued job
+# can call into a helper that takes the slot again on the same thread.
+_site_slots: dict[str, threading.RLock] = {}
+_site_slots_guard = threading.Lock()
+
+
+@contextlib.contextmanager
+def site_slot(site_name: str, on_wait: Callable[[], None] | None = None):
+    """Hold ``site_name``'s one download slot for the length of the
+    ``with`` block.
+
+    A site's rate limit is kept by its scraper spacing out its own
+    requests. Two downloads from one site at once are two scrapers,
+    each keeping the limit on its own, and together sending twice what
+    the site allows. The queue kept its own jobs apart, but a picked
+    batch, a series or a voice preview ran beside it. Everything that
+    downloads a story now holds this slot while it does.
+
+    ``on_wait`` is called once, before blocking, when something else
+    has the slot, so the caller can say why nothing seems to happen.
+    """
+    with _site_slots_guard:
+        slot = _site_slots.get(site_name)
+        if slot is None:
+            slot = _site_slots[site_name] = threading.RLock()
+    if not slot.acquire(blocking=False):
+        if on_wait is not None:
+            try:
+                on_wait()
+            except Exception:  # noqa: BLE001 — a status line must not stop a download
+                logger.debug("site_slot on_wait callback raised", exc_info=True)
+        slot.acquire()
+    try:
+        yield
+    finally:
+        slot.release()
 
 
 class _SiteQueue:
@@ -212,7 +256,10 @@ class _SiteQueue:
                 self._active += 1
             self._fire_state_change()
             try:
-                result = job_fn()
+                # The slot is what keeps this job apart from a download
+                # of the same site that was not queued here.
+                with site_slot(self._site_name):
+                    result = job_fn()
                 fut.set_result(result)
             except Exception as exc:
                 # Catch ``Exception`` not ``BaseException``: a worker

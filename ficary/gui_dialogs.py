@@ -23,6 +23,16 @@ from pathlib import Path
 from .gui_status_log import StatusLogCtrl
 
 
+# Shown when the Piper voice engine could not be installed. It used to
+# send the reader to "View → Status log", a menu item that has never
+# existed. The details are in the main window's status pane, which a
+# screen reader announces as "Status log".
+PIPER_INSTALL_FAILED_MESSAGE = (
+    "Could not install Piper. The details are in the Status log, the "
+    "read-only box at the bottom of the main window."
+)
+
+
 class VoicePreviewDialog(wx.Dialog):
     """Show detected characters, their assigned voices, and let users play
     a short sample or swap the voice before committing to an audiobook
@@ -1380,8 +1390,7 @@ class TtsProvidersDialog(wx.Dialog):
             )
         else:
             wx.MessageBox(
-                "Could not install Piper. See the main log for details "
-                "(menu: View → Status log).",
+                PIPER_INSTALL_FAILED_MESSAGE,
                 "TTS providers", wx.OK | wx.ICON_WARNING, self,
             )
         self._refresh_rows()

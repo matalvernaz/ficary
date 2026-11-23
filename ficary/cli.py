@@ -1414,28 +1414,58 @@ def _collapse_results(raw_results: list, site: str) -> list:
     return list(raw_results)
 
 
+# What a search listing puts in a field it has no value for.
+_UNKNOWN_SEARCH_VALUES = (None, "", "?")
+
+
+def _search_result_details(row: dict, *, with_length: bool = True) -> str:
+    """The line under a search result's title: who wrote it, what it is
+    and how long, leaving out whatever the site's listing does not say.
+
+    Every field used to be printed whether or not it held anything.
+    Royal Road's listing has no author and no rating, so each of its
+    results read "by  | Fantasy | ... | Rated ?", which a screen reader
+    speaks as "by, vertical bar" and "rated question mark".
+    """
+    def known(key: str) -> bool:
+        return row.get(key) not in _UNKNOWN_SEARCH_VALUES
+
+    parts = []
+    if known("author"):
+        parts.append(f"by {row['author']}")
+    if known("fandom"):
+        parts.append(str(row["fandom"]))
+    if with_length:
+        if known("words"):
+            parts.append(f"{row['words']} words")
+        if known("chapters"):
+            chapters = str(row["chapters"])
+            parts.append(f"{chapters} chapter" if chapters == "1" else f"{chapters} chapters")
+        if known("rating"):
+            parts.append(f"Rated {row['rating']}")
+        if row.get("status") == "Complete":
+            parts.append("Complete")
+        # Rows from a site whose listing gives a date carry the day the
+        # story last changed (what --sort date uses).
+        if row.get("updated"):
+            parts.append(f"updated {row['updated'][:10]}")
+    return " | ".join(parts)
+
+
 def _print_search_results(results: list, start_idx: int = 1) -> None:
     """Render the search results list the interactive prompt picks from."""
     for i, r in enumerate(results, start=start_idx):
         if r.get("is_series"):
             parts = len(r.get("series_parts") or [])
             print(f"  {i:>2}. {r['title']}  [Series · {parts} part(s) seen]")
-            print(f"      by {r.get('author', '')} | {r.get('fandom', '')}")
+            details = _search_result_details(r, with_length=False)
         else:
-            status_tag = " [Complete]" if r.get("status") == "Complete" else ""
-            # Fan-out rows carry their origin site. Rows from a site
-            # whose listing gives a date also carry the day the story
-            # last changed (what --sort date uses).
+            # Fan-out rows carry their origin site.
             site_tag = f" [{r['site']}]" if r.get("site") else ""
-            updated_tag = (
-                f" | updated {r['updated'][:10]}" if r.get("updated") else ""
-            )
             print(f"  {i:>2}. {r['title']}{site_tag}")
-            print(
-                f"      by {r['author']} | {r['fandom']} | "
-                f"{r['words']} words | {r['chapters']} ch | "
-                f"Rated {r['rating']}{status_tag}{updated_tag}"
-            )
+            details = _search_result_details(r)
+        if details:
+            print(f"      {details}")
         summary = r.get("summary") or ""
         if summary:
             s = summary if len(summary) <= 120 else summary[:117] + "..."

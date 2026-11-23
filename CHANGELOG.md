@@ -82,6 +82,34 @@
   showed every line twice and a screen reader read it twice. Status
   lines now go to standard output only.
 
+**Smaller fixes**
+
+* A search window opens even when its saved filters are damaged. A
+  saved setting of the wrong shape, such as one written by a different
+  version, stopped that site's search window from opening at all.
+* Clipboard watch and Show Parts ask where to save, as every other way
+  of starting a download does. With no library folder chosen yet, they
+  saved into whichever folder the program was running from. Turning
+  the clipboard watch on now asks for the folder first.
+* A site gets one download at a time, however the downloads were
+  started. A batch picked from an author page, a series or a voice
+  preview used to run beside an ordinary download of the same site,
+  and together they sent the site more requests than its limit allows.
+  The status pane says when one download is waiting for another.
+* Two messages pointed at menus that do not exist. "No library folder
+  is configured (Settings → Library)" now names Library > Library...
+  (Ctrl+L) and its Library folder box, and a failed Piper install
+  points at the Status log in the main window, not at a "View → Status
+  log" menu item.
+* Command-line search results leave out what a site's listing does not
+  give. Royal Road results read "by  | ... | Rated ?"; they now start
+  with what is known, and chapters are written "5 chapters", not
+  "5 ch".
+* When LLM speaker detection is refused by the provider, the log line
+  quotes the provider's message, not the raw error body.
+* A log message that arrives after the window has closed no longer
+  raises an error in the background thread that logged it.
+
 ## 2.20.10 — 2026-11-15
 
 **The Docker image's web page can offer only BookNLP's small model**

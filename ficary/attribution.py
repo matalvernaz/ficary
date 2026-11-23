@@ -667,10 +667,13 @@ def refine_speakers(
                 **llm_config,
             )
     except Exception as exc:  # the whole point is to never blow up the render
+        # A provider's refusal is said in its own words ("Your credit
+        # balance is too low"), not as the raw error body.
+        reason = exc.explain() if isinstance(exc, LLMRejected) else exc
         logger.warning(
             "Attribution backend %r failed (%s); falling back to builtin "
             "for the rest of this render",
-            backend, exc,
+            backend, reason,
         )
         _failed_runs.add(key)
         return segments
