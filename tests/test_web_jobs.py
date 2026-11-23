@@ -6,6 +6,7 @@ The web page used to start every audiobook job on its own thread the moment it w
 from __future__ import annotations
 
 import importlib.util
+import os
 import sys
 import threading
 import time
@@ -376,7 +377,78 @@ class TestTheTimer:
         assert sweeps == []
 
 
+class TestTheWorkFolder:
+    """Whatever is in the working folder when the server starts belongs to jobs the server has forgotten, so nobody can ever download it."""
+
+    def test_it_is_made_inside_the_folder_the_setting_names(self, tmp_path):
+        folder = web_jobs.prepare_work_folder(str(tmp_path))
+        assert folder == tmp_path / web_jobs.WORK_FOLDER_NAME
+        assert folder.is_dir()
+
+    def test_what_a_previous_run_left_is_removed(self, tmp_path):
+        folder = tmp_path / web_jobs.WORK_FOLDER_NAME
+        (folder / "ficary-abc123-xyz" / "ffn-audiobook-1").mkdir(parents=True)
+        (folder / "ficary-abc123-xyz" / "book.m4b").write_bytes(b"audio")
+        (folder / "ffn-tts-123").mkdir()
+        (folder / "ffn-tts-123" / "segment.mp3").write_bytes(b"audio")
+        (folder / "stray.txt").write_text("x", encoding="utf-8")
+        assert web_jobs.prepare_work_folder(str(tmp_path)) == folder
+        assert list(folder.iterdir()) == []
+
+    def test_nothing_beside_the_working_folder_is_touched(self, tmp_path):
+        """The setting names the folder the working folder is made in. Pointed at a folder of models, it must cost the models nothing."""
+        (tmp_path / "models").mkdir()
+        (tmp_path / "models" / "big.bin").write_bytes(b"model")
+        (tmp_path / "notes.txt").write_text("keep", encoding="utf-8")
+        web_jobs.prepare_work_folder(str(tmp_path))
+        assert (tmp_path / "models" / "big.bin").read_bytes() == b"model"
+        assert (tmp_path / "notes.txt").read_text(encoding="utf-8") == "keep"
+        assert sorted(entry.name for entry in tmp_path.iterdir()) == [web_jobs.WORK_FOLDER_NAME, "models", "notes.txt"]
+
+    def test_a_link_is_removed_but_not_what_it_points_at(self, tmp_path):
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        (outside / "precious.txt").write_text("keep", encoding="utf-8")
+        folder = tmp_path / web_jobs.WORK_FOLDER_NAME
+        folder.mkdir()
+        (folder / "link-to-folder").symlink_to(outside, target_is_directory=True)
+        (folder / "link-to-file").symlink_to(outside / "precious.txt")
+        (folder / "link-to-nothing").symlink_to(tmp_path / "nowhere")
+        web_jobs.prepare_work_folder(str(tmp_path))
+        assert list(folder.iterdir()) == []
+        assert (outside / "precious.txt").read_text(encoding="utf-8") == "keep"
+
+    def test_a_folder_that_cannot_be_made_gives_none_and_does_not_raise(self, tmp_path):
+        a_file = tmp_path / "a-file"
+        a_file.write_text("x", encoding="utf-8")
+        assert web_jobs.prepare_work_folder(str(a_file)) is None
+
+    @pytest.mark.skipif(not hasattr(os, "geteuid") or os.geteuid() == 0, reason="needs a user that file permissions apply to")
+    def test_a_folder_the_server_cannot_write_to_gives_none(self, tmp_path):
+        """What an image build leaves if it makes the folder as root: there, but not the server's to write in."""
+        folder = tmp_path / web_jobs.WORK_FOLDER_NAME
+        folder.mkdir()
+        folder.chmod(0o500)
+        try:
+            assert web_jobs.prepare_work_folder(str(tmp_path)) is None
+        finally:
+            folder.chmod(0o700)
+
+    def test_starting_again_with_nothing_left_is_fine(self, tmp_path):
+        first = web_jobs.prepare_work_folder(str(tmp_path))
+        second = web_jobs.prepare_work_folder(str(tmp_path))
+        assert first == second
+        assert second.is_dir()
+
+
 class TestSettings:
+    @pytest.mark.parametrize(
+        "hours, words",
+        [(24.0, "24 hours"), (1.0, "1 hour"), (1.5, "1.5 hours"), (0.5, "0.5 hours"), (72.0, "72 hours")],
+    )
+    def test_the_keep_time_in_words(self, hours, words):
+        assert web_jobs.hours_in_words(hours) == words
+
     @pytest.mark.parametrize(
         "text, expected",
         [("3", 3.0), ("1.5", 1.5), (" 48 ", 48.0)],
@@ -447,6 +519,45 @@ class TestThePageAndTheImage:
     def test_the_server_starts_the_timer(self):
         lines = [line.strip() for line in self.page_source().splitlines()]
         assert "JOBS.start_sweeping()" in lines
+
+    def test_the_working_folder_is_set_up_when_the_server_starts_and_not_on_import(self):
+        """The image build imports the page as root. A folder made then belongs to root, and every job the real server ran would fail to write."""
+        lines = self.page_source().splitlines()
+        calls = [line for line in lines if line.strip() == "use_work_folder()"]
+        assert len(calls) == 1
+        assert calls[0].startswith("    "), "the call must sit inside the start-up function, not at the top level"
+        assert "lifespan=_lifespan" in self.page_source()
+
+    def test_the_image_names_the_working_folder_after_switching_user(self):
+        dockerfile = (DOCKER_FOLDER / "Dockerfile").read_text(encoding="utf-8")
+        assert "FICARY_WEB_WORK_DIR=/tmp" in dockerfile
+        assert dockerfile.index("USER ficary") < dockerfile.index("FICARY_WEB_WORK_DIR=/tmp")
+        import_step = dockerfile.index('RUN python -c "import app')
+        assert import_step < dockerfile.index("FICARY_WEB_WORK_DIR=/tmp"), "the build's import of the page must not see the setting"
+
+    def test_only_not_found_means_the_job_is_gone(self):
+        """A dropped connection or a server error in the middle of an hour-long render used to end the page's checks and tell the user to start again."""
+        source = self.page_source()
+        assert 'if (r.status === 404) return "gone";' in source
+        assert "if (!r.ok) return null;" in source
+        assert "Lost job" not in source
+
+    def test_the_page_keeps_checking_after_an_unanswered_check(self):
+        source = self.page_source()
+        unanswered = source[source.index("if (j === null) {"):]
+        unanswered = unanswered[: unanswered.index("unanswered = 0;")]
+        assert "continue;" in unanswered
+        assert "return;" not in unanswered
+
+    def test_the_page_picks_its_audiobook_back_up_after_a_reload(self):
+        source = self.page_source()
+        assert "rememberJob(id);" in source
+        assert "const earlierJob = rememberedJob();" in source
+        assert "poll(earlierJob);" in source
+
+    def test_the_keep_time_on_the_page_is_the_servers_own(self):
+        source = self.page_source()
+        assert 'LANDING = LANDING.replace("__KEEP_HOURS__", web_jobs.hours_in_words(KEEP_AUDIOBOOKS_HOURS))' in source
 
     def test_there_is_one_status_region_and_it_is_in_the_page_from_the_start(self):
         """A screen reader announces a status region when its text changes, and only reliably if the region was already in the page."""

@@ -122,7 +122,14 @@ Audiobooks are made one at a time, and a second one waits its turn; the
 page says how many are ahead of it. On a server with memory for more,
 `-e FICARY_WEB_MAX_AUDIO_JOBS=2` runs two at once. A finished audiobook
 stays downloadable for a day and is then removed from the server;
-`-e FICARY_WEB_KEEP_AUDIOBOOKS_HOURS=72` keeps it for three.
+`-e FICARY_WEB_KEEP_AUDIOBOOKS_HOURS=72` keeps it for three. The page
+remembers the audiobook it asked for, so it can be closed and opened
+again later to collect it.
+
+The server keeps its working files (audiobooks waiting to be downloaded
+and a render's scratch files) in a folder named `ficary-web-work` under
+`/tmp` in the container, and empties that folder each time it starts.
+`-e FICARY_WEB_WORK_DIR=/some/folder` puts it somewhere with more room.
 
 ### Optional features
 

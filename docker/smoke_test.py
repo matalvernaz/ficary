@@ -100,6 +100,27 @@ if web_page.MAX_AUDIO_JOBS != 1:
 	problems.append("a FICARY_WEB_MAX_AUDIO_JOBS that is not a number should fall back to one job at a time")
 del os.environ["FICARY_WEB_MAX_AUDIO_JOBS"]
 del os.environ["FICARY_WEB_KEEP_AUDIOBOOKS_HOURS"]
+importlib.reload(web_page)
+
+# The server's working folder. The image names where it goes (FICARY_WEB_WORK_DIR); the server
+# makes it when it starts and sends every temporary file there. This runs as the user the server
+# runs as, so it also catches a folder that user cannot write to, which is what an image build
+# leaves behind if it ever makes the folder as root.
+import tempfile  # noqa: E402
+
+work_folder = web_page.use_work_folder()
+if work_folder is None:
+	problems.append("the server could not set up its working folder; is FICARY_WEB_WORK_DIR set in the image and writable by its user?")
+elif tempfile.gettempdir() != str(work_folder):
+	problems.append(f"temporary files go to {tempfile.gettempdir()}, not to the server's working folder {work_folder}")
+else:
+	try:
+		probe_folder = tempfile.mkdtemp(prefix="ficary-smoke-")
+		os.rmdir(probe_folder)
+	except OSError as error:
+		problems.append(f"the server cannot write in its working folder {work_folder}: {error}")
+if "__KEEP_HOURS__" in web_page.LANDING or "24 hours" not in web_page.LANDING:
+	problems.append("the web page does not say how long a finished audiobook is kept")
 
 if problems:
 	print("This image failed its checks:", file=sys.stderr)

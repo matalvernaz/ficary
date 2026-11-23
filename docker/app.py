@@ -5,9 +5,14 @@
   Audiobook jobs run one at a time unless FICARY_WEB_MAX_AUDIO_JOBS says otherwise, and a finished
   one is kept for FICARY_WEB_KEEP_AUDIOBOOKS_HOURS (a day by default) and then removed with its file.
   The bookkeeping for that is in web_jobs.py.
+- When FICARY_WEB_WORK_DIR names a folder (the image sets it to /tmp), everything the server writes
+  while working goes in a folder of its own inside it, and that folder is emptied each time the
+  server starts. One server process only: the jobs are held in memory, and a second process
+  starting would empty the folder under the first.
 """
 from __future__ import annotations
 
+import contextlib
 import logging
 import os
 import shutil
@@ -30,7 +35,33 @@ from web_jobs import Job
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger("ficary-web")
 
-app = FastAPI(title="ficary", version=ficary.__version__)
+# The folder the server's working folder is made in. Not set outside the image, where the server
+# leaves the system's temporary folder as it is; the Dockerfile sets it to /tmp.
+WORK_FOLDER_PARENT = os.environ.get("FICARY_WEB_WORK_DIR", "").strip()
+
+
+def use_work_folder() -> Path | None:
+    """Send every temporary file this process makes to the server's working folder, emptied first. Returns the folder, or None when the setting is absent or the folder cannot be used.
+
+    Story exports, audiobook jobs and a render's scratch files all ask Python for a temporary folder, so moving that one setting moves them all.
+    """
+    if not WORK_FOLDER_PARENT:
+        return None
+    folder = web_jobs.prepare_work_folder(WORK_FOLDER_PARENT)
+    if folder is not None:
+        tempfile.tempdir = str(folder)
+    return folder
+
+
+@contextlib.asynccontextmanager
+async def _lifespan(_app: FastAPI):
+    # Done when the server starts and not when this file is imported: the image build imports it
+    # as root, and a folder made then would belong to root and refuse the user the server runs as.
+    use_work_folder()
+    yield
+
+
+app = FastAPI(title="ficary", version=ficary.__version__, lifespan=_lifespan)
 
 TEXT_FORMATS = ("epub", "html", "txt")
 AUDIO_FORMAT = "audio"
@@ -213,9 +244,39 @@ function stageSentence(j) {
   }
   if (j.status === "downloading") return "Downloading the story.";
   if (j.status === "synthesizing") return "Making the audiobook. A long story can take an hour or more.";
-  if (j.status === "done") return "The audiobook is ready. The Download audiobook link is on the page.";
+  if (j.status === "done") return "The audiobook is ready. The Download audiobook link is on the page. The server keeps it for __KEEP_HOURS__ after it was made.";
   if (j.status === "error") return "The audiobook could not be made. " + (j.error || "");
   return "";
+}
+
+// The audiobook this browser asked for last is remembered, so that reloading the page, or having
+// to sign in again, picks it back up. Without this a reload lost sight of a render that can take
+// an hour, and nothing on the page could find it again.
+const FOLLOWED_JOB_KEY = "ficary-audiobook-job";
+function rememberJob(id) {
+  try { localStorage.setItem(FOLLOWED_JOB_KEY, id); } catch (error) { /* Storage is switched off. The page works; it just cannot pick a job back up. */ }
+}
+function forgetJob() {
+  try { localStorage.removeItem(FOLLOWED_JOB_KEY); } catch (error) { /* As above. */ }
+}
+function rememberedJob() {
+  try { return localStorage.getItem(FOLLOWED_JOB_KEY); } catch (error) { return null; }
+}
+
+// Shows a message in the status area and says it to a screen reader.
+function showAndAnnounce(text) {
+  statusEl.textContent = text;
+  announce(text);
+}
+
+// What the server said was wrong, out of an error reply. Its errors are JSON with a "detail".
+async function problemIn(reply) {
+  const body = await reply.text();
+  try {
+    const parsed = JSON.parse(body);
+    if (parsed && typeof parsed.detail === "string") return parsed.detail;
+  } catch (error) { /* Not JSON. Say it as it came. */ }
+  return body || ("the server answered " + reply.status);
 }
 
 $("#audio-form").addEventListener("submit", async (e) => {
@@ -226,15 +287,21 @@ $("#audio-form").addEventListener("submit", async (e) => {
   fd.set("hr_as_stars", e.target.hr_as_stars.checked ? "true" : "false");
   statusEl.textContent = "Queuing…";
   lastAnnounced = "";
-  const r = await fetch("/jobs", { method: "POST", body: fd });
-  if (!r.ok) {
-    const problem = "Error: " + await r.text();
-    statusEl.textContent = problem;
-    announce(problem);
+  let id = null;
+  try {
+    const r = await fetch("/jobs", { method: "POST", body: fd });
+    if (!r.ok) {
+      showAndAnnounce("The audiobook was not started: " + await problemIn(r));
+      return;
+    }
+    id = (await r.json()).id;
+  } catch (error) {
+    // No connection, or a sign-in page where the answer should have been.
+    showAndAnnounce("The audiobook was not started: the server could not be reached. Reload the page and try again. You may be asked to sign in.");
     return;
   }
-  const { id } = await r.json();
   followedJob = id;
+  rememberJob(id);
   poll(id);
 });
 
@@ -247,18 +314,47 @@ function addText(tag, text) {
   return element;
 }
 
+const CHECK_EVERY_MS = 2000;
+// How many checks in a row can go unanswered before the page says so. A render that takes an hour
+// will see the odd dropped connection, and that is not worth a word.
+const UNANSWERED_CHECKS_BEFORE_SAYING_SO = 5;
+const pause = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
+// Asks the server how a job is doing. Gives back the job; the word "gone" when the server says it
+// does not know the job; or null when the question went unanswered this time (no connection, a
+// server error, a sign-in page where the answer should be).
+async function askAboutJob(id) {
+  try {
+    const r = await fetch("/jobs/" + encodeURIComponent(id));
+    if (r.status === 404) return "gone";
+    if (!r.ok) return null;
+    return await r.json();
+  } catch (error) {
+    return null;
+  }
+}
+
 async function poll(id) {
+  let unanswered = 0;
   while (true) {
     if (id !== followedJob) return;
-    const r = await fetch("/jobs/" + id);
+    const j = await askAboutJob(id);
     if (id !== followedJob) return;
-    if (!r.ok) {
-      const lost = "The server no longer knows this audiobook job. If it was made more than a day ago it has been cleared out; start it again.";
-      statusEl.textContent = lost;
-      announce(lost);
+    if (j === "gone") {
+      // Only this means the job is lost. Anything else that goes wrong gets another try.
+      forgetJob();
+      showAndAnnounce("The server no longer has this audiobook. A finished audiobook is cleared out __KEEP_HOURS__ after it was made, and restarting the server loses one that was not finished. Start it again if you still want it.");
       return;
     }
-    const j = await r.json();
+    if (j === null) {
+      unanswered += 1;
+      if (unanswered === UNANSWERED_CHECKS_BEFORE_SAYING_SO) {
+        showAndAnnounce("Lost contact with the server. Still trying. The audiobook carries on being made meanwhile. If this does not clear up, reload the page. You may be asked to sign in again.");
+      }
+      await pause(CHECK_EVERY_MS);
+      continue;
+    }
+    unanswered = 0;
     const pct = j.total ? Math.round(100 * j.current / j.total) : 0;
     statusEl.replaceChildren();
     announce(stageSentence(j));
@@ -284,14 +380,24 @@ async function poll(id) {
       link.textContent = "Download audiobook";
       line.appendChild(link);
       statusEl.appendChild(line);
+      addText("p", "The server keeps it for __KEEP_HOURS__ after it was made.");
       return;
     }
     if (j.status === "error") {
+      // Said once. A reload should not bring the same failure back up.
+      forgetJob();
       addText("pre", j.error || "unknown error");
       return;
     }
-    await new Promise(r => setTimeout(r, 2000));
+    await pause(CHECK_EVERY_MS);
   }
+}
+
+// An audiobook asked for before this page was loaded: pick it back up.
+const earlierJob = rememberedJob();
+if (earlierJob) {
+  followedJob = earlierJob;
+  poll(earlierJob);
 }
 </script>
 </body>
@@ -299,6 +405,7 @@ async function poll(id) {
 """
 
 
+LANDING = LANDING.replace("__KEEP_HOURS__", web_jobs.hours_in_words(KEEP_AUDIOBOOKS_HOURS))
 LANDING = LANDING.replace(
     "__MODEL_SIZE_OPTIONS__",
     "\n".join(

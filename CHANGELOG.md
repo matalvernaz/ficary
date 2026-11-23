@@ -103,6 +103,19 @@
   and "Make an audiobook".
 * Asking for an audiobook the server has already cleared out says so,
   where it used to answer with a server error.
+* A render cut short by the server restarting no longer leaves its
+  files behind. The image keeps everything it writes while working in
+  one folder and empties it at each start; `FICARY_WEB_WORK_DIR` moves
+  that folder.
+* The page keeps following an audiobook through a dropped connection
+  or a server error. One failed check used to end the checking, and
+  the page then said the job was lost when it was still being made.
+  After several unanswered checks it says it has lost contact and
+  keeps trying.
+* Reloading the page, or opening it again later, picks the audiobook
+  back up: its progress while it is being made, its download link once
+  it is ready. Before, a reload lost sight of it for good.
+* The page says how long the server will keep a finished audiobook.
 
 **Smaller fixes**
 

@@ -74,7 +74,10 @@ RUN useradd --uid 1000 --user-group --home-dir /data --no-create-home --shell /u
     && mkdir -p /data \
     && chown ficary:ficary /data
 USER ficary
-ENV HOME=/data
+# The server keeps its working files in a folder of its own inside FICARY_WEB_WORK_DIR and empties
+# that folder each time it starts, so a render cut short by a restart leaves nothing behind.
+ENV HOME=/data \
+    FICARY_WEB_WORK_DIR=/tmp
 
 EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \

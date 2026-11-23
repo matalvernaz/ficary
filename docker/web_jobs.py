@@ -6,11 +6,13 @@ from __future__ import annotations
 
 import logging
 import math
+import os
 import queue
 import shutil
 import threading
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Callable
 
 logger = logging.getLogger("ficary-web")
@@ -27,6 +29,9 @@ SECONDS_PER_HOUR = 3600.0
 
 # How often the background sweep looks for finished jobs that are old enough to remove.
 SWEEP_INTERVAL_SECONDS = 600.0
+
+# The server's working folder, made inside whichever folder the FICARY_WEB_WORK_DIR setting names. This one folder is all the server ever empties, so a setting that points at a folder with other things in it costs those things nothing.
+WORK_FOLDER_NAME = "ficary-web-work"
 
 
 @dataclass
@@ -67,6 +72,54 @@ def positive_number(text: str | None, default: float) -> float:
         logger.warning("Setting %r is not a number above zero; using %s", text, default)
         return default
     return value
+
+
+def hours_in_words(hours: float) -> str:
+    """How long finished audiobooks are kept, as the page says it: "24 hours", "1 hour", "1.5 hours"."""
+    number = f"{hours:g}"
+    return f"{number} hour" if number == "1" else f"{number} hours"
+
+
+def prepare_work_folder(parent: str) -> Path | None:
+    """Make the server's working folder inside ``parent``, remove whatever a previous run left in it, and return it.
+
+    Everything the server writes while it works belongs in this folder: a story being exported, an audiobook waiting to be downloaded, the scratch files of a render. All of it can only be reached through a job the server remembers, and it remembers none across a restart. So whatever is in the folder when the server starts can never be downloaded or reused. Before this, a render that was cut short (the container out of memory, the machine restarted) left its files behind until the container was replaced.
+
+    One server process per folder: a second one starting would empty the folder under the first.
+
+    Returns None, with the reason logged, when the folder cannot be used. The server then carries on with the system's own temporary folder.
+    """
+    folder = Path(parent) / WORK_FOLDER_NAME
+    try:
+        folder.mkdir(parents=True, exist_ok=True)
+        leftovers = list(folder.iterdir())
+    except OSError as error:
+        logger.warning("Cannot use %s for working files (%s); using the system temporary folder", folder, error)
+        return None
+    if not os.access(folder, os.W_OK | os.X_OK):
+        # It exists but belongs to someone else, as it would if an image build had made it as root.
+        logger.warning("Cannot write to %s; using the system temporary folder", folder)
+        return None
+    for leftover in leftovers:
+        _remove_leftover(leftover)
+    still_there = [leftover.name for leftover in leftovers if os.path.lexists(leftover)]
+    removed_count = len(leftovers) - len(still_there)
+    if removed_count:
+        logger.info("Removed %d item(s) a previous run left in %s", removed_count, folder)
+    if still_there:
+        logger.warning("Could not remove %d item(s) from %s: %s", len(still_there), folder, ", ".join(sorted(still_there)[:5]))
+    return folder
+
+
+def _remove_leftover(leftover: Path) -> None:
+    """Remove one thing from the working folder. A link is removed as a link: what it points at is outside the folder and not the server's to delete."""
+    try:
+        if leftover.is_symlink() or not leftover.is_dir():
+            leftover.unlink()
+        else:
+            shutil.rmtree(leftover, ignore_errors=True)
+    except OSError:
+        logger.warning("Could not remove %s", leftover, exc_info=True)
 
 
 class JobRegistry:
