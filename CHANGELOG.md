@@ -36,6 +36,19 @@
   pip. Its requirement was written in a form they answer with "no
   matching distribution".
 
+**The debug log no longer fills with story text**
+
+* At the Debug log level, the LLM author's-note check copied the start
+  of every paragraph it examined into the log. That was nearly the
+  whole file: a megabyte for every thirty seconds of a download. The
+  log keeps four megabytes, so one long story pushed out everything
+  older, and with Debug selected the same lines poured into the status
+  pane. It now logs only the paragraphs it flagged, which are the ones
+  worth checking. Setting the environment variable
+  `FICARY_LLM_LOG_PARAGRAPHS=1` brings the full copy back.
+* The default log level, Info, never wrote these lines and is
+  unchanged.
+
 **The LLM author's-note check no longer hides its own failures**
 
 * When the LLM provider turns a request away for a reason that applies

@@ -3151,6 +3151,31 @@ _AN_SYSTEM_PROMPT = (
 )
 
 
+# Setting this environment variable brings back the debug log's copy of
+# every paragraph sent to the classifier. It is off by default because
+# that copy was nearly the whole log: in one user's four log files, 3.7
+# of 3.9 MB were these lines, one megabyte every thirty seconds of a
+# download, pushing out the days of history the log is kept for. It
+# also put the text of every story read into a file people attach to
+# bug reports.
+_ENV_LOG_NOTE_PARAGRAPHS = "FICARY_LLM_LOG_PARAGRAPHS"
+
+# How much of a paragraph a log line shows.
+_NOTE_LOG_PREVIEW_CHARS = 120
+
+
+def _log_every_note_paragraph() -> bool:
+    """Whether the user asked for every classified paragraph in the
+    debug log (see :data:`_ENV_LOG_NOTE_PARAGRAPHS`)."""
+    setting = _legacy.getenv_compat(_ENV_LOG_NOTE_PARAGRAPHS).strip().lower()
+    return setting not in ("", "0", "false", "no", "off")
+
+
+def _note_log_preview(paragraph: str) -> str:
+    """The start of a paragraph, on one line, for a log message."""
+    return paragraph.strip().replace("\n", " ")[:_NOTE_LOG_PREVIEW_CHARS]
+
+
 def classify_authors_notes_via_llm(
     paragraphs: list[str], *, llm_config: dict,
     system_prompt_override: str | None = None,
@@ -3209,10 +3234,10 @@ def classify_authors_notes_via_llm(
             "LLM A/N input: %d paragraph(s) for %s/%s",
             len(paragraphs), provider, model,
         )
-        for i, p in enumerate(paragraphs, 1):
-            preview = p.strip().replace("\n", " ")[:120]
-            logger.debug("LLM A/N input  [%d] (%d chars): %s",
-                         i, len(p), preview)
+        if _log_every_note_paragraph():
+            for i, p in enumerate(paragraphs, 1):
+                logger.debug("LLM A/N input  [%d] (%d chars): %s",
+                             i, len(p), _note_log_preview(p))
 
     flagged: set[int] = set()
     unreadable_batches = 0
@@ -3264,6 +3289,15 @@ def classify_authors_notes_via_llm(
             "across %d batch(es), %d unreadable",
             len(flagged), total, n_batches, unreadable_batches,
         )
+        # The flagged paragraphs are the ones anybody reading this log
+        # wants to see: they are what is about to be taken out of the
+        # story. Numbered as in the list that was sent, from 1.
+        for index in sorted(flagged):
+            logger.debug(
+                "LLM A/N flagged [%d] (%d chars): %s",
+                index + 1, len(paragraphs[index]),
+                _note_log_preview(paragraphs[index]),
+            )
     if unreadable_batches:
         raise LLMIncompleteAnswer(
             flagged,
