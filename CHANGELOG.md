@@ -82,6 +82,20 @@
   showed every line twice and a screen reader read it twice. Status
   lines now go to standard output only.
 
+**An audiobook stops, and says why, when its voices stop working**
+
+* When the voice service refused every request, or could not be
+  reached, an audiobook render tried every piece of every chapter
+  three times, showed progress as if all were well, and failed at the
+  very end with "No chapter audio was generated". On a full-length
+  book that took an hour or more. A render now stops once eight pieces
+  of speech in a row have failed, says what went wrong and what to do
+  about it, and keeps the chapters it had already made so the next try
+  carries on from there.
+* A connection that drops for a few seconds does not end a render.
+  Unless the service is turning requests away outright, the failures
+  have to go on for twenty seconds first.
+
 **Royal Road, ScribbleHub, FicWad and MediaMiner downloads report and save as they go**
 
 * A story from one of these four sites was fetched whole before any of

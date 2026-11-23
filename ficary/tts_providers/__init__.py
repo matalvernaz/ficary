@@ -175,9 +175,17 @@ _UNREACHABLE_ERROR_NAMES = frozenset({
 })
 
 
-def explain_synthesis_error(error: BaseException | None) -> str:
+def explain_synthesis_error(
+    error: BaseException | None,
+    *,
+    retry_hint: str = "then press Play again",
+) -> str:
     """Why a voice could not turn text into speech, in words for the
     user, with what to do about it where that is known.
+
+    ``retry_hint`` finishes the advice for a service that could not be
+    reached. The reader's "press Play again" is the default; an
+    audiobook render passes its own.
 
     The Edge voices go through a Microsoft service that from time to
     time stops accepting older versions of the client. It answers them
@@ -200,7 +208,7 @@ def explain_synthesis_error(error: BaseException | None) -> str:
     ):
         return (
             "The voice service could not be reached. Check the internet "
-            "connection, then press Play again."
+            f"connection, {retry_hint}."
         )
     if name == "NoAudioReceived":
         return "The voice service sent back no audio for this text."

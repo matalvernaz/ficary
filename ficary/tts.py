@@ -10,6 +10,8 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
+import time
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
@@ -1826,6 +1828,9 @@ def _merge_small_segments(segments, min_len=30):
 # Max concurrent edge-tts API calls per chapter
 _TTS_CONCURRENCY = 5
 
+# How long a piece of speech waits before its next fallback attempt.
+_TTS_RETRY_PAUSE_SECONDS = 2
+
 # Pause inserted between segments when the speaker changes. Makes
 # multi-voice playback sound less like a rushed relay handoff.
 _SPEAKER_CHANGE_PAUSE_MS = 400
@@ -2304,6 +2309,73 @@ def _build_voice_pool(
     return out
 
 
+# A render gives up on its voices when this many pieces of speech in a
+# row have failed on every fallback voice with none succeeding in
+# between. Eight is more than one round of the five synthesised at once,
+# so a single bad round cannot do it.
+_VOICE_OUTAGE_MIN_FAILURES = 8
+
+# ...and when that run of failures has also lasted this long, so a
+# hiccup of a few seconds does not end a render with hours behind it.
+# A service that refuses outright (see ``_voice_refused``) is not going
+# to change its mind, so the wait is skipped for that.
+_VOICE_OUTAGE_MIN_SECONDS = 20.0
+
+
+def _voice_refused(error) -> bool:
+    """True for a failure that will be the same on every request: the
+    Edge voice service turning the connection away with a 401 or 403,
+    which is what it does to a client it has stopped accepting."""
+    if type(error).__name__ != "WSServerHandshakeError":
+        return False
+    text = str(error)
+    return "403" in text or "401" in text
+
+
+class _VoiceHealth:
+    """Keeps count, across one render, of the pieces of speech in a row
+    that failed on every fallback voice.
+
+    Without it a render whose voice service was down or refusing tried
+    every piece of every chapter, three attempts each, reporting
+    progress as if all were well, and failed at the very end with "No
+    chapter audio was generated" and no reason. On a full-length book
+    that is the better part of an hour or more.
+
+    Pieces are synthesised several at once, so every method takes the
+    lock. ``clock`` is replaceable so a test need not wait.
+    """
+
+    def __init__(self, clock=time.monotonic):
+        self._clock = clock
+        self._lock = threading.Lock()
+        self.failures_in_a_row = 0
+        self.last_error = None
+        self.gave_up = False
+        self._streak_started = None
+
+    def piece_succeeded(self) -> None:
+        with self._lock:
+            self.failures_in_a_row = 0
+            self._streak_started = None
+
+    def piece_failed(self, error) -> None:
+        """Count a piece that raised on its last fallback. A piece with
+        nothing to say (punctuation alone) raises nothing and is not
+        reported here at all."""
+        with self._lock:
+            now = self._clock()
+            if self.failures_in_a_row == 0:
+                self._streak_started = now
+            self.failures_in_a_row += 1
+            self.last_error = error
+            if self.failures_in_a_row < _VOICE_OUTAGE_MIN_FAILURES:
+                return
+            lasted = now - self._streak_started
+            if _voice_refused(error) or lasted >= _VOICE_OUTAGE_MIN_SECONDS:
+                self.gave_up = True
+
+
 @dataclass
 class ChapterAudioResult:
     """Outcome of synthesising one chapter's segments.
@@ -2352,7 +2424,7 @@ def _voice_allowed(voice, enabled_providers) -> bool:
 
 async def _generate_with_semaphore(
     sem, seg, voice, path, idx, ch_num, speech_rate=0, narrator_voice=None,
-    cancel_event=None, enabled_providers=None,
+    cancel_event=None, enabled_providers=None, voice_health=None,
 ):
     """Generate one segment with a concurrency limiter.
 
@@ -2416,11 +2488,18 @@ async def _generate_with_semaphore(
         return None
     if cancel_event is not None and cancel_event.is_set():
         return None
+    if voice_health is not None and voice_health.gave_up:
+        return None
+    last_error = None
     async with sem:
         for attempt, (label, try_voice, try_seg) in enumerate(attempts, 1):
             if cancel_event is not None and cancel_event.is_set():
                 # Cancellation granularity is one segment: whatever synth
                 # is in flight finishes, queued segments return here.
+                return None
+            if voice_health is not None and voice_health.gave_up:
+                # The render has stopped trusting its voices. Whatever
+                # is still queued returns here, as it does for a cancel.
                 return None
             try:
                 ok = await _generate_segment_audio(
@@ -2433,8 +2512,11 @@ async def _generate_with_semaphore(
                             "(%s, voice=%s)",
                             idx, ch_num, attempt, label, try_voice,
                         )
+                    if voice_health is not None:
+                        voice_health.piece_succeeded()
                     return path
             except Exception as exc:
+                last_error = exc
                 kwargs = _tts_kwargs_for_segment(
                     try_seg, try_voice, speech_rate=speech_rate,
                 )
@@ -2446,7 +2528,7 @@ async def _generate_with_semaphore(
                         attempt, len(attempts), label, idx, ch_num, exc,
                         seg.speaker, seg.emotion, kwargs, text_preview,
                     )
-                    await asyncio.sleep(2)
+                    await asyncio.sleep(_TTS_RETRY_PAUSE_SECONDS)
                 else:
                     logger.warning(
                         "TTS failed after %d attempts for segment %d (ch %d): %s | "
@@ -2454,13 +2536,18 @@ async def _generate_with_semaphore(
                         len(attempts), idx, ch_num, exc,
                         seg.speaker, seg.emotion, kwargs, len(seg.text), text_preview,
                     )
+    # Only a piece that raised counts against the voices. One with
+    # nothing to say (punctuation alone) comes back empty without an
+    # error, and a run of those is no sign of trouble.
+    if voice_health is not None and last_error is not None:
+        voice_health.piece_failed(last_error)
     return None
 
 
 async def generate_chapter_audio(
     segments, voice_mapper, output_path,
     chapter_num=0, narrator_voice=None, speech_rate=0,
-    cancel_event=None, enabled_providers=None,
+    cancel_event=None, enabled_providers=None, voice_health=None,
 ):
     """Generate audio for a full chapter's worth of segments.
 
@@ -2481,6 +2568,7 @@ async def generate_chapter_audio(
             chapter_num=chapter_num, narrator=narrator,
             speech_rate=speech_rate, cancel_event=cancel_event,
             enabled_providers=enabled_providers,
+            voice_health=voice_health,
         )
     finally:
         # Single cleanup point — any exception path between here and the
@@ -2492,7 +2580,7 @@ async def generate_chapter_audio(
 async def _generate_chapter_audio_inner(
     segments, voice_mapper, output_path, tmp_dir,
     *, chapter_num, narrator, speech_rate, cancel_event=None,
-    enabled_providers=None,
+    enabled_providers=None, voice_health=None,
 ):
     sem = asyncio.Semaphore(_TTS_CONCURRENCY)
 
@@ -2522,6 +2610,7 @@ async def _generate_chapter_audio_inner(
             sem, seg, voice, seg_path, i, chapter_num,
             speech_rate=speech_rate, narrator_voice=narrator,
             cancel_event=cancel_event, enabled_providers=enabled_providers,
+            voice_health=voice_health,
         )))
         plan.append(("speech", seg.speaker, task_idx))
 
@@ -2557,7 +2646,11 @@ async def _generate_chapter_audio_inner(
             ordered.append(("speech", speaker, r))
             succeeded += 1
 
-    if succeeded < attempted:
+    gave_up = voice_health is not None and voice_health.gave_up
+    if succeeded < attempted and not gave_up:
+        # Not said when the render has given up on its voices: most of
+        # what is missing was then never tried, and the render is about
+        # to stop with the real reason.
         logger.warning(
             "Chapter %d: %d of %d speech segment(s) could not be "
             "synthesised; this chapter will not be cached so a retry "
@@ -3320,6 +3413,37 @@ class AudiobookCancelled(RuntimeError):
     unlinked, build_tmp swept) — cancellation must not leave debris."""
 
 
+class AudiobookVoiceUnavailable(RuntimeError):
+    """Raised when a render's voices have stopped producing audio (see
+    ``_VoiceHealth``), so it stops instead of trying every remaining
+    piece of the book. The message says why and what was kept. Unwinds
+    through the same cleanup paths as a cancel."""
+
+
+def _voice_gave_up_message(voice_health, *, chapter, total, chapters_made) -> str:
+    """What to tell the user when a render stops because its voices have
+    stopped producing audio."""
+    from .tts_providers import explain_synthesis_error
+
+    parts = [
+        f"The audiobook was not made: the voices stopped producing audio "
+        f"at chapter {chapter} of {total}, after "
+        f"{voice_health.failures_in_a_row} pieces of speech in a row failed.",
+        explain_synthesis_error(
+            voice_health.last_error,
+            retry_hint="then make the audiobook again",
+        ),
+    ]
+    if chapters_made:
+        parts.append(
+            f"The {chapters_made} chapter"
+            f"{'' if chapters_made == 1 else 's'} already made "
+            f"{'is' if chapters_made == 1 else 'are'} kept, so making this "
+            "audiobook again carries on from there."
+        )
+    return " ".join(parts)
+
+
 def generate_audiobook(
     story, output_dir,
     progress_callback=None,
@@ -3778,6 +3902,9 @@ def _generate_audiobook_inner(
     # every chapter that lost prose. Reported at the end so the listener
     # learns the book is short of the source before they play it.
     incomplete: list[tuple] = []
+    # One tally for the whole render, so a voice service that is down
+    # or refusing stops it within seconds instead of at the last chapter.
+    voice_health = _VoiceHealth()
 
     display_ns = _chapter_display_numbers(
         (i, c.title) for i, c in enumerate(story.chapters, 1)
@@ -3811,6 +3938,7 @@ def _generate_audiobook_inner(
                         speech_rate=speech_rate,
                         cancel_event=cancel_event,
                         enabled_providers=enabled_providers,
+                        voice_health=voice_health,
                     )
                 )
                 if cancel_event is not None and cancel_event.is_set():
@@ -3820,6 +3948,15 @@ def _generate_audiobook_inner(
                         tmp_body.unlink(missing_ok=True)
                     raise AudiobookCancelled(
                         f"Audiobook render cancelled during chapter {i} of {total}."
+                    )
+                if voice_health.gave_up:
+                    # Same shape as a cancel: the chapter came back
+                    # partial, and the except below removes its file.
+                    raise AudiobookVoiceUnavailable(
+                        _voice_gave_up_message(
+                            voice_health, chapter=i, total=total,
+                            chapters_made=cache_hits + cache_misses,
+                        )
                     )
             except BaseException:
                 if tmp_body.exists():
