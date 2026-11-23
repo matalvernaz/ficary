@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 2.20.12 — 2026-11-23
 
 **An audiobook is no longer abandoned over a chapter the voices cannot speak**
 
