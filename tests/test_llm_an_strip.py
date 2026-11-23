@@ -859,20 +859,53 @@ class TestStripAnViaLlmFailures:
         assert out == html
         assert calls == [], "short chapters must skip the round-trip entirely"
 
-    def test_transport_error_returns_input_unchanged(self, tmp_path, monkeypatch):
-        _isolate_cache_dir(monkeypatch, tmp_path)
+    def test_failed_call_is_not_passed_off_as_a_clean_chapter(
+        self, tmp_path, monkeypatch,
+    ):
+        """A call that fails used to come back as the chapter untouched,
+        which the caller reported as "no A/N paragraphs found" and saved
+        as the chapter's result. ``strip_an_via_llm`` now raises, so
+        that cannot happen; keeping the export going is the chapter
+        loop's job (next test)."""
+        cache_root = _isolate_cache_dir(monkeypatch, tmp_path)
 
         def boom(**_kwargs):
             raise RuntimeError("network down")
 
         monkeypatch.setattr(attribution, "_llm_call", boom)
         html = "<p>One.</p><p>Two.</p><p>Three.</p><p>Four.</p>"
-        # Must not raise — LLM is purely additive on top of regex.
-        out = exporters.strip_an_via_llm(
-            html, llm_config=_llm_config(),
-            site_name="ffn", story_id=1, chapter_number=1,
+        with pytest.raises(attribution.LLMIncompleteAnswer):
+            exporters.strip_an_via_llm(
+                html, llm_config=_llm_config(),
+                site_name="ffn", story_id=1, chapter_number=1,
+            )
+        assert not list(cache_root.glob("*.json"))
+
+    def test_failed_call_does_not_fail_the_export(self, tmp_path, monkeypatch):
+        """The LLM is purely additive on top of regex: whatever it
+        does, the chapter's text still has to reach the file."""
+        _isolate_cache_dir(monkeypatch, tmp_path)
+
+        def boom(**_kwargs):
+            raise RuntimeError("network down")
+
+        monkeypatch.setattr(attribution, "_llm_call", boom)
+        from ficary.models import Chapter, Story
+        story = Story(
+            id=1, title="T", author="A", summary="",
+            url="https://www.fanfiction.net/s/1",
         )
-        assert out == html
+        story.chapters.append(Chapter(
+            number=1, title="Ch 1",
+            html="<p>One.</p><p>Two.</p><p>Three.</p><p>Four.</p>",
+        ))
+        path = exporters.export_html(
+            story, output_dir=str(tmp_path),
+            strip_notes=True, llm_config=_llm_config(),
+        )
+        body = path.read_text(encoding="utf-8")
+        for word in ("One.", "Two.", "Three.", "Four."):
+            assert f"<p>{word}</p>" in body
 
     def test_unavailable_endpoint_propagates_for_caller_to_short_circuit(
         self, tmp_path, monkeypatch,
@@ -1236,23 +1269,25 @@ class TestClassifyAuthorsNotesBatching:
         self, monkeypatch,
     ):
         # If a non-Unavailable exception lands on one batch (parse
-        # failure, malformed JSON, etc.) the classifier degrades that
-        # batch to "no flags" but still classifies the remaining
-        # batches — losing 40 paragraphs of attention is better than
-        # losing the entire chapter.
+        # failure, malformed JSON, etc.) the classifier still
+        # classifies the remaining batches — losing 40 paragraphs of
+        # attention is better than losing the entire chapter. What it
+        # found is handed back on the exception, which exists so the
+        # unanswered batch is not mistaken for "no notes in it".
         b = attribution._AN_BATCH_SIZE
         n = b * 2
         replies = [
-            "not even close to JSON",  # batch 1: garbage → empty set
+            "not even close to JSON",  # batch 1: garbage → no verdicts
             json.dumps({str(i): i == 7 for i in range(1, b + 1)}),
             # batch 2 flags local index 7 → global 0-based b + 6
         ]
         calls = _stub_llm(monkeypatch, replies)
-        flagged = attribution.classify_authors_notes_via_llm(
-            ["p"] * n, llm_config=_llm_config(),
-        )
+        with pytest.raises(attribution.LLMIncompleteAnswer) as raised:
+            attribution.classify_authors_notes_via_llm(
+                ["p"] * n, llm_config=_llm_config(),
+            )
         assert len(calls) == 2
-        assert flagged == {b + 6}
+        assert raised.value.flagged == {b + 6}
 
     def test_unavailable_in_any_batch_propagates(self, monkeypatch):
         # A dead endpoint must propagate LLMUnavailable so the
@@ -1341,10 +1376,14 @@ class TestExportLoopCircuitBreaker:
         )
         # The "skipping LLM for remaining chapters" notice fires once
         # so the user sees one line of context, not 5×.
-        unreachable_lines = [
-            l for l in progress_lines if "endpoint unreachable" in l
+        notice_lines = [
+            l for l in progress_lines
+            if "skipping LLM for remaining chapters" in l
         ]
-        assert len(unreachable_lines) == 1
+        assert len(notice_lines) == 1
+        assert "endpoint unreachable" in notice_lines[0]
+        # The closing line then says how much of the book that left.
+        assert "did not run on 5 chapters" in progress_lines[-1]
 
     def test_export_txt_calls_llm_once_when_endpoint_down(
         self, tmp_path, monkeypatch,
@@ -1442,7 +1481,7 @@ class TestExportLoopTimeoutThreshold:
     """A single LLM timeout is transient on local models — a 14B model
     on CPU can spend several minutes on one long chapter, and the
     classifier is fine for the next one. The chapter loop only trips
-    the breaker after :data:`_LLM_AN_MAX_CONSECUTIVE_TIMEOUTS`
+    the breaker after :data:`attribution.NOTE_CHECK_MAX_CONSECUTIVE_FAILURES`
     consecutive timeouts."""
 
     def _multi_chapter_story(self, n: int):
@@ -1524,7 +1563,7 @@ class TestExportLoopTimeoutThreshold:
         end state as an unreachable endpoint, just gated behind a
         higher bar."""
         _isolate_cache_dir(monkeypatch, tmp_path)
-        threshold = exporters._LLM_AN_MAX_CONSECUTIVE_TIMEOUTS
+        threshold = attribution.NOTE_CHECK_MAX_CONSECUTIVE_FAILURES
         calls: list = []
 
         def boom(**kwargs):
@@ -1558,7 +1597,7 @@ class TestExportLoopTimeoutThreshold:
         resets the streak so the breaker doesn't trip on a total of
         N timeouts spread across the story; only N *in a row*."""
         _isolate_cache_dir(monkeypatch, tmp_path)
-        threshold = exporters._LLM_AN_MAX_CONSECUTIVE_TIMEOUTS
+        threshold = attribution.NOTE_CHECK_MAX_CONSECUTIVE_FAILURES
         # Pattern: timeout, timeout, success, timeout, timeout — total
         # of four timeouts but the longest streak is two. Story is
         # six chapters so we'd expect six LLM calls if the breaker

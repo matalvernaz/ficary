@@ -1,5 +1,40 @@
 # Changelog
 
+## Unreleased
+
+**The LLM author's-note check no longer hides its own failures**
+
+* When the LLM provider turns a request away for a reason that applies
+  to every request (no credit left on the account, a rejected API key,
+  a model that does not exist), the check now stops after that one
+  request and says why in the provider's own words. Before, it asked
+  again for every remaining chapter, reported each one as "no A/N
+  paragraphs found", and saved that as the chapter's result.
+* Other failures (a busy provider, a slow model, an answer that cannot
+  be read) skip the check for that chapter and try again on the next.
+  After three chapters in a row the check stops for the rest of the
+  book.
+* The last status line of a download now says how the check went: how
+  many chapters were checked and how many had notes removed, or how
+  many went without the check, why, and that downloading the story
+  again will check them.
+* A failed check is no longer remembered. Results saved by earlier
+  versions that say "no notes" are asked about once more the next time
+  the story is downloaded from scratch, because some of them were saved
+  failures. Results that did find notes are kept.
+* Audiobooks follow the same rules. Before, a render asked the LLM
+  again for every chapter however often it failed.
+* A chapter the model declined to answer for, or whose answer was cut
+  off, is reported as not checked instead of as clean, and the log says
+  which it was.
+* Anthropic's "overloaded" reply (HTTP 529) is retried like other
+  temporary errors. A spent OpenAI quota is no longer retried, since
+  waiting does not fix it.
+* On the command line each status line now appears once. They were
+  printed to both standard output and standard error, so a terminal
+  showed every line twice and a screen reader read it twice. Status
+  lines now go to standard output only.
+
 ## 2.20.10 — 2026-11-15
 
 **The Docker image's web page can offer only BookNLP's small model**

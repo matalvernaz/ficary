@@ -5638,15 +5638,42 @@ def _handle_watchlist_test(channel: str) -> int:
     return _EXIT_OK
 
 
+def _was_not_already_printed(record: logging.LogRecord) -> bool:
+    """Log filter for the console: drop a record whose text the status
+    callback has already printed.
+
+    Exporters send each status line to their ``progress`` callback and
+    mirror it to the logger, marked ``ui_already_emitted``, so the GUI's
+    log file gets it too. On the command line the callback is ``print``
+    and the log goes to the same terminal, so without this every such
+    line came out twice, and was read out twice by a screen reader.
+    """
+    return not getattr(record, "ui_already_emitted", False)
+
+
+def _configure_console_logging(verbose: bool) -> None:
+    """Send log messages to the terminal for a command-line run.
+
+    Does what ``logging.basicConfig`` did here, including leaving
+    logging alone when something else has already set it up, plus the
+    filter that keeps status lines from being printed twice.
+    """
+    root = logging.getLogger()
+    if root.handlers:
+        return
+    handler = logging.StreamHandler()
+    handler.setFormatter(logging.Formatter("%(message)s"))
+    handler.addFilter(_was_not_already_printed)
+    root.addHandler(handler)
+    root.setLevel(logging.DEBUG if verbose else logging.INFO)
+
+
 def main(argv: list[str] | None = None) -> None:
     """CLI entry point. Parses args and dispatches to a handler."""
     parser = _build_parser()
     args = parser.parse_args(argv)
 
-    logging.basicConfig(
-        level=logging.DEBUG if args.verbose else logging.INFO,
-        format="%(message)s",
-    )
+    _configure_console_logging(args.verbose)
 
     if getattr(args, "install_attribution", None):
         sys.exit(_handle_install_attribution(args.install_attribution))

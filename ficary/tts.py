@@ -1930,7 +1930,10 @@ def _normalize_scene_break_lines(text, ornament_tokens=frozenset()):
     return "\n".join(lines) if changed else text
 
 
-def _llm_strip_an_paragraphs(text: str, llm_config: dict | None) -> str:
+def _llm_strip_an_paragraphs(
+    text: str, llm_config: dict | None, *,
+    note_check=None, chapter_label: str = "chapter",
+) -> str:
     """Backstop pass: when ``--strip-notes`` is on AND the LLM
     attribution backend is configured, send every top-level paragraph
     of the post-regex chapter text to the LLM for an A/N decision and
@@ -1954,6 +1957,12 @@ def _llm_strip_an_paragraphs(text: str, llm_config: dict | None) -> str:
     * Block expansion — once a flag lands in the natural head/tail
       A/N region, sweep its neighbours so the listener doesn't hear
       a half-stripped outro.
+
+    ``note_check`` is the render's running tally
+    (:class:`~ficary.attribution.NoteCheckRun`). When one is given it
+    is told how the chapter went, and it is what decides, after a
+    failure, whether the remaining chapters are still worth asking
+    about. ``chapter_label`` names the chapter in the lines it words.
     """
     if not text or not llm_config:
         return text
@@ -1962,36 +1971,70 @@ def _llm_strip_an_paragraphs(text: str, llm_config: dict | None) -> str:
         return text
     from . import attribution
 
-    # Catch LLM-side failures here so a flaky Ollama / unreachable
-    # cloud endpoint downgrades to "regex-only A/N stripping" rather
-    # than aborting the whole audiobook render. The exporter path
-    # already does this; mirroring the behaviour keeps audiobook
-    # listeners no worse off than EPUB readers when the backend
-    # blinks. Any non-LLM exception still propagates — those are
-    # unexpected and worth surfacing.
+    # Catch LLM-side failures here so a flaky Ollama, an unreachable
+    # cloud endpoint or an account out of credit downgrades to
+    # "regex-only A/N stripping" rather than aborting the whole
+    # audiobook render. The exporter path does the same; mirroring it
+    # keeps audiobook listeners no worse off than EPUB readers when
+    # the backend blinks. Any non-LLM exception still propagates —
+    # those are unexpected and worth surfacing.
+    incomplete = None
     try:
         flagged = attribution.classify_authors_notes_via_llm(
             paragraphs, llm_config=llm_config,
         )
-    except attribution.LLMUnavailable as exc:
-        logger.warning(
-            "LLM A/N strip skipped (LLM unavailable): %s — falling back "
-            "to regex-only output", exc,
-        )
-        return text
-    if not flagged:
-        return text
+    except attribution.LLMIncompleteAnswer as exc:
+        if not exc.answered_batches:
+            return _llm_note_check_failed(exc, note_check, chapter_label, text)
+        # Some batches did answer. Strip what they found; a listener
+        # is better off with half an outro gone than all of it read.
+        flagged = exc.flagged
+        incomplete = exc
+    except (attribution.LLMUnavailable, attribution.LLMRejected) as exc:
+        return _llm_note_check_failed(exc, note_check, chapter_label, text)
 
-    provider = (llm_config.get("provider") or "")
-    if attribution.should_constrain_an_to_boundaries(provider):
-        flagged = attribution.constrain_an_to_boundaries(
-            flagged, len(paragraphs),
+    if flagged:
+        provider = (llm_config.get("provider") or "")
+        if attribution.should_constrain_an_to_boundaries(provider):
+            flagged = attribution.constrain_an_to_boundaries(
+                flagged, len(paragraphs),
+            )
+        flagged = attribution.expand_an_block(flagged, len(paragraphs))
+
+    if note_check is not None:
+        if incomplete is None:
+            note_check.chapter_checked(removed=len(flagged))
+        else:
+            note_check.chapter_partly_checked(incomplete)
+    if incomplete is not None:
+        logger.warning(
+            "LLM A/N: part of %s could not be checked (%s)",
+            chapter_label, incomplete.reason,
         )
-    flagged = attribution.expand_an_block(flagged, len(paragraphs))
+
     if not flagged:
         return text
     kept = [p for i, p in enumerate(paragraphs) if i not in flagged]
     return "\n\n".join(kept)
+
+
+def _llm_note_check_failed(exc, note_check, chapter_label: str, text: str) -> str:
+    """Handle a chapter the LLM could not check at all: log why, and
+    hand back the text as the regex pass left it.
+
+    With a tally, the tally words the line and decides whether the
+    rest of the book is still worth asking about.
+    """
+    if note_check is None:
+        logger.warning(
+            "LLM A/N strip skipped (%s) — falling back to regex-only "
+            "output", exc,
+        )
+        return text
+    logger.warning(
+        "%s", note_check.chapter_failed(exc, chapter_label).strip(),
+    )
+    return text
 
 
 def _html_to_audiobook_text(html, strip_notes=False, hr_as_stars=False,
@@ -3403,7 +3446,10 @@ def generate_audiobook(
     an_config = llm_an_config
     if an_config is None and attribution_backend == "llm":
         an_config = attribution_llm_config
-    use_llm_an = strip_notes and bool(an_config)
+    from . import attribution as _note_attribution
+    note_check = _note_attribution.NoteCheckRun(
+        an_config if strip_notes else None,
+    )
     ornament_tokens = (
         _story_ornament_tokens(story.chapters) if hr_as_stars else frozenset()
     )
@@ -3421,13 +3467,30 @@ def generate_audiobook(
             chapter_notes=chapter_notes,
             ornament_tokens=ornament_tokens,
         )
-        if use_llm_an:
+        if note_check.config is not None:
             # Backstop: regex-based strip_note_paragraphs may have left
             # disguised A/Ns (mid-chapter outros, beta thanks dressed as
             # prose). Ask the LLM to flag any remaining ones.
-            text = _llm_strip_an_paragraphs(text, an_config)
+            text = _llm_strip_an_paragraphs(
+                text, note_check.config,
+                note_check=note_check,
+                chapter_label=f"chapter {ch.number}",
+            )
+        elif note_check.stopped:
+            # The check was given up on earlier in this book. Count the
+            # chapter, so the closing line says how many went without.
+            note_check.chapter_skipped()
         chapter_texts.append(text)
         full_text += text + "\n"
+
+    # Say how the note check went before the long part of the render
+    # starts. A listener otherwise finds out from hearing the notes.
+    note_check_summary = note_check.summary()
+    if note_check_summary:
+        logger.log(
+            logging.WARNING if note_check.had_problems else logging.INFO,
+            "%s", note_check_summary,
+        )
 
     # Parse all segments to find character names, honouring scene breaks.
     all_segments = []

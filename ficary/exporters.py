@@ -399,23 +399,61 @@ def html_to_text(html: str) -> str:
 # ── Exporters ─────────────────────────────────────────────────────
 
 
-def _llm_config_for(llm_config: dict | None, chapter) -> dict | None:
-    """Suppress the LLM A/N pass for chapters read back off disk.
+def _new_note_check(llm_config: dict | None, strip_notes: bool):
+    """Start keeping score of the LLM author's-note check for one
+    export. The LLM pass only runs as a second pass behind the regex
+    one, so with note stripping off there is no check to follow."""
+    from .attribution import NoteCheckRun
 
-    An update merges the existing file's chapters with the newly
-    fetched ones and re-exports the lot, so without this every old
-    chapter is classified again on every update. The disk cache can't
-    absorb that: it keys on the chapter's pre-strip paragraph text, and
-    a chapter read back from an export is post-strip, so the key never
-    matches. The classification is also pointless — the notes it would
-    look for were removed by the run that wrote the file.
+    return NoteCheckRun(llm_config if strip_notes else None)
 
-    The regex pass still runs, which is what strips notes out of a
-    foreign (FanFicFare / FicHub) file's chapters on first update.
+
+def _note_check_config_for(note_check, chapter) -> dict | None:
+    """The LLM config to check ``chapter`` with, or None to leave the
+    LLM out of this chapter.
+
+    Chapters read back off disk are never checked. An update merges
+    the existing file's chapters with the newly fetched ones and
+    re-exports the lot, so without this every old chapter is
+    classified again on every update. The disk cache can't absorb
+    that: it keys on the chapter's pre-strip paragraph text, and a
+    chapter read back from an export is post-strip, so the key never
+    matches. The regex pass still runs, which is what strips notes out
+    of a foreign (FanFicFare / FicHub) file's chapters on first update.
+
+    Once the check has been stopped for this book, every later chapter
+    goes without it and is counted, so the closing line can say how
+    many did.
     """
     if getattr(chapter, "from_existing_file", False):
         return None
-    return llm_config
+    if note_check.requested and note_check.stopped:
+        note_check.chapter_skipped()
+        return None
+    return note_check.config
+
+
+def _report_note_check(
+    note_check, progress: Callable[[str], None] | None,
+) -> None:
+    """Close an export with one line on how the LLM note check went.
+
+    The line goes to the status pane or console through ``progress``
+    and to the log file. A check that missed chapters is logged as a
+    warning, so it is still found when nobody was watching the pane.
+    """
+    line = note_check.summary()
+    if not line:
+        return
+    if progress:
+        progress("  " + line)
+    logger.log(
+        logging.WARNING if note_check.had_problems else logging.INFO,
+        "%s", line,
+        # Already on its way to the GUI through ``progress``; without
+        # this the status pane would show it twice (see ``_emit``).
+        extra={"ui_already_emitted": bool(progress)},
+    )
 
 
 def _prepare_chapter_html(
@@ -426,6 +464,7 @@ def _prepare_chapter_html(
     chapter_notes: str = DEFAULT_CHAPTER_NOTES,
     ornament_tokens: frozenset = frozenset(),
     llm_config: dict | None = None,
+    note_check=None,
     site_name: str | None = None,
     story_id=None,
     chapter_number: int | None = None,
@@ -442,7 +481,8 @@ def _prepare_chapter_html(
     is also on — the LLM is a backstop for cases the regex misses, not
     a replacement for it. ``site_name`` / ``story_id`` /
     ``chapter_number`` are forwarded into the LLM helper's per-story
-    disk cache so re-exports don't re-spend tokens.
+    disk cache so re-exports don't re-spend tokens. ``note_check`` is
+    the book's running tally of that pass, when one is being kept.
     """
     html = _apply_chapter_notes_mode(html, chapter_notes)
     html = _normalize_chapter_markup(html)
@@ -452,6 +492,7 @@ def _prepare_chapter_html(
             html = strip_an_via_llm(
                 html,
                 llm_config=llm_config,
+                note_check=note_check,
                 site_name=site_name,
                 story_id=story_id,
                 chapter_number=chapter_number,
@@ -466,15 +507,6 @@ def _prepare_chapter_html(
     return html
 
 
-# Consecutive ``LLMTimeout``s before the chapter loop disables the
-# LLM A/N pass for the remaining chapters. One timeout is treated as
-# transient — a 14B local model can spend a few minutes on an unusually
-# long chapter, but the model is fine for the next one. Three in a row
-# means something is genuinely wrong (model hung, GPU starved, OOM
-# killed) and we stop burning the per-chapter timeout budget.
-_LLM_AN_MAX_CONSECUTIVE_TIMEOUTS = 3
-
-
 def _prepare_chapter_html_with_llm_fallback(
     html: str,
     hr_as_stars: bool,
@@ -483,130 +515,74 @@ def _prepare_chapter_html_with_llm_fallback(
     chapter_notes: str = DEFAULT_CHAPTER_NOTES,
     ornament_tokens: frozenset = frozenset(),
     llm_config: dict | None,
+    note_check,
     site_name: str | None,
     story_id,
     chapter_number: int | None,
     progress: Callable[[str], None] | None,
-    consecutive_timeouts: int = 0,
-) -> tuple[str, bool, int]:
-    """Run the chapter pipeline; recover from LLM A/N failures.
+) -> str:
+    """Run the chapter pipeline, and get the chapter into the book
+    whatever the LLM author's-note pass does.
 
-    Returns ``(prepared_html, llm_disabled, consecutive_timeouts)``.
+    ``llm_config`` is what :func:`_note_check_config_for` chose for
+    this chapter (None leaves the LLM out). ``note_check`` is the
+    book's :class:`~ficary.attribution.NoteCheckRun`.
 
-    Failure handling differentiates by exception type:
+    When the LLM pass fails, the failure goes to ``note_check``, which
+    decides whether the rest of the book is still worth asking about
+    and words the line the user sees, and the chapter is prepared
+    again with the regex pass alone. Three failures are expected and
+    handled this way:
 
-    * :class:`~ficary.attribution.LLMUnavailable` (non-timeout) —
-      connection refused / DNS / no-listener. Trips the breaker on
-      the first hit: every remaining chapter would hit the same
-      wall, so we re-run this chapter without the LLM and return
-      ``llm_disabled=True``.
-    * :class:`~ficary.attribution.LLMTimeout` — endpoint accepted
-      the connection but the model didn't reply in
-      :func:`~ficary.attribution._llm_request_timeout_s` seconds.
-      A single timeout is transient; we re-run this chapter without
-      the LLM but keep ``llm_disabled=False`` so the next chapter
-      retries. Only after
-      :data:`_LLM_AN_MAX_CONSECUTIVE_TIMEOUTS` consecutive timeouts
-      do we trip the breaker.
+    * :class:`~ficary.attribution.LLMUnavailable` (and its
+      :class:`~ficary.attribution.LLMTimeout` subclass): nothing is
+      listening, or the model did not reply in time.
+    * :class:`~ficary.attribution.LLMRejected`: the provider replied
+      with an error status, such as an account that is out of credit.
+    * :class:`~ficary.attribution.LLMIncompleteAnswer`: a reply came
+      back with nothing in it that reads as a verdict.
 
-    ``consecutive_timeouts`` is the running tally that the chapter
-    loop threads back in on each call. Successful classifications
-    reset it to zero (so a one-off slow chapter doesn't pollute the
-    count for the rest of the export).
+    None of them is allowed to fail the export. The LLM pass is an
+    addition to the regex pass, never a requirement.
     """
-    from .attribution import LLMTimeout, LLMUnavailable
+    from .attribution import LLMIncompleteAnswer, LLMRejected, LLMUnavailable
 
-    try:
-        prepared = _prepare_chapter_html(
+    def prepare(config: dict | None) -> str:
+        return _prepare_chapter_html(
             html, hr_as_stars, strip_notes,
             chapter_notes=chapter_notes,
             ornament_tokens=ornament_tokens,
-            llm_config=llm_config,
+            llm_config=config,
+            note_check=note_check,
             site_name=site_name,
             story_id=story_id,
             chapter_number=chapter_number,
             progress=progress,
         )
-        # Reset the timeout streak on any success — including
-        # success after the LLM was already disabled, which
-        # harmlessly returns 0.
-        return prepared, False, 0
-    except LLMTimeout as exc:
-        new_streak = consecutive_timeouts + 1
+
+    if not llm_config:
+        return prepare(None)
+    try:
+        return prepare(llm_config)
+    except (LLMUnavailable, LLMRejected, LLMIncompleteAnswer) as exc:
         chapter_label = (
             f"chapter {chapter_number}"
             if chapter_number is not None
             else "chapter"
         )
-        # Always re-run *this* chapter without the LLM so the
-        # regex-stripped content still lands in the export.
-        fallback = _prepare_chapter_html(
-            html, hr_as_stars, strip_notes,
-            chapter_notes=chapter_notes,
-            ornament_tokens=ornament_tokens,
-            llm_config=None,
-            site_name=site_name,
-            story_id=story_id,
-            chapter_number=chapter_number,
-            progress=progress,
-        )
-        if new_streak >= _LLM_AN_MAX_CONSECUTIVE_TIMEOUTS:
-            # Streak crossed the threshold — treat as a genuine
-            # outage and disable for the remainder of the export.
-            logger.warning(
-                "LLM A/N: %d consecutive timeouts (%s); "
-                "disabled for remaining chapters in this run",
-                new_streak, exc,
-            )
-            _emit(
-                progress,
-                f"  [llm-an] {chapter_label}: {new_streak} consecutive "
-                f"timeouts ({exc}); skipping LLM for remaining chapters",
-            )
-            return fallback, True, new_streak
-        logger.info(
-            "LLM A/N: timeout on %s (%s); skipping LLM on this "
-            "chapter, will retry on the next one (%d/%d)",
-            chapter_label, exc, new_streak,
-            _LLM_AN_MAX_CONSECUTIVE_TIMEOUTS,
-        )
-        _emit(
-            progress,
-            f"  [llm-an] {chapter_label}: timeout ({exc}); "
-            f"skipping LLM on this chapter, retrying on the next "
-            f"({new_streak}/{_LLM_AN_MAX_CONSECUTIVE_TIMEOUTS})",
-        )
-        return fallback, False, new_streak
-    except LLMUnavailable as exc:
-        # Endpoint truly down (connection refused / DNS / no
-        # listener). Log loud (warning, not info) so a "why didn't
-        # my A/N strip work?" postmortem on the file log surfaces
-        # this in a single grep, even when the user is running with
-        # the default INFO log level.
+        line = note_check.chapter_failed(exc, chapter_label)
+        if progress:
+            progress(line)
+        # A warning, so one search of the log file answers "why were
+        # the notes still in my book?" even at the default log level.
         logger.warning(
-            "LLM A/N: endpoint unreachable (%s); disabled for remaining "
-            "chapters in this run",
-            exc,
+            "%s", line.strip(),
+            # Already shown through ``progress``; see ``_emit``.
+            extra={"ui_already_emitted": bool(progress)},
         )
-        _emit(
-            progress,
-            f"  [llm-an] endpoint unreachable ({exc}); "
-            "skipping LLM for remaining chapters",
-        )
-        return (
-            _prepare_chapter_html(
-                html, hr_as_stars, strip_notes,
-                chapter_notes=chapter_notes,
-                ornament_tokens=ornament_tokens,
-                llm_config=None,
-                site_name=site_name,
-                story_id=story_id,
-                chapter_number=chapter_number,
-                progress=progress,
-            ),
-            True,
-            0,
-        )
+        # Prepare this chapter again without the LLM, so its
+        # regex-stripped text still lands in the export.
+        return prepare(None)
 
 
 def export_txt(
@@ -639,22 +615,19 @@ def export_txt(
         buf.write(f"{label}: {value}\n")
     buf.write("=" * 60 + "\n")
     display_ns = chapter_display_numbers((c.number, c.title) for c in story.chapters)
-    consecutive_timeouts = 0
+    note_check = _new_note_check(llm_config, strip_notes)
     for ch in story.chapters:
         buf.write(f"\n\n--- {format_chapter_heading(display_ns[ch.number], ch.title)} ---\n\n")
-        html, llm_disabled, consecutive_timeouts = (
-            _prepare_chapter_html_with_llm_fallback(
-                ch.html, hr_as_stars=False, strip_notes=strip_notes,
-                chapter_notes=chapter_notes,
-                llm_config=_llm_config_for(llm_config, ch),
-                site_name=site_name, story_id=story.id,
-                chapter_number=ch.number, progress=progress,
-                consecutive_timeouts=consecutive_timeouts,
-            )
+        html = _prepare_chapter_html_with_llm_fallback(
+            ch.html, hr_as_stars=False, strip_notes=strip_notes,
+            chapter_notes=chapter_notes,
+            llm_config=_note_check_config_for(note_check, ch),
+            note_check=note_check,
+            site_name=site_name, story_id=story.id,
+            chapter_number=ch.number, progress=progress,
         )
-        if llm_disabled:
-            llm_config = None
         buf.write(html_to_text(html))
+    _report_note_check(note_check, progress)
     with single_flight.path_lock(path):
         atomic_write_text(path, buf.getvalue())
     return path
@@ -790,30 +763,27 @@ def export_html(
     ornament_tokens = (
         _story_ornament_tokens(story.chapters) if hr_as_stars else frozenset()
     )
-    consecutive_timeouts = 0
+    note_check = _new_note_check(llm_config, strip_notes)
     for i, ch in enumerate(story.chapters, 1):
         ch_title = escape(format_chapter_heading(display_ns[ch.number], ch.title))
         anchor_n = ch.number if ch.number else i
         buf.write(
             f'<div class="chapter" id="chapter-{anchor_n}"><h2>{ch_title}</h2>\n'
         )
-        chapter_html, llm_disabled, consecutive_timeouts = (
-            _prepare_chapter_html_with_llm_fallback(
-                ch.html, hr_as_stars, strip_notes,
-                chapter_notes=chapter_notes,
-                ornament_tokens=ornament_tokens,
-                llm_config=_llm_config_for(llm_config, ch),
-                site_name=site_name,
-                story_id=story.id,
-                chapter_number=ch.number,
-                progress=progress,
-                consecutive_timeouts=consecutive_timeouts,
-            )
+        chapter_html = _prepare_chapter_html_with_llm_fallback(
+            ch.html, hr_as_stars, strip_notes,
+            chapter_notes=chapter_notes,
+            ornament_tokens=ornament_tokens,
+            llm_config=_note_check_config_for(note_check, ch),
+            note_check=note_check,
+            site_name=site_name,
+            story_id=story.id,
+            chapter_number=ch.number,
+            progress=progress,
         )
-        if llm_disabled:
-            llm_config = None
         buf.write(chapter_html)
         buf.write("\n</div><hr>\n")
+    _report_note_check(note_check, progress)
 
     buf.write("</body>\n</html>\n")
     with single_flight.path_lock(path):
@@ -1963,13 +1933,54 @@ def _llm_an_cache_key(paragraphs: list[str], llm_config: dict) -> str:
 
 
 def _llm_an_load_cache(path: Path | None) -> dict:
+    """Read a story's cached LLM A/N classifications. A file that is
+    missing, unreadable, or not the JSON object it should be counts as
+    an empty cache: the chapters are simply classified again."""
     if path is None or not path.exists():
         return {}
     try:
         import json
-        return json.loads(path.read_text(encoding="utf-8")) or {}
+        loaded = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return {}
+    return loaded if isinstance(loaded, dict) else {}
+
+
+# The field a cached classification keeps its paragraph numbers under.
+_LLM_AN_CACHE_FLAGS_FIELD = "flags"
+
+
+def _llm_an_cached_flags(entry) -> set[int] | None:
+    """The flagged paragraphs a cache entry records, or None when the
+    entry is missing or cannot be trusted, and the chapter has to be
+    classified again.
+
+    Entries are written as ``{"flags": [...]}``. Older versions wrote
+    the bare list, and wrote an empty one both when the model found no
+    notes and when the request had failed: an account that had run out
+    of credit was stored as "no notes" for every chapter of the book.
+    The two cannot be told apart afterwards, so an old empty list is
+    not trusted. The chapter is asked about once more and stored in
+    the new form. An old list with flags in it can only have come from
+    a real answer, so it is kept.
+    """
+    if isinstance(entry, dict):
+        stored = entry.get(_LLM_AN_CACHE_FLAGS_FIELD)
+        if not isinstance(stored, list):
+            return None
+    elif isinstance(entry, list) and entry:
+        stored = entry
+    else:
+        return None
+    return {
+        index for index in stored
+        if isinstance(index, int) and not isinstance(index, bool)
+    }
+
+
+def _llm_an_cache_entry(flagged: set[int]) -> dict:
+    """The cache entry for a chapter the model answered for in full."""
+    return {_LLM_AN_CACHE_FLAGS_FIELD: sorted(flagged)}
 
 
 def _llm_an_save_cache(path: Path | None, data: dict) -> None:
@@ -2052,6 +2063,7 @@ def strip_an_via_llm(
     html: str,
     *,
     llm_config: dict | None,
+    note_check=None,
     site_name: str | None = None,
     story_id=None,
     chapter_number: int | None = None,
@@ -2082,8 +2094,22 @@ def strip_an_via_llm(
       unchanged chapters; bumping the model invalidates the cache
       naturally since the model name is part of the key.
 
-    Network and parse failures degrade silently to "no change" — the
-    LLM is purely additive on top of the regex, never load-bearing.
+    * Only an answer that covers the whole chapter is saved to that
+      cache. A chapter the model answered for in part has the notes it
+      did find removed, and is asked about again next time.
+
+    A request that fails outright raises one of the ``attribution``
+    LLM errors (unreachable, timed out, rejected, or nothing usable
+    in the reply) instead of returning the chapter untouched. That
+    used to be reported as "no A/N paragraphs found" and saved, so the
+    chapter was never checked again. The chapter loop
+    (:func:`_prepare_chapter_html_with_llm_fallback`) catches them and
+    carries on with the regex result: the LLM stays an addition to the
+    regex pass, never a requirement.
+
+    ``note_check`` is the book's running tally
+    (:class:`~ficary.attribution.NoteCheckRun`), told here how each
+    chapter the model did answer for turned out.
     """
     if not html or not llm_config:
         return html
@@ -2120,16 +2146,19 @@ def strip_an_via_llm(
         f"chapter {chapter_number}" if chapter_number is not None else "chapter"
     )
 
-    cached = cache.get(cache_key)
+    cached_flags = _llm_an_cached_flags(cache.get(cache_key))
     flagged: set[int]
     # Track whether we already emitted a verification-round summary.
     # The verification message ("kept N/M flags" / "dropped every
     # flag") IS the outcome line for that path, so we don't follow
     # it with a redundant "stripped X paragraphs" message below.
     outcome_already_logged = False
+    # Set when part of the chapter went unanswered. What did come back
+    # is still used for this export, but it is not saved.
+    incomplete = None
 
-    if isinstance(cached, list):
-        flagged = {int(i) for i in cached if isinstance(i, int)}
+    if cached_flags is not None:
+        flagged = cached_flags
         _emit(progress, f"  [llm-an] {chapter_label}: cache hit")
     else:
         from . import attribution
@@ -2148,9 +2177,23 @@ def strip_an_via_llm(
             progress,
             f"  [llm-an] {chapter_label}: classifying via {provider}/{model}{suffix}",
         )
-        first = attribution.classify_authors_notes_via_llm(
-            paragraph_texts, llm_config=llm_config,
-        )
+        try:
+            first = attribution.classify_authors_notes_via_llm(
+                paragraph_texts, llm_config=llm_config,
+            )
+        except attribution.LLMIncompleteAnswer as exc:
+            if not exc.answered_batches:
+                # Nothing usable came back for any of it. The chapter
+                # loop handles that like any other failed chapter.
+                raise
+            first = exc.flagged
+            incomplete = exc
+            _emit(
+                progress,
+                f"  [llm-an] {chapter_label}: part of this chapter could "
+                f"not be checked ({exc.reason}); the result is not saved, "
+                "so it is checked again next time",
+            )
         # Runaway guard: too many flags on a single chapter is the
         # classifier's failure mode (occasional models read a long
         # chapter as one giant author's note when the opening
@@ -2163,14 +2206,32 @@ def strip_an_via_llm(
                 f"{len(first)}/{len(paragraph_texts)} paragraphs "
                 f"({ratio:.0%}); running verification round",
             )
-            flagged = _llm_an_verify(
-                paragraph_texts, first, llm_config=llm_config,
-            )
+            verification_unreadable = False
+            try:
+                flagged = _llm_an_verify(
+                    paragraph_texts, first, llm_config=llm_config,
+                )
+            except attribution.LLMIncompleteAnswer as exc:
+                # The second look did not come back whole, so the
+                # first pass's suspiciously large set of flags stays
+                # unconfirmed, and unconfirmed paragraphs stay in the
+                # story.
+                flagged = set()
+                incomplete = incomplete or exc
+                verification_unreadable = True
+                _emit(
+                    progress,
+                    f"  [llm-an] {chapter_label}: verification round "
+                    f"could not be read ({exc.reason}); keeping chapter "
+                    "intact, and the result is not saved",
+                )
             keep_ratio = (
                 len(flagged) / len(paragraph_texts)
                 if paragraph_texts else 0.0
             )
-            if flagged and keep_ratio > _LLM_AN_VERIFY_KEEP_CEILING:
+            if verification_unreadable:
+                pass  # said above
+            elif flagged and keep_ratio > _LLM_AN_VERIFY_KEEP_CEILING:
                 _emit(
                     progress,
                     f"  [llm-an] {chapter_label}: verification kept "
@@ -2194,8 +2255,10 @@ def strip_an_via_llm(
             outcome_already_logged = True
         else:
             flagged = first
-        cache[cache_key] = sorted(flagged)
-        _llm_an_save_cache(cache_path, cache)
+        # Only an answer that covers the whole chapter is remembered.
+        if incomplete is None:
+            cache[cache_key] = _llm_an_cache_entry(flagged)
+            _llm_an_save_cache(cache_path, cache)
 
     # Boundary-only constraint for providers whose A/N classifier we
     # don't trust mid-chapter (currently Ollama). Drops any LLM flag
@@ -2246,11 +2309,19 @@ def strip_an_via_llm(
                 f"{len(flagged)}/{len(paragraph_texts)} paragraph(s) "
                 "as A/N",
             )
-        else:
+        elif incomplete is None:
+            # Not said for a chapter only partly checked: "none found"
+            # would claim more than is known.
             _emit(
                 progress,
                 f"  [llm-an] {chapter_label}: no A/N paragraphs found",
             )
+
+    if note_check is not None:
+        if incomplete is None:
+            note_check.chapter_checked(removed=len(flagged))
+        else:
+            note_check.chapter_partly_checked(incomplete)
 
     if not flagged:
         return html
@@ -2541,7 +2612,7 @@ def export_epub(
         _story_ornament_tokens(story.chapters) if hr_as_stars else frozenset()
     )
     display_ns = chapter_display_numbers((c.number, c.title) for c in story.chapters)
-    consecutive_timeouts = 0
+    note_check = _new_note_check(llm_config, strip_notes)
     for ch in story.chapters:
         ch_heading = format_chapter_heading(display_ns[ch.number], ch.title)
         ec = epub.EpubHtml(
@@ -2550,21 +2621,17 @@ def export_epub(
             lang=lang_code,
         )
         heading = escape(ch_heading)
-        chapter_html, llm_disabled, consecutive_timeouts = (
-            _prepare_chapter_html_with_llm_fallback(
-                ch.html, hr_as_stars, strip_notes,
-                chapter_notes=chapter_notes,
-                ornament_tokens=ornament_tokens,
-                llm_config=_llm_config_for(llm_config, ch),
-                site_name=site_prefix,
-                story_id=story.id,
-                chapter_number=ch.number,
-                progress=progress,
-                consecutive_timeouts=consecutive_timeouts,
-            )
+        chapter_html = _prepare_chapter_html_with_llm_fallback(
+            ch.html, hr_as_stars, strip_notes,
+            chapter_notes=chapter_notes,
+            ornament_tokens=ornament_tokens,
+            llm_config=_note_check_config_for(note_check, ch),
+            note_check=note_check,
+            site_name=site_prefix,
+            story_id=story.id,
+            chapter_number=ch.number,
+            progress=progress,
         )
-        if llm_disabled:
-            llm_config = None
         # Sanitise AFTER the strip-notes / LLM pass so those regexes see
         # the raw markup they were tuned against; only the EPUB path
         # gets the EPUB3 content-model cleanup.
@@ -2573,6 +2640,7 @@ def export_epub(
         ec.add_item(css)
         book.add_item(ec)
         epub_chapters.append(ec)
+    _report_note_check(note_check, progress)
 
     book.toc = [title_page] + epub_chapters
     book.add_item(epub.EpubNcx())

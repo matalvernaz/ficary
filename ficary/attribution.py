@@ -81,6 +81,192 @@ class LLMTimeout(LLMUnavailable):
     pass for the rest of the export."""
 
 
+# HTTP statuses that mean the same thing for every later request in a
+# run: the key is wrong (401), the account needs paying (402), or the
+# model or endpoint does not exist (404). 403 is left out on purpose.
+# From Anthropic and OpenAI it is an account restriction, but some
+# OpenAI-compatible gateways use it to refuse one flagged chapter, and
+# a story with one such chapter should not lose the check for the rest.
+_LLM_STATUSES_THAT_REPEAT = frozenset({401, 402, 404})
+
+# Machine-readable error names that mean the same. They are looked for
+# in the error body's ``type`` and ``code`` fields, because the status
+# alone does not say it: OpenAI sends an exhausted quota as a 429, and
+# Anthropic's spend cap is a 429 too.
+_LLM_ERROR_CODES_THAT_REPEAT = frozenset({
+    "authentication_error",
+    "billing_error",
+    "invalid_api_key",
+    "insufficient_quota",
+    "enforced_spend_limit_reached",
+    "model_not_found",
+    "account_deactivated",
+})
+
+# Wording that means the account has run out of money. Anthropic sends
+# "Your credit balance is too low to access the Anthropic API" as a
+# plain 400 ``invalid_request_error``, so its text is the only thing
+# that tells it apart from a malformed request. If a provider rewords
+# its message this stops matching, and the failure is then caught by
+# the consecutive-failure limit a few requests later instead.
+_LLM_MESSAGES_THAT_REPEAT = (
+    "credit balance",
+    "exceeded your current quota",
+    "insufficient funds",
+    "insufficient balance",
+)
+
+# How a provider is named to the user in a status line.
+_LLM_PROVIDER_DISPLAY_NAMES = {
+    "anthropic": "Anthropic",
+    "openai": "OpenAI",
+    "ollama": "Ollama",
+}
+_LLM_PROVIDER_DISPLAY_FALLBACK = "The LLM server"
+
+# Longest piece of a provider's own error message quoted to the user.
+_LLM_QUOTED_MESSAGE_MAX_CHARS = 240
+
+
+def _llm_error_fields(body: str) -> tuple[str, frozenset[str]]:
+    """Pull the readable message and the machine codes out of an LLM
+    provider's error body.
+
+    Returns ``(message, codes)``. Both are empty when the body is not
+    the JSON any of the supported providers sends, so callers can use
+    the result without checking the shape first.
+
+    Shapes handled: Anthropic ``{"error": {"type", "message",
+    "details": {"error_code"}}}``, OpenAI and compatible servers
+    ``{"error": {"message", "type", "code"}}``, and Ollama
+    ``{"error": "text"}``.
+    """
+    import json as _json
+
+    try:
+        parsed = _json.loads(body or "")
+    except (ValueError, TypeError):
+        return "", frozenset()
+    if not isinstance(parsed, dict):
+        return "", frozenset()
+    error = parsed.get("error")
+    if isinstance(error, str):
+        return error.strip(), frozenset()
+    if not isinstance(error, dict):
+        return "", frozenset()
+
+    message = error.get("message")
+    if not isinstance(message, str):
+        message = ""
+    codes = set()
+    for field in ("type", "code"):
+        value = error.get(field)
+        if isinstance(value, str) and value:
+            codes.add(value.lower())
+    details = error.get("details")
+    if isinstance(details, dict):
+        detail_code = details.get("error_code")
+        if isinstance(detail_code, str) and detail_code:
+            codes.add(detail_code.lower())
+    return message.strip(), frozenset(codes)
+
+
+def _llm_rejection_will_repeat(status: int, body: str) -> bool:
+    """True when an error reply says something about the account or
+    the settings, so every later request in the run would get it too.
+
+    False is the safe answer for anything unrecognised: the caller
+    then keeps trying, and its consecutive-failure limit ends the
+    attempts a few requests later.
+    """
+    if status in _LLM_STATUSES_THAT_REPEAT:
+        return True
+    message, codes = _llm_error_fields(body)
+    if codes & _LLM_ERROR_CODES_THAT_REPEAT:
+        return True
+    lowered = message.lower()
+    return any(phrase in lowered for phrase in _LLM_MESSAGES_THAT_REPEAT)
+
+
+class LLMRejected(RuntimeError):
+    """The LLM provider answered, and its answer was an error status.
+
+    Raised for a status that is not worth retrying, and for one that
+    was retried and still failed. ``str()`` keeps the ``LLM HTTP
+    <status> from <provider>: <body>`` form that existing log lines
+    and their readers use.
+
+    Not a subclass of :class:`LLMUnavailable`: the server is there and
+    replying, so a single one of these is no reason to stop a run.
+    ``will_repeat`` says when it is: a rejected key, an empty balance
+    or a model that does not exist is the same answer for every
+    chapter still to come.
+    """
+
+    def __init__(
+        self, status: int, provider: str, detail: str = "",
+        body: str | None = None,
+    ):
+        """``detail`` is the text for the log line and may be cut
+        short. ``body`` is the provider's whole error body when the
+        caller has it; the message and codes are read from that, since
+        a body cut short is no longer JSON."""
+        self.status = status
+        self.provider = provider
+        self.detail = detail
+        whole_body = detail if body is None else body
+        self.provider_message, self.codes = _llm_error_fields(whole_body)
+        self.will_repeat = _llm_rejection_will_repeat(status, whole_body)
+        super().__init__(f"LLM HTTP {status} from {provider}: {detail}")
+
+    def explain(self) -> str:
+        """The rejection as one plain sentence for a status line.
+
+        Quotes the provider's own message when it sent one, since that
+        is the part that says what to do ("go to Plans & Billing").
+        """
+        name = _LLM_PROVIDER_DISPLAY_NAMES.get(
+            self.provider, _LLM_PROVIDER_DISPLAY_FALLBACK,
+        )
+        sentence = f"{name} refused the request (HTTP {self.status})"
+        message = self.provider_message
+        if not message:
+            return sentence
+        if len(message) > _LLM_QUOTED_MESSAGE_MAX_CHARS:
+            message = message[:_LLM_QUOTED_MESSAGE_MAX_CHARS].rstrip() + "…"
+        return f'{sentence}: "{message}"'
+
+
+class LLMIncompleteAnswer(RuntimeError):
+    """The author's-note classifier got a reply for a chapter, but one
+    or more of its batches held no verdicts that could be read.
+
+    Raised instead of returning the partial result, so a caller that
+    does not know about it cannot mistake "the model never answered"
+    for "the model found no notes" and save that as the chapter's
+    result. ``flagged`` holds what the readable batches did find, for
+    callers that would sooner strip those than nothing.
+    """
+
+    def __init__(
+        self, flagged: set[int], *,
+        unreadable_batches: int, batches: int, reason: str,
+    ):
+        self.flagged = flagged
+        self.unreadable_batches = unreadable_batches
+        self.batches = batches
+        self.reason = reason
+        super().__init__(
+            f"no usable verdicts in {unreadable_batches} of {batches} "
+            f"LLM reply batch(es): {reason}"
+        )
+
+    @property
+    def answered_batches(self) -> int:
+        """How many batches did come back with readable verdicts."""
+        return self.batches - self.unreadable_batches
+
+
 # ── Registry ────────────────────────────────────────────────────────
 
 # Each entry: distribution-name used with pip. The import name may
@@ -1739,9 +1925,16 @@ _LLM_REQUEST_TIMEOUT_DEFAULT_S = 300
 # whole render. 429 (rate-limit) is the load-bearing one for cloud
 # providers; 5xx covers transient provider overload. The retry budget
 # is small on purpose — three attempts with capped backoff so a wedged
-# provider can't stall a 50-chapter audiobook for hours.
-_LLM_HTTP_RETRY_STATUSES = frozenset({408, 425, 429, 500, 502, 503, 504})
+# provider can't stall a 50-chapter audiobook for hours. 529 is
+# Anthropic's "overloaded", which is as temporary as a 503.
+_LLM_HTTP_RETRY_STATUSES = frozenset({408, 425, 429, 500, 502, 503, 504, 529})
 _LLM_HTTP_RETRY_MAX = 3
+# How much of a provider's error body is read, and how much of that is
+# put in the log line. The body is read in full (within reason) so its
+# JSON can still be parsed; a gateway's HTML error page can run long,
+# and none of it is worth more than a line in the log.
+_LLM_ERROR_BODY_MAX_BYTES = 65536
+_LLM_ERROR_DETAIL_MAX_CHARS = 500
 _LLM_HTTP_RETRY_BASE_S = 2.0
 _LLM_HTTP_RETRY_MAX_DELAY_S = 30.0
 
@@ -2106,14 +2299,25 @@ def _llm_http_with_retry(
             with urllib.request.urlopen(req, timeout=request_timeout) as resp:
                 return resp.read().decode("utf-8", errors="replace")
         except urllib.error.HTTPError as exc:
+            # The error body can only be read once, so take it before
+            # deciding anything. The catch is broad because the body
+            # is whatever object the transport attached, and failing
+            # to read it must not hide the status we already have.
+            try:
+                body = exc.read(_LLM_ERROR_BODY_MAX_BYTES).decode(
+                    "utf-8", errors="replace",
+                )
+            except Exception:  # noqa: BLE001 — see comment above
+                body = ""
+            detail = body[:_LLM_ERROR_DETAIL_MAX_CHARS]
             if (
                 exc.code in _LLM_HTTP_RETRY_STATUSES
                 and attempt < _LLM_HTTP_RETRY_MAX - 1
+                # A spent quota or a spend cap arrives as a 429, and
+                # waiting a few seconds does not put money in the
+                # account. Don't sleep through retries for those.
+                and not _llm_rejection_will_repeat(exc.code, body)
             ):
-                try:
-                    detail = exc.read().decode("utf-8", errors="replace")[:200]
-                except Exception:
-                    detail = ""
                 retry_after = (
                     exc.headers.get("Retry-After") if exc.headers else None
                 )
@@ -2134,7 +2338,7 @@ def _llm_http_with_retry(
                     "LLM HTTP %d from %s; retry %d/%d in %.1fs (%s)",
                     exc.code, provider, attempt + 1,
                     _LLM_HTTP_RETRY_MAX, delay,
-                    detail.strip() or exc.reason,
+                    detail[:200].strip() or exc.reason,
                 )
                 import time as _time
                 _time.sleep(delay)
@@ -2145,13 +2349,8 @@ def _llm_http_with_retry(
             # fails on the last loop iteration), so there's no
             # separate "after N attempts" raise below; one less code
             # path to keep accurate as the retry knobs change.
-            detail = ""
-            try:
-                detail = exc.read().decode("utf-8", errors="replace")[:500]
-            except Exception:
-                pass
-            raise RuntimeError(
-                f"LLM HTTP {exc.code} from {provider}: {detail or exc.reason}"
+            raise LLMRejected(
+                exc.code, provider, detail or str(exc.reason), body=body,
             ) from exc
         except TimeoutError as exc:
             # Endpoint accepted the connection but the model didn't
@@ -2232,6 +2431,7 @@ def _extract_llm_text(body: str, provider: str) -> str:
             return ""
         return message.get("content", "") or ""
     if provider == "anthropic":
+        _log_llm_stop_reason(provider, parsed.get("stop_reason"))
         content = parsed.get("content")
         if not isinstance(content, list):
             return ""
@@ -2246,10 +2446,44 @@ def _extract_llm_text(body: str, provider: str) -> str:
     first = choices[0]
     if not isinstance(first, dict):
         return ""
+    _log_llm_stop_reason(provider, first.get("finish_reason"))
     message = first.get("message")
     if not isinstance(message, dict):
         return ""
     return message.get("content", "") or ""
+
+
+# Why a successful (HTTP 200) reply can still hold nothing usable, in
+# the words each provider uses for it. Anthropic reports these as
+# ``stop_reason``, OpenAI and compatible servers as ``finish_reason``.
+_LLM_STOP_REASON_EXPLANATIONS = {
+    "refusal": "the model declined to answer this request",
+    "content_filter": "the provider's content filter withheld the answer",
+    "max_tokens": "the answer was cut off at the model's output limit",
+    "length": "the answer was cut off at the model's output limit",
+}
+
+
+def _log_llm_stop_reason(provider: str, stop_reason: object) -> None:
+    """Put a line in the log when a reply ended for a reason that
+    leaves its text missing or incomplete.
+
+    The callers only get the reply text back, and an empty or
+    half-written reply looks the same to them whatever caused it. This
+    line is what says whether the model refused or simply ran out of
+    room, which need different fixes.
+    """
+    if not isinstance(stop_reason, str):
+        return
+    explanation = _LLM_STOP_REASON_EXPLANATIONS.get(stop_reason)
+    if explanation is None:
+        return
+    name = _LLM_PROVIDER_DISPLAY_NAMES.get(
+        provider, _LLM_PROVIDER_DISPLAY_FALLBACK,
+    )
+    logger.warning(
+        "%s: %s (%s).", name, explanation, stop_reason,
+    )
 
 
 _LLM_PROBE_TIMEOUT_S = 5.0
@@ -2924,10 +3158,24 @@ def classify_authors_notes_via_llm(
     """Ask the LLM to flag which paragraphs are author's notes.
 
     Returns a set of zero-based indices. ``llm_config`` matches the
-    dict ``generate_audiobook`` accepts. Failure modes (transport
-    error, parse failure, missing config) return an empty set so the
-    regex pre-pass is the only A/N filter applied — i.e. the LLM
-    backstop is purely additive.
+    dict ``generate_audiobook`` accepts. A missing config returns an
+    empty set, since there is nothing to ask.
+
+    A returned set always means the model answered for every
+    paragraph. When it did not, this raises, so that a failure can
+    never be read as "no notes found" and saved as the chapter's
+    result (which is what happened when an account ran out of credit:
+    every chapter was reported clean and remembered that way):
+
+    * :class:`LLMUnavailable` / :class:`LLMTimeout`: nothing is
+      listening, or the model did not reply in time.
+    * :class:`LLMRejected`: the provider replied with an error status.
+    * :class:`LLMIncompleteAnswer`: a reply came back but one or more
+      batches could not be read as verdicts. It carries the flags from
+      the batches that could, for callers that want them.
+
+    The LLM stays an addition to the regex pass, never a requirement:
+    callers catch these and carry on with the regex result.
 
     Long chapters are split into batches of ``_AN_BATCH_SIZE``
     paragraphs and the per-batch flag sets are unioned. Without
@@ -2967,6 +3215,8 @@ def classify_authors_notes_via_llm(
                          i, len(p), preview)
 
     flagged: set[int] = set()
+    unreadable_batches = 0
+    last_unreadable_reason = ""
     total = len(paragraphs)
     batch_size = _an_batch_size_for_provider(provider)
     n_batches = (total + batch_size - 1) // batch_size
@@ -2987,9 +3237,19 @@ def classify_authors_notes_via_llm(
                 api_key=api_key, system_prompt=system_prompt,
                 request_timeout_s=request_timeout_s,
             )
-        except LLMUnavailable:
+        except (LLMUnavailable, LLMRejected):
+            # Nothing is listening, or the provider turned the request
+            # away. Neither is about this batch, and the next batch
+            # would meet the same answer, so stop here and let the
+            # chapter loop decide what to do with the rest of the book.
             raise
         except Exception as exc:  # noqa: BLE001 — additive, never fail
+            # A reply that cannot be read as verdicts, or a fault in
+            # reading it. One bad batch must not cost the batches that
+            # do answer, so carry on, but remember it: the chapter is
+            # then reported as incomplete instead of as clean.
+            unreadable_batches += 1
+            last_unreadable_reason = str(exc) or type(exc).__name__
             logger.warning(
                 "LLM author's-note classifier failed on batch "
                 "%d/%d: %s", batch_no, n_batches, exc,
@@ -3001,10 +3261,26 @@ def classify_authors_notes_via_llm(
     if logger.isEnabledFor(logging.DEBUG):
         logger.debug(
             "LLM A/N parsed: %d flag(s) from %d paragraph(s) "
-            "across %d batch(es)",
-            len(flagged), total, n_batches,
+            "across %d batch(es), %d unreadable",
+            len(flagged), total, n_batches, unreadable_batches,
+        )
+    if unreadable_batches:
+        raise LLMIncompleteAnswer(
+            flagged,
+            unreadable_batches=unreadable_batches,
+            batches=n_batches,
+            reason=last_unreadable_reason,
         )
     return flagged
+
+
+class _NoVerdict(ValueError):
+    """One batch's reply held nothing that reads as a verdict.
+
+    Internal to the classifier: :func:`classify_authors_notes_via_llm`
+    counts these per chapter and reports them to its caller as one
+    :class:`LLMIncompleteAnswer`.
+    """
 
 
 def _classify_an_batch(
@@ -3016,6 +3292,10 @@ def _classify_an_batch(
     """One batched round-trip to the LLM. Returns 0-based indices
     *within this batch* (not the original chapter); the caller is
     responsible for offsetting them back to chapter coordinates.
+
+    Raises :class:`_NoVerdict` when the reply cannot be read as an
+    answer at all, so that is never confused with an answer of "no
+    notes here".
     """
     numbered = []
     # Truncate each paragraph to a reasonable length so a 5K-word
@@ -3076,8 +3356,11 @@ def _classify_an_batch(
 
     import json as _json
 
-    if not reply:
-        return set()
+    # Each of these used to return an empty set, which the caller could
+    # not tell from "the model looked and found no notes". It then
+    # reported the chapter as clean and saved that as its result.
+    if not reply or not reply.strip():
+        raise _NoVerdict("the model sent back an empty reply")
     text = reply.strip()
     if text.startswith("```"):
         first_nl = text.find("\n")
@@ -3089,14 +3372,57 @@ def _classify_an_batch(
     first_brace = text.find("{")
     last_brace = text.rfind("}")
     if first_brace == -1 or last_brace <= first_brace:
-        return set()
+        raise _NoVerdict("the model's reply was not JSON")
     blob = text[first_brace : last_brace + 1]
     try:
         parsed = _json.loads(blob)
     except (ValueError, _json.JSONDecodeError):
-        return set()
+        raise _NoVerdict(
+            "the model's reply was not valid JSON (it may have been cut off)"
+        ) from None
 
-    return _parse_an_response(parsed, paragraphs)
+    flagged = _parse_an_response(parsed, paragraphs)
+    if not flagged and not _an_reply_answers_the_question(parsed):
+        raise _NoVerdict(
+            "the model's reply did not say which paragraphs are notes"
+        )
+    return flagged
+
+
+def _an_reply_answers_the_question(parsed) -> bool:
+    """True when a reply with no flagged paragraphs still reads as a
+    real "none of these are notes" answer.
+
+    Three shapes count. The documented one is an object keyed by
+    paragraph number, with every verdict false. A model that lists
+    only the notes it found sends that same object with nothing in
+    it. And some models return a list of notes under one of the usual
+    keys and leave the list empty. Anything else (a scene summary, an
+    apology, an unrelated object) is the model not doing the task,
+    which must not be saved as "this chapter has no notes".
+
+    A number that is not one of this batch's paragraphs still counts
+    as the documented shape. The parser ignores it, as it always has.
+    """
+    if not isinstance(parsed, dict):
+        return False
+    if not parsed:
+        return True
+    for key, value in parsed.items():
+        try:
+            int(str(key).strip())
+        except (TypeError, ValueError):
+            pass
+        else:
+            return True
+        if (
+            isinstance(key, str)
+            and key.lower() in _AN_LIST_KEYS
+            and isinstance(value, list)
+            and not value
+        ):
+            return True
+    return False
 
 
 # Keys models tend to use for the "this paragraph is N" field when
@@ -3430,3 +3756,202 @@ def _normalise_para(s: str) -> str:
     if s.endswith("…"):
         s = s[:-1].rstrip()
     return " ".join(s.split())
+
+
+# ── Keeping score of the note check across one book ───────────────
+
+# Chapters in a row the LLM note check may fail on before the rest of
+# the book goes without it. One failure is often passing: a long
+# chapter on a slow local model, a provider having a bad minute. Three
+# in a row means each remaining chapter would cost a paid request, or
+# minutes of waiting, and get nothing back.
+NOTE_CHECK_MAX_CONSECUTIVE_FAILURES = 3
+
+
+def _note_check_failure_reason(exc: Exception) -> str:
+    """Why the LLM could not check a chapter, as a phrase that reads
+    naturally after "chapter 4:" and inside a longer sentence."""
+    if isinstance(exc, LLMTimeout):
+        return f"timeout ({exc})"
+    if isinstance(exc, LLMUnavailable):
+        return f"endpoint unreachable ({exc})"
+    if isinstance(exc, LLMRejected):
+        return exc.explain()
+    if isinstance(exc, LLMIncompleteAnswer):
+        return f"the LLM's reply could not be used ({exc.reason})"
+    return f"the LLM check failed ({exc})"
+
+
+class NoteCheckRun:
+    """Follows the LLM author's-note check through one book.
+
+    One of these is made for each export or audiobook render. The
+    chapter loop asks it which config to check the next chapter with,
+    tells it how each chapter went, and asks it for a closing line.
+
+    It exists so two decisions are made in one place, the same way for
+    every output format: when to stop asking the LLM, and what the
+    user is told. Before it, a provider that refused every request
+    (an account out of credit) was asked again for every chapter, and
+    the book was reported as checked.
+    """
+
+    def __init__(self, llm_config: dict | None):
+        self._config = llm_config or None
+        self._consecutive_failures = 0
+        self._stopped = False
+        # Chapters the LLM answered for in full, cached answers included.
+        self.checked = 0
+        # Of those, how many had at least one paragraph removed.
+        self.cleaned = 0
+        # Chapters where only some batches came back readable.
+        self.partly_checked = 0
+        # Chapters that went without the LLM check: it failed on them,
+        # or it had already been stopped when their turn came.
+        self.unchecked = 0
+        # The first failure, in plain words, for the closing line.
+        self.problem = ""
+
+    @property
+    def requested(self) -> bool:
+        """Whether an LLM note check was asked for at all."""
+        return self._config is not None
+
+    @property
+    def stopped(self) -> bool:
+        """True once the check has been given up on for this book."""
+        return self._stopped
+
+    @property
+    def config(self) -> dict | None:
+        """The config to check the next chapter with, or None when
+        there is no check to run (never asked for, or stopped)."""
+        if self._stopped:
+            return None
+        return self._config
+
+    @property
+    def had_problems(self) -> bool:
+        """True when any chapter was not fully checked."""
+        return bool(self.unchecked or self.partly_checked)
+
+    def chapter_checked(self, removed: int) -> None:
+        """Record a chapter the LLM answered for in full. ``removed``
+        is how many paragraphs it took out."""
+        self.checked += 1
+        if removed:
+            self.cleaned += 1
+        self._consecutive_failures = 0
+
+    def chapter_partly_checked(self, exc: Exception) -> None:
+        """Record a chapter where some of the LLM's replies were
+        usable and some were not. The LLM is evidently working, so
+        this does not count towards giving up."""
+        self.partly_checked += 1
+        if not self.problem:
+            self.problem = _note_check_failure_reason(exc)
+        self._consecutive_failures = 0
+
+    def chapter_skipped(self) -> None:
+        """Record a chapter that went without the check because it had
+        already been stopped."""
+        self.unchecked += 1
+
+    def chapter_failed(self, exc: Exception, chapter_label: str) -> str:
+        """Record that the LLM could not check a chapter.
+
+        Returns the line to show the user and to log; this method
+        does neither itself, so the line appears once however the
+        caller reports it. The caller then prepares the chapter again
+        with the regex pass alone, so its text still reaches the book.
+
+        Two kinds of failure end the check for the rest of the book at
+        once, because the next chapter would get the same answer:
+        nothing listening at the endpoint, and a rejection that is
+        about the account or the settings. Anything else is given
+        :data:`NOTE_CHECK_MAX_CONSECUTIVE_FAILURES` chapters in a row
+        before the check is dropped.
+        """
+        self.unchecked += 1
+        reason = _note_check_failure_reason(exc)
+        if not self.problem:
+            self.problem = reason
+
+        nothing_is_listening = (
+            isinstance(exc, LLMUnavailable) and not isinstance(exc, LLMTimeout)
+        )
+        account_or_settings = isinstance(exc, LLMRejected) and exc.will_repeat
+        if nothing_is_listening or account_or_settings:
+            self._stopped = True
+            return (
+                f"  [llm-an] {chapter_label}: {reason}; "
+                "skipping LLM for remaining chapters"
+            )
+
+        self._consecutive_failures += 1
+        limit = NOTE_CHECK_MAX_CONSECUTIVE_FAILURES
+        if self._consecutive_failures >= limit:
+            self._stopped = True
+            return (
+                f"  [llm-an] {chapter_label}: {reason} "
+                f"({self._consecutive_failures} chapters in a row); "
+                "skipping LLM for remaining chapters"
+            )
+        return (
+            f"  [llm-an] {chapter_label}: {reason}; skipping LLM on this "
+            f"chapter, retrying on the next "
+            f"({self._consecutive_failures}/{limit})"
+        )
+
+    def summary(self) -> str | None:
+        """The closing line for the book, or None when there is
+        nothing worth saying (no check asked for, or no chapter it
+        applied to).
+
+        When every chapter was checked this is a one-line tally, so
+        the outcome can be read without going back through a line per
+        chapter. When some were not, it says how many, why, and what
+        to do, because the per-chapter lines have scrolled away by
+        the time the book is saved and the book looks finished.
+        """
+        if not self.requested:
+            return None
+        if not self.had_problems:
+            if not self.checked:
+                return None
+            return (
+                f"LLM note check: {_count_chapters(self.checked)} checked, "
+                f"notes removed from {self.cleaned}."
+            )
+
+        parts = []
+        if self.unchecked:
+            parts.append(
+                f"did not run on {_count_chapters(self.unchecked)}"
+            )
+        if self.partly_checked:
+            parts.append(
+                f"only partly covered {_count_chapters(self.partly_checked)}"
+            )
+        sentence = "LLM note check " + " and ".join(parts)
+        if self.checked:
+            sentence += f" ({self.checked} checked in full)"
+        sentence += f": {self.problem}"
+        # A quoted provider message usually ends its own sentence.
+        if not sentence.endswith((".", "!", "?", '."', '!"', '?"')):
+            sentence += "."
+        if self.unchecked:
+            sentence += (
+                " Where it did not run, only the built-in note "
+                "stripping was applied."
+            )
+        sentence += (
+            " To have those chapters checked, fix the problem above and "
+            "download the story again."
+        )
+        return sentence
+
+
+def _count_chapters(count: int) -> str:
+    """``1 chapter`` / ``2 chapters``."""
+    return f"{count} chapter" if count == 1 else f"{count} chapters"

@@ -431,7 +431,7 @@ def test_llm_note_stripping_works_without_llm_attribution(monkeypatch):
     seen = []
     monkeypatch.setattr(
         tts, "_llm_strip_an_paragraphs",
-        lambda text, cfg: seen.append(cfg) or text,
+        lambda text, cfg, **_tally: seen.append(cfg) or text,
     )
     story = SimpleNamespace(
         id="t", title="T", author="A", url="https://example.invalid",
