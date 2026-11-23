@@ -28,6 +28,37 @@ def isolate_mcstories_title_cache(tmp_path, monkeypatch):
     monkeypatch.setattr(search, "_mcs_title_index_loaded", False)
 
 
+@pytest.fixture(autouse=True)
+def isolate_chapter_audio_cache(tmp_path, monkeypatch):
+    """Keep every test's audiobook chapter cache in a per-test temp folder.
+
+    A render makes a folder for its story in that cache before anything
+    else, and ends by clearing old chapter audio out of it. Without this
+    a test that runs a render does both to the real cache of whoever is
+    running the tests.
+    """
+    import ficary.tts as tts
+
+    monkeypatch.setattr(
+        tts, "_chapter_audio_cache_base",
+        lambda: tmp_path / "chapter-audio-cache",
+    )
+
+
+@pytest.fixture(autouse=True)
+def no_update_check_at_launch(monkeypatch):
+    """Stop the main window asking GitHub for the latest release.
+
+    Every test that opens the main window used to make that request for
+    real. GitHub answers 60 an hour without a sign-in, counted per
+    internet address, so a day of test runs used them all up and the
+    real updater on another computer behind the same router was told
+    403. A test of the launch check itself can take this back off with
+    ``monkeypatch.delenv``.
+    """
+    monkeypatch.setenv("FICARY_SKIP_UPDATE_CHECK", "1")
+
+
 @pytest.fixture(scope="session")
 def wx_app():
     """A single ``wx.App`` shared by every GUI test in the session.

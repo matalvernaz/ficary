@@ -2,6 +2,31 @@
 
 ## Unreleased
 
+**An audiobook is no longer abandoned over a chapter the voices cannot speak**
+
+* 2.20.11 stops a render when its voices stop working. It also stopped
+  when a single chapter could not be spoken at all, for instance one in
+  a language the chosen voices do not know. The voice service answers
+  each piece of such a chapter with "no audio", and enough of those in
+  a row were taken for the service being down. The book was then not
+  made, where earlier versions made it with that chapter missing and
+  said so. Only the service refusing requests or being out of reach,
+  or a voice that is not installed, counts as the voices being out.
+* A book whose first three chapters all come back with no audio is
+  stopped there, with the reason, instead of every remaining chapter
+  being tried.
+
+**The update check explains GitHub's limit**
+
+* GitHub answers 60 requests an hour from one internet connection
+  without a sign-in, shared by every program and computer behind it.
+  Past that it answers 403, which was shown as "Update check failed:
+  HTTP Error 403". The message now says what is happening, when GitHub
+  will answer again, and where the new version can be downloaded in
+  the meantime. At launch it is one line in the status pane.
+* Setting the environment variable `FICARY_SKIP_UPDATE_CHECK` skips the
+  check at launch, whatever the preference says.
+
 **Old audiobook chapter audio is cleared out**
 
 * Every chapter of every audiobook ever made was kept in the cache
@@ -10,10 +35,13 @@
   a book can be made again when chapters are added; kept for ever, it
   took as much disk again as the audiobooks themselves.
 * Chapter audio that no render has used for 30 days is now deleted at
-  the end of a render. A chapter counts as used whenever a render
-  reuses it, so a book that is still being added to keeps its audio.
-  The first render after updating clears whatever is older than that,
-  and the log says how many chapters and how much space.
+  the end of a render, and the log says how many chapters and how much
+  space. A chapter counts as used whenever a render reuses it, so a
+  book that is still being added to keeps its audio.
+* Nothing is deleted for the first 30 days after updating. Earlier
+  versions did not record when a chapter was reused, so until then a
+  chapter made long ago and reused last week cannot be told from one
+  nobody has needed since.
 * `FICARY_CHAPTER_AUDIO_KEEP_DAYS` changes the number of days.
   `forever` (or 0) keeps everything, as before.
 

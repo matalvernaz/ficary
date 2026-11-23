@@ -2030,6 +2030,8 @@ class MainFrame(wx.Frame):
 
         if not self.prefs.get_bool(_p.KEY_CHECK_UPDATES):
             return
+        if os.environ.get(self_update.ENV_SKIP_UPDATE_CHECK):
+            return
 
         threading.Thread(target=self._run_update_check, daemon=True).start()
 
@@ -2122,6 +2124,12 @@ class MainFrame(wx.Frame):
 
         try:
             info = self_update.check_for_update()
+        except self_update.UpdateCheckRateLimited as exc:
+            # Nothing is wrong with the program or the connection, so
+            # this is one plain line and no traceback in the log.
+            logger.info("%s", exc.brief())
+            wx.CallAfter(self._log, f"({exc.brief()})")
+            return
         except Exception as exc:
             # Route to the file logger too — the GUI panel is gone the
             # moment the user closes the window, so a pane-only message

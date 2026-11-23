@@ -44,6 +44,113 @@ REPO = "matalvernaz/ficary"
 LATEST_URL = f"https://api.github.com/repos/{REPO}/releases/latest"
 RELEASES_URL = f"https://api.github.com/repos/{REPO}/releases"
 
+# The page a person can download the newest version from when the
+# update check itself cannot get an answer.
+RELEASE_PAGE_URL = f"https://github.com/{REPO}/releases/latest"
+
+# Set to anything to skip the update check at launch, whatever the
+# preference says. The test suite sets it: every test that opens the
+# main window used to ask GitHub for the latest release, and a day of
+# test runs used up the allowance described below for everything
+# sharing the developer's internet connection, the real updater on
+# another computer included.
+ENV_SKIP_UPDATE_CHECK = "FICARY_SKIP_UPDATE_CHECK"
+
+# How many requests an hour GitHub answers without a sign-in, counted
+# per internet address, so shared by every computer behind one router.
+GITHUB_ANONYMOUS_REQUESTS_PER_HOUR = 60
+
+
+class UpdateCheckRateLimited(RuntimeError):
+    """GitHub turned the update check away because this internet
+    connection has used up its allowance of requests for now.
+
+    It answers such a request with 403 (or 429), which the user used to
+    be shown as "Update check failed: HTTP Error 403". ``reset_at`` is
+    when it will answer again, as a Unix time, or None when it did not
+    say. The message is written for the user and says when to try again
+    and where the download is in the meantime.
+    """
+
+    def __init__(self, reset_at=None, *, now=None):
+        self.reset_at = reset_at
+        self._now = time.time() if now is None else now
+        super().__init__(self.explain())
+
+    def when(self) -> str:
+        """When GitHub will answer again, in words."""
+        if self.reset_at is None:
+            return "within the hour"
+        minutes = int((self.reset_at - self._now + 59) // 60)
+        if minutes <= 0:
+            return "any moment now"
+        clock = time.strftime("%H:%M", time.localtime(self.reset_at))
+        return f"at {clock}, in {minutes} minute{'' if minutes == 1 else 's'}"
+
+    def brief(self) -> str:
+        """One line, for the status pane at launch."""
+        return (
+            "Update check skipped: GitHub is limiting requests from this "
+            f"internet connection. It will answer again {self.when()}."
+        )
+
+    def explain(self) -> str:
+        return (
+            "GitHub is not answering update checks from this internet "
+            "connection at the moment. It allows "
+            f"{GITHUB_ANONYMOUS_REQUESTS_PER_HOUR} requests an hour for "
+            "everything sharing a connection, and they have been used up. "
+            f"It will answer again {self.when()}. Until then the newest "
+            f"version can be downloaded from {RELEASE_PAGE_URL}"
+        )
+
+
+def _raise_if_rate_limited(resp, *, now=None) -> None:
+    """Raise :class:`UpdateCheckRateLimited` when ``resp`` is GitHub
+    refusing a request for having had too many. Any other answer,
+    another kind of 403 included, is left for the caller."""
+    status = getattr(resp, "status_code", 200)
+    if status not in (403, 429):
+        return
+    headers = getattr(resp, "headers", None) or {}
+    now = time.time() if now is None else now
+
+    def header(name):
+        # Header names are matched whatever their capitals, also when
+        # the headers arrive as a plain dict.
+        try:
+            items = list(headers.items())
+        except AttributeError:
+            return None
+        for key, value in items:
+            if str(key).lower() == name:
+                return value
+        return None
+
+    remaining = header("x-ratelimit-remaining")
+    retry_after = header("retry-after")
+    try:
+        body = (getattr(resp, "text", "") or "").lower()
+    except Exception:  # noqa: BLE001 — an unreadable body is just no evidence
+        body = ""
+    limited = (
+        status == 429
+        or str(remaining).strip() == "0"
+        or retry_after is not None
+        or "rate limit" in body
+    )
+    if not limited:
+        return
+    reset_at = None
+    try:
+        if retry_after is not None:
+            reset_at = now + float(retry_after)
+        elif header("x-ratelimit-reset") is not None:
+            reset_at = float(header("x-ratelimit-reset"))
+    except (TypeError, ValueError):
+        reset_at = None
+    raise UpdateCheckRateLimited(reset_at, now=now)
+
 # Bundled alongside ficary.exe in the portable zip; vendored at
 # tools/vendor/ (see its README for provenance). If it's ever missing
 # we refuse to self-replace and direct the user to the release page
@@ -102,6 +209,7 @@ def check_for_update(allow_equal: bool = False):
     release the install already claims to be.
     """
     resp = curl_requests.get(LATEST_URL, impersonate="chrome", timeout=15)
+    _raise_if_rate_limited(resp)
     resp.raise_for_status()
     data = resp.json()
 
@@ -152,6 +260,7 @@ def _default_releases_get():
         RELEASES_URL, params={"per_page": 100},
         impersonate="chrome", timeout=15,
     )
+    _raise_if_rate_limited(resp)
     resp.raise_for_status()
     return resp.json()
 
