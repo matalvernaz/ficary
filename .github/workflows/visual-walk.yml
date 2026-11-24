@@ -1,0 +1,37 @@
+name: Visual walk
+
+# Opens every window and dialog with a made-up library on Windows and
+# saves a screenshot of each, with the list of its controls in Tab
+# order, for looking at what a sighted helper sees there. GTK on Linux
+# lays windows out differently (it squeezes what doesn't fit; Windows
+# clips it), so a Linux screenshot doesn't stand in for this one.
+# Run by hand: gh workflow run visual-walk.yml --ref reader
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  walk:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          # The version the Windows build uses.
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install ".[all]"
+
+      - name: Take the screenshots
+        run: python tools/visual_walk.py walk-output
+
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: visual-walk-windows
+          path: walk-output/
+          retention-days: 7
