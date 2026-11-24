@@ -253,8 +253,11 @@ class LibraryPanel(wx.Panel):
         )
         sizer.Add(self.summary_ctrl, 1, wx.EXPAND | wx.LEFT | wx.RIGHT, 8)
 
-        # Action buttons.
-        btns = wx.BoxSizer(wx.HORIZONTAL)
+        # Action buttons. They wrap onto a second row where the window is
+        # too narrow for all of them; one row ran past the right-hand
+        # edge on Linux, Rescan and Close with it. Tab order follows the
+        # order they are made in, not where they land.
+        btns = wx.WrapSizer(wx.HORIZONTAL)
         self.open_btn = wx.Button(self, label="&Open in Reader")
         self.open_btn.Bind(wx.EVT_BUTTON, self._on_open)
         set_help(
@@ -262,7 +265,7 @@ class LibraryPanel(wx.Panel):
             "Open the selected story in the built-in reader "
             "(EPUB and HTML stories).",
         )
-        btns.Add(self.open_btn, 0, wx.RIGHT, 6)
+        btns.Add(self.open_btn, 0, wx.RIGHT | wx.BOTTOM, 6)
 
         self.update_btn = wx.Button(self, label="Check for &Updates")
         self.update_btn.Bind(wx.EVT_BUTTON, self._on_update)
@@ -271,7 +274,7 @@ class LibraryPanel(wx.Panel):
             "Check the selected story's source site for new chapters and "
             "merge any into the existing file.",
         )
-        btns.Add(self.update_btn, 0, wx.RIGHT, 6)
+        btns.Add(self.update_btn, 0, wx.RIGHT | wx.BOTTOM, 6)
 
         self.reexport_btn = wx.Button(self, label="Re-&export...")
         self.reexport_btn.Bind(wx.EVT_BUTTON, self._on_reexport)
@@ -280,7 +283,7 @@ class LibraryPanel(wx.Panel):
             "Write the selected story out again in another format "
             "(EPUB, HTML, or plain text).",
         )
-        btns.Add(self.reexport_btn, 0, wx.RIGHT, 6)
+        btns.Add(self.reexport_btn, 0, wx.RIGHT | wx.BOTTOM, 6)
 
         self.path_btn = wx.Button(self, label="Copy &Path")
         self.path_btn.Bind(wx.EVT_BUTTON, self._on_copy_path)
@@ -288,7 +291,7 @@ class LibraryPanel(wx.Panel):
             self.path_btn,
             "Copy the selected story's file path on disk to the clipboard.",
         )
-        btns.Add(self.path_btn, 0, wx.RIGHT, 6)
+        btns.Add(self.path_btn, 0, wx.RIGHT | wx.BOTTOM, 6)
 
         # Per-story management: adult classification and abandoned flag.
         # Labels are set per selection in _update_summary so the button
@@ -302,7 +305,7 @@ class LibraryPanel(wx.Panel):
             "story that was filed wrong. Adult stories are hidden until "
             "Show adult is ticked.",
         )
-        btns.Add(self.adult_btn, 0, wx.RIGHT, 6)
+        btns.Add(self.adult_btn, 0, wx.RIGHT | wx.BOTTOM, 6)
 
         self.abandon_btn = wx.Button(self, label="Mark A&bandoned")
         self.abandon_btn.Bind(wx.EVT_BUTTON, self._on_toggle_abandoned)
@@ -312,7 +315,7 @@ class LibraryPanel(wx.Panel):
             "checks skip it, or revive it so it's checked again. Use this "
             "for a WIP you know the author has walked away from.",
         )
-        btns.Add(self.abandon_btn, 0, wx.RIGHT, 6)
+        btns.Add(self.abandon_btn, 0, wx.RIGHT | wx.BOTTOM, 6)
 
         self.delete_btn = wx.Button(self, label="&Delete...")
         self.delete_btn.Bind(wx.EVT_BUTTON, self._on_delete)
@@ -321,7 +324,7 @@ class LibraryPanel(wx.Panel):
             "Delete the selected story's file from disk and drop it from "
             "the library index. Cannot be undone.",
         )
-        btns.Add(self.delete_btn, 0, wx.RIGHT, 6)
+        btns.Add(self.delete_btn, 0, wx.RIGHT | wx.BOTTOM, 6)
 
         self.rescan_btn = wx.Button(self, label="Re&scan")
         self.rescan_btn.Bind(wx.EVT_BUTTON, self._on_rescan)
@@ -330,7 +333,7 @@ class LibraryPanel(wx.Panel):
             "Re-read every configured library folder from disk and refresh "
             "this list.",
         )
-        btns.Add(self.rescan_btn, 0, wx.RIGHT, 6)
+        btns.Add(self.rescan_btn, 0, wx.RIGHT | wx.BOTTOM, 6)
 
         # Close only exists when a host asked for it (the standalone
         # window). The embedded main-window view has nothing to close.
@@ -338,8 +341,8 @@ class LibraryPanel(wx.Panel):
             close_btn = wx.Button(self, id=wx.ID_CLOSE, label="&Close")
             close_btn.Bind(wx.EVT_BUTTON, lambda e: self._on_close())
             set_help(close_btn, "Close the library browser (Escape).")
-            btns.Add(close_btn, 0)
-        sizer.Add(btns, 0, wx.ALL, 8)
+            btns.Add(close_btn, 0, wx.BOTTOM, 6)
+        sizer.Add(btns, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.TOP, 8)
 
         self.SetSizer(sizer)
         self._enable_actions(False)

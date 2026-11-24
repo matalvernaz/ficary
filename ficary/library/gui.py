@@ -27,6 +27,7 @@ logger = logging.getLogger(__name__)
 
 from .. import prefs as _prefs
 from ..gui_help import set_help
+from ..gui_layout import WrappingText
 from .. import activity
 from ..gui_status_bar import HINT as STATUS_BAR_HINT, add_activity_status_bar
 from ..gui_status_log import StatusLogCtrl
@@ -1245,7 +1246,7 @@ class ReviewDialog(wx.Dialog):
         sizer = wx.BoxSizer(wx.VERTICAL)
 
         sizer.Add(
-            wx.StaticText(
+            WrappingText(
                 panel,
                 label=(
                     "Pick a file, paste its source URL, and press Promote. "

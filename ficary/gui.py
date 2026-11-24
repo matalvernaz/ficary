@@ -348,6 +348,7 @@ from .download_queue import (
     site_from_thread_name,
 )
 from .gui_help import set_help, is_own_destroy
+from .gui_layout import fit_on_screen
 from . import activity
 from .gui_status_bar import HINT as STATUS_BAR_HINT, add_activity_status_bar
 from .merge import source_display_name
@@ -647,6 +648,9 @@ class MainFrame(wx.Frame):
         self._load_prefs()
         self._show_early_warnings()
         self.Bind(wx.EVT_CLOSE, self._on_close)
+        # 820 pixels tall ran under the taskbar of a 768-pixel laptop
+        # screen, status bar and all.
+        fit_on_screen(self)
         self.Centre()
         self._start_update_check()
         self._start_story_check_at_launch()
@@ -706,8 +710,10 @@ class MainFrame(wx.Frame):
 
         form_sizer.Add(opts, 0, wx.EXPAND | wx.ALL, pad)
 
-        # Extra export options row
-        opts2 = wx.BoxSizer(wx.HORIZONTAL)
+        # Extra export options row. It wraps where the window is narrower
+        # than all of it, as when the window has been fitted to a small
+        # screen; one row would be cut off at the right-hand edge.
+        opts2 = wx.WrapSizer(wx.HORIZONTAL)
         self.hr_stars_ctrl = wx.CheckBox(
             form,
             label=(
@@ -958,6 +964,7 @@ class MainFrame(wx.Frame):
         self.audio_panel.Show(True)
         form.Layout()
         self.add_story_frame.SetClientSize(form.GetBestSize())
+        fit_on_screen(self.add_story_frame)
         self._update_audio_panel_visibility()
         self.add_story_frame.Bind(wx.EVT_CLOSE, self._hide_add_story)
         _hide_id = wx.NewIdRef()

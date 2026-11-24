@@ -14,13 +14,37 @@ into the visible label text as a ``[x] `` / ``[ ] `` prefix so
 screen readers speak the state as part of the row.
 """
 
+import logging
 import re
+import socket
 import threading
+import urllib.error
 
 import wx
 from pathlib import Path
 
+from .gui_layout import WrappingText
 from .gui_status_log import StatusLogCtrl
+
+logger = logging.getLogger(__name__)
+
+
+def _voice_list_problem(exc: Exception) -> str:
+    """What the TTS providers window says when a provider's voice list can't be fetched. A failed connection gets a plain sentence and what to do: its raw error named an SSL object at a memory address. Anything else is quoted, since it may say what is wrong."""
+    network_errors = [ConnectionError, TimeoutError, socket.gaierror, urllib.error.URLError]
+    try:
+        import aiohttp
+
+        network_errors.append(aiohttp.ClientError)
+    except ImportError:
+        pass
+    if isinstance(exc, tuple(network_errors)):
+        return (
+            "The voice list couldn't be fetched: there was no connection to "
+            "the voice service. Check the internet connection, then open "
+            "this window again."
+        )
+    return f"The voice list couldn't be fetched ({exc})."
 
 
 # Shown when the Piper voice engine could not be installed. It used to
@@ -76,7 +100,7 @@ class VoicePreviewDialog(wx.Dialog):
         sizer = wx.BoxSizer(wx.VERTICAL)
 
         sizer.Add(
-            wx.StaticText(
+            WrappingText(
                 panel,
                 label=(
                     "Select a character and click Play Sample to hear "
@@ -401,16 +425,19 @@ class StoryPickerDialog(wx.Dialog):
         self.find_ctrl = wx.TextCtrl(panel)
         self.find_ctrl.SetName("Find in this list")
         self.find_ctrl.Bind(wx.EVT_TEXT, self._on_find_text)
-        controls.Add(self.find_ctrl, 1, wx.RIGHT, 16)
+        controls.Add(self.find_ctrl, 1)
+        sizer.Add(controls, 0, wx.EXPAND | wx.ALL, 8)
 
+        # A row of their own: at the end of the filter row they were
+        # squeezed off its end on Linux.
+        selection = wx.BoxSizer(wx.HORIZONTAL)
         select_all = wx.Button(panel, label="&Select All")
         select_all.Bind(wx.EVT_BUTTON, lambda e: self._set_all(True))
-        controls.Add(select_all, 0, wx.RIGHT, 4)
+        selection.Add(select_all, 0, wx.RIGHT, 4)
         select_none = wx.Button(panel, label="Select &None")
         select_none.Bind(wx.EVT_BUTTON, lambda e: self._set_all(False))
-        controls.Add(select_none, 0)
-
-        sizer.Add(controls, 0, wx.EXPAND | wx.ALL, 8)
+        selection.Add(select_none, 0)
+        sizer.Add(selection, 0, wx.LEFT | wx.RIGHT, 8)
 
         self.list_ctrl = wx.CheckListBox(panel, choices=[])
         self.list_ctrl.SetName("Stories to download")
@@ -438,7 +465,7 @@ class StoryPickerDialog(wx.Dialog):
         self.summary_ctrl.SetName("Story summary")
         sizer.Add(self.summary_ctrl, 0, wx.EXPAND | wx.LEFT | wx.RIGHT, 8)
 
-        hint = wx.StaticText(
+        hint = WrappingText(
             panel,
             label=(
                 "Use the arrow keys to move, space to tick or untick, "
@@ -779,7 +806,7 @@ class MultiPickerDialog(wx.Dialog):
         self.list_ctrl.Bind(wx.EVT_CHECKLISTBOX, self._on_item_toggled)
         sizer.Add(self.list_ctrl, 1, wx.EXPAND | wx.ALL, 8)
 
-        hint = wx.StaticText(
+        hint = WrappingText(
             panel,
             label=(
                 "Arrow keys to move, space to tick or untick. "
@@ -885,7 +912,7 @@ class SeriesPartsDialog(wx.Dialog):
         sizer = wx.BoxSizer(wx.VERTICAL)
 
         sizer.Add(
-            wx.StaticText(
+            WrappingText(
                 panel,
                 label=(
                     f"{len(parts)} part(s) of {series_name} loaded from "
@@ -994,7 +1021,7 @@ class OptionalFeaturesDialog(wx.Dialog):
         panel = wx.Panel(self)
         outer = wx.BoxSizer(wx.VERTICAL)
 
-        header = wx.StaticText(
+        header = WrappingText(
             panel,
             label=(
                 "ficary ships a minimal core install. Optional features "
@@ -1003,17 +1030,28 @@ class OptionalFeaturesDialog(wx.Dialog):
                 "log at the bottom streams its output."
             ),
         )
-        header.Wrap(680)
         outer.Add(header, 0, wx.ALL, 8)
 
-        grid = wx.FlexGridSizer(rows=0, cols=3, hgap=10, vgap=10)
-        grid.AddGrowableCol(0)
+        # The features scroll, and each one is a block: its name, its
+        # status, its description, then its button. Laid out as three
+        # columns they ran past the right-hand edge (each button names
+        # its feature, so the button column alone was wider than the
+        # window) and down past the bottom, the log and Close with them,
+        # with nothing to scroll. The controls are made in the same
+        # order as before, so Tab and a screen reader meet them as they
+        # did; a scrolled window brings the one Tab reaches into view.
+        features = wx.ScrolledWindow(panel, style=wx.VSCROLL)
+        features.SetScrollRate(0, 20)
+        # No name of its own: a named area could be announced on the way
+        # into it, which the dialog never said before.
+        features_sizer = wx.BoxSizer(wx.VERTICAL)
 
         for feature in self._feat.available():
             info = self._feat.FEATURES[feature]
-            title = wx.StaticText(
-                panel,
+            title = WrappingText(
+                features,
                 label=f"{info['display']} ({info['size_hint']})",
+                margin=24,
             )
             # Bold-ish via font weight so the dialog scan-reads with
             # NVDA's "skim" (Ctrl+Down) — the display string is the
@@ -1021,12 +1059,13 @@ class OptionalFeaturesDialog(wx.Dialog):
             font = title.GetFont()
             font.SetWeight(wx.FONTWEIGHT_BOLD)
             title.SetFont(font)
+            title.rewrap()
 
-            status = wx.StaticText(panel, label=self._status_text(feature))
+            status = wx.StaticText(features, label=self._status_text(feature))
             status.SetName(f"{info['display']} status")
             self._status_labels[feature] = status
 
-            btn = wx.Button(panel, label=self._button_label(feature))
+            btn = wx.Button(features, label=self._button_label(feature))
             btn.SetName(f"Install {info['display']}")
             btn.Bind(
                 wx.EVT_BUTTON,
@@ -1034,20 +1073,21 @@ class OptionalFeaturesDialog(wx.Dialog):
             )
             self._buttons[feature] = btn
 
-            grid.Add(title, 1, wx.EXPAND | wx.ALIGN_CENTER_VERTICAL)
-            grid.Add(status, 0, wx.ALIGN_CENTER_VERTICAL)
-            grid.Add(btn, 0, wx.ALIGN_CENTER_VERTICAL)
-
-            # Full description spans all three columns as a second
-            # row. Not using TextCtrl because we want the label to
+            # Not using TextCtrl because we want the label to
             # participate in MSAA tree traversal cleanly.
-            desc = wx.StaticText(panel, label=info["description"])
-            desc.Wrap(640)
-            grid.Add(desc, 1, wx.EXPAND | wx.LEFT | wx.BOTTOM, 2)
-            grid.Add((0, 0))  # spacer
-            grid.Add((0, 0))  # spacer
+            desc = WrappingText(features, label=info["description"], margin=24)
 
-        outer.Add(grid, 0, wx.EXPAND | wx.ALL, 8)
+            # The status goes under the name: the longest names leave no
+            # room beside them.
+            features_sizer.Add(title, 0, wx.LEFT | wx.RIGHT | wx.TOP, 8)
+            features_sizer.Add(status, 0, wx.LEFT | wx.RIGHT | wx.TOP, 8)
+            features_sizer.Add(desc, 0, wx.LEFT | wx.RIGHT | wx.TOP, 8)
+            features_sizer.Add(btn, 0, wx.LEFT | wx.TOP | wx.BOTTOM, 8)
+
+        features.SetSizer(features_sizer)
+        features.FitInside()
+        self._features = features
+        outer.Add(features, 3, wx.EXPAND | wx.LEFT | wx.RIGHT, 8)
 
         outer.Add(
             wx.StaticText(panel, label="&Installer log:"),
@@ -1109,10 +1149,16 @@ class OptionalFeaturesDialog(wx.Dialog):
             return f"&Reinstall {display}..."
         return f"&Install {display}..."
 
+    def _relayout_features(self) -> None:
+        """Lay the feature list out again: a status or button label that changes length is otherwise drawn at its old width, cut off."""
+        self._features.Layout()
+        self._features.FitInside()
+
     def _refresh_feature_row(self, feature: str) -> None:
         self._status_labels[feature].SetLabel(self._status_text(feature))
         btn = self._buttons[feature]
         btn.SetLabel(self._button_label(feature))
+        self._relayout_features()
         btn.Enable(
             self._feat.install_unsupported_reason(feature) is None
             and feature not in self._active_installs
@@ -1138,6 +1184,7 @@ class OptionalFeaturesDialog(wx.Dialog):
 
         self._active_installs.add(feature)
         self._status_labels[feature].SetLabel("(installing...)")
+        self._relayout_features()
         self._buttons[feature].Enable(False)
         self._append_log(f"\nInstalling {info['display']}...")
 
@@ -1219,7 +1266,7 @@ class TtsProvidersDialog(wx.Dialog):
         pad = 8
 
         sizer.Add(
-            wx.StaticText(
+            WrappingText(
                 root,
                 label=(
                     "Pick which TTS providers contribute voices to the "
@@ -1244,8 +1291,7 @@ class TtsProvidersDialog(wx.Dialog):
         self.list_ctrl.Bind(wx.EVT_LISTBOX, self._on_select)
         sizer.Add(self.list_ctrl, 1, wx.EXPAND | wx.LEFT | wx.RIGHT, pad)
 
-        self.detail = wx.StaticText(root, label="")
-        self.detail.Wrap(580)
+        self.detail = WrappingText(root, label="")
         sizer.Add(self.detail, 0, wx.ALL, pad)
 
         btns = wx.BoxSizer(wx.HORIZONTAL)
@@ -1315,7 +1361,8 @@ class TtsProvidersDialog(wx.Dialog):
             voices = provider.list_voices() if provider.is_installed() else []
         except Exception as exc:  # noqa: BLE001
             voices = []
-            err = f" (catalog error: {exc})"
+            logger.info("The %s voice list couldn't be fetched", name, exc_info=True)
+            err = " " + _voice_list_problem(exc)
         else:
             err = ""
         if name == "edge":
@@ -1341,7 +1388,6 @@ class TtsProvidersDialog(wx.Dialog):
         else:
             text = f"{name}: {len(voices)} voices."
         _announce_label(self.detail, text)
-        self.detail.Wrap(580)
         self.Layout()
 
     def _on_tts_close(self, event):
