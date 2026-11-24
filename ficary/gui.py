@@ -13,6 +13,7 @@ import subprocess
 import sys
 import threading
 import time
+import weakref
 import wx
 import webbrowser
 from collections import deque
@@ -308,6 +309,33 @@ class _WxLogHandler(logging.Handler):
             pass
 
 
+class _EarlyWarnings(logging.Handler):
+    """Holds the warnings Ficary's own code logs while the main window is
+    being built, before the status pane is listening.
+
+    The library list first loads then, and that is when a damaged
+    library index is found and set aside; the settings are read then
+    too. Those warnings went only to a log file, which is off by
+    default, so the one line saying why the library looked empty was
+    never seen. The main window shows what was held once the pane's
+    own handler is in place.
+    """
+
+    # A window that fails to build leaves this attached; a cap keeps
+    # that from growing without bound.
+    _MAX_HELD = 50
+
+    def __init__(self):
+        super().__init__(level=logging.WARNING)
+        self.held: list[logging.LogRecord] = []
+
+    def emit(self, record):
+        if not record.name.startswith("ficary"):
+            return
+        if len(self.held) < self._MAX_HELD:
+            self.held.append(record)
+
+
 from . import legacy as _legacy
 from .download_queue import (
     DownloadCancelled,
@@ -532,6 +560,9 @@ class MainFrame(wx.Frame):
             size=(900, 820),
             style=wx.DEFAULT_FRAME_STYLE,
         )
+        self._early_warnings = _EarlyWarnings()
+        logging.getLogger().addHandler(self._early_warnings)
+        weakref.finalize(self, logging.getLogger().removeHandler, self._early_warnings)
         from .prefs import Prefs
         self.prefs = Prefs()
         # ``_global_busy`` covers operations that don't route through
@@ -609,6 +640,7 @@ class MainFrame(wx.Frame):
         self._log_lock = threading.Lock()
         self._build_ui()
         self._load_prefs()
+        self._show_early_warnings()
         self.Bind(wx.EVT_CLOSE, self._on_close)
         self.Centre()
         self._start_update_check()
@@ -1171,6 +1203,21 @@ class MainFrame(wx.Frame):
 
         # Status lines can start with a blank line for the pane's sake.
         announce(text.strip())
+
+    def _show_early_warnings(self) -> None:
+        """Stop holding warnings, and put the ones logged while the window
+        was being built into the status pane, through the pane's own
+        handler so the chosen log level still applies."""
+        early = getattr(self, "_early_warnings", None)
+        if early is None:
+            return
+        self._early_warnings = None
+        logging.getLogger().removeHandler(early)
+        handler = getattr(self, "_wx_log_handler", None)
+        if handler is None:
+            return
+        for record in early.held:
+            handler.handle(record)
 
     def _log(self, msg):
         # Auto-prefix log lines emitted on a per-site queue worker so

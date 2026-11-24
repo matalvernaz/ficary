@@ -142,3 +142,173 @@ class TestSoundscapes:
             encoding="utf-8",
         )
         assert library.load("mine") is None
+
+
+# ── The library index ────────────────────────────────────────────
+
+from ficary.library import index as index_module  # noqa: E402
+from ficary.library.index import LibraryIndex, SCHEMA_VERSION  # noqa: E402
+
+DAMAGED_INDEXES = {
+    "empty": b"",
+    "all zeros": b"\x00" * 512,
+    "cut off": b'{"version": 1, "libraries": {"/home/someone/Stories": {"stori',
+    "utf-16": json.dumps({"version": 1, "libraries": {}}).encode("utf-16"),
+    # json.loads raises RecursionError for this, not a ValueError.
+    "nested too deep": b"[" * 200_000,
+}
+
+
+@pytest.fixture
+def told(monkeypatch):
+    """Every line the index has told the user, and a clean slate for "once per run"."""
+    lines: list[str] = []
+    monkeypatch.setattr(index_module, "_told", set(), raising=False)
+    real = index_module.logger.warning
+
+    def warning(message, *args, **kwargs):
+        lines.append(message % args if args else message)
+        real(message, *args, **kwargs)
+
+    monkeypatch.setattr(index_module.logger, "warning", warning)
+    return lines
+
+
+def set_aside(path: Path) -> list[Path]:
+    return sorted(path.parent.glob(f"{path.stem}.unreadable-*{path.suffix}"))
+
+
+class TestLibraryIndex:
+    @pytest.mark.parametrize("body", DAMAGED_INDEXES.values(), ids=DAMAGED_INDEXES.keys())
+    def test_a_damaged_index_is_kept_aside_and_a_new_one_started(self, tmp_path, told, body):
+        """It used to refuse every save from then on, with nothing in the
+        app saying why the library looked empty."""
+        path = tmp_path / "library-index.json"
+        path.write_bytes(body)
+        index = LibraryIndex.load(path)
+        assert index.save_blocker is None
+        assert index.library_roots() == []
+        [kept] = set_aside(path)
+        assert kept.read_bytes() == body
+        index.save()
+        assert json.loads(path.read_text(encoding="utf-8"))["version"] == SCHEMA_VERSION
+        assert kept.read_bytes() == body
+        [line] = told
+        assert kept.name in line and "Import Existing Folder" in line
+
+    def test_an_index_that_cannot_be_moved_aside_is_not_written_over(self, tmp_path, told, monkeypatch):
+        path = tmp_path / "library-index.json"
+        path.write_bytes(b"\x00" * 64)
+
+        def refuse(self, target):
+            raise PermissionError("The process cannot access the file")
+
+        monkeypatch.setattr(Path, "rename", refuse)
+        index = LibraryIndex.load(path)
+        assert index.save_blocker is not None
+        with pytest.raises(RuntimeError):
+            index.save()
+        assert path.read_bytes() == b"\x00" * 64
+        LibraryIndex.load(path)
+        [line] = told
+        assert "move it aside" in line
+
+    def test_an_index_another_program_has_open_is_left_alone(self, tmp_path, told, monkeypatch):
+        path = tmp_path / "library-index.json"
+        good = json.dumps({"version": SCHEMA_VERSION, "libraries": {}})
+        path.write_text(good, encoding="utf-8")
+        real_read = Path.read_text
+
+        def locked(self, *args, **kwargs):
+            if self == path:
+                raise PermissionError("The process cannot access the file because it is being used by another process")
+            return real_read(self, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "read_text", locked)
+        index = LibraryIndex.load(path)
+        LibraryIndex.load(path)
+        assert index.save_blocker is not None
+        assert set_aside(path) == []
+        assert real_read(path, encoding="utf-8") == good
+        [line] = told
+        assert "could not open" in line
+
+    def test_two_loads_racing_on_one_damaged_file(self, tmp_path, told, monkeypatch):
+        """The library list and the launch check can load at the same moment."""
+        path = tmp_path / "library-index.json"
+        path.write_bytes(b"")
+        real_rename = Path.rename
+
+        def the_other_one_got_there_first(self, target):
+            real_rename(self, tmp_path / "library-index.unreadable-elsewhere.json")
+            raise FileNotFoundError(2, "No such file or directory")
+
+        monkeypatch.setattr(Path, "rename", the_other_one_got_there_first)
+        index = LibraryIndex.load(path)
+        assert index.save_blocker is None
+        index.save()
+        assert path.exists()
+
+    def test_a_newer_index_is_copied_once_however_often_it_is_loaded(self, tmp_path, told):
+        """Each load used to take another copy of it until the first save,
+        and ten copies pushed the backups taken before a heal out of the
+        rotation."""
+        from ficary.library.backup import list_backups
+
+        path = tmp_path / "library-index.json"
+        earlier = tmp_path / "library-index.backup-20260101-000000.json"
+        earlier.write_text(json.dumps({"version": SCHEMA_VERSION, "libraries": {}}), encoding="utf-8")
+        path.write_text(json.dumps({"version": SCHEMA_VERSION + 1, "libraries": {}}), encoding="utf-8")
+        for _ in range(12):
+            LibraryIndex.load(path)
+        backups = list_backups(path)
+        assert earlier in backups
+        assert len(backups) == 2
+        assert len(told) == 1 and "newer version" in told[0]
+
+    def test_discarding_a_bad_index_from_the_command_line_sticks(self, tmp_path, told, monkeypatch):
+        """``--discard-bad-index`` cleared the block in memory and exited
+        without saving, so the next run was blocked again."""
+        from ficary import cli
+
+        path = tmp_path / "library-index.json"
+        path.write_bytes(b"\x00" * 64)
+        monkeypatch.setattr(index_module, "default_index_path", lambda: path)
+
+        def refuse(self, target):
+            raise PermissionError("The process cannot access the file")
+
+        monkeypatch.setattr(Path, "rename", refuse)
+        with pytest.raises(SystemExit) as exit_info:
+            cli._handle_discard_bad_index()
+        assert exit_info.value.code == 0
+        assert LibraryIndex.load(path).save_blocker is None
+
+
+wx = pytest.importorskip("wx")
+
+
+@pytest.mark.skipif(not os.environ.get("DISPLAY"), reason="builds real windows (run under xvfb-run -a)")
+def test_a_damaged_index_found_while_the_window_opens_is_in_the_status_pane(wx_app, told):
+    """The library list first loads while the window is still being built,
+    before the status pane is listening, so the line went nowhere."""
+    from ficary import gui
+
+    path = index_module.default_index_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b"\x00" * 512)
+    frame = gui.MainFrame()
+    try:
+        for _ in range(20):
+            wx.SafeYield()
+        # The pane's timer may already have moved the lines out of the
+        # queue and into the pane itself.
+        with frame._log_lock:
+            text = frame.log_ctrl.GetValue() + "".join(frame._log_queue)
+        [kept] = set_aside(path)
+        assert f"kept the file as {kept.name}" in text
+        assert "Import Existing Folder" in text
+    finally:
+        frame._clip_timer.Stop()
+        frame.Destroy()
+        wx.SafeYield()

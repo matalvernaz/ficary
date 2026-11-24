@@ -164,7 +164,11 @@ def test_two_first_time_writers_cannot_overwrite_each_other(tmp_path):
 def test_load_never_raises_on_malformed_storage(tmp_path):
     bad_bytes = tmp_path / "bad.json"
     bad_bytes.write_bytes(b"\xff\xfe\x00")
-    assert LibraryIndex.load(bad_bytes).save_blocker is not None
+    loaded = LibraryIndex.load(bad_bytes)   # must not raise
+    assert loaded.library_roots() == []
+    # Kept aside rather than written over (tests/test_damaged_files.py).
+    [kept] = list(tmp_path.glob("bad.unreadable-*.json"))
+    assert kept.read_bytes() == b"\xff\xfe\x00"
 
     from ficary.library.index import SCHEMA_VERSION
 

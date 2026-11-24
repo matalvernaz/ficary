@@ -78,15 +78,34 @@ def test_discard_save_blocker_unblocks_save(tmp_path: Path, monkeypatch):
     assert raw == {"version": SCHEMA_VERSION, "libraries": {}}
 
 
-def test_save_blocker_on_unparseable_json(tmp_path: Path):
-    """JSON-corrupt index also triggers the blocker (not just schema-
-    version mismatch), so a hand-edit gone wrong doesn't silently get
-    overwritten by the next save."""
+def test_unparseable_json_is_kept_aside_not_written_over(tmp_path: Path):
+    """A JSON-corrupt index (a hand edit gone wrong, a power cut) must not
+    be silently overwritten by the next save. It is moved aside, where it
+    can still be recovered by hand, and a new index starts; it used to
+    block every save instead, which left the app with an empty library
+    and no way out. tests/test_damaged_files.py has the rest."""
     idx_path = tmp_path / "lib.json"
     idx_path.write_text("{this is not valid json")
     idx = LibraryIndex.load(idx_path)
+    assert idx.save_blocker is None
+    [kept] = list(tmp_path.glob("lib.unreadable-*.json"))
+    assert kept.read_text() == "{this is not valid json"
+
+
+def test_save_blocker_when_unparseable_json_cannot_be_moved(tmp_path: Path, monkeypatch):
+    idx_path = tmp_path / "lib.json"
+    idx_path.write_text("{this is not valid json")
+
+    def refuse(self, target):
+        raise PermissionError("in use")
+
+    monkeypatch.setattr(Path, "rename", refuse)
+    idx = LibraryIndex.load(idx_path)
     assert idx.save_blocker is not None
-    assert "unreadable JSON" in idx.save_blocker
+    assert "could not be moved aside" in idx.save_blocker
+    with pytest.raises(RuntimeError, match="unsafe state"):
+        idx.save()
+    assert idx_path.read_text() == "{this is not valid json"
 
 
 # ── V4-light: mtime conflict ─────────────────────────────────────

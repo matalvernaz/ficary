@@ -51,6 +51,8 @@ from __future__ import annotations
 import json
 import logging
 import re
+import threading
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterator
@@ -146,10 +148,17 @@ class LibraryIndex:
     # ── Construction ────────────────────────────────────────────
 
     @classmethod
-    def load(cls, path: Path | None = None) -> "LibraryIndex":
+    def load(cls, path: Path | None = None, *, _retried: bool = False) -> "LibraryIndex":
         """Load the index from disk, or return an empty one if missing
-        or malformed. Never raises on a bad file — stale data just gets
-        replaced by an empty index on the next save().
+        or malformed. Never raises on a bad file.
+
+        A file whose content cannot be read (cut off, empty or all
+        zeros after a power cut, not text) is moved aside as
+        ``<name>.unreadable-<time>-<id>.json``, kept for anyone who wants
+        to recover it by hand, and a new index is started; the user is
+        told once. If it cannot be moved, saves are refused instead, as
+        they are when the file cannot be opened at all (locked by
+        another program): its content may be fine.
 
         Schema-version mismatch (e.g. a user downgrading ficary onto an
         index written by a newer build) is treated as "structurally
@@ -177,17 +186,27 @@ class LibraryIndex:
             return inst
         try:
             raw = json.loads(p.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError, UnicodeDecodeError):
+        except (ValueError, RecursionError):
+            # ValueError: bad JSON and bytes that are not UTF-8.
+            # RecursionError: deeply nested garbage.
+            return cls._start_again_after_unreadable(p, retried=_retried)
+        except OSError as exc:
+            # There but not readable: locked by another program, or no
+            # permission. The content may be fine, so it is left alone
+            # and nothing is saved over it. The signature stays so a
+            # writer that fixes it meanwhile still trips the conflict
+            # check on save.
             inst = cls(p, _empty())
-            # File exists but is unparseable. Set a blocker to prevent
-            # blind overwrite — a JSON-corrupt index might still be
-            # recoverable by hand. Mtime stays captured so a concurrent
-            # writer that fixed the file in the meantime still triggers
-            # the conflict path on save.
             inst._loaded_sig = _stat_signature(p)
             inst._save_blocker = (
-                f"unreadable JSON at {p} (parse error or I/O); "
-                "saves blocked until acknowledged via discard_save_blocker()"
+                f"could not open {p} ({exc}); saves blocked until it can "
+                "be read, or until acknowledged via discard_save_blocker()"
+            )
+            _tell_once(
+                f"open:{p}",
+                f"Ficary could not open its library index, {p} ({exc}). "
+                "Until it can, the library looks empty and nothing is "
+                "saved to it.",
             )
             return inst
         if (
@@ -218,6 +237,53 @@ class LibraryIndex:
         _migrate_non_canonical_keys(raw)
         inst = cls(p, raw)
         inst._loaded_sig = _stat_signature(p)
+        return inst
+
+    @classmethod
+    def _start_again_after_unreadable(cls, p: Path, *, retried: bool) -> "LibraryIndex":
+        """The index file's content cannot be read. Move it aside, kept
+        for recovery by hand, and start a new index as if there had been
+        none; or, if it cannot be moved, refuse to save over it.
+
+        This used to refuse every save in every case, with nothing in
+        the app saying why the library looked empty and no way out but
+        a command-line option that did not stick. That was the result
+        of any power cut that caught the file part-way."""
+        stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        aside = p.with_name(f"{p.stem}.unreadable-{stamp}-{uuid.uuid4().hex[:8]}{p.suffix}")
+        try:
+            p.rename(aside)
+        except FileNotFoundError:
+            # Another load (another thread, or the command line) moved
+            # it first. Read whatever is there now, once.
+            if not retried:
+                return cls.load(p, _retried=True)
+            inst = cls(p, _empty())
+            inst._loaded_absent = True
+            return inst
+        except OSError as exc:
+            inst = cls(p, _empty())
+            inst._loaded_sig = _stat_signature(p)
+            inst._save_blocker = (
+                f"unreadable index at {p}, which could not be moved aside "
+                f"({exc}); saving would overwrite it"
+            )
+            _tell_once(
+                f"stuck:{p}",
+                f"Ficary could not read its library index, {p}, or move it "
+                f"aside ({exc}). Until that file is moved or deleted, the "
+                "library looks empty and nothing is saved to it.",
+            )
+            return inst
+        inst = cls(p, _empty())
+        inst._loaded_absent = True
+        _tell_once(
+            f"aside:{aside}",
+            "Ficary could not read its library index, so it kept the "
+            f"file as {aside.name} and started a new one. Library > "
+            "Import Existing Folder adds the stories in your library "
+            "folder back.",
+        )
         return inst
 
     def save(self) -> None:
@@ -267,9 +333,9 @@ class LibraryIndex:
     def save_blocker(self) -> str | None:
         """Reason save is blocked, or ``None`` when save is safe.
 
-        Callers should display this to the user before offering to
-        proceed (the GUI Library panel renders it as a status banner;
-        the CLI prints it before ``--discard-bad-index`` is honoured)."""
+        ``load()`` tells the user once when it sets this (a warning,
+        which the status pane shows); the CLI prints it before
+        ``--discard-bad-index`` is honoured."""
         return self._save_blocker
 
     def discard_save_blocker(self) -> None:
@@ -606,8 +672,20 @@ def _snapshot_unreadable_index(
     failure on backup proceeded to ``return empty``, and the next save
     atomically obliterated the original."""
     try:
-        from .backup import backup
-        snapshot = backup(path)
+        from .backup import backup, list_backups
+
+        # load() runs on every library change, and until the first
+        # save replaces the file each one used to take another copy of
+        # it. Ten copies of the same file pushed every earlier backup,
+        # the ones taken before a heal or a clean-up, out of the
+        # rotation. One copy per content is enough.
+        current = path.read_bytes()
+        snapshot = next(
+            (existing for existing in list_backups(path) if existing.read_bytes() == current),
+            None,
+        )
+        if snapshot is None:
+            snapshot = backup(path)
     except Exception as exc:
         logger.warning(
             "library index at %s has an unrecognised schema "
@@ -624,7 +702,7 @@ def _snapshot_unreadable_index(
         )
     if snapshot is None:
         return None, None
-    logger.warning(
+    logger.debug(
         "library index at %s has an unrecognised schema "
         "(got version=%r, expected %d); snapshotted to %s before "
         "treating as empty",
@@ -633,7 +711,31 @@ def _snapshot_unreadable_index(
         SCHEMA_VERSION,
         snapshot,
     )
+    _tell_once(
+        f"snapshot:{snapshot}",
+        "Ficary's library index was made by a newer version of Ficary, "
+        "or is in a form this version does not know, so it kept a copy "
+        f"as {snapshot.name} and started a new one. Library > Import "
+        "Existing Folder adds the stories in your library folder back.",
+    )
     return snapshot, None
+
+
+# What a damaged index has already told the user in this run, so a
+# load() repeated on every library change says each thing once.
+_told: set[str] = set()
+_told_lock = threading.Lock()
+
+
+def _tell_once(key: str, line: str) -> None:
+    """Warn the user about the index file: the status pane and the
+    command line both show warnings. Once per run for each ``key``."""
+    with _told_lock:
+        if key in _told:
+            logger.debug("%s", line)
+            return
+        _told.add(key)
+    logger.warning("%s", line)
 
 
 def _migrate_non_canonical_keys(raw: dict) -> None:

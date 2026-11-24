@@ -3216,15 +3216,20 @@ def _handle_discard_bad_index() -> None:
         sys.exit(0)
     print(f"Discarding save-blocker: {idx.save_blocker}")
     idx.discard_save_blocker()
-    # Empty in-memory state + cleared blocker → safe to save the
-    # new state. We don't auto-save here; the user runs --scan-library
-    # next, or another flow that mutates+saves.
+    # Write the empty index now. Clearing the flag alone used to last
+    # only until this process exited: the next run loaded the same
+    # unreadable file and was blocked again, so the option never
+    # unblocked anything.
+    try:
+        idx.save()
+    except Exception as exc:  # noqa: BLE001 - reported, not raised
+        print(f"Could not write a new library index at {default_index_path()}: {exc}")
+        sys.exit(1)
     print(
-        "Save-blocker cleared. The next ficary operation that saves "
-        "the library index will write the (currently empty) in-memory "
-        "state. If you intended to recover from the unreadable file, "
-        "run --list-backups and --restore-index <BACKUP> before "
-        "anything else."
+        f"Started a new, empty library index at {default_index_path()}. "
+        "Run --scan-library to add the stories in your library folder "
+        "back, or --list-backups and --restore-index <BACKUP> to go "
+        "back to an earlier copy."
     )
     sys.exit(0)
 

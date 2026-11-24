@@ -2,6 +2,27 @@
 
 ## Unreleased
 
+**A damaged library index no longer leaves the library stuck empty**
+
+* When the library index (the file where Ficary keeps track of the
+  stories in a library) cannot be read, because a power cut caught it
+  part-way or it was cut off some other way, Ficary keeps the damaged
+  file beside it with "unreadable" in its name and starts a new index.
+  The status pane says so, and Library > Import Existing Folder adds
+  the stories back. Before, the library looked empty, nothing could be
+  saved to it, and nothing in the app said why; the only way out was a
+  command-line option that did not stick.
+* When the index cannot be opened at all, for instance because another
+  program has it open, it is left alone and the status pane says so.
+* Warnings found while the main window opens now appear in the status
+  pane. They used to go only to the log file, which is off unless
+  switched on.
+* `ficary --discard-bad-index` now writes the new index, so the next run
+  is not blocked by the same file again.
+* An index made by a newer version of Ficary is copied into the index
+  backups once, instead of each time the library was read, which could
+  push older backups out.
+
 **Damaged audiobook files no longer stop a render or get written over**
 
 * A character voice list saved in another encoding (UTF-16, which
