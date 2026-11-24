@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 2.20.23 — 2026-11-24
 
 **A story whose site took chapters down stops saying it has new ones**
 
