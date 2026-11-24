@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 2.20.15 — 2026-11-23
 
 **ScribbleHub: update checks work again; downloads are being blocked**
 
