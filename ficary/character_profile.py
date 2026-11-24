@@ -308,7 +308,7 @@ def analyze_story_via_llm(
             user_prompt=user_prompt,
         )
     except Exception as exc:  # noqa: BLE001 — never fail the render
-        logger.warning("LLM unified story analysis failed: %s", exc)
+        logger.warning("AI story analysis failed: %s", exc)
         return _empty_analysis()
     return _parse_unified_response(reply, character_list)
 

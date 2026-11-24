@@ -4323,7 +4323,7 @@ def _build_parser() -> argparse.ArgumentParser:
             "default regex parser. 'fastcoref' and 'booknlp' are optional "
             "neural models you must pip-install separately — see "
             "`ficary --install-attribution BACKEND`. 'llm' sends each "
-            "chapter to a local Ollama instance or a remote LLM API "
+            "chapter to a local Ollama model or a remote AI service "
             "(see --llm-provider / --llm-model / --llm-api-key)."
         ),
     )
@@ -4342,7 +4342,7 @@ def _build_parser() -> argparse.ArgumentParser:
         choices=["ollama", "openai", "anthropic", "openai-compatible"],
         default=None,
         help=(
-            "LLM provider when --attribution=llm. 'ollama' is local and "
+            "AI provider when --attribution=llm. 'ollama' is local and "
             "needs no API key; 'openai' / 'anthropic' / 'openai-compatible' "
             "use the provider's HTTPS API. Defaults to the GUI pref or "
             "'ollama' if unset."
@@ -4353,7 +4353,7 @@ def _build_parser() -> argparse.ArgumentParser:
         default=None,
         metavar="MODEL",
         help=(
-            "LLM model identifier — e.g. 'llama3.1:8b' for Ollama, "
+            "AI model identifier — e.g. 'llama3.1:8b' for Ollama, "
             "'gpt-4o-mini' for OpenAI, 'claude-haiku-4-5' for Anthropic. "
             "Defaults to the GUI pref."
         ),
@@ -4363,7 +4363,7 @@ def _build_parser() -> argparse.ArgumentParser:
         default=None,
         metavar="KEY",
         help=(
-            "API key for the chosen LLM provider. Falls back to env "
+            "API key for the chosen AI provider. Falls back to env "
             "vars OPENAI_API_KEY / ANTHROPIC_API_KEY / OPENROUTER_API_KEY "
             "when this flag is omitted, then to the GUI pref. Ignored "
             "for Ollama."
@@ -4374,7 +4374,7 @@ def _build_parser() -> argparse.ArgumentParser:
         default=None,
         metavar="URL",
         help=(
-            "Override the LLM provider's base URL. Useful for "
+            "Override the AI provider's base URL. Useful for "
             "self-hosted Ollama on another machine, or any "
             "OpenAI-compatible endpoint (Groq, OpenRouter, vLLM, ...)."
         ),
@@ -4667,11 +4667,11 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help=(
             "Pair with --strip-notes to send each top-level paragraph the "
-            "regex pass kept through the configured LLM (--llm-provider / "
-            "--llm-model / --llm-api-key, or the GUI's LLM prefs) for a "
+            "regex pass kept through the configured AI model (--llm-provider / "
+            "--llm-model / --llm-api-key, or the app's AI settings) for a "
             "second-pass A/N decision. Catches outros that don't trip the "
             "regex's keyword gate and shout-outs buried mid-chapter. "
-            "Costs one LLM call per chapter — local Ollama is free but "
+            "Costs one AI request per chapter — local Ollama is free but "
             "slow, OpenAI/Anthropic charge per token. Off by default. "
             "Results are cached per story so re-exports don't re-spend."
         ),

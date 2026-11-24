@@ -2001,7 +2001,7 @@ def _llm_strip_an_paragraphs(
             note_check.chapter_partly_checked(incomplete)
     if incomplete is not None:
         logger.warning(
-            "LLM A/N: part of %s could not be checked (%s)",
+            "AI A/N check: part of %s could not be checked (%s)",
             chapter_label, incomplete.reason,
         )
 
@@ -2020,8 +2020,8 @@ def _llm_note_check_failed(exc, note_check, chapter_label: str, text: str) -> st
     """
     if note_check is None:
         logger.warning(
-            "LLM A/N strip skipped (%s) — falling back to regex-only "
-            "output", exc,
+            "AI A/N check skipped (%s); using the regex result alone",
+            exc,
         )
         return text
     logger.warning(
@@ -3776,7 +3776,7 @@ def generate_audiobook(
         )
         pronunciation_map = _load_pronunciation_map(pron_path)
         logger.info(
-            "LLM seeded %d pronunciation overrides", len(seeded_pron),
+            "AI suggested %d pronunciations", len(seeded_pron),
         )
 
     if pronunciation_map:
@@ -3980,7 +3980,7 @@ def generate_audiobook(
                 accents.setdefault(name, accent)
             _accent_map.save_accents(accents_path, accents)
             logger.info(
-                "LLM character-profile seeder filled %d profile entries",
+                "AI filled in %d character profile entries",
                 len(seeded),
             )
 
@@ -3998,7 +3998,7 @@ def generate_audiobook(
                 )
                 if picked and picked != narrator:
                     logger.info(
-                        "LLM narrator-voice suggestion: %s (%s — %s)",
+                        "AI narrator-voice suggestion: %s (%s — %s)",
                         picked,
                         narrator_profile.get("accent") or "any",
                         narrator_profile.get("rationale") or "",

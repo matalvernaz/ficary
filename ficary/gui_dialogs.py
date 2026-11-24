@@ -1527,7 +1527,7 @@ class LlmSettingsDialog(wx.Dialog):
 
     def __init__(self, parent, prefs):
         super().__init__(
-            parent, title="LLM attribution settings", size=(620, 560),
+            parent, title="AI settings", size=(620, 560),
             style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER,
         )
         self._prefs = prefs
@@ -1622,7 +1622,7 @@ class LlmSettingsDialog(wx.Dialog):
         )
         self.timeout_ctrl.SetName("Request timeout in seconds")
         self.timeout_ctrl.SetToolTip(
-            "Per-request timeout for LLM calls, in seconds. 0 means "
+            "Per-request timeout for AI requests, in seconds. 0 means "
             "use the default (300s) or the FICARY_LLM_TIMEOUT_S env "
             "var. Bump to 600-900 if a 14B model on CPU or partial-"
             "GPU offload is timing out on long chapters."
@@ -1675,7 +1675,7 @@ class LlmSettingsDialog(wx.Dialog):
         log_label = wx.StaticText(root, label="Status:")
         sizer.Add(log_label, 0, wx.LEFT | wx.TOP, pad)
         self.status_ctrl = StatusLogCtrl(root, size=(-1, 110))
-        self.status_ctrl.SetName("LLM action log")
+        self.status_ctrl.SetName("AI action log")
         sizer.Add(self.status_ctrl, 1, wx.EXPAND | wx.ALL, pad)
 
         btns = wx.StdDialogButtonSizer()
@@ -2149,7 +2149,7 @@ class LlmSettingsDialog(wx.Dialog):
         if ok:
             self._append_status(
                 f"  '{model}' is now installed. Save the dialog to use "
-                "it as your LLM model."
+                "it as your AI model."
             )
             # Only merge into the dropdown if the user is still on
             # Ollama — pull is Ollama-only, so if they switched to

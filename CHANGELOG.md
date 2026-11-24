@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+**"AI" instead of "LLM"**
+
+* The windows, status messages, command-line help and manual say "AI"
+  where they said "LLM", which a screen reader spells out letter by
+  letter: "Use AI to catch missed A/N", "AI settings", the "AI" choice
+  for speaker detection, and "AI note check" in the status pane.
+  Keyboard shortcuts stay as they were (Alt+L for the A/N checkbox),
+  and the AI settings button in the Add Story window gains a usable
+  one, Alt+G. Command-line options (`--llm-provider` and the rest),
+  saved settings and environment variables keep their names, so
+  nothing that already works changes.
+
 **New books can be read by a media server; audiobooks survive a power cut**
 
 * On Linux and Mac every new book was saved so that only its owner

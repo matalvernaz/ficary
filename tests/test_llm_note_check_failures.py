@@ -199,7 +199,7 @@ class TestAccountOutOfCredit:
         _path, lines = export(make_story(5), tmp_path, anthropic_config())
         stop_lines = [
             line for line in lines
-            if "skipping LLM for remaining chapters" in line
+            if "skipping the AI check for the remaining chapters" in line
         ]
         assert len(stop_lines) == 1
         assert "Your credit balance is too low" in stop_lines[0]
@@ -214,7 +214,7 @@ class TestAccountOutOfCredit:
         refuse_every_request(monkeypatch, 400, ANTHROPIC_OUT_OF_CREDIT_BODY)
         _path, lines = export(make_story(5), tmp_path, anthropic_config())
         closing = lines[-1]
-        assert "LLM note check did not run on 5 chapters" in closing
+        assert "AI note check did not run on 5 chapters" in closing
         assert "Your credit balance is too low" in closing
         assert "download the story again" in closing
 
@@ -324,11 +324,11 @@ class TestWhichRejectionsEndTheCheck:
 
     def test_message_keeps_the_form_existing_logs_use(self):
         rejected = attribution.LLMRejected(400, "anthropic", "body text")
-        assert str(rejected) == "LLM HTTP 400 from anthropic: body text"
+        assert str(rejected) == "AI service HTTP 400 from anthropic: body text"
 
     def test_explains_itself_without_a_readable_body(self):
         rejected = attribution.LLMRejected(503, "openai-compatible", "<html>")
-        assert rejected.explain() == "The LLM server refused the request (HTTP 503)"
+        assert rejected.explain() == "The AI server refused the request (HTTP 503)"
 
     def test_quotes_an_ollama_error(self):
         rejected = attribution.LLMRejected(
@@ -396,7 +396,7 @@ class TestPassingFailures:
         assert len(calls) == 5
         assert [
             line for line in lines
-            if "skipping LLM for remaining chapters" in line
+            if "skipping the AI check for the remaining chapters" in line
         ] == []
         assert "did not run on 1 chapter " in lines[-1]
         assert "(4 checked in full)" in lines[-1]
@@ -414,7 +414,7 @@ class TestPassingFailures:
         assert len(calls) == limit
         stop_lines = [
             line for line in lines
-            if "skipping LLM for remaining chapters" in line
+            if "skipping the AI check for the remaining chapters" in line
         ]
         assert len(stop_lines) == 1
         assert f"({limit} chapters in a row)" in stop_lines[0]
@@ -582,7 +582,7 @@ class TestRepliesThatAreNotAnAnswer:
         ) == 1
         assert list(cached_entries(cache_root).values()) == [{"flags": []}]
         assert lines[-1].strip() == (
-            "LLM note check: 1 chapter checked, notes removed from 0."
+            "AI note check: 1 chapter checked, notes removed from 0."
         )
 
     def test_a_refusal_is_named_in_the_log(self, caplog):
@@ -841,7 +841,7 @@ class TestClosingLine:
         )
         _path, lines = export(make_story(3), tmp_path, anthropic_config())
         assert lines[-1].strip() == (
-            "LLM note check: 3 chapters checked, notes removed from 2."
+            "AI note check: 3 chapters checked, notes removed from 2."
         )
 
     def test_says_nothing_when_no_check_was_asked_for(self, tmp_path, cache_root):
@@ -850,7 +850,7 @@ class TestClosingLine:
             make_story(2), output_dir=str(tmp_path),
             strip_notes=True, llm_config=None, progress=lines.append,
         )
-        assert [line for line in lines if "LLM note check" in line] == []
+        assert [line for line in lines if "AI note check" in line] == []
 
     def test_says_nothing_when_note_stripping_is_off(
         self, tmp_path, monkeypatch, cache_root,
@@ -865,7 +865,7 @@ class TestClosingLine:
             strip_notes=False, llm_config=anthropic_config(),
             progress=lines.append,
         )
-        assert [line for line in lines if "LLM note check" in line] == []
+        assert [line for line in lines if "AI note check" in line] == []
 
     def test_chapters_from_the_existing_file_are_not_counted(
         self, tmp_path, monkeypatch, cache_root,
@@ -937,7 +937,7 @@ class TestAudiobookNoteCheck:
         ]
         stop_lines = [
             message for message in warnings
-            if "skipping LLM for remaining chapters" in message
+            if "skipping the AI check for the remaining chapters" in message
         ]
         assert len(stop_lines) == 1
         assert "Your credit balance is too low" in stop_lines[0]
@@ -964,7 +964,7 @@ class TestAudiobookNoteCheck:
         )
         with caplog.at_level(logging.INFO, logger="ficary.tts"):
             self.render(monkeypatch, self.audio_story(3), anthropic_config())
-        assert "LLM note check: 3 chapters checked, notes removed from 0." in caplog.text
+        assert "AI note check: 3 chapters checked, notes removed from 0." in caplog.text
 
     def test_direct_call_without_a_tally_still_never_raises(self, monkeypatch):
         def llm(**kwargs):
@@ -1012,7 +1012,7 @@ class TestCommandLineShowsEachLineOnce:
     def test_a_status_line_is_printed_once(self, capsys):
         with fresh_command_line_logging():
             cli._configure_console_logging(verbose=False)
-            exporters._emit(print, "  [llm-an] chapter 1: cache hit")
+            exporters._emit(print, "  [AI notes] chapter 1: cache hit")
         shown = capsys.readouterr()
         assert shown.out.count("chapter 1: cache hit") == 1
         assert "cache hit" not in shown.err
@@ -1030,7 +1030,7 @@ class TestCommandLineShowsEachLineOnce:
         shown = capsys.readouterr()
         everything = shown.out + shown.err
         assert everything.count("did not run on 3 chapters") == 1
-        assert everything.count("skipping LLM for remaining chapters") == 1
+        assert everything.count("skipping the AI check for the remaining chapters") == 1
 
     def test_other_log_messages_still_reach_the_terminal(self, capsys):
         with fresh_command_line_logging():

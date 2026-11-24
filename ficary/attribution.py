@@ -122,7 +122,7 @@ _LLM_PROVIDER_DISPLAY_NAMES = {
     "openai": "OpenAI",
     "ollama": "Ollama",
 }
-_LLM_PROVIDER_DISPLAY_FALLBACK = "The LLM server"
+_LLM_PROVIDER_DISPLAY_FALLBACK = "The AI server"
 
 # Longest piece of a provider's own error message quoted to the user.
 _LLM_QUOTED_MESSAGE_MAX_CHARS = 240
@@ -217,7 +217,7 @@ class LLMRejected(RuntimeError):
         whole_body = detail if body is None else body
         self.provider_message, self.codes = _llm_error_fields(whole_body)
         self.will_repeat = _llm_rejection_will_repeat(status, whole_body)
-        super().__init__(f"LLM HTTP {status} from {provider}: {detail}")
+        super().__init__(f"AI service HTTP {status} from {provider}: {detail}")
 
     def explain(self) -> str:
         """The rejection as one plain sentence for a status line.
@@ -258,7 +258,7 @@ class LLMIncompleteAnswer(RuntimeError):
         self.reason = reason
         super().__init__(
             f"no usable verdicts in {unreadable_batches} of {batches} "
-            f"LLM reply batch(es): {reason}"
+            f"AI reply batch(es): {reason}"
         )
 
     @property
@@ -332,15 +332,15 @@ BACKENDS = {
     "llm": {
         "pip_name": None,  # uses urllib + a remote/local HTTP API
         "import_name": None,
-        "display": "LLM (Ollama / OpenAI / Anthropic)",
+        "display": "AI (Ollama / OpenAI / Anthropic)",
         "size_hint": "API",
         "description": (
-            "Sends each chapter to a Large Language Model and asks it "
+            "Sends each chapter to an AI language model and asks it "
             "to label the speaker of every quoted line, grounded by the "
             "story's character list. Choose between a local Ollama "
             "endpoint (no key, runs offline) or a remote provider "
             "(OpenAI / Anthropic / OpenAI-compatible) that needs an "
-            "API key. Latest research puts well-prompted LLMs above "
+            "API key. Latest research puts well-prompted AI models above "
             "BookNLP-big on quotation attribution accuracy."
         ),
         "sizes": None,  # provider/model live in dedicated config
@@ -2338,7 +2338,7 @@ def _llm_http_with_retry(
                 import random as _random
                 delay += _random.uniform(0, 0.5)
                 logger.info(
-                    "LLM HTTP %d from %s; retry %d/%d in %.1fs (%s)",
+                    "AI service HTTP %d from %s; retry %d/%d in %.1fs (%s)",
                     exc.code, provider, attempt + 1,
                     _LLM_HTTP_RETRY_MAX, delay,
                     detail[:200].strip() or exc.reason,
@@ -2361,7 +2361,7 @@ def _llm_http_with_retry(
             # the chapter loop can apply a consecutive-failure
             # threshold instead of tripping on one slow chapter.
             raise LLMTimeout(
-                f"LLM endpoint {url} timed out after {request_timeout}s"
+                f"AI endpoint {url} timed out after {request_timeout}s"
             ) from exc
         except (urllib.error.URLError, OSError) as exc:
             # ``URLError`` wraps a transport failure; its ``reason``
@@ -2373,7 +2373,7 @@ def _llm_http_with_retry(
                 getattr(exc, "reason", None), TimeoutError,
             ):
                 raise LLMTimeout(
-                    f"LLM endpoint {url} timed out after "
+                    f"AI endpoint {url} timed out after "
                     f"{request_timeout}s"
                 ) from exc
             # Connection refused, DNS failure — the endpoint isn't
@@ -2382,14 +2382,14 @@ def _llm_http_with_retry(
             # want to give up after one of these instead of retrying
             # 100+ times.
             raise LLMUnavailable(
-                f"LLM endpoint {url} unreachable: {exc}"
+                f"AI endpoint {url} unreachable: {exc}"
             ) from exc
     # Unreachable: every loop iteration above either returns, continues
     # to the next attempt, or raises. _LLM_HTTP_RETRY_MAX > 0 is a
     # module constant. Kept as a defensive sentinel against a future
     # refactor that lets control fall off the bottom of the loop.
     raise RuntimeError(
-        f"LLM HTTP retry loop exited without resolution against {provider}"
+        f"AI request retry loop exited without resolution against {provider}"
     )
 
 
@@ -2418,13 +2418,13 @@ def _extract_llm_text(body: str, provider: str) -> str:
         parsed = _json.loads(body)
     except (ValueError, _json.JSONDecodeError):
         logger.warning(
-            "LLM %s returned non-JSON body (%d bytes); ignoring.",
+            "AI provider %s returned non-JSON body (%d bytes); ignoring.",
             provider, len(body or ""),
         )
         return ""
     if not isinstance(parsed, dict):
         logger.warning(
-            "LLM %s returned JSON of type %s, expected object; ignoring.",
+            "AI provider %s returned JSON of type %s, expected object; ignoring.",
             provider, type(parsed).__name__,
         )
         return ""
@@ -2543,7 +2543,7 @@ def probe_llm_endpoint(
     import urllib.request
 
     base = _llm_normalize_endpoint(provider, endpoint)
-    logger.info("LLM probe: provider=%s endpoint=%s", provider, base or "(blank)")
+    logger.info("AI connection test: provider=%s endpoint=%s", provider, base or "(blank)")
     if not base:
         return LLMProbeResult(
             ok=False,
@@ -2585,7 +2585,7 @@ def probe_llm_endpoint(
             status = resp.status
     except urllib.error.HTTPError as exc:
         logger.warning(
-            "LLM probe: HTTP %s from %s (%s)", exc.code, provider, exc.reason,
+            "AI connection test: HTTP %s from %s (%s)", exc.code, provider, exc.reason,
         )
         if exc.code in (401, 403):
             return LLMProbeResult(
@@ -2603,7 +2603,7 @@ def probe_llm_endpoint(
         )
     except (urllib.error.URLError, TimeoutError, OSError) as exc:
         logger.warning(
-            "LLM probe: %s endpoint unreachable: %s", provider, exc,
+            "AI connection test: %s endpoint unreachable: %s", provider, exc,
         )
         if provider == "ollama":
             hint = (
@@ -2659,7 +2659,7 @@ def probe_llm_endpoint(
             )
         )
     logger.info(
-        "LLM probe: ok provider=%s status=%s models=%d",
+        "AI connection test: ok provider=%s status=%s models=%d",
         provider, status, len(model_names),
     )
     return LLMProbeResult(
@@ -2890,9 +2890,9 @@ def _refine_with_llm(
     On any provider error we raise — the dispatcher catches and falls
     back to builtin for the rest of the render."""
     if not _llm_provider_supported(provider):
-        raise RuntimeError(f"Unsupported LLM provider: {provider!r}")
+        raise RuntimeError(f"Unsupported AI provider: {provider!r}")
     if not model:
-        raise RuntimeError("LLM backend requires a model name")
+        raise RuntimeError("AI speaker detection needs a model name")
     endpoint_url = _llm_normalize_endpoint(provider, endpoint)
     if not endpoint_url:
         raise RuntimeError(f"No endpoint configured for provider {provider!r}")
@@ -3061,7 +3061,7 @@ def _refine_with_llm(
 
     if handled:
         logger.info(
-            "LLM attribution: labelled %d/%d quoted segment%s (%s/%s)",
+            "AI speaker detection: labelled %d/%d quoted segment%s (%s/%s)",
             len(handled), len(quoted_idx),
             "" if len(quoted_idx) == 1 else "s",
             provider, model,
@@ -3279,7 +3279,7 @@ def classify_authors_notes_via_llm(
             unreadable_batches += 1
             last_unreadable_reason = str(exc) or type(exc).__name__
             logger.warning(
-                "LLM author's-note classifier failed on batch "
+                "AI author's-note check failed on batch "
                 "%d/%d: %s", batch_no, n_batches, exc,
             )
             continue
@@ -3815,8 +3815,8 @@ def _note_check_failure_reason(exc: Exception) -> str:
     if isinstance(exc, LLMRejected):
         return exc.explain()
     if isinstance(exc, LLMIncompleteAnswer):
-        return f"the LLM's reply could not be used ({exc.reason})"
-    return f"the LLM check failed ({exc})"
+        return f"the AI's reply could not be used ({exc.reason})"
+    return f"the AI check failed ({exc})"
 
 
 class NoteCheckRun:
@@ -3921,8 +3921,8 @@ class NoteCheckRun:
         if nothing_is_listening or account_or_settings:
             self._stopped = True
             return (
-                f"  [llm-an] {chapter_label}: {reason}; "
-                "skipping LLM for remaining chapters"
+                f"  [AI notes] {chapter_label}: {reason}; "
+                "skipping the AI check for the remaining chapters"
             )
 
         self._consecutive_failures += 1
@@ -3930,12 +3930,12 @@ class NoteCheckRun:
         if self._consecutive_failures >= limit:
             self._stopped = True
             return (
-                f"  [llm-an] {chapter_label}: {reason} "
+                f"  [AI notes] {chapter_label}: {reason} "
                 f"({self._consecutive_failures} chapters in a row); "
-                "skipping LLM for remaining chapters"
+                "skipping the AI check for the remaining chapters"
             )
         return (
-            f"  [llm-an] {chapter_label}: {reason}; skipping LLM on this "
+            f"  [AI notes] {chapter_label}: {reason}; skipping the AI check on this "
             f"chapter, retrying on the next "
             f"({self._consecutive_failures}/{limit})"
         )
@@ -3957,7 +3957,7 @@ class NoteCheckRun:
             if not self.checked:
                 return None
             return (
-                f"LLM note check: {_count_chapters(self.checked)} checked, "
+                f"AI note check: {_count_chapters(self.checked)} checked, "
                 f"notes removed from {self.cleaned}."
             )
 
@@ -3970,7 +3970,7 @@ class NoteCheckRun:
             parts.append(
                 f"only partly covered {_count_chapters(self.partly_checked)}"
             )
-        sentence = "LLM note check " + " and ".join(parts)
+        sentence = "AI note check " + " and ".join(parts)
         if self.checked:
             sentence += f" ({self.checked} checked in full)"
         sentence += f": {self.problem}"

@@ -2163,7 +2163,7 @@ def strip_an_via_llm(
 
     if cached_flags is not None:
         flagged = cached_flags
-        _emit(progress, f"  [llm-an] {chapter_label}: cache hit")
+        _emit(progress, f"  [AI notes] {chapter_label}: cache hit")
     else:
         from . import attribution
         suffix = ""
@@ -2179,7 +2179,7 @@ def strip_an_via_llm(
         suffix += ")"
         _emit(
             progress,
-            f"  [llm-an] {chapter_label}: classifying via {provider}/{model}{suffix}",
+            f"  [AI notes] {chapter_label}: classifying via {provider}/{model}{suffix}",
         )
         try:
             first = attribution.classify_authors_notes_via_llm(
@@ -2194,7 +2194,7 @@ def strip_an_via_llm(
             incomplete = exc
             _emit(
                 progress,
-                f"  [llm-an] {chapter_label}: part of this chapter could "
+                f"  [AI notes] {chapter_label}: part of this chapter could "
                 f"not be checked ({exc.reason}); the result is not saved, "
                 "so it is checked again next time",
             )
@@ -2206,7 +2206,7 @@ def strip_an_via_llm(
         if first and ratio > _LLM_AN_RUNAWAY_THRESHOLD:
             _emit(
                 progress,
-                f"  [llm-an] {chapter_label}: first pass flagged "
+                f"  [AI notes] {chapter_label}: first pass flagged "
                 f"{len(first)}/{len(paragraph_texts)} paragraphs "
                 f"({ratio:.0%}); running verification round",
             )
@@ -2225,7 +2225,7 @@ def strip_an_via_llm(
                 verification_unreadable = True
                 _emit(
                     progress,
-                    f"  [llm-an] {chapter_label}: verification round "
+                    f"  [AI notes] {chapter_label}: verification round "
                     f"could not be read ({exc.reason}); keeping chapter "
                     "intact, and the result is not saved",
                 )
@@ -2238,7 +2238,7 @@ def strip_an_via_llm(
             elif flagged and keep_ratio > _LLM_AN_VERIFY_KEEP_CEILING:
                 _emit(
                     progress,
-                    f"  [llm-an] {chapter_label}: verification kept "
+                    f"  [AI notes] {chapter_label}: verification kept "
                     f"{len(flagged)}/{len(paragraph_texts)} flag(s) "
                     f"({keep_ratio:.0%}); rejecting as runaway, "
                     "falling back to regex",
@@ -2247,13 +2247,13 @@ def strip_an_via_llm(
             elif not flagged:
                 _emit(
                     progress,
-                    f"  [llm-an] {chapter_label}: verification dropped "
+                    f"  [AI notes] {chapter_label}: verification dropped "
                     "every flag — keeping chapter intact",
                 )
             else:
                 _emit(
                     progress,
-                    f"  [llm-an] {chapter_label}: verification kept "
+                    f"  [AI notes] {chapter_label}: verification kept "
                     f"{len(flagged)}/{len(first)} flag(s)",
                 )
             outcome_already_logged = True
@@ -2279,8 +2279,8 @@ def strip_an_via_llm(
             if len(flagged) < before:
                 _emit(
                     progress,
-                    f"  [llm-an] {chapter_label}: dropped "
-                    f"{before - len(flagged)} mid-chapter LLM flag(s) "
+                    f"  [AI notes] {chapter_label}: dropped "
+                    f"{before - len(flagged)} mid-chapter AI flag(s) "
                     f"({provider} boundary-only mode)",
                 )
 
@@ -2296,8 +2296,8 @@ def strip_an_via_llm(
         if len(flagged) > before:
             _emit(
                 progress,
-                f"  [llm-an] {chapter_label}: expanded "
-                f"{before} LLM flag(s) into {len(flagged)} "
+                f"  [AI notes] {chapter_label}: expanded "
+                f"{before} AI flag(s) into {len(flagged)} "
                 "paragraph(s) covering the head/tail A/N block",
             )
 
@@ -2309,7 +2309,7 @@ def strip_an_via_llm(
         if flagged:
             _emit(
                 progress,
-                f"  [llm-an] {chapter_label}: stripped "
+                f"  [AI notes] {chapter_label}: stripped "
                 f"{len(flagged)}/{len(paragraph_texts)} paragraph(s) "
                 "as A/N",
             )
@@ -2318,7 +2318,7 @@ def strip_an_via_llm(
             # would claim more than is known.
             _emit(
                 progress,
-                f"  [llm-an] {chapter_label}: no A/N paragraphs found",
+                f"  [AI notes] {chapter_label}: no A/N paragraphs found",
             )
 
     if note_check is not None:

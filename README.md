@@ -438,16 +438,16 @@ smartest — pick with `--attribution` or in the GUI's audio toolbar:
   "he said / she said" correctly.
 - **booknlp** — a heavyweight literary NLP model (~150 MB small,
   ~1 GB big).
-- **llm** — sends each chapter to a large language model, which
-  reads the scene and decides who's talking. Point it at a local
+- **AI** (`--attribution llm`) — sends each chapter to an AI
+  language model, which reads the scene and decides who's talking. Point it at a local
   Ollama (free, offline) or a remote provider — OpenAI, Anthropic, or
   anything OpenAI-compatible such as Groq, OpenRouter, or vLLM. In
-  published evaluations, well-prompted LLMs beat BookNLP's best model
-  at this. Set the provider, model, and key under "LLM settings..."
+  published evaluations, well-prompted AI models beat BookNLP's best
+  model at this. Set the provider, model, and key under "AI settings..."
   in the audio toolbar (or `--llm-provider`, `--llm-model`,
   `--llm-api-key`, `--llm-endpoint`).
 
-With the LLM backend on, Ficary goes further than naming speakers.
+With AI speaker detection on, Ficary goes further than naming speakers.
 It reads the story and builds, per character: an emotion cue for each
 quote (whispers whisper, shouts shout), a profile (gender, age,
 accent, tone) used to cast a fitting voice, an accent map so a
@@ -456,14 +456,15 @@ pronunciation guide for made-up names and fandom terms. It also
 suggests a narrator voice to match the story's tone. Each of these
 lives in a small editable file next to the audiobook, your hand edits
 are never overwritten, and results are cached — re-rendering a story
-or adding one new chapter doesn't re-spend LLM calls on the rest.
+or adding one new chapter doesn't re-spend AI requests on the rest.
 
 ### Skipping author's notes
 
 `--strip-notes` removes recognisable author's notes from any export
 format. Add `--llm-strip-notes` to also catch the disguised ones —
-outros, beta thanks, review shout-outs — using the same LLM settings
-as above, one call per chapter, cached per story.
+outros, beta thanks, review shout-outs — using the same AI settings
+as above, one request per chapter, cached per story. In the Add Story
+window this is "Use AI to catch missed A/N".
 
 ## Watching for new chapters
 

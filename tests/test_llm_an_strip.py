@@ -1374,11 +1374,11 @@ class TestExportLoopCircuitBreaker:
             "After the first LLMUnavailable the chapter loop must "
             "stop calling the LLM for remaining chapters"
         )
-        # The "skipping LLM for remaining chapters" notice fires once
+        # The "skipping the AI check for the remaining chapters" notice fires once
         # so the user sees one line of context, not 5×.
         notice_lines = [
             l for l in progress_lines
-            if "skipping LLM for remaining chapters" in l
+            if "skipping the AI check for the remaining chapters" in l
         ]
         assert len(notice_lines) == 1
         assert "endpoint unreachable" in notice_lines[0]
@@ -1551,7 +1551,7 @@ class TestExportLoopTimeoutThreshold:
         # the threshold trip and the unreachable case.
         disable_lines = [
             l for l in progress_lines
-            if "skipping LLM for remaining chapters" in l
+            if "skipping the AI check for the remaining chapters" in l
         ]
         assert disable_lines == []
 
@@ -1586,7 +1586,7 @@ class TestExportLoopTimeoutThreshold:
         # The disable notice fires once on the trip.
         disable_lines = [
             l for l in progress_lines
-            if "skipping LLM for remaining chapters" in l
+            if "skipping the AI check for the remaining chapters" in l
         ]
         assert len(disable_lines) == 1
 

@@ -691,15 +691,15 @@ class MainFrame(wx.Frame):
         # user can run a paid-API LLM on HTML/EPUB exports without
         # inheriting the audiobook narrator path.
         self.llm_strip_notes_ctrl = wx.CheckBox(
-            form, label="Use &LLM to catch missed A/N (slower)"
+            form, label="Use AI to catch missed A/N (s&lower)"
         )
-        self.llm_strip_notes_ctrl.SetName("Use LLM to catch missed author's notes")
+        self.llm_strip_notes_ctrl.SetName("Use AI to catch missed author's notes")
         self.llm_strip_notes_ctrl.SetToolTip(
-            "Run the configured LLM over each chapter after the regex "
+            "Run the configured AI model over each chapter after the regex "
             "pass. Catches notes the regex misses but adds one "
             "round-trip per chapter — local Ollama is free but slow, "
             "paid APIs charge per token. Results are cached per story "
-            "so re-exports don't re-spend. Click 'LLM settings…' to "
+            "so re-exports don't re-spend. Click 'AI settings…' to "
             "pick the provider/model."
         )
         opts2.Add(self.llm_strip_notes_ctrl, 0, wx.ALIGN_CENTER_VERTICAL)
@@ -715,13 +715,13 @@ class MainFrame(wx.Frame):
         # works for every export format — the user has to be able
         # to reach the dialog from HTML/EPUB/TXT mode too.
         self.llm_settings_main_btn = wx.Button(
-            form, label="LLM settings&…", size=(120, -1),
+            form, label="AI settin&gs…", size=(120, -1),
         )
-        self.llm_settings_main_btn.SetName("Open LLM settings")
+        self.llm_settings_main_btn.SetName("Open AI settings")
         self.llm_settings_main_btn.SetToolTip(
-            "Configure the LLM used by the A/N strip option to the "
-            "left (and by the audiobook attribution backend when "
-            "Format=audio + Attribution=LLM)."
+            "Configure the AI model used by the A/N option to the "
+            "left (and by audiobook speaker detection when "
+            "Format is audio and Attribution is AI)."
         )
         self.llm_settings_main_btn.Bind(wx.EVT_BUTTON, self._on_llm_settings)
         opts2.Add(
@@ -772,7 +772,7 @@ class MainFrame(wx.Frame):
             self.attribution_ctrl,
             "How ficary decides who's speaking each line, to give "
             "characters their own voices: Built-in (fast, no download), "
-            "fastcoref or BookNLP (neural models), or LLM (most accurate, "
+            "fastcoref or BookNLP (neural models), or AI (most accurate, "
             "needs a local or remote model).",
         )
         self.attribution_ctrl.Bind(wx.EVT_CHOICE, self._on_attribution_change)
@@ -814,13 +814,13 @@ class MainFrame(wx.Frame):
         # selected so the audio toolbar stays uncluttered for everyone
         # using the heuristic / neural backends.
         self.llm_settings_btn = wx.Button(
-            self.audio_panel, label="LLM &settings...", size=(140, -1),
+            self.audio_panel, label="AI &settings...", size=(140, -1),
         )
-        self.llm_settings_btn.SetName("LLM settings")
+        self.llm_settings_btn.SetName("AI settings")
         set_help(
             self.llm_settings_btn,
-            "Set the LLM provider, model, API key, and endpoint used by the "
-            "LLM attribution backend.",
+            "Set the AI provider, model, API key and endpoint used by AI "
+            "speaker detection.",
         )
         self.llm_settings_btn.Bind(wx.EVT_BUTTON, self._on_llm_settings)
         audio_sizer.Add(self.llm_settings_btn, 0, wx.RIGHT, 4)
@@ -3610,7 +3610,7 @@ class MainFrame(wx.Frame):
             )
             size_note = f", size={size}" if size else ""
             llm_note = (
-                f", llm={llm_config['provider']}/{llm_config['model']}"
+                f", AI={llm_config['provider']}/{llm_config['model']}"
                 if llm_config else ""
             )
             self._log(
@@ -3671,7 +3671,7 @@ class MainFrame(wx.Frame):
         an_llm_config = params.llm_render_config if params.llm_strip_notes else None
         if an_llm_config:
             self._log(
-                f"  LLM A/N strip: {an_llm_config['provider']}/"
+                f"  AI A/N check: {an_llm_config['provider']}/"
                 f"{an_llm_config['model']} (one call per chapter)"
             )
         path = exporter(

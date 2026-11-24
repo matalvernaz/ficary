@@ -121,8 +121,8 @@ def save_profiles(path: Path, profiles: dict[str, dict]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     skeleton = {
         "_comment": (
-            "Per-character profiles seeded by the LLM attribution "
-            "backend. Each entry: gender (male/female/neutral), age "
+            "Per-character profiles seeded by AI speaker "
+            "detection. Each entry: gender (male/female/neutral), age "
             "(child/teen/young adult/adult/elder), accent (BCP-47), "
             "tone (free-form descriptor). The audiobook generator "
             "uses these to pick voices that match the character "
