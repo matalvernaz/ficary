@@ -9,7 +9,7 @@
 # attribution models (BookNLP's big model is about 1 GB) survive the container being replaced.
 # A folder mounted there must be writable by uid 1000.
 
-FROM python:3.12-slim
+FROM python:3.15-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
