@@ -2373,6 +2373,71 @@ _BARE_AMP_RE = re.compile(
     r"&(?![A-Za-z][A-Za-z0-9]*;|#\d+;|#[Xx][0-9A-Fa-f]+;)"
 )
 
+# Elements whose content is code, not the author's text. A <script> made
+# the chapter "scripted" (epubcheck OPF-014), and some readers run it.
+_XHTML_CODE_ELEMENTS = ("script", "noscript")
+
+# Attributes that only mean something on a link with an address.
+_LINK_ONLY_ATTRS = ("rel", "target", "hreflang", "type", "download", "ping", "referrerpolicy")
+
+
+def _tidy_links_and_ids(soup) -> None:
+    """The markup epubcheck rejects that scraped chapters carry with links,
+    ids and code. Each made the whole EPUB invalid, and Amazon's Send to
+    Kindle refuses invalid EPUBs. The author's text is kept every time.
+
+    * ``<script>``/``<noscript>`` and ``on...`` attributes go: code, not
+      text.
+    * A link with no address: a Word bookmark (``<a name="_GoBack"
+      rel="nofollow">``, in anything written in Word and pasted into AO3)
+      or an old named anchor. Its name becomes an id when a link in the
+      chapter points at it, and it goes when it is empty and nothing
+      does; one with text keeps the text.
+    * A link to ``#something`` that is not in the chapter keeps its text
+      and loses the link: each chapter is its own file, so the target
+      (an end note, say) is not there.
+    * An id used twice in a chapter keeps only its first use.
+    """
+    for element in soup.find_all(list(_XHTML_CODE_ELEMENTS)):
+        element.decompose()
+    for tag in soup.find_all(True):
+        for attr in [name for name in tag.attrs if name.lower().startswith("on")]:
+            del tag[attr]
+
+    seen_ids: set[str] = set()
+    for tag in soup.find_all(id=True):
+        if tag["id"] in seen_ids:
+            del tag["id"]
+        else:
+            seen_ids.add(tag["id"])
+
+    wanted = {
+        (link.get("href") or "")[1:]
+        for link in soup.find_all("a", href=True)
+        if (link.get("href") or "").startswith("#")
+    }
+    for anchor in soup.find_all("a"):
+        if anchor.get("href"):
+            continue
+        name = (anchor.get("name") or "").strip()
+        if name and name in wanted and not anchor.get("id") and name not in seen_ids:
+            anchor["id"] = name
+            seen_ids.add(name)
+        for attr in ("name", "href", *_LINK_ONLY_ATTRS):
+            if attr in anchor.attrs:
+                del anchor[attr]
+        if anchor.get("id"):
+            continue
+        if anchor.get_text(strip=True) or anchor.find(True):
+            anchor.unwrap()
+        else:
+            anchor.decompose()
+
+    for link in soup.find_all("a", href=True):
+        target = link["href"]
+        if target.startswith("#") and target[1:] not in seen_ids:
+            link.unwrap()
+
 
 def _xhtml_sanitize(html: str) -> str:
     """Rewrite scraped chapter HTML into EPUB3-clean XHTML.
@@ -2420,6 +2485,8 @@ def _xhtml_sanitize(html: str) -> str:
             existing = tag.get("class") or []
             if align not in existing:
                 tag["class"] = existing + [align]
+
+    _tidy_links_and_ids(soup)
 
     for img in soup.find_all("img"):
         src = (img.get("src") or "").strip()

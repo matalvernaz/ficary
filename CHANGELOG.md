@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+**EPUBs pass the standard EPUB check**
+
+* Stories written in Word and pasted into AO3 carry Word's hidden
+  bookmarks, and those made every EPUB of them invalid by the standard
+  check (epubcheck). Amazon's Send to Kindle refuses invalid EPUBs, and
+  strict readers can stumble on them. So did a script or a link to a
+  note in another chapter. Ficary now tidies these when it makes an
+  EPUB: scripts are removed, links to something that is not in the
+  chapter keep their text without the link, and footnote links within
+  a chapter keep working. The story's text is never removed.
+
 **An address from a site Ficary does not support says so**
 
 * Pasting an address from a site Ficary does not download from (a

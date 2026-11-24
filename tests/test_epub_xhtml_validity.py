@@ -131,3 +131,110 @@ class TestEpubcheckGate:
             f"{m.get('severity')} {m.get('ID')} {m.get('message', '')[:80]}"
             for m in bad
         )
+
+
+# ── Links, ids and code (2026-11-24) ─────────────────────────────
+# Each of these made the whole EPUB invalid; Amazon's Send to Kindle
+# refuses invalid EPUBs. The author's text survives every one.
+
+_LINK_TROUBLE = (
+    '<p>Before<script>document.write("x")</script> after.</p>'
+    '<noscript>Turn scripts on.</noscript>'
+    '<p onclick="steal()" onmouseover="x()">Clickable paragraph.</p>'
+    '<p>Pasted from Word.<a name="_GoBack" rel="nofollow"></a></p>'
+    '<p>See note<a href="#fn1">1</a>, and the <a href="#chapter_1_endnotes">end notes</a>.</p>'
+    '<p><a name="fn1"></a>The footnote itself.</p>'
+    '<p><a name="old-anchor">Named text</a> stays as text.</p>'
+    '<p id="twice">First.</p><p id="twice">Second.</p>'
+    '<p><a href="https://example.invalid/elsewhere" target="_blank">An outside link</a>.</p>'
+)
+
+
+class TestLinksIdsAndCode:
+    def tidy(self, html: str) -> str:
+        return _xhtml_sanitize(html)
+
+    def test_scripts_go_and_the_text_around_them_stays(self):
+        out = self.tidy(_LINK_TROUBLE)
+        assert "<script" not in out and "document.write" not in out
+        assert "<noscript" not in out
+        assert "Before" in out and "after." in out
+
+    def test_event_attributes_go(self):
+        out = self.tidy(_LINK_TROUBLE)
+        assert "onclick" not in out and "onmouseover" not in out
+        assert "Clickable paragraph." in out
+
+    def test_a_word_bookmark_goes(self):
+        out = self.tidy('<p>Pasted from Word.<a name="_GoBack" rel="nofollow"></a></p>')
+        assert out == "<p>Pasted from Word.</p>"
+
+    def test_a_footnote_keeps_its_link_and_its_target(self):
+        out = self.tidy(_LINK_TROUBLE)
+        assert '<a href="#fn1">1</a>' in out
+        assert '<a id="fn1"></a>' in out
+        assert "The footnote itself." in out
+
+    def test_a_link_to_something_not_in_the_chapter_keeps_its_text(self):
+        out = self.tidy(_LINK_TROUBLE)
+        assert "#chapter_1_endnotes" not in out
+        assert "end notes" in out
+
+    def test_a_named_anchor_with_text_keeps_the_text(self):
+        out = self.tidy(_LINK_TROUBLE)
+        assert "old-anchor" not in out
+        assert "<p>Named text stays as text.</p>" in out
+
+    def test_an_id_used_twice_keeps_its_first_use(self):
+        out = self.tidy(_LINK_TROUBLE)
+        assert out.count('id="twice"') == 1
+        assert "First." in out and "Second." in out
+
+    def test_an_outside_link_is_left_alone(self):
+        out = self.tidy(_LINK_TROUBLE)
+        assert '<a href="https://example.invalid/elsewhere" target="_blank">An outside link</a>' in out
+
+
+def _link_trouble_story():
+    story = Story(id=8, title="Links & Code", author="A", summary="", url="https://www.fanfiction.net/s/8")
+    story.chapters.append(Chapter(number=1, title="One", html=_LINK_TROUBLE))
+    return story
+
+
+def _ao3_fixture_story():
+    """The AO3 work in the fixtures: its first chapter has a Word bookmark."""
+    from pathlib import Path
+
+    from bs4 import BeautifulSoup
+
+    from ficary.ao3 import AO3Scraper
+
+    page = (Path(__file__).parent / "fixtures" / "ao3_work_full.html").read_text(encoding="utf-8")
+    soup = BeautifulSoup(page, "lxml")
+    meta = AO3Scraper._parse_metadata(soup)
+    story = Story(id=9, title=meta["title"], author=meta["author"], summary="", url="https://archiveofourown.org/works/9")
+    story.chapters.extend(AO3Scraper._parse_chapters(soup, meta["title"]))
+    return story
+
+
+def _epubcheck_problems(epub_path) -> list[str]:
+    import json
+
+    proc = subprocess.run(["epubcheck", "--json", "-", str(epub_path)], capture_output=True, text=True, timeout=300)
+    brace = proc.stdout.find("{")
+    assert brace != -1, f"epubcheck produced no JSON (rc={proc.returncode}): {proc.stdout[:300]} {proc.stderr[:300]}"
+    report = json.loads(proc.stdout[brace:])
+    return [
+        f"{m.get('severity')} {m.get('ID')} {m.get('message', '')[:100]}"
+        for m in report.get("messages", [])
+        if m.get("severity") in ("ERROR", "WARNING", "FATAL")
+    ]
+
+
+@pytest.mark.skipif(shutil.which("epubcheck") is None, reason="epubcheck not on PATH (optional deeper gate)")
+class TestEpubcheckOnLinksAndRealWork:
+    def test_links_ids_and_code_pass(self, tmp_path):
+        assert _epubcheck_problems(export_epub(_link_trouble_story(), output_dir=str(tmp_path))) == []
+
+    def test_the_real_ao3_work_with_a_word_bookmark_passes(self, tmp_path):
+        assert _epubcheck_problems(export_epub(_ao3_fixture_story(), output_dir=str(tmp_path))) == []
