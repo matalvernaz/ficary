@@ -869,6 +869,16 @@ def _build_scraper(url: str, args: argparse.Namespace):
         )
         if cookie:
             kwargs["session_cookie"] = cookie
+    # StoriesOnline shows only the start of a story to someone not signed
+    # in; a signed-in browser's cookie gets the whole story.
+    from .erotica import StoriesOnlineScraper
+    if scraper_cls is StoriesOnlineScraper:
+        cookie = (
+            getattr(args, "storiesonline_cookie", None)
+            or _legacy.getenv_compat("FICARY_STORIESONLINE_COOKIE")
+        )
+        if cookie:
+            kwargs["session_cookie"] = cookie
     return scraper_cls(**kwargs)
 
 
@@ -4637,6 +4647,18 @@ def _build_parser() -> argparse.ArgumentParser:
             "For subscribestar.adult, a logged-in browser 'Cookie:' header "
             "string. Required — the post feed is subscriber-only. Reads "
             "$FICARY_SUBSCRIBESTAR_COOKIE if the flag is omitted."
+        ),
+    )
+    parser.add_argument(
+        "--storiesonline-cookie",
+        type=str,
+        default=None,
+        metavar="COOKIE",
+        help=(
+            "For storiesonline.net, a 'Cookie:' header string from a browser "
+            "signed in to a StoriesOnline account (a free one is enough). "
+            "Without it the site shows only the start of a story. Reads "
+            "$FICARY_STORIESONLINE_COOKIE if the flag is omitted."
         ),
     )
     parser.add_argument(

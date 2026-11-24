@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+**Whole StoriesOnline stories with a free account**
+
+* StoriesOnline shows only the start of a story to someone who is not
+  signed in, so every StoriesOnline book stopped at "There is more of
+  this story...". Preferences > Downloads has a new StoriesOnline cookie
+  box (Alt+T): paste the Cookie header from a browser signed in to a
+  StoriesOnline account (the site says a free one is enough) and Ficary
+  downloads whole stories, including in library updates and the
+  watchlist. On the command line it is `--storiesonline-cookie`, or the
+  `FICARY_STORIESONLINE_COOKIE` environment variable.
+* When a book still stops at the free part, the status pane says why:
+  no cookie set, or the cookie may have run out.
+
 **GreatFeet and StoriesOnline books lose the site's own lines**
 
 * GreatFeet books ended with the site's navigation ("Back to the Story

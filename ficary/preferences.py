@@ -480,6 +480,18 @@ class PreferencesDialog(wx.Dialog):
         self.subscribestar_cookie_ctrl.SetName("SubscribeStar cookie")
         sizer.Add(row, 0, wx.EXPAND | wx.ALL, 6)
 
+        row, self.storiesonline_cookie_ctrl = self._labeled_row(
+            panel, "S&toriesOnline cookie:", _cookie,
+            help_text=(
+                "Paste a Cookie header from a browser signed in to "
+                "StoriesOnline (a free account is enough) to download whole "
+                "stories; without it the site shows only the start of one. "
+                "Stored locally."
+            ),
+        )
+        self.storiesonline_cookie_ctrl.SetName("StoriesOnline cookie")
+        sizer.Add(row, 0, wx.EXPAND | wx.ALL, 6)
+
         self._add_help_text(
             sizer, panel,
             "These set the defaults that load on launch. Format, filename, "
@@ -876,6 +888,8 @@ class PreferencesDialog(wx.Dialog):
             self.prefs.get(_p.KEY_SCRIBBLEHUB_COOKIE) or "")
         self.subscribestar_cookie_ctrl.SetValue(
             self.prefs.get(_p.KEY_SUBSCRIBESTAR_COOKIE) or "")
+        self.storiesonline_cookie_ctrl.SetValue(
+            self.prefs.get(_p.KEY_STORIESONLINE_COOKIE) or "")
 
         # Audiobook
         try:
@@ -1038,6 +1052,10 @@ class PreferencesDialog(wx.Dialog):
         self.prefs.set(
             _p.KEY_SUBSCRIBESTAR_COOKIE,
             self.subscribestar_cookie_ctrl.GetValue().strip(),
+        )
+        self.prefs.set(
+            _p.KEY_STORIESONLINE_COOKIE,
+            self.storiesonline_cookie_ctrl.GetValue().strip(),
         )
 
         # Audiobook

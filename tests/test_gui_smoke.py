@@ -229,6 +229,7 @@ _PREFS_LABELED_FIELDS = [
     ("ao3_cookie_ctrl", "AO3 cookie:"),
     ("scribblehub_cookie_ctrl", "ScribbleHub cookie:"),
     ("subscribestar_cookie_ctrl", "SubscribeStar cookie:"),
+    ("storiesonline_cookie_ctrl", "StoriesOnline cookie:"),
     ("speech_rate_ctrl", "Default speech rate (%):"),
     ("attribution_ctrl", "Default attribution backend:"),
     ("attribution_size_ctrl", "Default model size (BookNLP only):"),

@@ -51,6 +51,7 @@ class DownloadJob:
     webnovel_cookie: Optional[str] = None
     scribblehub_cookie: Optional[str] = None
     subscribestar_cookie: Optional[str] = None
+    storiesonline_cookie: Optional[str] = None
     chyoa_max_depth: Optional[int] = None
 
     # ── bulk-update run options (read by _run_update_queue) ───────
@@ -103,6 +104,7 @@ class DownloadJob:
             KEY_CF_SOLVE,
             KEY_SCRIBBLEHUB_COOKIE,
             KEY_STRIP_NOTES,
+            KEY_STORIESONLINE_COOKIE,
             KEY_SUBSCRIBESTAR_COOKIE,
             KEY_WEBNOVEL_COOKIE,
             Prefs,
@@ -134,6 +136,9 @@ class DownloadJob:
             scribblehub_cookie=(prefs.get(KEY_SCRIBBLEHUB_COOKIE) or None),
             subscribestar_cookie=(
                 prefs.get(KEY_SUBSCRIBESTAR_COOKIE) or None
+            ),
+            storiesonline_cookie=(
+                prefs.get(KEY_STORIESONLINE_COOKIE) or None
             ),
             cf_solve=prefs.get_bool(KEY_CF_SOLVE),
             fichub=prefs.get_bool(KEY_FICHUB),

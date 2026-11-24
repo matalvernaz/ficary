@@ -60,7 +60,7 @@ def test_storiesonline_says_when_the_book_is_only_the_free_part(caplog):
     with caplog.at_level(logging.WARNING, logger="ficary.erotica.storiesonline"):
         scraper.download("https://storiesonline.net/s/40467/ouroboros-dorm-dipping")
     said = [record.getMessage() for record in caplog.records if record.levelno == logging.WARNING]
-    assert any("shows only the start of" in line and "Ficary cannot sign in to StoriesOnline" in line for line in said)
+    assert any("shows only the start of" in line and "Preferences > Downloads, StoriesOnline cookie" in line for line in said)
 
 
 def test_a_whole_storiesonline_story_says_nothing(caplog):

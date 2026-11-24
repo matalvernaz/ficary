@@ -142,6 +142,7 @@ def test_credential_fields_have_height_and_scroll_into_view(wx_app):
         for name in (
             "ao3_cookie_ctrl", "ao3_user_agent_ctrl",
             "scribblehub_cookie_ctrl", "subscribestar_cookie_ctrl",
+            "storiesonline_cookie_ctrl",
         ):
             ctrl = getattr(dlg, name)
             assert ctrl.GetSize().height > 0, f"{name} has no drawable height"

@@ -44,6 +44,12 @@ can also be searched from inside the app; see
 [Searching for stories](#searching-for-stories). (FicWad, MediaMiner,
 and Webnovel are download-by-link only — no search.)
 
+StoriesOnline shows only the start of a story unless you are signed
+in. A free StoriesOnline account is enough: paste the Cookie header
+from a browser signed in to it into Preferences → Downloads,
+StoriesOnline cookie (or use `--storiesonline-cookie`), and Ficary gets
+whole stories. Without one it saves the free part and says so.
+
 One caveat: BDSM Library's own story database has been broken at the
 source since July 2026 — the site serves blank pages for every story.
 Ficary reports this clearly instead of saving an empty file, and will
@@ -544,6 +550,7 @@ ficary --fichub https://www.fanfiction.net/s/12345
 # variables work too.
 ficary --ao3-cookie "$COOKIE" https://archiveofourown.org/works/1234
 ficary --webnovel-cookie "$COOKIE" https://www.webnovel.com/book/...
+ficary --storiesonline-cookie "$COOKIE" https://storiesonline.net/s/12345
 
 # Everything an author has written.
 ficary -a https://www.fanfiction.net/u/1234/Name

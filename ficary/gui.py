@@ -65,6 +65,7 @@ class _DownloadParams:
     ao3_user_agent: str = ""
     scribblehub_cookie: str = ""
     subscribestar_cookie: str = ""
+    storiesonline_cookie: str = ""
     send_to_abs: bool = False
     # HTML title-page layout (exporters.HTML_STYLE_*). Set from the
     # "Default HTML layout" preference — there's no per-download control
@@ -2983,6 +2984,7 @@ class MainFrame(wx.Frame):
                     cf_solve=params.cf_solve,
                     scribblehub_cookie=params.scribblehub_cookie,
                     subscribestar_cookie=params.subscribestar_cookie,
+                    storiesonline_cookie=params.storiesonline_cookie,
                 )
             else:
                 scraper = self._scraper_for(url)
@@ -3194,6 +3196,7 @@ class MainFrame(wx.Frame):
                     cf_solve=params.cf_solve,
                     scribblehub_cookie=params.scribblehub_cookie,
                     subscribestar_cookie=params.subscribestar_cookie,
+                    storiesonline_cookie=params.storiesonline_cookie,
                 )
                 if AO3Scraper.is_series_url(series_url) and not isinstance(scraper, AO3Scraper):
                     scraper = AO3Scraper()
@@ -3230,6 +3233,7 @@ class MainFrame(wx.Frame):
                         cf_solve=params.cf_solve,
                         scribblehub_cookie=params.scribblehub_cookie,
                         subscribestar_cookie=params.subscribestar_cookie,
+                        storiesonline_cookie=params.storiesonline_cookie,
                     )
                     with self._site_slot_for(work_url):
                         stories.append(
@@ -3388,7 +3392,8 @@ class MainFrame(wx.Frame):
 
     def _scraper_for(self, url, *, use_fichub=False, webnovel_cookie="",
                      ao3_cookie="", ao3_user_agent="", scribblehub_cookie="",
-                     subscribestar_cookie="", cf_solve=False, use_cache=True):
+                     subscribestar_cookie="", storiesonline_cookie="",
+                     cf_solve=False, use_cache=True):
         from .sites import detect_scraper
         cls = detect_scraper(url)
         # ``use_cache=False`` threads through every branch: a fresh-copy
@@ -3428,6 +3433,10 @@ class MainFrame(wx.Frame):
             from .subscribestar import SubscribeStarScraper
             if cls is SubscribeStarScraper:
                 return cls(session_cookie=subscribestar_cookie, **base)
+        if storiesonline_cookie:
+            from .erotica import StoriesOnlineScraper
+            if cls is StoriesOnlineScraper:
+                return cls(session_cookie=storiesonline_cookie, **base)
         return cls(**base)
 
     def _snapshot_download_params(self) -> _DownloadParams:
@@ -3495,6 +3504,9 @@ class MainFrame(wx.Frame):
             ).strip(),
             subscribestar_cookie=(
                 self.prefs.get(_p.KEY_SUBSCRIBESTAR_COOKIE) or ""
+            ).strip(),
+            storiesonline_cookie=(
+                self.prefs.get(_p.KEY_STORIESONLINE_COOKIE) or ""
             ).strip(),
             html_style=(self.prefs.get(_p.KEY_HTML_STYLE) or "modern"),
             chapter_notes=(self.prefs.get(_p.KEY_CHAPTER_NOTES) or "keep"),
@@ -3981,6 +3993,7 @@ class MainFrame(wx.Frame):
                 cf_solve=params.cf_solve,
                 scribblehub_cookie=params.scribblehub_cookie,
                 subscribestar_cookie=params.subscribestar_cookie,
+                storiesonline_cookie=params.storiesonline_cookie,
                 # Fresh-copy re-pull ignores the chapter cache so edited
                 # chapters actually refetch (audit #1).
                 use_cache=not refetch_all,
@@ -4438,6 +4451,7 @@ class MainFrame(wx.Frame):
                     cf_solve=params.cf_solve,
                     scribblehub_cookie=params.scribblehub_cookie,
                     subscribestar_cookie=params.subscribestar_cookie,
+                    storiesonline_cookie=params.storiesonline_cookie,
                 )
 
                 def progress(current, total, t, cached):

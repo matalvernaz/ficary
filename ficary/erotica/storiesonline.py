@@ -23,7 +23,7 @@ from typing import Optional
 from bs4 import BeautifulSoup
 
 from ..models import Chapter, Story, chapter_in_spec
-from ..scraper import BaseScraper
+from ..scraper import BaseScraper, CookieAuthMixin
 
 logger = logging.getLogger(__name__)
 
@@ -43,10 +43,18 @@ SOL_TAG_URL_RE = re.compile(
 )
 
 
-class StoriesOnlineScraper(BaseScraper):
-    """Scraper for storiesonline.net stories."""
+class StoriesOnlineScraper(CookieAuthMixin, BaseScraper):
+    """Scraper for storiesonline.net stories.
+
+    Someone not signed in sees only the start of a story. A ``Cookie:``
+    header from a browser signed in to an account (a free one is enough,
+    by the site's own notice) is passed as ``session_cookie``
+    (Preferences > Downloads, StoriesOnline cookie; ``--storiesonline-
+    cookie`` on the command line) and gets the whole story.
+    """
 
     site_name = "storiesonline"
+    _auth_cookie_domain = ".storiesonline.net"
 
     @staticmethod
     def parse_story_id(url_or_id):
@@ -365,14 +373,29 @@ class StoriesOnlineScraper(BaseScraper):
 
         if self._only_the_free_part(soup):
             # Said, so a book that stops part-way is not taken for the
-            # whole story. Ficary has no way to sign in to SOL.
-            logger.warning(
-                "StoriesOnline shows only the start of \"%s\" to someone who "
-                "is not signed in, so the book stops where the free part "
-                "does, at \"There is more of this story...\". Ficary cannot "
-                "sign in to StoriesOnline.",
-                meta["title"],
-            )
+            # whole story.
+            if self.has_auth:
+                logger.warning(
+                    "StoriesOnline still shows only the start of \"%s\", "
+                    "even with your StoriesOnline cookie, so the book stops "
+                    "where the free part does. The cookie may have run out: "
+                    "copy a fresh one from a browser signed in to "
+                    "StoriesOnline into Preferences > Downloads, "
+                    "StoriesOnline cookie.",
+                    meta["title"],
+                )
+            else:
+                logger.warning(
+                    "StoriesOnline shows only the start of \"%s\" to someone "
+                    "who is not signed in, so the book stops where the free "
+                    "part does, at \"There is more of this story...\". A "
+                    "free StoriesOnline account gets the whole story: put the "
+                    "Cookie header from a browser signed in to it in "
+                    "Preferences > Downloads, StoriesOnline cookie "
+                    "(--storiesonline-cookie on the command line), and "
+                    "download it again.",
+                    meta["title"],
+                )
 
         if skip_chapters < 1 and chapter_in_spec(1, chapters):
             html = self._parse_chapter_html(soup)
