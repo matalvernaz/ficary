@@ -283,8 +283,9 @@ class PreferencesDialog(wx.Dialog):
         )
         self.announce_ctrl.SetToolTip(
             "Your screen reader says when a download, a library update or "
-            "an audiobook finishes, wherever you are working. Only ever "
-            "through a screen reader, never the computer's own voice."
+            "an audiobook finishes, and when the check at launch finds "
+            "new chapters, wherever you are working. Only ever through a "
+            "screen reader, never the computer's own voice."
         )
         sizer.Add(self.announce_ctrl, 0, wx.ALL, 6)
 

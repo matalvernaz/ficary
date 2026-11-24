@@ -2269,7 +2269,13 @@ class MainFrame(wx.Frame):
             return
         if waiting is None:
             return
-        self._log(waiting_summary(waiting))
+        summary = waiting_summary(waiting)
+        self._log(summary)
+        if waiting > 0:
+            # Said as well, like a finished download (chosen by the
+            # maintainer): a line in the status pane is easy to miss at
+            # launch. Nothing is said when nothing is waiting.
+            self._announce(summary)
 
     def _cancel_story_check(self) -> None:
         self._story_check_cancel.set()

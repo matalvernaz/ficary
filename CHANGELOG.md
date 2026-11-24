@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+**The screen reader says when new chapters are waiting**
+
+* When the check at launch finds stories with new chapters, the screen
+  reader now says so as well as the status pane, for instance "3
+  stories in your library have new chapters. Library > Check for Story
+  Updates (Ctrl+U) downloads them." Nothing is said when there are
+  none. The same switch as for finished downloads turns it off
+  (Preferences > General, Alt+R).
+
 **Members-only pages say so**
 
 * When a site answers with its sign-in page, as forums do for threads

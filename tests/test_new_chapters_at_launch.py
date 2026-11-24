@@ -403,6 +403,34 @@ class TestTheWindow:
         window._run_story_check([tmp_path])
         assert logged(window).strip() == launch_check.waiting_summary(3)
 
+    def announced(self, monkeypatch):
+        from ficary import announce
+
+        said = []
+        monkeypatch.setattr(announce, "announce", lambda text: said.append(text))
+        return said
+
+    def test_new_chapters_are_said_by_the_screen_reader_too(self, window, monkeypatch, tmp_path):
+        """A line in the status pane is easy to miss at launch."""
+        said = self.announced(monkeypatch)
+        monkeypatch.setattr(launch_check, "check_for_new_chapters", lambda roots, cancel_event: 3)
+        window._run_story_check([tmp_path])
+        assert said == [launch_check.waiting_summary(3)]
+
+    def test_nothing_waiting_is_not_said(self, window, monkeypatch, tmp_path):
+        said = self.announced(monkeypatch)
+        monkeypatch.setattr(launch_check, "check_for_new_chapters", lambda roots, cancel_event: 0)
+        window._run_story_check([tmp_path])
+        assert said == []
+        assert logged(window).strip() == launch_check.waiting_summary(0)
+
+    def test_not_said_when_announcements_are_switched_off(self, window, monkeypatch, tmp_path):
+        said = self.announced(monkeypatch)
+        window.values[prefs_module.KEY_ANNOUNCE_FINISHED] = False
+        monkeypatch.setattr(launch_check, "check_for_new_chapters", lambda roots, cancel_event: 3)
+        window._run_story_check([tmp_path])
+        assert said == []
+
     def test_a_check_with_nothing_to_report_says_nothing(self, window, monkeypatch, tmp_path):
         monkeypatch.setattr(launch_check, "check_for_new_chapters", lambda roots, cancel_event: None)
         window._run_story_check([tmp_path])
