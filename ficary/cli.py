@@ -3,8 +3,10 @@
 import argparse
 import contextlib
 import copy
+import html
 import logging
 import os
+import re
 import sys
 import threading
 from pathlib import Path
@@ -997,14 +999,39 @@ def _is_literotica_series(scraper, url: str) -> bool:
     return isinstance(scraper, LiteroticaScraper) and LiteroticaScraper.is_series_url(url)
 
 
-def _download_series_as_one(scraper, series_url: str, *, report_part, cancel_event=None):
+# The link merge_stories puts on each part's title page in a merged book.
+_PART_LINK_RE = re.compile(r'<a\s[^>]*href="([^"]+)"[^>]*>\s*Original on ', re.IGNORECASE)
+
+
+def _parts_in_merged_book(chapters) -> set[str]:
+    """The Literotica parts a merged book holds, as story slugs, read from the link on each part's title page."""
+    slugs = set()
+    for chapter in chapters:
+        for address in _PART_LINK_RE.findall(chapter.html or ""):
+            try:
+                slugs.add(LiteroticaScraper.parse_story_id(html.unescape(address)))
+            except ValueError:
+                continue
+    return slugs
+
+
+def _download_series_as_one(scraper, series_url: str, *, report_part, cancel_event=None, keeping=frozenset(), listing=None):
     """Download every part of a Literotica series and merge them into one book, as a series download does. Returns the merged story and how many parts it has.
 
-    ``report_part(number, count, title)`` is told as each part arrives. Any part that can't be downloaded stops the whole thing with a ValueError naming it: an update must not write a book with fewer parts than the one it replaces. Parts already read come from the scraper's cache, so only the first page of each is asked for again.
+    ``report_part(number, count, title)`` is told as each part arrives. An update must never write a book with fewer parts than the one it replaces, so this stops with a ValueError, before anything is written, when the series page no longer lists one of the parts in ``keeping`` (the slugs of the parts the book has) or when any part can't be downloaded. Parts already read come from the scraper's cache, so only the first page of each is asked for again. ``listing`` is the series page's ``(name, part addresses)`` when the caller has fetched it already.
     """
-    series_name, part_urls = scraper.scrape_series_works(series_url)
+    series_name, part_urls = listing if listing is not None else scraper.scrape_series_works(series_url)
     if not part_urls:
         raise StoryNotFoundError(f"No parts were found in the series at {series_url}.")
+    listed = {LiteroticaScraper.parse_story_id(part_url) for part_url in part_urls}
+    gone = sorted(set(keeping) - listed)
+    if gone:
+        raise ValueError(
+            f"the series page no longer lists {_parts(len(gone))} the book has "
+            f"({', '.join(gone)}), so the book was left as it was rather than "
+            "lose them. Download the series again as a new book to have the "
+            "new parts too."
+        )
     parts = []
     for number, part_url in enumerate(part_urls, 1):
         _raise_if_download_cancelled(cancel_event)
@@ -1267,8 +1294,22 @@ def _download_one(
                 else:
                     status(f"  [{number}/{count}] {title}")
 
+            # Which parts the book has, so none of them can be lost.
+            try:
+                keeping = _parts_in_merged_book(read_chapters(update_path))
+            except ChaptersNotReadableError as exc:
+                raise ValueError(
+                    f"its parts could not be read from the book ({exc}), so "
+                    "it was left as it was"
+                ) from exc
+            if not keeping:
+                raise ValueError(
+                    "the book doesn't say which parts it has, so it was left "
+                    "as it was. Download the series again to have the new parts."
+                )
             story, series_parts = _download_series_as_one(
                 scraper, url, report_part=report_part, cancel_event=cancel_event,
+                keeping=keeping,
             )
         else:
             story = scraper.download(

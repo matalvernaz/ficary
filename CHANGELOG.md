@@ -19,6 +19,13 @@
   place, the old parts' text coming from the cache. The status pane
   says it in parts ("1 new part, 6 on the site"), and if any part can't
   be downloaded the book is left exactly as it was.
+* A book is never rebuilt with fewer parts than it has: if the series
+  page no longer lists a part the book holds, the book is left as it
+  was and the status pane says which part, rather than lose it.
+* File > Update Existing File and Update in the library browser rebuild
+  a merged series the same way, and say "Up to date. No new parts."
+  when there are none. They used to fail with "Cannot parse Literotica
+  story slug".
 
 **Books an update can't check are skipped with a note**
 
@@ -29,6 +36,9 @@
   creator's page (Add Story, then pick it) and delete the old copy.
 * An AO3 series saved as one book is skipped the same way, with a note
   saying to download the series again to get new parts.
+* The Library window lists such books again after the update's summary,
+  under "Can't be checked for updates:", for Download New Chapters too,
+  so the note isn't lost among the other skipped stories.
 
 **The status bar keeps its sentence**
 

@@ -813,111 +813,122 @@ class LibraryFrame(wx.Frame):
                 return
             self._post_status(line)
 
+        # Books an update can't check at all, listed at the end, where
+        # they can be found: their notes otherwise sit among hundreds of
+        # other skip lines, or nowhere for Download New Chapters.
+        cannot_check: list[tuple[str, str]] = []
         probe_queue, skipped = build_refresh_queue(
             root,
             skip_complete=not force,
             recheck_interval_s=recheck_interval,
             progress=queue_progress,
+            cannot_check=cannot_check,
         )
-        if only_waiting:
-            probe_queue = [
-                entry for entry in probe_queue
-                if isinstance(entry.get("remote"), int) and entry["remote"] > (entry.get("local") or 0)
-            ]
-            skipped = []
-            if not probe_queue:
+        try:
+            if only_waiting:
+                probe_queue = [
+                    entry for entry in probe_queue
+                    if isinstance(entry.get("remote"), int) and entry["remote"] > (entry.get("local") or 0)
+                ]
+                skipped = []
+                if not probe_queue:
+                    self._post_status(
+                        f"No stories in {root} are known to have new chapters. "
+                        "Check All Stories for Updates (Ctrl+U) asks the sites."
+                    )
+                    return
+            if not probe_queue and not skipped:
                 self._post_status(
-                    f"No stories in {root} are known to have new chapters. "
-                    "Check All Stories for Updates (Ctrl+U) asks the sites."
+                    f"No indexed stories for {root}. Use {IMPORT_EXISTING_FOLDER} first."
                 )
                 return
-        if not probe_queue and not skipped:
-            self._post_status(
-                f"No indexed stories for {root}. Use {IMPORT_EXISTING_FOLDER} first."
+
+            # Say up front what the run will do, so someone who checks twice
+            # in a row can hear why the second one asks about so little.
+            # Stories already known to have new chapters are not asked again
+            # (the update runner downloads them straight away), so they are
+            # not counted as ones to check.
+            if recheck_interval > 0 and not only_waiting:
+                hours = recheck_interval / 3600
+                known = sum(1 for entry in probe_queue if "remote" in entry)
+                parts = [f"{len(probe_queue) - known} to check"]
+                if known:
+                    parts.append(f"{known} already known to have new chapters")
+                if skipped:
+                    parts.append(
+                        f"{len(skipped)} skipped as finished, abandoned or checked "
+                        f"in the last {hours:g} hours (Force recheck includes them)"
+                    )
+                self._post_status("; ".join(parts) + ".")
+
+            # Incremental ``last_probed`` stamping: buffer stamps and flush
+            # every N probes plus once at the end, so closing the app
+            # mid-probe doesn't lose all progress and force a full re-probe.
+            STAMP_FLUSH_EVERY = 25
+            stamp_lock = threading.Lock()
+            pending_stamps: dict[str, int | None] = {}
+
+            def _flush_stamps_locked():
+                """Caller holds ``stamp_lock``. Reload the on-disk index,
+                stamp pending URLs (with remote chapter counts so a later
+                refresh can resume interrupted downloads), save, clear.
+                Reloading per-flush merges into current disk state rather
+                than overwriting with a stale in-memory copy."""
+                if not pending_stamps:
+                    return
+                try:
+                    idx = LibraryIndex.load()
+                    idx.mark_probed(root, dict(pending_stamps))
+                except Exception as exc:
+                    logger.exception(
+                        "probe-stamp flush failed (pending=%d)",
+                        len(pending_stamps),
+                    )
+                    self._post_status(f"Warning: probe-stamp flush failed: {exc}")
+                pending_stamps.clear()
+
+            def on_probe_complete(url: str, remote_count: int | None = None) -> None:
+                with stamp_lock:
+                    pending_stamps[url] = remote_count
+                    if len(pending_stamps) >= STAMP_FLUSH_EVERY:
+                        _flush_stamps_locked()
+
+            # The books this run rewrote, to refresh in the index at the end.
+            updated_files: list[Path] = []
+
+            def on_download_complete(url: str, path: Path) -> None:
+                updated_files.append(path)
+
+            cli._run_update_queue(
+                probe_queue, args, args.probe_workers,
+                skipped_count=len(skipped),
+                label="Library update",
+                progress=self._post_status,
+                on_probe_complete=on_probe_complete,
+                on_download_complete=on_download_complete,
+                cancel_event=cancel_event,
+                # A line when each story starts and one when it ends; its
+                # chapters go to the status bar.
+                chapters_in_status_bar=True,
             )
-            return
 
-        # Say up front what the run will do, so someone who checks twice
-        # in a row can hear why the second one asks about so little.
-        # Stories already known to have new chapters are not asked again
-        # (the update runner downloads them straight away), so they are
-        # not counted as ones to check.
-        if recheck_interval > 0 and not only_waiting:
-            hours = recheck_interval / 3600
-            known = sum(1 for entry in probe_queue if "remote" in entry)
-            parts = [f"{len(probe_queue) - known} to check"]
-            if known:
-                parts.append(f"{known} already known to have new chapters")
-            if skipped:
-                parts.append(
-                    f"{len(skipped)} skipped as finished, abandoned or checked "
-                    f"in the last {hours:g} hours (Force recheck includes them)"
-                )
-            self._post_status("; ".join(parts) + ".")
-
-        # Incremental ``last_probed`` stamping: buffer stamps and flush
-        # every N probes plus once at the end, so closing the app
-        # mid-probe doesn't lose all progress and force a full re-probe.
-        STAMP_FLUSH_EVERY = 25
-        stamp_lock = threading.Lock()
-        pending_stamps: dict[str, int | None] = {}
-
-        def _flush_stamps_locked():
-            """Caller holds ``stamp_lock``. Reload the on-disk index,
-            stamp pending URLs (with remote chapter counts so a later
-            refresh can resume interrupted downloads), save, clear.
-            Reloading per-flush merges into current disk state rather
-            than overwriting with a stale in-memory copy."""
-            if not pending_stamps:
-                return
-            try:
-                idx = LibraryIndex.load()
-                idx.mark_probed(root, dict(pending_stamps))
-            except Exception as exc:
-                logger.exception(
-                    "probe-stamp flush failed (pending=%d)",
-                    len(pending_stamps),
-                )
-                self._post_status(f"Warning: probe-stamp flush failed: {exc}")
-            pending_stamps.clear()
-
-        def on_probe_complete(url: str, remote_count: int | None = None) -> None:
             with stamp_lock:
-                pending_stamps[url] = remote_count
-                if len(pending_stamps) >= STAMP_FLUSH_EVERY:
-                    _flush_stamps_locked()
+                _flush_stamps_locked()
 
-        # The books this run rewrote, to refresh in the index at the end.
-        updated_files: list[Path] = []
-
-        def on_download_complete(url: str, path: Path) -> None:
-            updated_files.append(path)
-
-        cli._run_update_queue(
-            probe_queue, args, args.probe_workers,
-            skipped_count=len(skipped),
-            label="Library update",
-            progress=self._post_status,
-            on_probe_complete=on_probe_complete,
-            on_download_complete=on_download_complete,
-            cancel_event=cancel_event,
-            # A line when each story starts and one when it ends; its
-            # chapters go to the status bar.
-            chapters_in_status_bar=True,
-        )
-
-        with stamp_lock:
-            _flush_stamps_locked()
-
-        # Each rewritten book was re-indexed as it was saved; this makes
-        # sure of it, under this library folder. A rescan of the whole
-        # library used to run here instead. It reads every book, so on a
-        # big library, or one in Dropbox where opening a book can mean
-        # downloading it first, it took minutes after the summary had
-        # said the update was complete, with the window still busy and
-        # the computer slowed down.
-        for path in updated_files:
-            record_downloaded_file(path, library_root=root)
+            # Each rewritten book was re-indexed as it was saved; this makes
+            # sure of it, under this library folder. A rescan of the whole
+            # library used to run here instead. It reads every book, so on a
+            # big library, or one in Dropbox where opening a book can mean
+            # downloading it first, it took minutes after the summary had
+            # said the update was complete, with the window still busy and
+            # the computer slowed down.
+            for path in updated_files:
+                record_downloaded_file(path, library_root=root)
+        finally:
+            if cannot_check:
+                self._post_status("Can't be checked for updates:")
+                for name, why_not in cannot_check:
+                    self._post_status(f'  "{name}": {why_not}.')
 
     def _update_finished(self) -> None:
         cancelled = self._update_cancel_event is not None and self._update_cancel_event.is_set()

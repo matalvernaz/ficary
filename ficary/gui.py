@@ -4114,6 +4114,16 @@ class MainFrame(wx.Frame):
                     self._run_series_download(url, scraper, params=params)
                 return
 
+            if is_update and update_path is not None:
+                from . import cli
+
+                if cli._is_literotica_series(scraper, url):
+                    job = activity.Job(f'Updating "{Path(update_path).stem}".')
+                    outcome, job_result = self._update_merged_series(
+                        url, scraper, update_path=Path(update_path), params=params, job=job,
+                    )
+                    return outcome
+
             scraper.parse_story_id(url)
 
             if is_update and update_path is not None:
@@ -4254,6 +4264,46 @@ class MainFrame(wx.Frame):
                 )
             ):
                 self._set_busy(False)
+
+    def _update_merged_series(self, url, scraper, *, update_path: Path, params, job):
+        """Update a Literotica series saved as one book (File > Update Existing File, or Update in the library browser): when the series has parts the book doesn't, download them all and rebuild it, old parts from the cache. Never loses a part: see cli._download_series_as_one. Returns the outcome and the sentence to leave in the status bar.
+
+        Runs inside _run_download's try, which reports an error, a Stop, and ends ``job``.
+        """
+        from . import cli
+        from .updater import read_chapters
+
+        doing = f'Updating "{update_path.stem}"'
+        self._tell_about_status_bar_once()
+        keeping = cli._parts_in_merged_book(read_chapters(update_path))
+        if not keeping:
+            raise ValueError(
+                "the book doesn't say which parts it has, so it was left as "
+                "it was. Download the series again to have the new parts."
+            )
+        with self._site_slot_for(url):
+            listing = scraper.scrape_series_works(url)
+            listed = {cli.LiteroticaScraper.parse_story_id(part) for part in listing[1]}
+            if listed <= keeping:
+                self._log("Up to date. No new parts.")
+                result = f"{update_path.stem} is up to date. No new parts."
+                self._announce(result)
+                return DownloadOutcome(ok=True, reason="already up to date"), result
+
+            def report_part(number, count, title):
+                job.say(f"{doing}, part {number} of {count}.")
+                self._raise_if_stopped(params)
+
+            story, parts = cli._download_series_as_one(
+                scraper, url, report_part=report_part, keeping=keeping, listing=listing,
+            )
+        self._log(f"\n  Series:   {story.title}")
+        self._log(f"  Parts:    {parts} ({max(parts - len(keeping), 0)} new)")
+        path = self._export_story(story, params, update_path=update_path, job=job, doing=doing)
+        self._log(f"\nDone! Saved to: {path}")
+        result = _finished_sentence(story.title, params.fmt)
+        self._announce(result)
+        return DownloadOutcome(ok=True, saved_paths=[str(path)] if path else []), result
 
     def _run_series_download(self, url, scraper, *, params: Optional[_DownloadParams] = None):
         self._log(f"Fetching series: {url}")

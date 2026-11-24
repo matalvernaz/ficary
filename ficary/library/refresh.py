@@ -145,8 +145,14 @@ def build_refresh_queue(
     skip_abandoned: bool = True,
     progress: Callable[[str], None] = print,
     now: Callable[[], float] = time.time,
+    cannot_check: list | None = None,
 ) -> tuple[list[dict], list[str]]:
     """Build (probe_queue, skipped) from the library index for ``root``.
+
+    ``cannot_check``, if given, collects ``(name, why)`` for each story
+    skipped because an update can't check it at all (see
+    ``_why_updates_cannot_check``), for a caller that lists them where
+    they can be found rather than among every other skip line.
 
     Each queue entry has ``path``, ``rel`` (display name), ``title``
     (from the index, which an update names the story by), ``url``,
@@ -211,10 +217,13 @@ def build_refresh_queue(
             skipped.append(display_rel)
             continue
 
-        cannot_check = _why_updates_cannot_check(url)
-        if cannot_check:
-            progress(f"  [skip] {display_rel}: {cannot_check}")
+        why_not = _why_updates_cannot_check(url)
+        if why_not:
+            progress(f"  [skip] {display_rel}: {why_not}")
             skipped.append(display_rel)
+            if cannot_check is not None:
+                name = " ".join(str(entry.get("title") or "").split()) or Path(display_rel).stem
+                cannot_check.append((name, why_not))
             continue
 
         if skip_abandoned:

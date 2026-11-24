@@ -1224,8 +1224,8 @@ def literotica_part_url(number: int) -> str:
     return f"https://www.literotica.com/s/ruth-ch-{number}"
 
 
-def made_up_series(parts: int, *, fail_at: int | None = None, on_part=None):
-    """A Literotica site whose series at SERIES_URL has ``parts`` parts, each one chapter, as every submission is. No network: the series page and the parts are made up."""
+def made_up_series(parts: int, *, fail_at: int | None = None, on_part=None, listed=None):
+    """A Literotica site whose series at SERIES_URL has ``parts`` parts, each one chapter, as every submission is; ``listed`` names the part numbers on its series page when they aren't 1 to ``parts``. No network: the series page and the parts are made up."""
     from ficary.erotica.literotica import LiteroticaScraper
 
     class MadeUpSeries(LiteroticaScraper):
@@ -1240,7 +1240,8 @@ def made_up_series(parts: int, *, fail_at: int | None = None, on_part=None):
             pass
 
         def scrape_series_works(self, url):
-            return "Ruth", [literotica_part_url(number) for number in range(1, parts + 1)]
+            numbers = listed if listed is not None else range(1, parts + 1)
+            return "Ruth", [literotica_part_url(number) for number in numbers]
 
         def download(self, url_or_id, progress_callback=None, skip_chapters=0, chapters=None):
             number = int(str(url_or_id).rsplit("-", 1)[1])
@@ -1275,7 +1276,25 @@ class TestAMergedLiteroticaSeries:
         with patch.object(scraper, "_fetch", return_value=page):
             assert scraper.get_chapter_count(SERIES_URL) == 6
 
-    def update(self, tmp_path, monkeypatch, site, *, in_status_bar=True, cancel=None):
+    @staticmethod
+    def a_merged_book(folder: Path, parts: int = 2, *, links: bool = True) -> Path:
+        """A real merged book of the series' first ``parts`` parts, made the way a series download makes one."""
+        from ficary.exporters import export_html
+        from ficary.merge import merge_stories
+
+        stories = []
+        for number in range(1, parts + 1):
+            part = Story(
+                id=number, title=f"Ruth Ch. {number:02d}", author="Someone", summary="",
+                url=literotica_part_url(number) if links else "",
+            )
+            part.chapters.append(Chapter(number=1, title=f"Ruth Ch. {number:02d}", html=f"<p>Part {number}.</p>"))
+            stories.append(part)
+        return Path(export_html(merge_stories("Ruth", SERIES_URL, stories), str(folder), template="{title}"))
+
+    def update(self, tmp_path, monkeypatch, site, *, in_status_bar=True, cancel=None, links=True):
+        book = self.a_merged_book(tmp_path, links=links)
+        self.book_before = book.read_bytes()
         exported = []
 
         def export(story, folder, **options):
@@ -1284,10 +1303,8 @@ class TestAMergedLiteroticaSeries:
 
         monkeypatch.setitem(cli.EXPORTERS, "html", export)
         plug_in(monkeypatch, site)
-        book = tmp_path / "Ruth.html"
-        book.write_bytes(b"the merged book with two parts")
         # Two parts in the book: four chapters.
-        queue = [{"path": book, "rel": "Ruth.html", "url": SERIES_URL, "local": 4, "title": "Ruth"}]
+        queue = [{"path": book, "rel": book.name, "url": SERIES_URL, "local": 4, "title": "Ruth"}]
         lines = update(queue, site, in_status_bar=in_status_bar, cancel=cancel)
         return lines, exported
 
@@ -1298,7 +1315,7 @@ class TestAMergedLiteroticaSeries:
         assert 'Updating 1 of 1: "Ruth", 1 new part.' in lines
         assert 'Updated "Ruth": 3 parts, 1 new.' in lines
         (story, written_to, _bar), = exported
-        assert written_to == tmp_path / "Ruth.html"
+        assert written_to.name == "Ruth.html"
         assert story.url == SERIES_URL
         assert len(story.chapters) == 6
         assert site.downloaded == [literotica_part_url(number) for number in (1, 2, 3)]
@@ -1317,7 +1334,25 @@ class TestAMergedLiteroticaSeries:
         lines, exported = self.update(tmp_path, monkeypatch, site)
         assert exported == []
         assert 'Could not update "Ruth": part 2 of 3 could not be downloaded, so the book was left as it was: Literotica answered 503' in lines
-        assert (tmp_path / "Ruth.html").read_bytes() == b"the merged book with two parts"
+        assert (tmp_path / "Ruth.html").read_bytes() == self.book_before
+
+    def test_a_part_the_site_took_down_is_never_lost(self, tmp_path, monkeypatch):
+        """The book has parts 1 and 2; the series page now lists 1, 3 and 4. More parts, so it counts as new, but rebuilding would drop part 2 for good."""
+        site = made_up_series(4, listed=[1, 3, 4])
+        lines, exported = self.update(tmp_path, monkeypatch, site)
+        assert exported == []
+        assert site.downloaded == []
+        assert any(
+            line.startswith('Could not update "Ruth": the series page no longer lists 1 part the book has (ruth-ch-2), so the book was left as it was rather than lose them.')
+            for line in lines
+        )
+        assert (tmp_path / "Ruth.html").read_bytes() == self.book_before
+
+    def test_a_book_that_does_not_say_which_parts_it_has_is_left_alone(self, tmp_path, monkeypatch):
+        site = made_up_series(3)
+        lines, exported = self.update(tmp_path, monkeypatch, site, links=False)
+        assert exported == []
+        assert any("the book doesn't say which parts it has, so it was left as it was" in line for line in lines)
 
     def test_a_cancel_between_parts_stops_without_writing(self, tmp_path, monkeypatch):
         cancel = threading.Event()
@@ -1340,3 +1375,118 @@ class TestAMergedLiteroticaSeries:
         assert '  1 of 1: "Ruth", up to date, 2 parts' in lines
         assert exported == []
         assert site.downloaded == []
+
+
+def test_a_merged_series_book_counts_true_end_to_end(tmp_path, monkeypatch, capsys):
+    """Real books, real scan, real export: the merged book's chapters are twice its parts, an update that finds a new part leaves the index saying so, and the next check finds it up to date with nothing waiting. If these drifted apart, every update would rebuild the book again."""
+    from ficary.library.index import LibraryIndex
+    from ficary.library.launch_check import stories_waiting
+    from ficary.library.scanner import scan
+
+    root = tmp_path / "library"
+    root.mkdir()
+    TestAMergedLiteroticaSeries.a_merged_book(root, parts=2)
+    scan(root)
+    root = root.resolve()
+
+    def the_entry():
+        (_url, entry), = LibraryIndex.load().library_state(root)["stories"].items()
+        return entry
+
+    assert the_entry()["chapter_count"] == 4
+    site = made_up_series(3)
+    plug_in(monkeypatch, site)
+    with pytest.raises(SystemExit):
+        cli.main(["--update-library", str(root), "--force-recheck"])
+    assert the_entry()["chapter_count"] == 6
+    assert stories_waiting(root) == 0
+    capsys.readouterr()
+    with pytest.raises(SystemExit):
+        cli.main(["--update-library", str(root), "--force-recheck", "--dry-run"])
+    assert '"Ruth", up to date, 3 parts' in capsys.readouterr().out
+
+
+@needs_display
+class TestAMergedSeriesFromTheMainWindow:
+    """File > Update Existing File, and Update in the library browser, use the main window's own update, which couldn't read a series address either ("Cannot parse Literotica story slug", then "A download failed")."""
+
+    def run(self, main_window, monkeypatch, tmp_path, site):
+        book = TestAMergedLiteroticaSeries.a_merged_book(tmp_path, parts=2)
+        before = book.read_bytes()
+        said = []
+        site_on_download = site.download
+
+        def noting_download(url, *args, **kwargs):
+            said.append(activity.current())
+            return site_on_download(url, *args, **kwargs)
+
+        monkeypatch.setattr(site, "download", noting_download)
+        monkeypatch.setattr(main_window, "_scraper_for", lambda *a, **k: site)
+        exported = []
+        monkeypatch.setattr(
+            main_window, "_export_story",
+            lambda story, params, update_path=None, job=None, doing=None: exported.append((story, update_path)) or update_path,
+        )
+        outcome = main_window._run_download(
+            SERIES_URL, skip_chapters=4, is_update=True, update_path=book,
+            params=download_params(main_window, fmt="html"),
+        )
+        return outcome, exported, said, book, before
+
+    def test_a_new_part_rebuilds_the_book(self, main_window, monkeypatch, tmp_path):
+        outcome, exported, said, book, _before = self.run(main_window, monkeypatch, tmp_path, made_up_series(3))
+        assert outcome.ok
+        (story, written_to), = exported
+        assert written_to == book
+        assert len(story.chapters) == 6
+        assert said[1:] == ['Updating "Ruth", part 1 of 3.', 'Updating "Ruth", part 2 of 3.']
+        assert "Parts:    3 (1 new)" in logged(main_window)
+
+    def test_no_new_parts_downloads_nothing(self, main_window, monkeypatch, tmp_path):
+        site = made_up_series(2)
+        outcome, exported, _said, _book, _before = self.run(main_window, monkeypatch, tmp_path, site)
+        assert outcome.ok
+        assert exported == []
+        assert site.downloaded == []
+        assert "Up to date. No new parts." in logged(main_window)
+
+    def test_a_part_the_site_took_down_is_never_lost(self, main_window, monkeypatch, tmp_path):
+        site = made_up_series(4, listed=[1, 3, 4])
+        outcome, exported, _said, book, before = self.run(main_window, monkeypatch, tmp_path, site)
+        assert not outcome.ok
+        assert exported == []
+        assert "the series page no longer lists 1 part the book has (ruth-ch-2)" in logged(main_window)
+        assert book.read_bytes() == before
+
+
+@pytest.mark.parametrize("only_waiting", [False, True], ids=["check all stories", "download new chapters"])
+def test_the_library_window_lists_books_it_cannot_check_after_the_update(tmp_path, monkeypatch, only_waiting):
+    """Their notes otherwise sit among hundreds of other skip lines, or, for Download New Chapters, nowhere."""
+    pytest.importorskip("wx")
+    from ficary.library.gui import LibraryFrame
+    from ficary.library.index import LibraryIndex
+    from ficary.library.scanner import scan
+
+    from .library_fixtures import ficary_epub
+
+    root = tmp_path / "library"
+    root.mkdir()
+    for number in (101, 102):
+        ficary_epub(root, title=f"Story {number}", url=f"https://www.fanfiction.net/s/{number}/1/", chapters=3, story_id=number)
+    scan(root)
+    root = root.resolve()
+    index = LibraryIndex.load()
+    stories = index.library_state(root)["stories"]
+    old = next(url for url in stories if "/s/102" in url)
+    stories["https://subscribestar.adult/someone"] = stories.pop(old)
+    index.save()
+    monkeypatch.setattr(cli, "_run_update_queue", lambda queue, *args, **options: 0)
+    posted: list[str] = []
+    window = types.SimpleNamespace(_post_status=posted.append)
+    LibraryFrame._probe_one_root(
+        window, root, force=False, refetch_all=False, recheck_interval=6 * 60 * 60,
+        cancel_event=threading.Event(), only_waiting=only_waiting,
+    )
+    heading = posted.index("Can't be checked for updates:")
+    assert posted[heading + 1].startswith('  "Story 102": saved from the creator\'s page')
+    assert heading == len(posted) - 2, "listed last, after the update's own lines"
