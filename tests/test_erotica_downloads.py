@@ -258,7 +258,14 @@ class TestGreatFeetDownload:
 
 class TestFictionmaniaDownload:
     def test_webdna_empty_falls_back_to_text(self, monkeypatch):
-        text = _load("fictionmania_text.html")
+        """The reader page comes back as an empty shell, so the plain-text
+        address is used. It used to be fed fictionmania_text.html, which
+        is itself the site's empty template (one word, no title): the
+        test passed with a "story" made of nothing, and a missing story is
+        now refused instead (tests/test_fictionmania_missing_story.py).
+        The plain-text address answers with a web page laid out like the
+        reader page, so that is what it gets here."""
+        text = _load("fm_story_2026_layout.html")
         empty_html = "<html><body></body></html>"
         scraper = _scraper(FictionmaniaScraper)
 
@@ -268,11 +275,9 @@ class TestFictionmaniaDownload:
         story = scraper.download(
             "https://fictionmania.tv/stories/readhtmlstory.html?storyID=12345"
         )
-        # Whatever the upstream title, download should have run to a
-        # populated Story with a non-empty body wrapped in <pre>.
         assert story.title
         assert len(story.chapters) == 1
-        assert story.chapters[0].html
+        assert "Paragraph 12 of a story made up for this test" in story.chapters[0].html
 
 
 # ── Shared download-loop invariants ───────────────────────────────

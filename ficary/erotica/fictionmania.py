@@ -23,11 +23,21 @@ from typing import Optional
 from bs4 import BeautifulSoup
 
 from ..models import Chapter, Story, chapter_in_spec
-from ..scraper import BaseScraper
+from ..scraper import BaseScraper, StoryNotFoundError
 
 logger = logging.getLogger(__name__)
 
 FM_BASE = "https://fictionmania.tv"
+
+# Fewer words than this on a page with no title and no author is not a
+# story. For a story number that does not exist the site answers 200 with
+# an empty template of about 3.5 KB, past the empty-page test in
+# _fetch_with_text_fallback, and its only word is a menu entry.
+_MISSING_STORY_MAX_WORDS = 50
+
+# The story's own block has at least this many words; the menu and the
+# boxes around it have fewer.
+_STORY_BLOCK_MIN_WORDS = 50
 
 FM_STORY_URL_RE = re.compile(
     r"^https?://(?:www\.)?fictionmania\.tv/stories/read(?:html|text)story\.html\?storyID=(?P<id>\d+)",
@@ -156,10 +166,17 @@ class FictionmaniaScraper(BaseScraper):
 
     @staticmethod
     def _parse_chapter_html(soup) -> str:
-        """Extract the story body. Fictionmania wraps the prose
-        inside a ``<blockquote>`` or, failing that, directly in the
-        ``<body>`` with the nav stripped. We take everything after
-        the synopsis block."""
+        """Extract the story body.
+
+        Older pages wrap the prose in a ``<blockquote>``. The 2026 page
+        puts the site menu (``div#menu``), the title and author, links to
+        the details and reviews, the synopsis, then the story in a
+        ``<div>`` of its own, then review prompts, a copyright notice and
+        a disclaimer, all straight under ``<body>``. Taking the whole
+        body put every one of those into the book, and an audiobook read
+        the menu out first. The story is the block under ``<body>`` with
+        the most words; a ``<pre>`` (the plain-text page) is kept whole.
+        """
         body_tag = soup.find("body")
         if body_tag is None:
             raise ValueError("Fictionmania page had no <body>.")
@@ -167,6 +184,14 @@ class FictionmaniaScraper(BaseScraper):
         bq = body_tag.find("blockquote")
         if bq is not None:
             return bq.decode_contents()
+        blocks = [
+            block for block in body_tag.find_all(["div", "pre"], recursive=False)
+            if block.get("id") != "menu"
+        ]
+        if blocks:
+            story = max(blocks, key=lambda block: len(block.get_text(" ", strip=True).split()))
+            if len(story.get_text(" ", strip=True).split()) >= _STORY_BLOCK_MIN_WORDS:
+                return str(story) if story.name == "pre" else story.decode_contents()
         # Otherwise drop obvious nav / heading anchors and emit body.
         for selector in ("a[name]", "form", "script", "style"):
             for el in body_tag.select(selector):
@@ -193,6 +218,10 @@ class FictionmaniaScraper(BaseScraper):
             story_id,
         )
         text = self._fetch(self._text_url(story_id))
+        if re.search(r"<(?:html|body|div)\b", text[:5000], re.IGNORECASE):
+            # The plain-text address answers with a web page too.
+            # Escaping it into a <pre> put its HTML source into the book.
+            return text, True
         wrapped = (
             "<html><head><title>Fictionmania text story</title></head>"
             "<body><pre>" + html_module.escape(text) + "</pre></body></html>"
@@ -239,6 +268,16 @@ class FictionmaniaScraper(BaseScraper):
                 meta["author"] = details["author"]
             if details.get("synopsis") and not meta["summary"]:
                 meta["summary"] = details["synopsis"]
+        if (
+            meta["title"] == f"Fictionmania {story_id}"
+            and meta["author"] == "Unknown Author"
+            and len(soup.get_text(" ", strip=True).split()) < _MISSING_STORY_MAX_WORDS
+        ):
+            # Saving it would put a book of one word into the library.
+            raise StoryNotFoundError(
+                f"Fictionmania has no story {story_id}: its page for it is "
+                "empty. Check the story number in the address."
+            )
         self._save_meta_cache(story_id, meta)
 
         story = Story(
