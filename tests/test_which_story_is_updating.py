@@ -249,7 +249,7 @@ class TestEachStory:
         lines = update(stories(tmp_path, "First Story"), site)
         assert 'Could not update "First Story": The site said no.' in lines
         failed = lines.index("Failed:")
-        assert lines[failed + 1:failed + 3] == ["  First Story", "    → download failed (see log above)"]
+        assert lines[failed + 1:failed + 3] == ["  First Story", "    → The site said no."]
 
     def test_a_story_that_breaks_is_named(self, tmp_path, monkeypatch, saving):
         site = TitledSite(fail_with=RuntimeError("the connection dropped"))
@@ -1490,3 +1490,74 @@ def test_the_library_window_lists_books_it_cannot_check_after_the_update(tmp_pat
     heading = posted.index("Can't be checked for updates:")
     assert posted[heading + 1].startswith('  "Story 102": saved from the creator\'s page')
     assert heading == len(posted) - 2, "listed last, after the update's own lines"
+
+
+# ── A story whose site took chapters down ────────────────────────
+
+
+class TestNothingNewAfterAll:
+    """Matt, 2026-11-24: "it keeps thinking a book from rr has 11 new chapters and it has none." An earlier check saw 415 chapters on Royal Road; the author has since taken some down (398 now, under the 404 in his copy). The stored count kept the story marked as waiting, a waiting story is never asked about again, and every update found nothing."""
+
+    def test_it_counts_as_up_to_date_and_clears_the_stale_count(self, tmp_path, monkeypatch, saving):
+        site = TitledSite(chapters=1)
+        plug_in(monkeypatch, site)
+        stamped = []
+        finished = []
+        lines: list[str] = []
+        cli._run_update_queue(
+            stories(tmp_path, "First Story"), DownloadJob(skip_complete=False), workers=1,
+            skipped_count=0, label="Library update", progress=lines.append,
+            cancel_event=threading.Event(), chapters_in_status_bar=True,
+            on_probe_complete=lambda url, count=None: stamped.append((url, count)),
+            on_download_complete=lambda url, path: finished.append(url),
+        )
+        wait_until_idle(site.site_name)
+        assert '"First Story" had no new chapters after all.' in lines
+        assert any(line.startswith("Library update complete — 0 updated, 1 up to date") for line in lines)
+        assert stamped == [("https://example.invalid/s/1", None)]
+        assert finished == [], "the book was not rewritten, so there is nothing to re-index"
+
+    def test_the_story_stops_waiting(self, tmp_path, monkeypatch):
+        """Through the Library window's Download New Chapters, with a real book and the real index."""
+        pytest.importorskip("wx")
+        from ficary.library.gui import LibraryFrame
+        from ficary.library.index import LibraryIndex
+        from ficary.library.launch_check import stories_waiting
+        from ficary.library.scanner import scan
+
+        from .library_fixtures import ficary_epub
+
+        root = tmp_path / "library"
+        root.mkdir()
+        ficary_epub(root, title="First Story", url="https://www.fanfiction.net/s/101/1/", chapters=3, story_id=101)
+        scan(root)
+        root = root.resolve()
+        index = LibraryIndex.load()
+        (url, entry), = index.library_state(root)["stories"].items()
+        entry["remote_chapter_count"] = 5
+        index.save()
+        assert stories_waiting(root) == 1
+        # The site has no chapters past the book's three now.
+        site = TitledSite(chapters=3)
+        plug_in(monkeypatch, site)
+        window = types.SimpleNamespace(_post_status=lambda line: None)
+        LibraryFrame._probe_one_root(
+            window, root, force=False, refetch_all=False, recheck_interval=6 * 60 * 60,
+            cancel_event=threading.Event(), only_waiting=True,
+        )
+        wait_until_idle(site.site_name)
+        assert stories_waiting(root) == 0
+        (url, entry), = LibraryIndex.load().library_state(root)["stories"].items()
+        assert entry.get("remote_chapter_count") is None
+        assert entry.get("last_probed")
+
+
+def test_a_failed_storys_reason_reaches_the_list_at_the_end_and_the_log(tmp_path, monkeypatch, saving, caplog):
+    """It said "download failed (see log above)", and the reason was only in the status pane."""
+    caplog.set_level(logging.WARNING, logger="ficary.cli")
+    site = TitledSite(fail_with=ValueError("The site said no."))
+    plug_in(monkeypatch, site)
+    lines = update(stories(tmp_path, "First Story"), site)
+    failed = lines.index("Failed:")
+    assert lines[failed + 1:failed + 3] == ["  First Story", "    → The site said no."]
+    assert 'Could not update "First Story": The site said no.' in caplog.text

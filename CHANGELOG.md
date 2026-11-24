@@ -1,5 +1,22 @@
 # Changelog
 
+## Unreleased
+
+**A story whose site took chapters down stops saying it has new ones**
+
+* A check that once saw more chapters than the book has marked the
+  story as having new chapters, and a story marked that way is not
+  asked about again: it is downloaded. When the site has since taken
+  chapters down (Royal Road authors do, for one), the download found
+  nothing, the mark stayed, and the story said it had new chapters at
+  every launch and every update. An update that finds nothing new now
+  counts the story as up to date and clears the mark, and the next
+  scheduled check reads the site's count afresh.
+* A story an update couldn't download is listed at the end with the
+  reason, and the reason is in the log file too. The list said
+  "download failed (see log above)", and the reason was only in the
+  Library window's status pane.
+
 ## 2.20.22 — 2026-11-24
 
 **Debug adds detail to the log file only**

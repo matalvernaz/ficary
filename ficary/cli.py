@@ -969,6 +969,8 @@ class BriefReport:
     def __init__(self, name: str, now: Callable[[str], None]):
         self.name = name
         self.now = now
+        # Why the story could not be downloaded, once it has failed.
+        self.failure: str | None = None
 
 
 def _story_name(entry: dict) -> str:
@@ -1095,6 +1097,7 @@ def _download_one(
     on_export: Callable[[Path], None] | None = None,
     cancel_event: "threading.Event | None" = None,
     brief: BriefReport | None = None,
+    on_nothing_new: Callable[[], None] | None = None,
 ) -> bool:
     """Download and export a single story. Returns True on success, False on error.
 
@@ -1123,6 +1126,9 @@ def _download_one(
     line per chapter go to the debug log instead; and the story ends
     with one line naming it: updated, nothing new after all, or why it
     could not be.
+
+    ``on_nothing_new`` (if given) is called when an update finds no new
+    chapters, so the caller can stop counting the story as having some.
     """
     scraper = _build_scraper(url, args)
     status = status_callback if status_callback is not None else print
@@ -1139,6 +1145,12 @@ def _download_one(
             status_callback(msg)
         else:
             print(msg, file=sys.stderr)
+        # The log file keeps it as well: a library update's lines go to
+        # its status pane and nowhere else, so the reason a story failed
+        # was gone once the window closed. Marked as already shown, so
+        # neither the main window's status log nor the console repeats it.
+        if msg.strip():
+            logger.warning("%s", msg.strip(), extra={"ui_already_emitted": True})
 
     def routine(line: str) -> None:
         """A line the status pane gets unless ``brief`` asked for one line per story. Then it goes to the log file only: marked ``ui_already_emitted``, which the main window's status log leaves out at every log level. Unmarked, at Debug it landed there instead."""
@@ -1157,6 +1169,8 @@ def _download_one(
         if brief is None:
             report_error(f"{kind}: {exc}")
             return
+        # For the update's own list of failures at the end.
+        brief.failure = str(exc) if kind == "Error" else f"{kind}: {exc}"
         doing = "update" if update_path else "download"
         if kind == "Error":
             report_error(f'Could not {doing} "{brief.name}": {exc}')
@@ -1335,6 +1349,8 @@ def _download_one(
         story_status = story.metadata.get("status", "Unknown")
 
         if update_path and new_count == 0:
+            if on_nothing_new is not None:
+                on_nothing_new()
             if brief is not None:
                 # The update said this story had new chapters; the site
                 # gave none when asked for them.
@@ -2480,20 +2496,26 @@ def _run_update_queue(
             brief_report["brief"] = BriefReport(
                 name, lambda now: story_job.say(f"{doing}, {now}."),
             )
+        # Set when the site had no chapters past the book's after all.
+        nothing_new: list[bool] = []
         try:
             ok = _download_one(
                 entry["url"], per_args, Path(per_args.output),
                 update_path=path, existing_chapters=local,
                 status_callback=progress,
                 cancel_event=cancel_event,
+                on_nothing_new=lambda: nothing_new.append(True),
                 **brief_report,
             )
             if not ok:
-                # _download_one swallowed an error and logged it; we
-                # don't have the exception message, but the scrollback
-                # already shows it. "download failed" is all we can
-                # surface in the summary.
-                failure_reason = "download failed (see log above)"
+                # _download_one said why where the user is reading; a
+                # brief report also keeps the reason for the list of
+                # failures at the end.
+                brief = brief_report.get("brief")
+                failure_reason = (
+                    brief.failure if brief is not None and brief.failure
+                    else "download failed (see log above)"
+                )
         except KeyboardInterrupt:
             # Re-raise so the outer wait loop sees the cancel.
             raise
@@ -2531,6 +2553,21 @@ def _run_update_queue(
                 logger.debug("Phase 3 download raised", exc_info=True)
                 say_failure(name, str(exc))
             failure_reason = f"{type(exc).__name__}: {exc}"
+        if ok and nothing_new:
+            # The count that said this story had new chapters is wrong now
+            # (Royal Road authors take chapters down, for one). Kept, it
+            # marked the story as waiting for good: a waiting story is
+            # never asked about again, and every update found nothing.
+            # Recording the check with no count clears it, and the next
+            # scheduled check takes the site's count afresh.
+            if on_probe_complete is not None:
+                try:
+                    on_probe_complete(entry["url"], None)
+                except Exception:  # pragma: no cover - the callback is best-effort
+                    logger.debug("on_probe_complete callback raised", exc_info=True)
+            with result_lock:
+                up_to_date.append(name)
+            return
         with result_lock:
             if ok:
                 updated.append(name)
