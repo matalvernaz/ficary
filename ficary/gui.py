@@ -792,11 +792,16 @@ class MainFrame(wx.Frame):
         from . import attribution as _attribution_module
         self._attribution_module = _attribution_module
         self.audio_panel = wx.Panel(form)
-        # Wraps, as the option row above does, where the window is
-        # narrower than the row (fitted to a small screen).
-        audio_sizer = wx.WrapSizer(wx.HORIZONTAL, wx.REMOVE_LEADING_SPACES)
+        # Two rows of their own: the settings, then the buttons. As one
+        # row they set the window's width, 1,225 pixels on Linux; as a
+        # row that wraps, inside this panel, its second line was cut off
+        # on Windows, since the panel's height took no account of it.
+        # The controls are made in the same order either way.
+        audio_sizer = wx.BoxSizer(wx.VERTICAL)
+        audio_settings = wx.BoxSizer(wx.HORIZONTAL)
+        audio_actions = wx.BoxSizer(wx.HORIZONTAL)
 
-        audio_sizer.Add(
+        audio_settings.Add(
             wx.StaticText(self.audio_panel, label="Speech &rate:"),
             0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 4,
         )
@@ -808,13 +813,13 @@ class MainFrame(wx.Frame):
             "Integer percent delta applied to every TTS call. "
             "Example: -20 for 20% slower, +30 for 30% faster."
         )
-        audio_sizer.Add(self.speech_rate_ctrl, 0, wx.RIGHT, 4)
-        audio_sizer.Add(
+        audio_settings.Add(self.speech_rate_ctrl, 0, wx.RIGHT, 4)
+        audio_settings.Add(
             wx.StaticText(self.audio_panel, label="% "),
             0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 16,
         )
 
-        audio_sizer.Add(
+        audio_settings.Add(
             wx.StaticText(self.audio_panel, label="&Attribution:"),
             0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 4,
         )
@@ -836,12 +841,12 @@ class MainFrame(wx.Frame):
             "needs a local or remote model).",
         )
         self.attribution_ctrl.Bind(wx.EVT_CHOICE, self._on_attribution_change)
-        audio_sizer.Add(self.attribution_ctrl, 0, wx.RIGHT, 4)
+        audio_settings.Add(self.attribution_ctrl, 0, wx.RIGHT, 4)
 
         # Secondary dropdown for backends with size variants (BookNLP).
         # Paired with a caption StaticText so both can be hidden together.
         self.size_label = wx.StaticText(self.audio_panel, label="Si&ze:")
-        audio_sizer.Add(self.size_label, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 4)
+        audio_settings.Add(self.size_label, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 4)
         self.attribution_size_ctrl = wx.Choice(self.audio_panel, choices=[])
         self.attribution_size_ctrl.SetName("Attribution model size")
         set_help(
@@ -851,11 +856,11 @@ class MainFrame(wx.Frame):
             "accurate but a larger download.",
         )
         self.attribution_size_ctrl.Bind(wx.EVT_CHOICE, self._on_size_change)
-        audio_sizer.Add(self.attribution_size_ctrl, 0, wx.RIGHT, 8)
+        audio_settings.Add(self.attribution_size_ctrl, 0, wx.RIGHT, 8)
 
         self.attribution_status = wx.StaticText(self.audio_panel, label="")
         self.attribution_status.SetName("Attribution status")
-        audio_sizer.Add(self.attribution_status, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 4)
+        audio_settings.Add(self.attribution_status, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 4)
 
         self.attribution_install_btn = wx.Button(
             self.audio_panel, label="&Install...", size=(90, -1),
@@ -867,7 +872,7 @@ class MainFrame(wx.Frame):
             "backend needs. Enabled when the backend isn't installed yet.",
         )
         self.attribution_install_btn.Bind(wx.EVT_BUTTON, self._on_install_attribution)
-        audio_sizer.Add(self.attribution_install_btn, 0, wx.RIGHT, 4)
+        audio_actions.Add(self.attribution_install_btn, 0, wx.RIGHT, 4)
 
         # LLM-only "Settings..." button — opens a modal for provider /
         # model / API key / endpoint. Hidden unless the LLM backend is
@@ -883,7 +888,7 @@ class MainFrame(wx.Frame):
             "speaker detection.",
         )
         self.llm_settings_btn.Bind(wx.EVT_BUTTON, self._on_llm_settings)
-        audio_sizer.Add(self.llm_settings_btn, 0, wx.RIGHT, 4)
+        audio_actions.Add(self.llm_settings_btn, 0, wx.RIGHT, 4)
         self.llm_settings_btn.Hide()
 
         # Multi-provider TTS controls — pick which providers contribute
@@ -900,7 +905,7 @@ class MainFrame(wx.Frame):
             "Piper voices), and install Piper.",
         )
         self.tts_providers_btn.Bind(wx.EVT_BUTTON, self._on_tts_providers)
-        audio_sizer.Add(self.tts_providers_btn, 0, wx.RIGHT, 4)
+        audio_actions.Add(self.tts_providers_btn, 0, wx.RIGHT, 4)
 
         # Upload the finished M4B to Audiobookshelf (server + token
         # configured in Preferences → Audiobookshelf). Persisted so the
@@ -920,12 +925,14 @@ class MainFrame(wx.Frame):
             lambda e: self.prefs.set_bool(
                 KEY_ABS_AUTO_SEND, self.abs_send_ctrl.GetValue()),
         )
-        audio_sizer.Add(self.abs_send_ctrl, 0, wx.ALIGN_CENTER_VERTICAL)
+        audio_actions.Add(self.abs_send_ctrl, 0, wx.ALIGN_CENTER_VERTICAL)
 
         # Track the currently-displayed size keys so we can map the
         # Choice's selection index back to a backend-specific size name.
         self._size_keys_shown = []
 
+        audio_sizer.Add(audio_settings, 0, wx.EXPAND)
+        audio_sizer.Add(audio_actions, 0, wx.TOP, 4)
         self.audio_panel.SetSizer(audio_sizer)
         form_sizer.Add(self.audio_panel, 0, wx.EXPAND | wx.LEFT | wx.RIGHT, pad)
 
