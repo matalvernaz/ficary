@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 
 from .. import prefs as _prefs
 from ..gui_help import set_help
-from ..gui_layout import WrappingText
+from ..gui_layout import WrappingText, fit_to_contents
 from .. import activity
 from ..gui_status_bar import HINT as STATUS_BAR_HINT, add_activity_status_bar
 from ..gui_status_log import StatusLogCtrl
@@ -88,6 +88,7 @@ class LibraryFrame(wx.Frame):
         self._load_prefs()
         # Escape closes the window (mirrors the old dialog affordance).
         self._install_escape_accel()
+        fit_to_contents(self, (760, 640))
 
     # ── UI construction ────────────────────────────────────────
 
@@ -96,7 +97,7 @@ class LibraryFrame(wx.Frame):
         sizer = wx.BoxSizer(wx.VERTICAL)
 
         sizer.Add(
-            wx.StaticText(
+            WrappingText(
                 panel,
                 label=(
                     "Scan a library of story files from any source and "
@@ -179,7 +180,7 @@ class LibraryFrame(wx.Frame):
         sizer.Add(tmpl_row, 0, wx.EXPAND | wx.LEFT | wx.RIGHT, 8)
 
         sizer.Add(
-            wx.StaticText(panel, label=_TEMPLATE_HINT),
+            WrappingText(panel, label=_TEMPLATE_HINT),
             0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 8,
         )
 
@@ -1140,13 +1141,14 @@ class ReorganizePreviewDialog(wx.Dialog):
         self._build_ui()
         self._refresh_labels()
         self._set_all(True)
+        fit_to_contents(self, (820, 560))
 
     def _build_ui(self) -> None:
         panel = wx.Panel(self)
         sizer = wx.BoxSizer(wx.VERTICAL)
 
         sizer.Add(
-            wx.StaticText(
+            WrappingText(
                 panel,
                 label=(
                     f"{len(self._moves)} move(s) planned. "
@@ -1254,6 +1256,7 @@ class ReviewDialog(wx.Dialog):
         self._build_ui()
         self._refresh_list()
         self._select_first_pending()
+        fit_to_contents(self, (740, 540))
 
     def _build_ui(self) -> None:
         panel = wx.Panel(self)
@@ -1406,6 +1409,7 @@ class AbandonedStoriesDialog(wx.Dialog):
         self._rows: list = []
         self._build_ui()
         self._refresh_rows()
+        fit_to_contents(self, (720, 440))
 
     def _build_ui(self) -> None:
         panel = wx.Panel(self)
@@ -1417,7 +1421,7 @@ class AbandonedStoriesDialog(wx.Dialog):
             else "Scope: every indexed library"
         )
         sizer.Add(
-            wx.StaticText(panel, label=scope_text),
+            wx.StaticText(panel, label=scope_text, style=wx.ST_ELLIPSIZE_MIDDLE),
             0, wx.ALL, 8,
         )
 

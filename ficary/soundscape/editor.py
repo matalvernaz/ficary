@@ -10,6 +10,7 @@ import shutil
 from pathlib import Path
 
 import wx
+from ..gui_layout import fit_to_contents
 
 from .. import portable
 from . import library
@@ -22,6 +23,7 @@ class SoundscapeEditorDialog(wx.Dialog):
         self._current: Soundscape | None = None
         self._build_ui()
         self._reload_list()
+        fit_to_contents(self, (760, 560))
 
     # ── UI ────────────────────────────────────────────────────────
     def _build_ui(self) -> None:

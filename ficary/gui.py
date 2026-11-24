@@ -774,7 +774,7 @@ class MainFrame(wx.Frame):
         # works for every export format — the user has to be able
         # to reach the dialog from HTML/EPUB/TXT mode too.
         self.llm_settings_main_btn = wx.Button(
-            form, label="AI settin&gs…", size=(120, -1),
+            form, label="AI settin&gs…",
         )
         self.llm_settings_main_btn.SetName("Open AI settings")
         self.llm_settings_main_btn.SetToolTip(
@@ -807,7 +807,7 @@ class MainFrame(wx.Frame):
             0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 4,
         )
         self.speech_rate_ctrl = wx.SpinCtrl(
-            self.audio_panel, min=-50, max=100, initial=0, size=(70, -1),
+            self.audio_panel, min=-50, max=100, initial=0, size=self.FromDIP(wx.Size(70, -1)),
         )
         self.speech_rate_ctrl.SetName("Speech rate percent")
         self.speech_rate_ctrl.SetToolTip(
@@ -864,7 +864,7 @@ class MainFrame(wx.Frame):
         audio_settings.Add(self.attribution_status, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 4)
 
         self.attribution_install_btn = wx.Button(
-            self.audio_panel, label="&Install...", size=(90, -1),
+            self.audio_panel, label="&Install...",
         )
         self.attribution_install_btn.SetName("Install attribution model")
         set_help(
@@ -880,7 +880,7 @@ class MainFrame(wx.Frame):
         # selected so the audio toolbar stays uncluttered for everyone
         # using the heuristic / neural backends.
         self.llm_settings_btn = wx.Button(
-            self.audio_panel, label="AI &settings...", size=(140, -1),
+            self.audio_panel, label="AI &settings...",
         )
         self.llm_settings_btn.SetName("AI settings")
         set_help(
@@ -896,7 +896,7 @@ class MainFrame(wx.Frame):
         # voices to the synthesis pool, and a button to install Piper /
         # download voices on first use.
         self.tts_providers_btn = wx.Button(
-            self.audio_panel, label="&TTS providers...", size=(150, -1),
+            self.audio_panel, label="&TTS providers...",
         )
         self.tts_providers_btn.SetName("Manage TTS providers")
         set_help(

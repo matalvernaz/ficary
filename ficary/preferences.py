@@ -30,6 +30,7 @@ import logging
 import threading
 
 import wx
+from .gui_layout import fit_to_contents
 from wx.lib import scrolledpanel
 
 from . import attribution as _attribution_module
@@ -161,6 +162,7 @@ class PreferencesDialog(wx.Dialog):
 
         self._build_ui()
         self._load_values()
+        fit_to_contents(self, (640, 520))
         self.Centre()
 
     # ── UI construction ─────────────────────────────────────────

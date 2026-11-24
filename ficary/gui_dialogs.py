@@ -23,7 +23,7 @@ import urllib.error
 import wx
 from pathlib import Path
 
-from .gui_layout import WrappingText
+from .gui_layout import WrappingText, fit_to_contents
 from .gui_status_log import StatusLogCtrl
 
 logger = logging.getLogger(__name__)
@@ -94,6 +94,7 @@ class VoicePreviewDialog(wx.Dialog):
         self._synth_done_event = None
         self._build_ui()
         self.Bind(wx.EVT_CLOSE, self._on_close)
+        fit_to_contents(self, (720, 500))
 
     def _build_ui(self):
         panel = wx.Panel(self)
@@ -364,6 +365,7 @@ class StoryPickerDialog(wx.Dialog):
         self._checked_urls: set[str] = set()
         self._apply_sort()
         self._build_ui()
+        fit_to_contents(self, (720, 560))
 
     def _load_saved_sort_key(self):
         if self._prefs is None:
@@ -779,6 +781,7 @@ class MultiPickerDialog(wx.Dialog):
         ]
         self._picked = []
         self._build_ui()
+        fit_to_contents(self, (420, 520))
 
     def _build_ui(self):
         panel = wx.Panel(self)
@@ -957,6 +960,7 @@ class SeriesPartsDialog(wx.Dialog):
         sizer.Add(btn_row, 0, wx.EXPAND | wx.ALL, 8)
 
         panel.SetSizer(sizer)
+        fit_to_contents(self, (560, 400))
 
     def _on_activate(self, event):
         self._on_ok(event)
@@ -1012,6 +1016,7 @@ class OptionalFeaturesDialog(wx.Dialog):
         self._alive = True
         self.Bind(wx.EVT_CLOSE, self._on_alive_close)
         self._build_ui()
+        fit_to_contents(self, (720, 520))
 
     def _on_alive_close(self, event):
         self._alive = False
@@ -1319,6 +1324,7 @@ class TtsProvidersDialog(wx.Dialog):
         self.SetSizer(outer)
 
         self._load_state()
+        fit_to_contents(self, (640, 420))
 
     def _row_label(self, name: str) -> str:
         provider = self._tts_providers.get_provider(name)
@@ -1746,6 +1752,7 @@ class LlmSettingsDialog(wx.Dialog):
 
         self._load_prefs()
         self._refresh_actions()
+        fit_to_contents(self, (620, 560))
 
     def _load_prefs(self):
         # In-memory overlay of {provider_key: {model, api_key, endpoint}}.
@@ -2254,6 +2261,7 @@ class AddFromUrlListDialog(wx.Dialog):
         self._alive = True
         self.Bind(wx.EVT_CLOSE, self._on_alive_close)
         self._build_ui()
+        fit_to_contents(self, (720, 560))
 
     def _on_alive_close(self, event):
         self._alive = False
@@ -2325,7 +2333,7 @@ class AddFromUrlListDialog(wx.Dialog):
         sel_row.Add(sel_inv, 0)
         sizer.Add(sel_row, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 8)
 
-        hint = wx.StaticText(
+        hint = WrappingText(
             panel,
             label=(
                 "Arrow keys to move, space to tick or untick. "

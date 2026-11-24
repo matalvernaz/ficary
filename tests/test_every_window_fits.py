@@ -50,7 +50,8 @@ def misfits(top, wx) -> list[str]:
             if kind is not None:
                 label = " ".join(child.GetLabel().split())[:60]
                 rect = child.GetScreenRect()
-                if child.GetSize().width < child.GetEffectiveMinSize().width - 2:
+                shortened = isinstance(child, wx.StaticText) and child.GetWindowStyleFlag() & (wx.ST_ELLIPSIZE_START | wx.ST_ELLIPSIZE_MIDDLE | wx.ST_ELLIPSIZE_END)
+                if not shortened and child.GetSize().width < child.GetEffectiveMinSize().width - 2:
                     problems.append(f"{kind} squeezed: {label!r}")
                 if not _scrolls(child, wx):
                     if rect.GetRight() > right_edge + 1:
@@ -237,6 +238,10 @@ def test_tabbing_to_the_last_install_button_brings_it_into_view(main_window):
         _settle(wx)
         last = list(dialog._buttons.values())[-1]
         last.SetFocus()
+        # What the toolkit sends a window when one of its children gets
+        # the focus. Under a test display with no window manager, whether
+        # it arrives on its own depends on the screen size.
+        last.GetEventHandler().ProcessEvent(wx.ChildFocusEvent(last))
         _settle(wx)
         area = last.GetParent()
         assert isinstance(area, wx.ScrolledWindow)
@@ -442,5 +447,94 @@ def test_the_add_story_window_is_not_a_long_strip(main_window):
 
     window = main_window.add_story_frame
     size = window.GetSize()
-    assert size.width < 900, size
-    assert size.height > 250, size
+    # The shape, not the size: larger text makes the window larger.
+    assert size.width < 3 * size.height, size
+
+
+# ── Fitting a window to its contents (any text size) ────────────
+
+
+@needs_display
+def test_a_window_whose_contents_fit_keeps_its_size(wx_app):
+    import wx
+
+    from ficary.gui_layout import fit_to_contents
+
+    frame = wx.Frame(None, size=(500, 300))
+    panel = wx.Panel(frame)
+    sizer = wx.BoxSizer(wx.VERTICAL)
+    sizer.Add(wx.Button(panel, label="Short"), 0, wx.ALL, 8)
+    panel.SetSizer(sizer)
+    try:
+        fit_to_contents(frame, (500, 300))
+        assert frame.GetSize() == frame.FromDIP(wx.Size(500, 300))
+    finally:
+        frame.Destroy()
+
+
+@needs_display
+def test_a_window_grows_by_what_would_be_cut_off_and_no_more(wx_app):
+    """Sized to what everything in it would like, windows that already fitted grew; it grows only by what doesn't fit."""
+    import wx
+
+    from ficary.gui_layout import fit_to_contents
+
+    frame = wx.Frame(None, size=(300, 200))
+    panel = wx.Panel(frame)
+    sizer = wx.BoxSizer(wx.VERTICAL)
+    row = wx.BoxSizer(wx.HORIZONTAL)
+    buttons = [wx.Button(panel, label=f"A button with a long label {n}") for n in range(3)]
+    for button in buttons:
+        row.Add(button, 0, wx.RIGHT, 6)
+    sizer.Add(row, 0, wx.ALL, 8)
+    sizer.Add(wx.ListCtrl(panel, style=wx.LC_REPORT), 1, wx.EXPAND | wx.ALL, 8)
+    panel.SetSizer(sizer)
+    try:
+        fit_to_contents(frame, (300, 200))
+        frame.Show()
+        _settle(wx)
+        assert misfits(frame, wx) == []
+        needed = 8 + sum(button.GetBestSize().width + 6 for button in buttons) + 8
+        border = frame.GetSize().width - frame.GetClientSize().width
+        assert frame.GetSize().width <= needed + border + 3 * 8, "grown far past what the buttons need"
+        assert frame.GetSize().height == frame.FromDIP(wx.Size(300, 200)).height, "the list can scroll; nothing needed more height"
+    finally:
+        frame.Destroy()
+        _settle(wx)
+
+
+@needs_display
+def test_a_window_with_pages_is_fitted_to_its_widest_page_once_shown(wx_app):
+    """A notebook's pages have no size until the window is shown (on Linux), and only one shows at a time; the widest page is the one hidden here."""
+    import wx
+
+    from ficary.gui_layout import fit_to_contents
+
+    frame = wx.Frame(None, size=(300, 240))
+    panel = wx.Panel(frame)
+    notebook = wx.Notebook(panel)
+    first = wx.Panel(notebook)
+    first_sizer = wx.BoxSizer(wx.VERTICAL)
+    first_sizer.Add(wx.CheckBox(first, label="Short"), 0, wx.ALL, 8)
+    first.SetSizer(first_sizer)
+    second = wx.Panel(notebook)
+    second_sizer = wx.BoxSizer(wx.VERTICAL)
+    wide = wx.CheckBox(second, label="A setting whose label runs on well past the width of this small window")
+    second_sizer.Add(wide, 0, wx.ALL, 8)
+    second.SetSizer(second_sizer)
+    notebook.AddPage(first, "First")
+    notebook.AddPage(second, "Second")
+    sizer = wx.BoxSizer(wx.VERTICAL)
+    sizer.Add(notebook, 1, wx.EXPAND | wx.ALL, 8)
+    panel.SetSizer(sizer)
+    try:
+        fit_to_contents(frame, (300, 240))
+        frame.Show()
+        _settle(wx, 20)
+        assert notebook.GetSelection() == 0, "the page showing is put back"
+        notebook.SetSelection(1)
+        _settle(wx)
+        assert misfits(frame, wx) == []
+    finally:
+        frame.Destroy()
+        _settle(wx)

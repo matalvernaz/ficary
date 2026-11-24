@@ -29,6 +29,7 @@ import logging
 import threading
 
 import wx
+from .gui_layout import fit_to_contents
 
 from .notifications import ALL_CHANNELS
 from .watchlist import (
@@ -119,6 +120,7 @@ class WatchlistFrame(wx.Frame):
         self._install_accelerators()
         self.Bind(wx.EVT_CLOSE, self._on_close)
         self._reload()
+        fit_to_contents(self, (900, 560))
         self.Centre()
 
     # ── UI ──────────────────────────────────────────────────
@@ -762,6 +764,7 @@ class AddURLWatchDialog(wx.Dialog):
 
         panel.SetSizer(sizer)
         self.url_ctrl.SetFocus()
+        fit_to_contents(self, (560, 360))
 
     def url_value(self):
         return self.url_ctrl.GetValue().strip()
@@ -864,6 +867,7 @@ class AddSearchWatchDialog(wx.Dialog):
 
         panel.SetSizer(sizer)
         self.query_ctrl.SetFocus()
+        fit_to_contents(self, (560, 400))
 
     def site_value(self):
         idx = self.site_ctrl.GetSelection()

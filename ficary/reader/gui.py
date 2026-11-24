@@ -14,6 +14,7 @@ import threading
 import time
 
 import wx
+from ..gui_layout import fit_to_contents
 
 from ..audio.engine import describe_unavailable, get_engine
 from ..audio.events import Event, ReaderEvent
@@ -81,6 +82,7 @@ class ReaderFrame(wx.Frame):
         self._restore_position()
         self._soundscape_session = self._make_soundscape_session()
         self._engine.emit(Event(ReaderEvent.READER_OPENED, story_key=self.source.story_key))
+        fit_to_contents(self, (900, 640))
         self.Centre()
 
     # ── UI construction ───────────────────────────────────────────
@@ -128,7 +130,7 @@ class ReaderFrame(wx.Frame):
         left = wx.BoxSizer(wx.VERTICAL)
         left.Add(wx.StaticText(panel, label="&Chapters"), 0, wx.ALL, 4)
         self.chapter_list = wx.ListCtrl(
-            panel, style=wx.LC_REPORT | wx.LC_SINGLE_SEL, size=(240, -1))
+            panel, style=wx.LC_REPORT | wx.LC_SINGLE_SEL, size=self.FromDIP(wx.Size(240, -1)))
         self.chapter_list.InsertColumn(0, "Chapter", width=230)
         self.chapter_list.SetName("Chapters")
         # ACTIVATED (Enter/double-click) only. Binding SELECTED as well made
@@ -767,6 +769,7 @@ class _BookmarksDialog(wx.Dialog):
         sizer.Add(row, 0, wx.ALIGN_RIGHT)
         self.SetSizer(sizer)
         self.Bind(wx.EVT_BUTTON, self._on_jump_btn, id=wx.ID_OK)
+        fit_to_contents(self, (460, 340))
 
     def _labels(self) -> list[str]:
         return [f"{m.name} — ch. {m.chapter_number}"

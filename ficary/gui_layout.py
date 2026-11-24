@@ -99,3 +99,171 @@ def fit_on_screen(window, area=None) -> None:
     top = min(max(rect.y, area.y), area.y + area.height - height)
     if (left, top, width, height) != (rect.x, rect.y, rect.width, rect.height):
         window.SetSize(left, top, width, height)
+
+
+# What must show whole: text and the controls that carry it. A list, a text
+# box or a scrolled area can be smaller than it would like and scroll.
+_SHOWN_WHOLE = (wx.StaticText, wx.Button, wx.CheckBox, wx.RadioButton, wx.Choice, wx.ComboBox)
+_SHORTENED = wx.ST_ELLIPSIZE_START | wx.ST_ELLIPSIZE_MIDDLE | wx.ST_ELLIPSIZE_END
+
+# Room added beyond the shortfall, so a control isn't drawn hard against the edge.
+_SPARE = 8
+
+
+def _place_in(window, control) -> wx.Point:
+    """Where ``control`` sits in the client area of the top-level ``window``, laid out or not."""
+    x = y = 0
+    current = control
+    while current is not None and current is not window:
+        position = current.GetPosition()
+        x += position.x
+        y += position.y
+        parent = current.GetParent()
+        if parent is not None and parent is not window:
+            # A child's position is within its parent's client area, which
+            # starts inside the parent's border.
+            offset = parent.GetClientAreaOrigin()
+            x += offset.x
+            y += offset.y
+        current = parent
+    return wx.Point(x, y)
+
+
+def _shortfall(window) -> tuple[int, int]:
+    """How much wider and taller ``window`` needs to be for every label, button and drop-down in it to show whole: none squeezed below the size it asks for, none past the right-hand or bottom edge. Inside an area that scrolls up and down, only the height is free: something too wide for it is cut off all the same."""
+    client = window.GetClientSize()
+    need_width = need_height = 0
+
+    def look(parent, scrolled):
+        nonlocal need_width, need_height
+        for child in parent.GetChildren():
+            if isinstance(child, wx.TopLevelWindow) or not child.IsShown():
+                continue
+            if isinstance(child, wx.ScrolledWindow):
+                look(child, child)
+                continue
+            if isinstance(child, _SHOWN_WHOLE):
+                shortened = isinstance(child, wx.StaticText) and child.GetWindowStyleFlag() & _SHORTENED
+                asked = child.GetEffectiveMinSize()
+                size = child.GetSize()
+                if not shortened and size.width < asked.width:
+                    need_width = max(need_width, asked.width - size.width)
+                shown_width = max(size.width, 0 if shortened else asked.width)
+                if scrolled is None:
+                    place = _place_in(window, child)
+                    need_width = max(need_width, place.x + shown_width - client.width)
+                    need_height = max(need_height, place.y + size.height - client.height)
+                elif scrolled.GetClientSize().width >= NARROWEST_WRAP:
+                    # (Narrower, the area has not been given its size yet.)
+                    place = _place_in(scrolled, child)
+                    need_width = max(need_width, place.x + shown_width - scrolled.GetClientSize().width)
+            look(child, scrolled)
+
+    look(window, None)
+    return max(need_width, 0), max(need_height, 0)
+
+
+def _notebooks_in(window) -> list:
+    found = []
+    for child in window.GetChildren():
+        if isinstance(child, wx.Notebook):
+            found.append(child)
+        found.extend(_notebooks_in(child))
+    return found
+
+
+def _page_borders(window) -> dict:
+    """For each notebook in ``window``, how much smaller than the notebook its page area is (the tabs and the border), measured on the page showing, once it has its size."""
+    borders = {}
+    for notebook in _notebooks_in(window):
+        page = notebook.GetCurrentPage()
+        if page is None:
+            continue
+        notebook_size = notebook.GetSize()
+        page_size = page.GetSize()
+        borders[notebook] = (notebook_size.width - page_size.width, notebook_size.height - page_size.height)
+    return borders
+
+
+def _shortfall_on_every_page(window, borders) -> tuple[int, int]:
+    """``_shortfall`` on each page of every notebook in ``window``, which shows one at a time; the page that was showing is put back. Each page is given the room the notebook has for it now, less ``borders``: the toolkit resizes only the showing page, and on Linux not straight away."""
+    width, height = _shortfall(window)
+    for notebook, (border_width, border_height) in borders.items():
+        if not notebook:
+            continue
+        showing = notebook.GetSelection()
+        notebook_size = notebook.GetSize()
+        room = wx.Size(notebook_size.width - border_width, notebook_size.height - border_height)
+        for page in range(notebook.GetPageCount()):
+            # ChangeSelection, unlike SetSelection, sends no page-changed event.
+            notebook.ChangeSelection(page)
+            notebook.GetPage(page).SetSize(room)
+            notebook.GetPage(page).Layout()
+            page_width, page_height = _shortfall(window)
+            width = max(width, page_width)
+            height = max(height, page_height)
+        if showing != wx.NOT_FOUND:
+            notebook.ChangeSelection(showing)
+            notebook.GetPage(showing).SetSize(room)
+            notebook.GetPage(showing).Layout()
+    return width, height
+
+
+def _pages_unsized(window) -> bool:
+    """Whether ``window`` has notebook pages not given their size yet: on Linux a page gets it only once the window is shown."""
+    for notebook in _notebooks_in(window):
+        page = notebook.GetCurrentPage()
+        if page is not None and page.GetSize().width < NARROWEST_WRAP:
+            return True
+    return False
+
+
+def _grow_to_fit(window) -> None:
+    """Grow ``window`` by whatever in it would be cut off, then fit it on the screen."""
+    if not window:
+        return
+    window.Layout()
+    borders = _page_borders(window)
+    # Laying out again after growing can wrap a label differently, so a
+    # few rounds; each only ever grows the window.
+    for _ in range(4):
+        window.Layout()
+        for child in window.GetChildren():
+            if isinstance(child, wx.Panel) and not isinstance(child, wx.TopLevelWindow):
+                child.Layout()
+        extra_width, extra_height = _shortfall_on_every_page(window, borders)
+        if not extra_width and not extra_height:
+            break
+        size = window.GetSize()
+        window.SetSize(
+            size.width + (extra_width + _SPARE if extra_width else 0),
+            size.height + (extra_height + _SPARE if extra_height else 0),
+        )
+    fit_on_screen(window)
+
+
+def fit_to_contents(window, minimum) -> None:
+    """Size the top-level ``window`` to ``minimum`` (width and height in pixels at 100% scaling, so larger on a screen scaled up), then larger wherever a label, button or drop-down in it would be cut off, and fit it on the screen.
+
+    Sized in fixed pixels, eight of Ficary's windows cut off a button or a line of text once the text was larger: with Windows display scaling at 125% or 150%, which laptops often come set to, or a larger system font. Matt chose to have that fixed (2026-11-24). A window grows only by what doesn't fit: lists, text boxes and scrolled areas can be smaller than they would like, so sizing to what everything would like made windows that already fitted larger.
+
+    A window with notebook pages is measured when it is first shown, since on Linux its pages have no size before then.
+    """
+    smallest = window.FromDIP(wx.Size(*minimum))
+    size = window.GetSize()
+    width = max(size.width, smallest.width)
+    height = max(size.height, smallest.height)
+    if (width, height) != (size.width, size.height):
+        window.SetSize(width, height)
+    if not _pages_unsized(window):
+        _grow_to_fit(window)
+        return
+
+    def on_first_show(event):
+        event.Skip()
+        if event.IsShown():
+            window.Unbind(wx.EVT_SHOW, handler=on_first_show)
+            wx.CallAfter(_grow_to_fit, window)
+
+    window.Bind(wx.EVT_SHOW, on_first_show)
+    fit_on_screen(window)

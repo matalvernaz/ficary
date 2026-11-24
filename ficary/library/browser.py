@@ -35,6 +35,7 @@ from pathlib import Path
 from typing import Optional
 
 import wx
+from ..gui_layout import fit_to_contents
 
 from .. import prefs as _prefs
 from ..gui_help import is_own_destroy, set_help
@@ -1075,6 +1076,7 @@ class LibraryBrowserFrame(wx.Frame):
         self.SetSizer(sizer)
         self._install_escape_accel()
         self.Bind(wx.EVT_CLOSE, self._on_close)
+        fit_to_contents(self, (900, 620))
 
     def __getattr__(self, name):
         # Only reached when normal attribute lookup fails — i.e. for the
