@@ -41,3 +41,20 @@ def name_and_help(ctrl: Any, name: str, text: str) -> None:
     except Exception:
         pass
     set_help(ctrl, text)
+
+
+def is_own_destroy(window_id: int, event: Any) -> bool:
+    """True when an EVT_WINDOW_DESTROY ``event`` is about the window whose
+    id is ``window_id``, false when it is about one of its children.
+
+    ``event.GetEventObject() is self`` looks like the natural test and
+    never holds for a top-level window: while it is being torn down wx
+    hands back a different Python wrapper (a plain TopLevelWindow), so
+    the cleanup it guarded never ran. Compare the id saved when the
+    window was made instead; the window itself may no longer answer
+    GetId() by then.
+    """
+    try:
+        return event.GetId() == window_id
+    except RuntimeError:
+        return False

@@ -311,7 +311,7 @@ from .download_queue import (
     WORKER_THREAD_PREFIX,
     site_from_thread_name,
 )
-from .gui_help import set_help
+from .gui_help import set_help, is_own_destroy
 from .gui_dialogs import (
     OptionalFeaturesDialog,
     StoryPickerDialog,
@@ -984,6 +984,15 @@ class MainFrame(wx.Frame):
         # Timer for clipboard polling (2 second interval)
         self._clip_timer = wx.Timer(self)
         self.Bind(wx.EVT_TIMER, self._on_clip_timer, self._clip_timer)
+
+        # Closing the window tidies up in _on_close. Destroying it
+        # without closing (code that calls Destroy() directly, as the
+        # tests do) skipped all of that, and a wx.Timer still running
+        # when its owner is deleted fires into freed memory: the test
+        # suite died with a bus error, then a segfault, once enough
+        # windows had been made and destroyed that way.
+        self._own_window_id = self.GetId()
+        self.Bind(wx.EVT_WINDOW_DESTROY, self._on_window_destroy)
 
     def _build_download_controls(self, panel, sizer, pad):
         sizer.Add(
@@ -2015,6 +2024,29 @@ class MainFrame(wx.Frame):
             for evt in list(self._pending_worker_dialogs):
                 evt.set()
             self._pending_worker_dialogs.clear()
+        event.Skip()
+
+    def _on_window_destroy(self, event):
+        """Stop what would outlive the window: both timers, the log
+        handlers on the root logger, the download-queue listener and the
+        watchlist poller. Runs when the window is really deleted, after
+        _on_close on a normal exit (everything here is safe to repeat)
+        and on its own when the window is destroyed without closing.
+        """
+        # EVT_WINDOW_DESTROY also arrives for every child window.
+        if is_own_destroy(self._own_window_id, event):
+            for name in ("_log_timer", "_clip_timer"):
+                timer = getattr(self, name, None)
+                if timer is not None:
+                    timer.Stop()
+            self._detach_log_handlers()
+            try:
+                DownloadQueues.remove_listener(self._on_site_queue_change)
+            except (KeyError, ValueError, RuntimeError, AttributeError):
+                pass
+            poller = getattr(self, "_watchlist_poller", None)
+            if poller is not None:
+                poller.stop()
         event.Skip()
 
     def _should_confirm_close(self):

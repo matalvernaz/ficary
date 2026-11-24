@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+**Closing the Library window can no longer crash Ficary later**
+
+* The Library window's status pane writes its lines on a timer, and
+  the timer was meant to stop when the window closed. The check for
+  "this is my window closing" never matched, so the timer kept running
+  after the window was gone, and a later tick could crash Ficary. The
+  library list had the same check for its delayed refresh. Both now
+  stop as intended, and the main window stops its own timers the same
+  way when it is destroyed.
+
 **"AI" instead of "LLM"**
 
 * The windows, status messages, command-line help and manual say "AI"

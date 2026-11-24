@@ -59,6 +59,24 @@ def no_update_check_at_launch(monkeypatch):
     monkeypatch.setenv("FICARY_SKIP_UPDATE_CHECK", "1")
 
 
+@pytest.fixture(autouse=True)
+def no_real_clipboard(monkeypatch):
+    """Keep every test away from the system clipboard.
+
+    Turning the clipboard watch on reads the clipboard straight away.
+    Under Xvfb a clipboard read in the middle of a long run of window
+    tests once ended the whole run with a bus error inside GTK. A test
+    has no business reading or writing whatever the user last copied
+    anyway. A test that needs clipboard text sets ``_get_clipboard``
+    on its window itself.
+    """
+    try:
+        import ficary.gui as gui
+    except Exception:  # noqa: BLE001 - no wx here, so no clipboard either
+        return
+    monkeypatch.setattr(gui.MainFrame, "_get_clipboard", lambda self: "")
+
+
 @pytest.fixture(scope="session")
 def wx_app():
     """A single ``wx.App`` shared by every GUI test in the session.

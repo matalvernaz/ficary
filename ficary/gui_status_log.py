@@ -26,6 +26,8 @@ from collections import deque
 
 import wx
 
+from .gui_help import is_own_destroy
+
 FLUSH_INTERVAL_MS = 100
 """How often queued lines are written into the control. Ten writes a
 second reads as live to a person; several hundred a second only reads
@@ -73,6 +75,7 @@ class StatusLogCtrl(wx.TextCtrl):
         self._timer = wx.Timer(self)
         self.Bind(wx.EVT_TIMER, self._on_flush_timer, self._timer)
         self._timer.Start(FLUSH_INTERVAL_MS)
+        self._own_window_id = self.GetId()
         self.Bind(wx.EVT_WINDOW_DESTROY, self._on_destroy)
 
     # ── Producer side (any thread) ─────────────────────────────
@@ -124,7 +127,9 @@ class StatusLogCtrl(wx.TextCtrl):
 
     def _on_destroy(self, event) -> None:
         # EVT_WINDOW_DESTROY also arrives for children; only our own
-        # teardown should stop the timer.
-        if event.GetEventObject() is self:
+        # teardown should stop the timer. (``GetEventObject() is self``
+        # never held during teardown, so the timer used to keep running
+        # into a deleted window: see gui_help.is_own_destroy.)
+        if is_own_destroy(self._own_window_id, event):
             self._timer.Stop()
         event.Skip()

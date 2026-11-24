@@ -37,7 +37,7 @@ from typing import Optional
 import wx
 
 from .. import prefs as _prefs
-from ..gui_help import set_help
+from ..gui_help import is_own_destroy, set_help
 
 logger = logging.getLogger(__name__)
 
@@ -152,6 +152,7 @@ class LibraryPanel(wx.Panel):
         # and search-as-you-type; None when nothing is scheduled.
         self._refresh_later = None
         self._filter_later = None
+        self._own_window_id = self.GetId()
         self.Bind(wx.EVT_WINDOW_DESTROY, self._on_destroy)
         self._build_ui()
         self.reload()
@@ -457,7 +458,7 @@ class LibraryPanel(wx.Panel):
         self._apply_filter()
 
     def _on_destroy(self, event: wx.Event) -> None:
-        if event.GetEventObject() is self:
+        if is_own_destroy(self._own_window_id, event):
             for later in (self._refresh_later, self._filter_later):
                 if later is not None:
                     later.Stop()
