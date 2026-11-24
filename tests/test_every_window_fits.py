@@ -325,3 +325,18 @@ def test_a_window_that_fits_is_left_where_it_is(wx_app):
         assert frame.GetRect() == wx.Rect(100, 50, 700, 500)
     finally:
         frame.Destroy()
+
+
+@needs_display
+def test_the_library_window_lays_itself_out_without_waiting_to_be_resized(main_window):
+    """Windows sends a window no size event when it is shown, so it has to lay itself out once built. The Library window's only size event came with its status bar, before its controls had a sizer, so on Windows every one of them sat on top of the others in the top left-hand corner (Linux lays a window out when it is shown, which hid it)."""
+    from ficary.library.gui import LibraryFrame
+
+    window = LibraryFrame(main_window, main_window.prefs)
+    try:
+        panel = window.scan_btn.GetParent()
+        places = {child.GetPosition().Get() for child in panel.GetChildren()}
+        assert len(places) > 1, "every control is still where it was made, on top of the others"
+    finally:
+        window.Destroy()
+

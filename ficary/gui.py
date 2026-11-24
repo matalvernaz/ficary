@@ -713,7 +713,9 @@ class MainFrame(wx.Frame):
         # Extra export options row. It wraps where the window is narrower
         # than all of it, as when the window has been fitted to a small
         # screen; one row would be cut off at the right-hand edge.
-        opts2 = wx.WrapSizer(wx.HORIZONTAL)
+        # Not EXTEND_LAST_ON_EACH_LINE, the default: it stretches the last
+        # button on each line to the end of it.
+        opts2 = wx.WrapSizer(wx.HORIZONTAL, wx.REMOVE_LEADING_SPACES)
         self.hr_stars_ctrl = wx.CheckBox(
             form,
             label=(

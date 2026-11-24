@@ -257,7 +257,9 @@ class LibraryPanel(wx.Panel):
         # too narrow for all of them; one row ran past the right-hand
         # edge on Linux, Rescan and Close with it. Tab order follows the
         # order they are made in, not where they land.
-        btns = wx.WrapSizer(wx.HORIZONTAL)
+        # Not EXTEND_LAST_ON_EACH_LINE, the default: it stretches the last
+        # button on each line to the end of it.
+        btns = wx.WrapSizer(wx.HORIZONTAL, wx.REMOVE_LEADING_SPACES)
         self.open_btn = wx.Button(self, label="&Open in Reader")
         self.open_btn.Bind(wx.EVT_BUTTON, self._on_open)
         set_help(
