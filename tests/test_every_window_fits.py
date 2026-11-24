@@ -443,8 +443,6 @@ def test_a_voice_list_that_cant_be_fetched_is_said_plainly():
 @needs_display
 def test_the_add_story_window_is_not_a_long_strip(main_window):
     """Its option rows, the audiobook settings among them, wrap, so the window is an ordinary shape. With the audiobook settings on one line it opened 1,225 pixels wide and under 300 tall."""
-    import wx
-
     window = main_window.add_story_frame
     size = window.GetSize()
     # The shape, not the size: larger text makes the window larger.
