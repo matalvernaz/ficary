@@ -110,6 +110,13 @@ _SHORTENED = wx.ST_ELLIPSIZE_START | wx.ST_ELLIPSIZE_MIDDLE | wx.ST_ELLIPSIZE_EN
 _SPARE = 8
 
 
+def _room_asked(control) -> wx.Size:
+    """The room a control needs: a label or button the size of its text, even where it was given a fixed size (a fixed 120 pixels cut "AI settings..." off inside its button once the text was larger); a drop-down the width it asks for, since one given a fixed width shows a long item cut short and its list shows it whole."""
+    if isinstance(control, (wx.Choice, wx.ComboBox)):
+        return control.GetEffectiveMinSize()
+    return control.GetBestSize()
+
+
 def _place_in(window, control) -> wx.Point:
     """Where ``control`` sits in the client area of the top-level ``window``, laid out or not."""
     x = y = 0
@@ -144,7 +151,7 @@ def _shortfall(window) -> tuple[int, int]:
                 continue
             if isinstance(child, _SHOWN_WHOLE):
                 shortened = isinstance(child, wx.StaticText) and child.GetWindowStyleFlag() & _SHORTENED
-                asked = child.GetEffectiveMinSize()
+                asked = _room_asked(child)
                 size = child.GetSize()
                 if not shortened and size.width < asked.width:
                     need_width = max(need_width, asked.width - size.width)

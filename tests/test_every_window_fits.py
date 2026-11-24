@@ -51,7 +51,10 @@ def misfits(top, wx) -> list[str]:
                 label = " ".join(child.GetLabel().split())[:60]
                 rect = child.GetScreenRect()
                 shortened = isinstance(child, wx.StaticText) and child.GetWindowStyleFlag() & (wx.ST_ELLIPSIZE_START | wx.ST_ELLIPSIZE_MIDDLE | wx.ST_ELLIPSIZE_END)
-                if not shortened and child.GetSize().width < child.GetEffectiveMinSize().width - 2:
+                # Text and buttons need the room their text takes, even
+                # given a fixed size; a drop-down, the width it asks for.
+                asked = child.GetEffectiveMinSize() if isinstance(child, (wx.Choice, wx.ComboBox)) else child.GetBestSize()
+                if not shortened and child.GetSize().width < asked.width - 2:
                     problems.append(f"{kind} squeezed: {label!r}")
                 if not _scrolls(child, wx):
                     if rect.GetRight() > right_edge + 1:
@@ -533,6 +536,127 @@ def test_a_window_with_pages_is_fitted_to_its_widest_page_once_shown(wx_app):
         notebook.SetSelection(1)
         _settle(wx)
         assert misfits(frame, wx) == []
+        assert frame.GetSize().width <= wide.GetBestSize().width + 120, "grown far past the widest page"
+    finally:
+        frame.Destroy()
+        _settle(wx)
+
+
+@needs_display
+def test_a_window_made_smaller_is_given_its_usual_size(wx_app):
+    import wx
+
+    from ficary.gui_layout import fit_to_contents
+
+    frame = wx.Frame(None, size=(200, 120))
+    wx.Panel(frame)
+    try:
+        fit_to_contents(frame, (500, 300))
+        assert frame.GetSize() == frame.FromDIP(wx.Size(500, 300))
+    finally:
+        frame.Destroy()
+
+
+@needs_display
+def test_a_long_folder_path_is_shortened_not_widening_the_window(main_window, tmp_path):
+    """A path has no spaces to wrap at; it shortens in the middle, and a screen reader still reads it whole."""
+    import wx
+
+    from ficary.library.gui import AbandonedStoriesDialog
+
+    deep = tmp_path.joinpath(*(f"a-rather-long-folder-name-{n}" for n in range(12)))
+    deep.mkdir(parents=True)
+    dialog = AbandonedStoriesDialog(main_window, deep)
+    try:
+        dialog.Show()
+        _settle(wx)
+        assert dialog.GetSize().width < 1000
+        assert misfits(dialog, wx) == []
+    finally:
+        dialog.Destroy()
+        _settle(wx)
+
+
+@needs_display
+def test_preferences_is_no_wider_than_its_widest_setting_needs(main_window):
+    """Its pages are measured once it is shown; measured on a page not given its size yet, it grew to the width of the screen."""
+    import wx
+
+    from ficary.preferences import PreferencesDialog
+
+    dialog = PreferencesDialog(main_window, main_window.prefs, main_frame=main_window)
+    try:
+        dialog.Show()
+        _settle(wx, 20)
+        widest = 0
+        notebook = _notebook_in(dialog, wx)
+        for page in range(notebook.GetPageCount()):
+            for control in notebook.GetPage(page).GetChildren():
+                if isinstance(control, wx.CheckBox):
+                    widest = max(widest, control.GetBestSize().width)
+        assert dialog.GetSize().width <= max(dialog.FromDIP(wx.Size(640, 0)).width, widest + 200)
+    finally:
+        dialog.Destroy()
+        _settle(wx)
+
+
+@needs_display
+def test_controls_placed_past_an_edge_widen_and_lengthen_the_window(wx_app):
+    """Windows doesn't squeeze what doesn't fit, as Linux does: it puts it past the window's edge. Placed there by hand here."""
+    import wx
+
+    from ficary.gui_layout import fit_to_contents
+
+    frame = wx.Frame(None, size=(300, 200))
+    panel = wx.Panel(frame)
+    right = wx.Button(panel, label="Right", pos=(340, 10))
+    below = wx.Button(panel, label="Below", pos=(10, 260))
+    try:
+        fit_to_contents(frame, (300, 200))
+        client = frame.GetClientSize()
+        assert client.width >= 340 + right.GetSize().width
+        assert client.height >= 260 + below.GetSize().height
+    finally:
+        frame.Destroy()
+
+
+@needs_display
+def test_a_control_too_wide_for_an_area_that_scrolls_up_and_down_widens_the_window(wx_app):
+    import wx
+
+    from ficary.gui_layout import fit_to_contents
+
+    frame = wx.Frame(None, size=(300, 200))
+    panel = wx.Panel(frame)
+    area = wx.ScrolledWindow(panel, style=wx.VSCROLL)
+    area.SetScrollRate(0, 20)
+    sizer = wx.BoxSizer(wx.VERTICAL)
+    sizer.Add(area, 1, wx.EXPAND)
+    panel.SetSizer(sizer)
+    wide = wx.Button(area, label="Too wide", pos=(330, 10))
+    try:
+        frame.Layout()
+        fit_to_contents(frame, (300, 200))
+        frame.Layout()
+        assert area.GetClientSize().width >= 330 + wide.GetSize().width
+    finally:
+        frame.Destroy()
+
+
+@needs_display
+def test_a_button_given_a_fixed_width_too_small_for_its_label_is_found(wx_app):
+    """A fixed 120 pixels cut "AI settings..." off inside its button once the text was larger; the button reported 120 as all it needed."""
+    import wx
+
+    frame = wx.Frame(None, size=(400, 200))
+    panel = wx.Panel(frame)
+    sizer = wx.BoxSizer(wx.VERTICAL)
+    sizer.Add(wx.Button(panel, label="A label longer than its button", size=(60, -1)), 0, wx.ALL, 8)
+    panel.SetSizer(sizer)
+    try:
+        frame.Show()
+        _settle(wx)
+        assert any(problem.startswith("Button squeezed") for problem in misfits(frame, wx))
     finally:
         frame.Destroy()
         _settle(wx)
