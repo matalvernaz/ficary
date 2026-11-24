@@ -1,5 +1,22 @@
 # Changelog
 
+## Unreleased
+
+**Every window works with larger text: 125% and 150% display scaling**
+
+* Windows were sized in fixed pixels, so with Windows display scaling at
+  125% or 150%, which laptops often come set to, or a larger font, eight
+  of them cut off a button or a line of text: Preferences, TTS
+  providers, AI settings, the Library window, Reorganize, Add from URL
+  List, the reader and the watchlist. Each window now opens at its usual
+  size and grows by exactly what would otherwise be cut off. At 100%
+  nothing changes size.
+* Long notes in the Library, Reorganize and Add from URL List windows
+  wrap; the folder path in Abandoned Stories shortens in the middle on
+  screen (a screen reader still reads it whole); buttons that had fixed
+  pixel widths size to their labels.
+* The automatic tests now also check every window with text 50% larger.
+
 ## 2.20.26 — 2026-11-24
 
 **Fewer lines to wade through in an update, sites by their names, chapter titles in the reader**
