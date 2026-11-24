@@ -79,6 +79,140 @@ def no_update_check_at_launch(monkeypatch):
     monkeypatch.setenv("FICARY_SKIP_UPDATE_CHECK", "1")
 
 
+def _is_this_computer(host) -> bool:
+    import ipaddress
+
+    if host is None:
+        return True
+    if isinstance(host, bytes):
+        host = host.decode("ascii", "replace")
+    host = str(host).strip("[]").lower()
+    if host in ("", "localhost", "localhost.localdomain"):
+        return True
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    return address.is_loopback or address.is_unspecified
+
+
+@pytest.fixture(autouse=True)
+def no_network(monkeypatch):
+    """Refuse every attempt to reach a computer other than this one, and
+    fail the test that made it.
+
+    A test that reaches a real site is slow, fails without a connection,
+    behaves differently with one, and spends requests that belong to the
+    people using Ficary from the same address (GitHub's limit of 60 an
+    hour is per address). The suite used to look up Microsoft's voice
+    list on every audiobook render test and send requests to
+    ``example.invalid``. Both ways out are covered: Python's own sockets
+    (urllib, aiohttp, websockets, edge-tts) and curl_cffi, which is
+    libcurl underneath and never touches them. Loopback addresses and
+    Unix sockets are allowed, so a test can still run a server of its
+    own on this computer.
+    """
+    import socket
+    from urllib.parse import urlsplit
+
+    tried: list[str] = []
+
+    def refuse(target):
+        tried.append(str(target))
+        raise ConnectionRefusedError(f"tests may not reach {target} (tests/conftest.py, no_network)")
+
+    real_connect = socket.socket.connect
+    real_connect_ex = socket.socket.connect_ex
+    real_getaddrinfo = socket.getaddrinfo
+
+    def connect(self, address):
+        if self.family in (socket.AF_INET, socket.AF_INET6) and not _is_this_computer(address[0]):
+            refuse(f"{address[0]}:{address[1]}")
+        return real_connect(self, address)
+
+    def connect_ex(self, address):
+        if self.family in (socket.AF_INET, socket.AF_INET6) and not _is_this_computer(address[0]):
+            refuse(f"{address[0]}:{address[1]}")
+        return real_connect_ex(self, address)
+
+    def getaddrinfo(host, *args, **kwargs):
+        if not _is_this_computer(host):
+            refuse(host)
+        return real_getaddrinfo(host, *args, **kwargs)
+
+    monkeypatch.setattr(socket.socket, "connect", connect)
+    monkeypatch.setattr(socket.socket, "connect_ex", connect_ex)
+    monkeypatch.setattr(socket, "getaddrinfo", getaddrinfo)
+
+    def url_host(url):
+        try:
+            return urlsplit(str(url)).hostname
+        except ValueError:
+            return str(url)
+
+    try:
+        import curl_cffi.requests as curl_requests
+    except ImportError:
+        curl_requests = None
+    if curl_requests is not None:
+        real_request = curl_requests.Session.request
+
+        def request(self, method, url, *args, **kwargs):
+            if not _is_this_computer(url_host(url)):
+                refuse(url)
+            return real_request(self, method, url, *args, **kwargs)
+
+        monkeypatch.setattr(curl_requests.Session, "request", request)
+        async_session = getattr(curl_requests, "AsyncSession", None)
+        if async_session is not None:
+            real_async_request = async_session.request
+
+            async def async_request(self, method, url, *args, **kwargs):
+                if not _is_this_computer(url_host(url)):
+                    refuse(url)
+                return await real_async_request(self, method, url, *args, **kwargs)
+
+            monkeypatch.setattr(async_session, "request", async_request)
+
+    # A test of this guard itself takes the list, and empties it once it
+    # has seen the refusal it was after.
+    yield tried
+    if tried:
+        pytest.fail(
+            "This test tried to reach " + ", ".join(sorted(set(tried)))
+            + ". Give it a stand-in for the network.",
+            pytrace=False,
+        )
+
+
+@pytest.fixture(autouse=True)
+def fixed_voice_list(monkeypatch):
+    """The Microsoft voices' catalogue, without asking Microsoft.
+
+    An audiobook render asks edge-tts for the list of voices, which is a
+    request to Microsoft's servers: made for real by the first render
+    test of a run with a connection, and failing without one, so the
+    same tests took different paths depending on the network. This is
+    Ficary's own fallback voices, in the shape edge-tts returns them.
+    """
+    try:
+        from ficary import tts
+        from ficary.tts_providers import edge
+    except Exception:  # noqa: BLE001 - nothing to give a catalogue to
+        return
+    catalogue = [
+        {"ShortName": name, "Locale": name.rsplit("-", 1)[0], "Gender": gender, "FriendlyName": name, "Status": "GA"}
+        for names, gender in ((tts.MALE_VOICES, "Male"), (tts.FEMALE_VOICES, "Female"))
+        for name in names
+    ]
+
+    async def voices():
+        return [dict(entry) for entry in catalogue]
+
+    monkeypatch.setattr(edge, "_list_voices_async", voices)
+    monkeypatch.setattr(edge, "_CATALOG_CACHE", None)
+
+
 @pytest.fixture(autouse=True)
 def no_launch_questions(monkeypatch):
     """Keep the library questions a new main window asks at launch out of

@@ -692,6 +692,9 @@ class TestCloudflareInteractiveChallenge:
         scraper = self._scraper()
         plain = type("R", (), {"status_code": 403, "text": "nope", "headers": {}})
         sess = _StubSession([plain() for _ in range(3)])
+        # A rotated browser gets the same answer. It used to be a real
+        # session, which sent the last attempt out over the network.
+        monkeypatch.setattr(scraper, "_rotate_browser", lambda: _StubSession([plain() for _ in range(3)]))
         with pytest.raises(RateLimitError):
             scraper._fetch("https://example.invalid/x", session=sess)
 

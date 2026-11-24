@@ -61,7 +61,14 @@ def test_default_cache_dir_returns_none_on_mkdir_failure(monkeypatch):
 def test_cf_cookie_seed_fires_at_most_once(monkeypatch):
     monkeypatch.setattr("ficary.scraper.time.sleep", lambda s: None)
     s = BaseScraper(use_cache=False, max_retries=5)
-    monkeypatch.setattr(s, "_rotate_browser", lambda: s._session())
+
+    class Always403:
+        def get(self, url, timeout=None):
+            return type("R", (), {"status_code": 403, "text": "", "headers": {}})()
+
+    # A rotated browser gets the same answer. It used to be a real
+    # session, which sent the remaining attempts out over the network.
+    monkeypatch.setattr(s, "_rotate_browser", lambda: Always403())
 
     seed_calls = {"n": 0}
 
@@ -70,10 +77,6 @@ def test_cf_cookie_seed_fires_at_most_once(monkeypatch):
         return True  # pretend a cached cookie exists every time
 
     monkeypatch.setattr(s, "_maybe_seed_cf_cookies", fake_seed)
-
-    class Always403:
-        def get(self, url, timeout=None):
-            return type("R", (), {"status_code": 403, "text": "", "headers": {}})()
 
     with pytest.raises(RateLimitError):
         s._fetch("https://example.invalid/x", session=Always403())
