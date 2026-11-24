@@ -199,3 +199,18 @@ def test_the_readers_chapter_list_and_jump_to_show_the_headings(wx_app, tmp_path
         reader.Destroy()
         frame._clip_timer.Stop()
         frame.Destroy()
+
+
+def test_a_story_read_from_the_download_cache_has_its_headings_too(tmp_path):
+    """The reader also opens a story from Ficary's download cache, one file a chapter."""
+    import json
+
+    from ficary.reader import source as reader_source
+
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    for number, title in enumerate(["Prologue", "The Gate", "The Inn"], 1):
+        (cache / f"{reader_source._CHAPTER_STEM_PREFIX}{number:04d}.json").write_text(json.dumps({"title": title, "html": f"<p>{number}</p>"}), encoding="utf-8")
+    story = reader_source.StorySource.from_cache_dir(cache, "https://www.fanfiction.net/s/1/1/", title="Lanterns")
+    story._loader = lambda number: pytest.fail("a heading needs no chapter text")
+    assert [story.chapter_heading(n) for n in (1, 2, 3)] == ["Prologue", "Chapter 1. The Gate", "Chapter 2. The Inn"]
