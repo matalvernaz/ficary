@@ -270,6 +270,20 @@ class RoyalRoadScraper(BaseScraper):
         soup = BeautifulSoup(html, "lxml")
         return len(self._parse_chapter_list(soup))
 
+    lists_chapters = True
+
+    def list_chapters(self, url_or_id):
+        """The site's chapters in order, as :class:`~ficary.chapter_match.SiteChapter`, from the story's page: what an update matches the book's chapters against, so it adds only the ones the book lacks after the author has taken some down. One request, no chapter text."""
+        from .chapter_match import SiteChapter
+
+        fiction_id = self.parse_story_id(url_or_id)
+        html = self._fetch(f"{RR_BASE}/fiction/{fiction_id}")
+        soup = BeautifulSoup(html, "lxml")
+        return [
+            SiteChapter(position=position, site_id=str(item["id"]), title=item["title"])
+            for position, item in enumerate(self._parse_chapter_list(soup), 1)
+        ]
+
     def scrape_author_stories(self, url):
         """Author page lists fictions they've written under 'Fictions'."""
         html = self._fetch(url)

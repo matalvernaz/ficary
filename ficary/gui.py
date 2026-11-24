@@ -4144,70 +4144,111 @@ class MainFrame(wx.Frame):
                 initial_skip = 0
             else:
                 initial_skip = skip_chapters
+            from . import chapter_match, cli
+
+            # The book as it is, read first: to match its chapters to the
+            # site's, to keep the ones the site took down, and so nothing
+            # is written that loses one (Matt's rule, 2026-11-24).
+            book = None
+            if is_update and update_path is not None:
+                try:
+                    book = read_chapters(update_path)
+                except ChaptersNotReadableError as exc:
+                    self._log(
+                        f"Couldn't read existing chapters ({exc}); "
+                        "re-downloading full story..."
+                    )
+
+            # A site that lists its chapters is matched against the book
+            # instead of going by position: only the chapters the book
+            # lacks are downloaded, wherever the site has them.
+            update_plan = None
+            if is_update and not refetch_all and book is not None and getattr(scraper, "lists_chapters", False):
+                with self._site_slot_for(url):
+                    site_chapters = scraper.list_chapters(url)
+                if site_chapters is not None:
+                    update_plan = chapter_match.plan_update(book, site_chapters)
+                    if not update_plan.new_positions:
+                        self._log("Up to date. No new chapters.")
+                        job_result = f"{Path(update_path).stem} is up to date. No new chapters."
+                        self._announce(job_result)
+                        return DownloadOutcome(ok=True, reason="already up to date")
+
             # Queued jobs hold their site's slot already. This is for
             # the times this method runs on a thread of its own.
             with self._site_slot_for(url):
-                story = scraper.download(
-                    url, progress_callback=progress, skip_chapters=initial_skip,
-                )
+                if update_plan is not None:
+                    story = scraper.download(
+                        url, progress_callback=progress,
+                        chapters=[(position, position) for position in update_plan.new_positions],
+                    )
+                else:
+                    story = scraper.download(
+                        url, progress_callback=progress,
+                        skip_chapters=initial_skip if book is not None or not is_update else 0,
+                    )
 
-            if is_update and not refetch_all and len(story.chapters) == 0:
+            if is_update and not refetch_all and book is not None and len(story.chapters) == 0:
                 self._log("Up to date. No new chapters.")
                 job_result = f"{story.title} is up to date. No new chapters."
                 self._announce(job_result)
                 return DownloadOutcome(ok=True, reason="already up to date")
 
-            if is_update and not refetch_all:
+            if is_update and not refetch_all and book is not None:
                 new_count = len(story.chapters)
-                # Merge-in-place: read existing chapters from disk and
-                # concatenate with the just-downloaded new ones. Avoids
-                # re-downloading every chapter from upstream just to
-                # re-export, which used to silently take minutes per
+                # Merge-in-place: the book's chapters with the new ones.
+                # Avoids re-downloading every chapter from upstream just
+                # to re-export, which used to silently take minutes per
                 # story on libraries without a populated local cache.
-                merged = None
-                if update_path is not None:
-                    try:
-                        merged = read_chapters(update_path)
-                    except ChaptersNotReadableError as exc:
-                        self._log(
-                            f"Couldn't read existing chapters ({exc}); "
-                            "re-downloading full story..."
-                        )
-
-                if merged is not None:
-                    self._log(
-                        f"Found {new_count} new chapter(s). Merging "
-                        f"with {len(merged)} existing."
+                self._log(
+                    f"Found {new_count} new chapter(s). Merging "
+                    f"with {len(book)} existing."
+                )
+                if update_plan is not None:
+                    # Never merged by number: a chapter downloaded by its
+                    # place on the site would replace the book's chapter
+                    # at the same number.
+                    story.chapters = chapter_match.apply_plan(
+                        book, {chapter.number: chapter for chapter in story.chapters}, update_plan,
                     )
+                else:
                     from .models import merge_chapter_lists
                     story.chapters, dupes = merge_chapter_lists(
-                        merged, list(story.chapters),
+                        book, list(story.chapters),
                     )
                     if dupes:
                         self._log(
                             f"  ({dupes} chapter(s) replaced by "
                             "re-downloaded versions)"
                         )
-                    from . import webnovel as _wn
-                    stubs = sum(
-                        1 for c in story.chapters if _wn.is_locked_stub(c.html)
-                    )
-                    if stubs:
-                        self._log(
-                            f"  Note: {stubs} paywalled placeholder "
-                            "chapter(s) remain. After unlocking them, "
-                            "update from the command line with "
-                            "--webnovel-cookie (or use Force Full "
-                            "Refresh) to fetch the real text."
-                        )
-                else:
+                from . import webnovel as _wn
+                stubs = sum(
+                    1 for c in story.chapters if _wn.is_locked_stub(c.html)
+                )
+                if stubs:
                     self._log(
-                        f"Found {new_count} new chapters. Re-exporting..."
+                        f"  Note: {stubs} paywalled placeholder "
+                        "chapter(s) remain. After unlocking them, "
+                        "update from the command line with "
+                        "--webnovel-cookie (or use Force Full "
+                        "Refresh) to fetch the real text."
                     )
-                    with self._site_slot_for(url):
-                        story = scraper.download(
-                            url, progress_callback=progress, skip_chapters=0,
-                        )
+
+            if is_update and refetch_all and book:
+                # A fresh copy keeps the book's chapters the site no
+                # longer has, each after the chapter it followed.
+                fresh_count = len(story.chapters)
+                story.chapters = chapter_match.keep_taken_down(book, story.chapters)
+                if len(story.chapters) > fresh_count:
+                    self._log(
+                        f"  Kept {cli._chapters(len(story.chapters) - fresh_count)} "
+                        "the site no longer has."
+                    )
+
+            if is_update:
+                # Whatever the update did, everything the book had must
+                # be in what is about to be written.
+                cli._refuse_to_lose_chapters(book, story.chapters, skip_chapters)
 
             self._log(f"\n  Title:    {story.title}")
             self._log(f"  Author:   {story.author}")

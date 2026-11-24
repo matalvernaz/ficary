@@ -15,6 +15,17 @@ class Chapter:
     # previous run already stripped — and it can't even do that from
     # cache, since the cache is keyed on the pre-strip paragraph text.
     from_existing_file: bool = False
+    # The site's own id for the chapter, where it has one that stays put
+    # (Royal Road's chapter number in its address, for one). Written into
+    # the book, so an update can tell which of the site's chapters the
+    # book already has even after the site has taken some down, when
+    # their positions no longer line up. Empty when not known.
+    site_id: str = ""
+    # For a chapter read back from a book, its heading exactly as the book
+    # wrote it. A chapter titled just "Chapter 5" reads back with no title,
+    # since the book's own numbering looks the same, and an update
+    # matching the book's chapters to the site's by title needs the words.
+    heading: str = ""
 
 
 @dataclass

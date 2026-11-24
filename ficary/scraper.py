@@ -1447,6 +1447,12 @@ class BaseScraper:
         if total is None:
             total = len(chapter_list)
 
+        # The site's id for each chapter, where its list gives one.
+        site_ids = {
+            number: str(info["id"]) if info.get("id") not in (None, "") else ""
+            for number, info in enumerate(chapter_list, 1)
+        }
+
         # Build a plan so fetched and cached chapters can be stitched
         # back in one pass. Each entry is (number, title, cached_or_None).
         plan = []
@@ -1506,7 +1512,10 @@ class BaseScraper:
                             number, exc_info=True,
                         )
                         continue
-                    chapter = Chapter(number=number, title=title, html=html)
+                    chapter = Chapter(
+                        number=number, title=title, html=html,
+                        site_id=site_ids.get(number, ""),
+                    )
                     self._save_chapter_cache(story_id, chapter, cache_key=key)
                     if first_error is None:
                         ready.append(chapter)
@@ -1522,6 +1531,7 @@ class BaseScraper:
         try:
             for number, title, cached, key in plan:
                 if cached is not None:
+                    cached.site_id = site_ids.get(number, "")
                     result.append(cached)
                     if progress_callback:
                         progress_callback(number, total, cached.title, True)
@@ -1888,6 +1898,21 @@ class BaseScraper:
         """
         self._delay()
         return self.get_chapter_count(url_or_id)
+
+    lists_chapters = False
+    """Whether :meth:`list_chapters` gives the site's chapter list. Checked before asking, so a site that can't list them costs no extra request."""
+
+    def list_chapters(self, url_or_id):
+        """The site's chapters in order, as :class:`~ficary.chapter_match.SiteChapter`, without their text, for a site that can list them that way; None for one that can't.
+
+        An update matches a book's chapters against this list, so after a site has taken chapters down it adds only the ones the book lacks and keeps the rest (Matt's rule, 2026-11-24). Sites returning None are updated by position, as before.
+        """
+        return None
+
+    def probe_chapter_list(self, url_or_id):
+        """:meth:`list_chapters` behind the pacing gate, as :meth:`probe_chapter_count` is: a library update asks one story after another."""
+        self._delay()
+        return self.list_chapters(url_or_id)
 
     def scrape_author_stories(self, url):
         """Return ``(author_name, [story_url, ...])`` for an author page.

@@ -49,6 +49,14 @@ CHAPTER_NOTES_MODES = (
 DEFAULT_CHAPTER_NOTES = CHAPTER_NOTES_KEEP
 
 
+def _site_id_attribute(chapter) -> str:
+    """The ``data-site-id`` attribute for a chapter's heading, or nothing when its site id isn't known. Read back by the updater, so an update can tell which of the site's chapters the book has after the site has taken some down."""
+    site_id = getattr(chapter, "site_id", "") or ""
+    if not site_id:
+        return ""
+    return f' data-site-id="{escape(site_id, quote=True)}"'
+
+
 def _emit(progress: Callable[[str], None] | None, line: str) -> None:
     """Send a status line both to the GUI / CLI ``progress`` callback
     and to the file logger.
@@ -770,7 +778,8 @@ def export_html(
         ch_title = escape(format_chapter_heading(display_ns[ch.number], ch.title))
         anchor_n = ch.number if ch.number else i
         buf.write(
-            f'<div class="chapter" id="chapter-{anchor_n}"><h2>{ch_title}</h2>\n'
+            f'<div class="chapter" id="chapter-{anchor_n}">'
+            f'<h2{_site_id_attribute(ch)}>{ch_title}</h2>\n'
         )
         chapter_html = _prepare_chapter_html_with_llm_fallback(
             ch.html, hr_as_stars, strip_notes,
@@ -2720,7 +2729,7 @@ def export_epub(
         # the raw markup they were tuned against; only the EPUB path
         # gets the EPUB3 content-model cleanup.
         chapter_html = _xhtml_sanitize(chapter_html)
-        ec.content = f"<h2>{heading}</h2>\n{chapter_html}".encode("utf-8")
+        ec.content = f"<h2{_site_id_attribute(ch)}>{heading}</h2>\n{chapter_html}".encode("utf-8")
         ec.add_item(css)
         book.add_item(ec)
         epub_chapters.append(ec)

@@ -25,6 +25,7 @@ from .exporters import (
     HTML_STYLES,
     check_format_deps,
 )
+from . import chapter_match
 from .merge import merge_stories
 from .erotica import LiteroticaScraper
 from .erotica.literotica import MERGED_SERIES_CHAPTERS_PER_PART
@@ -1054,8 +1055,21 @@ def _new_chapters(count: int) -> str:
     return f"{count} new chapter" if count == 1 else f"{count} new chapters"
 
 
-def _check_verdict(local: int, remote: int, *, in_parts: bool = False) -> str:
-    """What the site's chapter count means for the copy in the library. ``in_parts`` says it in parts, for a series saved as one book, whose counts are its chapters (MERGED_SERIES_CHAPTERS_PER_PART to a part)."""
+def _check_verdict(local: int, remote: int, *, in_parts: bool = False, site_count: int | None = None) -> str:
+    """What the site's chapter count means for the copy in the library. ``in_parts`` says it in parts, for a series saved as one book, whose counts are its chapters (MERGED_SERIES_CHAPTERS_PER_PART to a part).
+
+    ``site_count`` is given when the book was matched against the site's chapter list: ``remote`` is then the book's count plus the chapters it lacks, and the site's own count may be lower, when it has taken chapters down that the book keeps.
+    """
+    if site_count is not None and not in_parts:
+        new = max(remote - local, 0)
+        if new:
+            verdict = f"{_new_chapters(new)}, {site_count} on the site"
+        else:
+            verdict = f"up to date, {_chapters(local)}"
+        taken_down = local + new - site_count
+        if taken_down > 0:
+            verdict += f"; your copy keeps the {taken_down} the site took down"
+        return verdict
     if in_parts:
         local //= MERGED_SERIES_CHAPTERS_PER_PART
         remote //= MERGED_SERIES_CHAPTERS_PER_PART
@@ -1070,6 +1084,26 @@ def _check_verdict(local: int, remote: int, *, in_parts: bool = False) -> str:
         f"the site has {units(remote)}, fewer than the {local} here, "
         "so it is left alone"
     )
+
+
+def _probe_for_update(scraper, entry: dict) -> int:
+    """The chapter count an update would bring the book in ``entry`` to.
+
+    For a site that lists its chapters, the book's chapters plus the site's it lacks, found by matching them (chapter_match), with the book's own count put in ``entry["local"]`` and the site's in ``entry["site_count"]``. After a site has taken chapters down its count can be below the book's while it has new chapters; counting alone never saw them. Raises CannotMatch (a ValueError) when none of the book's chapters is on the site. For other sites, and for a book that can't be read, the site's count, as before.
+    """
+    if not getattr(scraper, "lists_chapters", False):
+        return scraper.probe_chapter_count(entry["url"])
+    site = scraper.probe_chapter_list(entry["url"])
+    if site is None:
+        return scraper.probe_chapter_count(entry["url"])
+    try:
+        book = read_chapters(entry["path"])
+    except ChaptersNotReadableError:
+        return len(site)
+    plan = chapter_match.plan_update(book, site)
+    entry["local"] = len(book)
+    entry["site_count"] = len(site)
+    return len(book) + len(plan.new_positions)
 
 
 def _is_merged_series(entry: dict) -> bool:
@@ -1239,7 +1273,10 @@ def _download_one(
         # re-read the file.
         existing_chapters_list: list | None = None
         legacy_format = False
-        if update_path is not None and not refetch_all_update:
+        # The count the caller gave, kept for the never-remove check when
+        # the book can't be read.
+        book_count_given = existing_chapters
+        if update_path is not None and not series_update:
             try:
                 existing_chapters_list = read_chapters(update_path)
                 # Authoritative count from the actual parsed file.
@@ -1249,17 +1286,42 @@ def _download_one(
                 # the file we just opened.
                 existing_chapters = len(existing_chapters_list)
             except ChaptersNotReadableError as exc:
-                legacy_format = True
-                existing_chapters = 0
-                status(
-                    f"\n  [legacy-format] {update_path.name}: {exc}.\n"
-                    "  Doing a clean re-export under the existing "
-                    "filename — this is a one-time conversion."
-                )
+                if not refetch_all_update:
+                    legacy_format = True
+                    existing_chapters = 0
+                    status(
+                        f"\n  [legacy-format] {update_path.name}: {exc}.\n"
+                        "  Doing a clean re-export under the existing "
+                        "filename — this is a one-time conversion."
+                    )
 
         initial_skip = (
             0 if (refetch_all_update or legacy_format) else existing_chapters
         )
+
+        # A site that lists its chapters is matched against the book
+        # instead of going by position, so after it has taken chapters
+        # down only the ones the book lacks are downloaded and none of
+        # the book's is lost (Matt's rule, 2026-11-24).
+        update_plan = None
+        if (
+            update_path is not None
+            and existing_chapters_list is not None
+            and not refetch_all_update
+            and not series_update
+            and chapter_spec is None
+        ):
+            site_chapters = scraper.list_chapters(url) if getattr(scraper, "lists_chapters", False) else None
+            if site_chapters is not None:
+                update_plan = chapter_match.plan_update(existing_chapters_list, site_chapters)
+                if not update_plan.new_positions:
+                    if on_nothing_new is not None:
+                        on_nothing_new()
+                    if brief is not None:
+                        status(f'"{brief.name}" had no new chapters after all.')
+                    else:
+                        status("\n  Up to date — no new chapters.")
+                    return True
         if refetch_all_update:
             routine(
                 "  Fresh-copies mode — re-downloading every chapter."
@@ -1324,6 +1386,12 @@ def _download_one(
             story, series_parts = _download_series_as_one(
                 scraper, url, report_part=report_part, cancel_event=cancel_event,
                 keeping=keeping,
+            )
+        elif update_plan is not None:
+            story = scraper.download(
+                url,
+                progress_callback=progress,
+                chapters=[(position, position) for position in update_plan.new_positions],
             )
         else:
             story = scraper.download(
@@ -1390,15 +1458,41 @@ def _download_one(
                 f"\n  Merging {len(existing_chapters_list)} existing "
                 f"chapter(s) with {len(story.chapters)} new."
             )
-            merged, duplicates = _merge_chapter_lists(
-                existing_chapters_list, story.chapters
-            )
-            if duplicates:
-                routine(
-                    f"  ({duplicates} chapter(s) replaced by "
-                    f"re-downloaded versions)"
+            if update_plan is not None:
+                # Each new chapter where the site has it; never merged by
+                # number, which would let one replace the book's chapter
+                # at the same position.
+                story.chapters = chapter_match.apply_plan(
+                    existing_chapters_list,
+                    {chapter.number: chapter for chapter in story.chapters},
+                    update_plan,
                 )
-            story.chapters = merged
+            else:
+                merged, duplicates = _merge_chapter_lists(
+                    existing_chapters_list, story.chapters
+                )
+                if duplicates:
+                    routine(
+                        f"  ({duplicates} chapter(s) replaced by "
+                        f"re-downloaded versions)"
+                    )
+                story.chapters = merged
+
+        if refetch_all_update and not series_update and existing_chapters_list:
+            # A fresh copy keeps the book's chapters the site no longer
+            # has, each after the chapter it followed.
+            fresh_count = len(story.chapters)
+            story.chapters = chapter_match.keep_taken_down(existing_chapters_list, story.chapters)
+            if len(story.chapters) > fresh_count:
+                status(
+                    f"  Kept {_chapters(len(story.chapters) - fresh_count)} "
+                    "the site no longer has."
+                )
+
+        # Never lose a chapter: whatever the update did, everything the
+        # book had must be in what is about to be written.
+        if update_path is not None and not series_update:
+            _refuse_to_lose_chapters(existing_chapters_list, story.chapters, book_count_given)
 
         # Library auto-sort: for fresh downloads only, route into
         # <library>/<fandom>/... based on the story's metadata.
@@ -1566,6 +1660,24 @@ def _download_one(
     except ImportError as exc:
         report_failure("Missing dependency", exc)
         return False
+
+
+def _refuse_to_lose_chapters(book, chapters, book_count) -> None:
+    """Stop an update, with a ValueError saying why, before it writes a book that would lose any chapter it has. ``book`` is the book's chapters, read from it, or None when it couldn't be read; then all that can be checked is that it doesn't shrink below ``book_count``."""
+    if book is not None:
+        lost = chapter_match.dropped(book, chapters)
+        if lost:
+            raise ValueError(
+                f"writing it would have lost {_chapters(len(lost))} the book has "
+                f'("{lost[0].title or lost[0].heading}"' + (" and others" if len(lost) > 1 else "")
+                + "), so it was left as it was"
+            )
+    elif book_count and len(chapters) < book_count:
+        raise ValueError(
+            f"the site has {_chapters(len(chapters))}, fewer than the {book_count} "
+            "in the book, and the book couldn't be read to keep the others, "
+            "so it was left as it was"
+        )
 
 
 def _brief_ending(
@@ -2230,10 +2342,11 @@ def _run_update_queue(
                     probe_guard(scraper.site_name) if probe_guard is not None
                     else contextlib.nullcontext()
                 ):
-                    entry["remote"] = scraper.probe_chapter_count(entry["url"])
+                    entry["remote"] = _probe_for_update(scraper, entry)
                 remote_count = entry["remote"]
                 outcome = _check_verdict(
                     entry["local"], entry["remote"], in_parts=_is_merged_series(entry),
+                    site_count=entry.get("site_count"),
                 )
                 probe_answered = True
             except DownloadCancelled:

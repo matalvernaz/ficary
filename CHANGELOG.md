@@ -1,5 +1,33 @@
 # Changelog
 
+## Unreleased
+
+**A book keeps the chapters its site took down, and gets only the new ones**
+
+* Updates went by position: a book with 404 chapters was taken to have
+  the site's first 404. Once a site takes chapters down, which Royal
+  Road authors do, often most of a story when it goes to Kindle
+  Unlimited, that stops being true: a new chapter could land at a
+  position the book already covered and be skipped, and the site could
+  have new chapters while having fewer than the book. Royal Road
+  updates now match the book's chapters to the site's list: by the
+  site's own id for each chapter, which books record from now on, and
+  by title for books made before. Only chapters the book doesn't have
+  are downloaded, each put in where the site has it, and every chapter
+  the book has is kept.
+* The check before an update says so: "up to date, 404 chapters; your
+  copy keeps the 6 the site took down", or "2 new chapters, 400 on the
+  site; ...".
+* A fresh copy (re-download all chapters) keeps the chapters the site
+  no longer has, on every site, matched by title where there are no
+  ids, and says how many it kept.
+* Whatever an update does, a book is never written with fewer of its
+  chapters: if it would be, it is left as it was and the status pane
+  says which chapter would have been lost. This holds for the Library
+  window, the command line and File > Update Existing File.
+* Other sites are still updated by position, with the same guarantee
+  that nothing the book has is lost.
+
 ## 2.20.23 — 2026-11-24
 
 **A story whose site took chapters down stops saying it has new ones**

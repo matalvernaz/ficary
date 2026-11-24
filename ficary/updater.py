@@ -1014,6 +1014,17 @@ _TXT_CHAPTER_HEADER_RE = re.compile(
 
 _DEFAULT_CHAPTER_TITLE_FMT = "Chapter {n}"
 
+_SITE_ID_RE = re.compile(r'\bdata-site-id\s*=\s*"([^"]*)"', re.IGNORECASE)
+
+
+def _site_id_of(heading_match) -> str:
+    """The site's id for a chapter, from the ``data-site-id`` on its heading, or "" when the book didn't record one (books made before it did, and sites without stable ids)."""
+    if heading_match is None:
+        return ""
+    opening_tag = heading_match.group(0).split(">", 1)[0]
+    found = _SITE_ID_RE.search(opening_tag)
+    return _html_module.unescape(found.group(1)) if found else ""
+
 
 def _strip_opening_tag(block: str) -> str:
     """Drop the leading ``<div ...>`` from an HTML chapter block match.
@@ -1029,7 +1040,7 @@ def _strip_opening_tag(block: str) -> str:
 
 
 def _entries_to_chapters(
-    entries: list[tuple[int, Optional[str], str]],
+    entries: list[tuple[int, Optional[str], str, str]],
 ) -> list[Chapter]:
     """Turn parsed ``(number, heading, body_html)`` entries into Chapters.
 
@@ -1042,10 +1053,10 @@ def _entries_to_chapters(
     """
     entries = sorted(entries, key=lambda e: e[0])
     display_ns = chapter_display_numbers(
-        (number, heading or "") for number, heading, _ in entries
+        (number, heading or "") for number, heading, _body, _site_id in entries
     )
     chapters = []
-    for number, heading, body_html in entries:
+    for number, heading, body_html, site_id in entries:
         if heading is None:
             title = _DEFAULT_CHAPTER_TITLE_FMT.format(n=number)
         else:
@@ -1058,7 +1069,7 @@ def _entries_to_chapters(
             )
         chapters.append(Chapter(
             number=number, title=title, html=body_html,
-            from_existing_file=True,
+            from_existing_file=True, site_id=site_id, heading=heading or "",
         ))
     return chapters
 
@@ -1074,7 +1085,7 @@ def _read_html_chapters(path: Path) -> list[Chapter]:
     non-ficary HTML that happens to carry our extension.
     """
     text = path.read_text(encoding="utf-8", errors="replace")
-    entries: list[tuple[int, Optional[str], str]] = []
+    entries: list[tuple[int, Optional[str], str, str]] = []
     seen_numbers: set[int] = set()
 
     for fallback_index, match in enumerate(
@@ -1119,7 +1130,7 @@ def _read_html_chapters(path: Path) -> list[Chapter]:
             heading = None
             body_html = body
 
-        entries.append((number, heading, body_html))
+        entries.append((number, heading, body_html, _site_id_of(title_match)))
 
     if not entries:
         raise ChaptersNotReadableError(
@@ -1152,7 +1163,7 @@ def _read_epub_chapters(path: Path) -> list[Chapter]:
             f"Failed to read EPUB {path.name}: {exc}"
         ) from exc
 
-    entries: list[tuple[int, Optional[str], str]] = []
+    entries: list[tuple[int, Optional[str], str, str]] = []
     filename_number_re = re.compile(r"chapter_(\d+)\.xhtml$", re.IGNORECASE)
 
     # ebooklib returns the full XHTML document for each chapter item
@@ -1188,7 +1199,7 @@ def _read_epub_chapters(path: Path) -> list[Chapter]:
             heading = None
             body_html = body
 
-        entries.append((number, heading, body_html))
+        entries.append((number, heading, body_html, _site_id_of(title_match)))
 
     if not entries:
         raise ChaptersNotReadableError(
