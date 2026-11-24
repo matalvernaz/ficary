@@ -583,3 +583,141 @@ class TestThePageAndTheImage:
         assert "display" not in rule
         assert "visibility" not in rule
         assert "clip" in rule
+
+
+# ── Text files (EPUB, HTML, TXT) as jobs ─────────────────────────
+
+
+def _folder_maker(tmp_path):
+    def make(job):
+        folder = tmp_path / f"job-{job.id}"
+        folder.mkdir()
+        return folder
+    return make
+
+
+class TestTextFiles:
+    """The page used to make a text file while its request waited, and a
+    long story could outlast Cloudflare's 100 seconds for one request.
+    It is a job now, in a queue of its own."""
+
+    def test_the_story_is_downloaded_then_the_file_made_in_a_folder_of_its_own(self, tmp_path):
+        registry = web_jobs.JobRegistry(lambda job: None, name="text")
+        job = web_jobs.Job(id="t1", url="https://example.invalid/s/1", format="epub")
+        seen = []
+
+        def download_story(url, progress):
+            seen.append(("download", url, job.status, job.stage))
+            progress(1, 2, "One", False)
+            progress(2, 2, "Two", True)
+            seen.append(("progress", job.current, job.total, job.detail))
+            return "the story"
+
+        def export(format, story, folder):
+            # The folder is on the job before the file is written, so a
+            # failed export's folder is removed with the job.
+            seen.append(("export", format, story, job.folder == folder, job.stage))
+            path = Path(folder) / "Story - Author.epub"
+            path.write_bytes(b"epub")
+            return str(path)
+
+        web_jobs.run_text_job(job, registry=registry, download_story=download_story, export=export, make_folder=_folder_maker(tmp_path))
+        assert seen == [
+            ("download", "https://example.invalid/s/1", "downloading", "fetching story"),
+            ("progress", 2, 2, "Two (cached)"),
+            ("export", "epub", "the story", True, "making the file"),
+        ]
+        assert job.status == "done"
+        assert job.path == str(tmp_path / "job-t1" / "Story - Author.epub")
+        assert job.detail == "Story - Author.epub"
+
+    def test_a_failed_export_is_an_error_and_its_folder_goes(self, tmp_path):
+        removed = []
+        holder = []
+
+        def run(job):
+            def export(format, story, folder):
+                raise OSError("No space left on device")
+
+            web_jobs.run_text_job(job, registry=holder[0], download_story=lambda url, progress: "the story", export=export, make_folder=_folder_maker(tmp_path))
+
+        registry = web_jobs.JobRegistry(run, name="text", remove_folder=removed.append)
+        holder.append(registry)
+        job = web_jobs.Job(id="t2", url="https://example.invalid/s/2", format="txt")
+        registry.add(job)
+        assert wait_until(lambda: job.status == "error")
+        assert "No space left on device" in job.error
+        assert wait_until(lambda: removed == [str(tmp_path / "job-t2")])
+
+    def test_its_workers_are_named_for_their_kind(self):
+        started = threading.Event()
+        names = []
+
+        def run(job):
+            names.append(threading.current_thread().name)
+            job.status = "done"
+            started.set()
+
+        registry = web_jobs.JobRegistry(run, name="text")
+        registry.add(web_jobs.Job(id="t3", url="https://example.invalid/s/3", format="html"))
+        assert started.wait(5)
+        assert names == ["text-worker-1"]
+
+    def test_every_text_format_is_sent_as_what_it_is(self):
+        assert web_jobs.TEXT_MEDIA_TYPES == {
+            "epub": "application/epub+zip",
+            "html": "text/html; charset=utf-8",
+            "txt": "text/plain; charset=utf-8",
+        }
+
+
+class TestThePageFollowsTextDownloads:
+    """Checked as text like the rest of the page; the real browser run is in the commit message."""
+
+    def page_source(self) -> str:
+        return (DOCKER_FOLDER / "app.py").read_text(encoding="utf-8")
+
+    def test_text_files_have_a_queue_of_their_own_that_the_server_sweeps(self):
+        source = self.page_source()
+        assert "TEXT_JOBS = web_jobs.JobRegistry(" in source
+        assert "TEXT_JOBS.start_sweeping()" in [line.strip() for line in source.splitlines()]
+        assert "for registry in (JOBS, TEXT_JOBS):" in source
+
+    def test_the_jobs_endpoint_takes_text_formats(self):
+        source = self.page_source()
+        start = source[source.index("def start_job("):]
+        start = start[: start.index("@app.get")]
+        assert "if format in TEXT_FORMATS:" in start
+        assert "TEXT_JOBS.add(text_job)" in start
+
+    def test_the_form_follows_a_job_and_still_works_without_the_script(self):
+        source = self.page_source()
+        assert '<form id="text-form" method="post" action="/download" autocomplete="off">' in source
+        handler = source[source.index('$("#text-form").addEventListener("submit"'):]
+        handler = handler[: handler.index("\n});")]
+        assert "e.preventDefault();" in handler
+        assert 'fetch("/jobs", { method: "POST", body: fd })' in handler
+        assert "followTextJob(id);" in handler
+
+    def test_a_finished_file_is_handed_over_once(self):
+        """Forgotten before the browser is sent for it, so a reload never downloads it twice."""
+        source = self.page_source()
+        follow = source[source.index("async function followTextJob(id) {"):]
+        done = follow[follow.index('if (j.status === "done") {'):]
+        done = done[: done.index("return;")]
+        assert done.index("forgetTextJob();") < done.index("window.location.assign(result);")
+
+    def test_only_not_found_means_a_download_is_gone(self):
+        source = self.page_source()
+        follow = source[source.index("async function followTextJob(id) {"):]
+        assert "const j = await askAboutJob(id);" in follow
+        unanswered = follow[follow.index("if (j === null) {"):]
+        unanswered = unanswered[: unanswered.index("unanswered = 0;")]
+        assert "continue;" in unanswered and "return;" not in unanswered
+
+    def test_its_status_area_is_not_a_live_region_and_there_is_still_one_announcer(self):
+        source = self.page_source()
+        assert '<div id="text-status"></div>' in source
+        assert source.count('role="status"') == 1
+        follow = source[source.index("async function followTextJob(id) {"):]
+        assert "announce(textSentence(j));" in follow

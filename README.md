@@ -102,8 +102,10 @@ If you'd rather install only what you need, the pieces are:
 
 Every release is also published as a container image that serves a
 small web page: paste a story link and get an EPUB, HTML or TXT file
-back, or start an audiobook and download it when it's done. It runs on
-64-bit x86 and ARM.
+back, or start an audiobook and download it when it's done. A text file
+is made in the background too, with the page saying how far it has got,
+and the browser saves it as soon as it's ready, so a long story is not
+cut off by a proxy's time limit. It runs on 64-bit x86 and ARM.
 
 ```bash
 docker run -d -p 8000:8000 -v ficary-data:/data ghcr.io/matalvernaz/ficary
@@ -121,8 +123,10 @@ a server without that to spare, add
 
 Audiobooks are made one at a time, and a second one waits its turn; the
 page says how many are ahead of it. On a server with memory for more,
-`-e FICARY_WEB_MAX_AUDIO_JOBS=2` runs two at once. A finished audiobook
-stays downloadable for a day and is then removed from the server;
+`-e FICARY_WEB_MAX_AUDIO_JOBS=2` runs two at once. Text files have a
+queue of their own, one at a time, so they never wait behind an
+audiobook. A finished audiobook or file stays downloadable for a day
+and is then removed from the server;
 `-e FICARY_WEB_KEEP_AUDIOBOOKS_HOURS=72` keeps it for three. The page
 remembers the audiobook it asked for, so it can be closed and opened
 again later to collect it.

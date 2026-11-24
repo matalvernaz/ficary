@@ -1,4 +1,6 @@
-"""Keeps track of the web page's audiobook jobs: which are waiting, which are running, and when a finished one and its file are thrown away.
+"""Keeps track of the web page's jobs: which are waiting, which are running, and when a finished one and its file are thrown away.
+
+There are two kinds, each with a registry of its own. An audiobook can take an hour; an EPUB, HTML or TXT file takes seconds to a few minutes, and must not wait behind one. Text files used to be made while the page's request waited, and a long story could outlast Cloudflare's limit of 100 seconds for one request, which ends the download with an error page.
 
 It exists apart from app.py so it can be tested without the web framework. Before it, every job started its own thread at once and nothing was ever removed: each finished audiobook stayed in the container's temporary folder, and each job stayed in memory, until the container was replaced. Two audiobooks at once could also need more memory than a small server has.
 """
@@ -39,11 +41,12 @@ class Job:
     id: str
     url: str
     format: str
-    attribution: str
-    model_size: str
-    speech_rate: int
-    strip_notes: bool
-    hr_as_stars: bool
+    # The rest of these are for audiobooks; a text file's job leaves them as they are.
+    attribution: str = ""
+    model_size: str = ""
+    speech_rate: int = 0
+    strip_notes: bool = False
+    hr_as_stars: bool = False
     status: str = STATUS_QUEUED  # queued | downloading | synthesizing | done | error
     stage: str = ""
     current: int = 0
@@ -136,7 +139,10 @@ class JobRegistry:
         keep_finished_seconds: float = DEFAULT_KEEP_FINISHED_HOURS * SECONDS_PER_HOUR,
         clock: Callable[[], float] = time.time,
         remove_folder: Callable[[str], None] | None = None,
+        name: str = "audio",
     ) -> None:
+        # Names the worker threads and the log lines: "audio" or "text".
+        self._name = name
         self._run_job = run_job
         self._max_running = max(1, int(max_running))
         self._keep_finished_seconds = keep_finished_seconds
@@ -193,7 +199,7 @@ class JobRegistry:
             worker = threading.Thread(
                 target=self._work,
                 daemon=True,
-                name=f"audio-worker-{len(self._workers) + 1}",
+                name=f"{self._name}-worker-{len(self._workers) + 1}",
             )
             self._workers.append(worker)
             worker.start()
@@ -209,7 +215,7 @@ class JobRegistry:
             try:
                 self._run_job(job)
             except Exception as error:  # noqa: BLE001 - a failed job must not take the worker down with it
-                logger.exception("audio job %s failed", job.id)
+                logger.exception("%s job %s failed", self._name, job.id)
                 self.update(job, status=STATUS_ERROR, error=str(error))
             finally:
                 with self._lock:
@@ -236,7 +242,7 @@ class JobRegistry:
         for job in expired:
             self._discard_folder(job)
         if expired:
-            logger.info("Removed %d finished audiobook job(s) kept past their time", len(expired))
+            logger.info("Removed %d finished %s job(s) kept past their time", len(expired), self._name)
         return [job.id for job in expired]
 
     def _discard_folder(self, job: Job) -> None:
@@ -267,8 +273,43 @@ class JobRegistry:
                 try:
                     self.sweep()
                 except Exception:  # noqa: BLE001 - the timer has to survive one bad pass
-                    logger.exception("audiobook job sweep failed")
+                    logger.exception("%s job sweep failed", self._name)
 
-        thread = threading.Thread(target=sweep_until_stopped, daemon=True, name="audio-job-sweep")
+        thread = threading.Thread(target=sweep_until_stopped, daemon=True, name=f"{self._name}-job-sweep")
         thread.start()
         return thread
+
+
+# ── Text files ────────────────────────────────────────────────────
+
+# What a finished text file is sent as.
+TEXT_MEDIA_TYPES = {
+    "epub": "application/epub+zip",
+    "html": "text/html; charset=utf-8",
+    "txt": "text/plain; charset=utf-8",
+}
+
+
+def run_text_job(
+    job: Job,
+    *,
+    registry: JobRegistry,
+    download_story: Callable[[str, Callable[..., None]], Any],
+    export: Callable[[str, Any, str], str],
+    make_folder: Callable[[Job], Path],
+) -> None:
+    """Make one EPUB, HTML or TXT file: download the story, reporting each chapter, then export it into a folder of the job's own, where it waits to be collected.
+
+    ``download_story(url, progress)`` and ``export(format, story, folder)`` are the real download and exporter in the server and stand-ins in a test. A failure is left to raise: the registry marks the job as an error with its message and removes its folder.
+    """
+    registry.update(job, status="downloading", stage="fetching story")
+
+    def progress(current: int, total: int, title: str, cached: bool) -> None:
+        registry.update(job, current=current, total=total, detail=f"{title}{' (cached)' if cached else ''}")
+
+    story = download_story(job.url, progress)
+    folder = make_folder(job)
+    # Recorded before the file is written, so a failed export's folder goes with the job.
+    registry.update(job, folder=str(folder), stage="making the file", detail="")
+    path = Path(export(job.format, story, str(folder)))
+    registry.update(job, status=STATUS_DONE, path=str(path), stage="complete", detail=path.name)

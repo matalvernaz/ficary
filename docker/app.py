@@ -1,10 +1,13 @@
 """Web front end for ficary, the page the Docker image serves (see docker/Dockerfile).
 
-- Text formats (epub, html, txt) are synchronous: POST /download returns the file.
-- Audio is asynchronous: POST /jobs queues a job, GET /jobs/{id} polls, GET /jobs/{id}/result downloads.
-  Audiobook jobs run one at a time unless FICARY_WEB_MAX_AUDIO_JOBS says otherwise, and a finished
-  one is kept for FICARY_WEB_KEEP_AUDIOBOOKS_HOURS (a day by default) and then removed with its file.
-  The bookkeeping for that is in web_jobs.py.
+- Every format is a job: POST /jobs queues one, GET /jobs/{id} polls, GET /jobs/{id}/result downloads.
+  Text files (epub, html, txt) and audiobooks have a queue each, so a quick EPUB never waits behind an
+  hour-long render. Audiobook jobs run one at a time unless FICARY_WEB_MAX_AUDIO_JOBS says otherwise;
+  text jobs run one at a time, which keeps the page from asking a story site for two stories at once.
+  A finished job is kept for FICARY_WEB_KEEP_AUDIOBOOKS_HOURS (a day by default) and then removed with
+  its file. The bookkeeping for that is in web_jobs.py.
+- POST /download still makes a text file while the request waits and returns it, for scripts that use
+  it. The page no longer does: a long story could outlast Cloudflare's 100 seconds for one request.
 - When FICARY_WEB_WORK_DIR names a folder (the image sets it to /tmp), everything the server writes
   while working goes in a folder of its own inside it, and that folder is emptied each time the
   server starts. One server process only: the jobs are held in memory, and a second process
@@ -136,6 +139,35 @@ JOBS = web_jobs.JobRegistry(
 JOBS.start_sweeping()
 
 
+def _run_text_job(job: Job) -> None:
+    web_jobs.run_text_job(
+        job,
+        registry=TEXT_JOBS,
+        download_story=lambda url, progress: detect_scraper(url)().download(url, progress_callback=progress),
+        export=lambda format, story, folder: EXPORTERS[format](story, folder),
+        make_folder=lambda job: Path(tempfile.mkdtemp(prefix=f"ficary-{job.id}-")),
+    )
+
+
+# Text files: one at a time, so the page never asks a story site for two stories at once.
+TEXT_JOBS = web_jobs.JobRegistry(
+    _run_text_job,
+    max_running=1,
+    keep_finished_seconds=KEEP_AUDIOBOOKS_HOURS * web_jobs.SECONDS_PER_HOUR,
+    name="text",
+)
+TEXT_JOBS.start_sweeping()
+
+
+def _find_job(job_id: str) -> tuple[web_jobs.JobRegistry, Job] | None:
+    """The job with this id and the registry that has it, whichever kind it is."""
+    for registry in (JOBS, TEXT_JOBS):
+        job = registry.get(job_id)
+        if job is not None:
+            return registry, job
+    return None
+
+
 # ── HTTP endpoints ────────────────────────────────────────────────
 
 LANDING = """<!doctype html>
@@ -163,6 +195,8 @@ LANDING = """<!doctype html>
 <p>Downloads stories from AO3, FanFiction.net, Royal Road, Wattpad, ScribbleHub, Webnovel, Literotica, and 20+ other sites.</p>
 
 <h2>Download a story</h2>
+<!-- The script below sends this to /jobs and follows the job. Without the script, the browser
+     posts it to /download and waits for the file, as the page used to. -->
 <form id="text-form" method="post" action="/download" autocomplete="off">
  <label>Story URL
   <input type="url" name="url" required autofocus autocomplete="off" spellcheck="false" placeholder="https://archiveofourown.org/works/...">
@@ -178,6 +212,8 @@ LANDING = """<!doctype html>
  </div>
  <button type="submit">Download</button>
 </form>
+<!-- What the eye sees of a download: rebuilt on every poll, and deliberately not a live region. -->
+<div id="text-status"></div>
 
 <h2>Make an audiobook</h2>
 <fieldset>
@@ -399,6 +435,134 @@ if (earlierJob) {
   followedJob = earlierJob;
   poll(earlierJob);
 }
+
+// ── Text files ─────────────────────────────────────────────────────
+// An EPUB, HTML or TXT file is a job too. It used to be made while the page's request waited, and
+// a long story could outlast Cloudflare's 100 seconds for one request. It is followed in its own
+// status area, and its sentences go through the same announcer as the audiobook's.
+const textStatusEl = $("#text-status");
+let followedTextJob = null;
+const FORMAT_NAMES = { epub: "EPUB", html: "HTML", txt: "TXT" };
+
+// Remembered like an audiobook, so a reload or a sign-in in the middle picks it back up, and
+// forgotten once the file has been handed over, so a reload never downloads it a second time.
+const TEXT_JOB_KEY = "ficary-text-job";
+function rememberTextJob(id) {
+  try { localStorage.setItem(TEXT_JOB_KEY, id); } catch (error) { /* Storage is switched off. */ }
+}
+function forgetTextJob() {
+  try { localStorage.removeItem(TEXT_JOB_KEY); } catch (error) { /* As above. */ }
+}
+function rememberedTextJob() {
+  try { return localStorage.getItem(TEXT_JOB_KEY); } catch (error) { return null; }
+}
+
+// The stage a download is at, as a sentence. What gets announced when it changes.
+function textSentence(j) {
+  const name = FORMAT_NAMES[j.format] || "story";
+  if (j.status === "queued") {
+    if (!j.ahead) return "Download queued. It will start shortly.";
+    return j.ahead === 1
+      ? "Waiting for 1 other download to finish first."
+      : "Waiting for " + j.ahead + " other downloads to finish first.";
+  }
+  if (j.status === "downloading") return "Downloading the story.";
+  if (j.status === "done") return "The " + name + " file is ready and should be downloading now. If it is not, use the Download link on the page.";
+  if (j.status === "error") return "The story could not be downloaded. " + (j.error || "");
+  return "";
+}
+
+function showTextStatus(text) {
+  textStatusEl.textContent = text;
+  announce(text);
+}
+
+function addTextTo(parent, tag, text) {
+  const element = document.createElement(tag);
+  element.textContent = text;
+  parent.appendChild(element);
+  return element;
+}
+
+$("#text-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const fd = new FormData(e.target);
+  textStatusEl.textContent = "Starting…";
+  lastAnnounced = "";
+  let id = null;
+  try {
+    const r = await fetch("/jobs", { method: "POST", body: fd });
+    if (!r.ok) {
+      showTextStatus("The download was not started: " + await problemIn(r));
+      return;
+    }
+    id = (await r.json()).id;
+  } catch (error) {
+    showTextStatus("The download was not started: the server could not be reached. Reload the page and try again. You may be asked to sign in.");
+    return;
+  }
+  followedTextJob = id;
+  rememberTextJob(id);
+  followTextJob(id);
+});
+
+async function followTextJob(id) {
+  let unanswered = 0;
+  while (true) {
+    if (id !== followedTextJob) return;
+    const j = await askAboutJob(id);
+    if (id !== followedTextJob) return;
+    if (j === "gone") {
+      forgetTextJob();
+      showTextStatus("The server no longer has this download. Download the story again.");
+      return;
+    }
+    if (j === null) {
+      unanswered += 1;
+      if (unanswered === UNANSWERED_CHECKS_BEFORE_SAYING_SO) {
+        showTextStatus("Lost contact with the server. Still trying. If this does not clear up, reload the page. You may be asked to sign in again.");
+      }
+      await pause(CHECK_EVERY_MS);
+      continue;
+    }
+    unanswered = 0;
+    textStatusEl.replaceChildren();
+    announce(textSentence(j));
+    addTextTo(textStatusEl, "p", textSentence(j));
+    if (j.total) {
+      const bar = document.createElement("progress");
+      bar.value = j.current;
+      bar.max = j.total;
+      textStatusEl.appendChild(bar);
+      addTextTo(textStatusEl, "p", `${j.current} / ${j.total} chapters`);
+    }
+    if (j.status === "done") {
+      forgetTextJob();
+      const result = "/jobs/" + encodeURIComponent(id) + "/result";
+      const line = document.createElement("p");
+      const link = document.createElement("a");
+      link.href = result;
+      link.textContent = "Download " + (j.detail || "the file");
+      line.appendChild(link);
+      textStatusEl.appendChild(line);
+      // The server sends it as an attachment, so the browser saves it and the page stays.
+      window.location.assign(result);
+      return;
+    }
+    if (j.status === "error") {
+      forgetTextJob();
+      return;
+    }
+    await pause(CHECK_EVERY_MS);
+  }
+}
+
+// A download asked for before this page was loaded: pick it back up.
+const earlierTextJob = rememberedTextJob();
+if (earlierTextJob) {
+  followedTextJob = earlierTextJob;
+  followTextJob(earlierTextJob);
+}
 </script>
 </body>
 </html>
@@ -427,6 +591,8 @@ def healthz() -> dict:
 
 @app.post("/download")
 def download(url: str = Form(...), format: str = Form("epub")):
+    """Make a text file while the request waits, and return it. Kept for scripts; the page uses
+    /jobs, since a long story could outlast Cloudflare's 100 seconds for one request."""
     if format not in TEXT_FORMATS:
         raise HTTPException(400, f"format must be one of {TEXT_FORMATS} (use /jobs for audio)")
     try:
@@ -471,8 +637,16 @@ def start_job(
     strip_notes: str = Form("false"),
     hr_as_stars: str = Form("true"),
 ):
+    if format in TEXT_FORMATS:
+        try:
+            check_format_deps(format)
+        except ImportError as exc:
+            raise HTTPException(500, str(exc)) from exc
+        text_job = Job(id=uuid.uuid4().hex[:12], url=url, format=format)
+        TEXT_JOBS.add(text_job)
+        return JSONResponse({"id": text_job.id})
     if format != AUDIO_FORMAT:
-        raise HTTPException(400, "jobs endpoint is for audio format only")
+        raise HTTPException(400, f"format must be one of {TEXT_FORMATS + (AUDIO_FORMAT,)}")
     if attribution not in ATTRIBUTION_BACKENDS:
         raise HTTPException(400, f"attribution must be one of {ATTRIBUTION_BACKENDS}")
     if model_size not in ALLOWED_BOOKNLP_SIZES + ("",):
@@ -499,14 +673,16 @@ def start_job(
 
 @app.get("/jobs/{job_id}")
 def get_job(job_id: str):
-    job = JOBS.get(job_id)
-    if not job:
+    found = _find_job(job_id)
+    if not found:
         raise HTTPException(404, "unknown job")
+    registry, job = found
     return {
         "id": job.id,
+        "format": job.format,
         "status": job.status,
-        # How many audiobooks have to finish or start before this one. Zero unless it is waiting.
-        "ahead": JOBS.jobs_ahead(job.id),
+        # How many jobs of its kind have to finish or start before this one. Zero unless it is waiting.
+        "ahead": registry.jobs_ahead(job.id),
         "stage": job.stage,
         "current": job.current,
         "total": job.total,
@@ -519,12 +695,17 @@ def get_job(job_id: str):
 
 @app.get("/jobs/{job_id}/result")
 def get_result(job_id: str):
-    job = JOBS.get(job_id)
-    if not job:
+    found = _find_job(job_id)
+    if not found:
         raise HTTPException(404, "unknown job")
+    _registry, job = found
     if job.status != "done" or not job.path:
         raise HTTPException(409, f"job status is {job.status}")
     p = Path(job.path)
+    if job.format in TEXT_FORMATS:
+        if not p.is_file():
+            raise HTTPException(410, "this file is no longer on the server; download the story again")
+        return FileResponse(p, media_type=web_jobs.TEXT_MEDIA_TYPES[job.format], filename=p.name)
     if not p.is_file():
         raise HTTPException(410, "this audiobook is no longer on the server; make it again")
     return FileResponse(p, media_type="audio/mp4", filename=p.name)

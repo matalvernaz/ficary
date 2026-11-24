@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+**The web page no longer cuts off long stories**
+
+* On the server's web page, an EPUB, HTML or TXT file is now made in
+  the background, the way an audiobook is. The page says how far it
+  has got, and the browser saves the file as soon as it is ready.
+  Before, the file was made while the page's request waited, and a
+  long story could outlast the 100 seconds a proxy such as Cloudflare
+  allows one request. Text files have a queue of their own, so they
+  never wait behind an audiobook. `POST /download` still makes a file
+  while the request waits, for scripts that use it.
+
 **The screen reader says when new chapters are waiting**
 
 * When the check at launch finds stories with new chapters, the screen
