@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 2.20.21 — 2026-11-24
 
 **An update is over when it says so**
 
