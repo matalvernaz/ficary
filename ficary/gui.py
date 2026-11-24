@@ -72,6 +72,11 @@ class _DownloadParams:
     # Structured per-chapter notes handling (exporters.CHAPTER_NOTES_*).
     # Prefs-only, same rationale as html_style.
     chapter_notes: str = "keep"
+    # How many times Stop had been pressed when this job was asked for.
+    # A job is stopped once Stop has been pressed again since: see
+    # ``MainFrame._stop_requested``. Taken with the rest of the snapshot,
+    # so a download still waiting in a queue is stopped as well.
+    stop_generation: int = 0
 
     def export_identity(self) -> tuple:
         """The settings that decide which artifact this job produces.
@@ -106,7 +111,75 @@ def _job_intent(params, update_path=None) -> str:
         parts.extend(str(v) for v in params.export_identity())
     if update_path is not None:
         parts.append(f"update:{update_path}")
+    # A download asked for after Stop is a new job. Joined to one that
+    # is still winding down from the Stop, it would stop with it.
+    stop_generation = getattr(params, "stop_generation", None)
+    if stop_generation:
+        parts.append(f"after-stop:{stop_generation}")
     return "\x1f".join(parts)
+
+
+# The Add Story window's Stop button. "St&op": Alt+S is already Save
+# to, and Alt+P Update Existing File.
+STOP_BUTTON_LABEL = "St&op"
+STOP_MENU_LABEL = "&Stop downloads\tCtrl+."
+
+
+def _stop_summary(*, running: int, batch_running: bool, dropped: int,
+                  renders: int, library_update: bool) -> str:
+    """What the status pane says when Stop is pressed."""
+    if not (running or batch_running or dropped or renders or library_update):
+        return "\nNothing is downloading right now."
+    parts = ["\nStopping downloads."]
+    if running or batch_running:
+        parts.append(
+            "The story being downloaded stops at the end of the chapter it "
+            "is on."
+        )
+    if dropped:
+        parts.append(
+            f"{dropped} download{'s' if dropped != 1 else ''} waiting "
+            f"{'their' if dropped != 1 else 'its'} turn "
+            f"{'were' if dropped != 1 else 'was'} dropped."
+        )
+    if renders:
+        parts.append(
+            "The audiobook being made stops after the piece it is speaking."
+            if renders == 1 else
+            f"The {renders} audiobooks being made stop after the piece each "
+            "is speaking."
+        )
+    if library_update:
+        parts.append("The library update stops too.")
+    parts.append(
+        "Chapters already fetched are kept, so trying again carries on "
+        "from there."
+    )
+    return " ".join(parts)
+
+
+# Said when a story is stopped part-way by Stop.
+STOPPED_PART_WAY_MESSAGE = (
+    "  Stopped part-way through this story. Nothing was saved for it; the "
+    "chapters fetched so far are kept, so trying again carries on from there."
+)
+
+
+def _batch_summary(label: str, *, total: int, succeeded: int, failed: int,
+                   started: int, stopped: bool) -> str:
+    """The last line of a batch: how it went, or how far it got before Stop."""
+    if not stopped:
+        return (
+            f"\n{label} complete: {succeeded} succeeded, "
+            f"{failed} failed out of {total}."
+        )
+    stopped_story = started - succeeded - failed
+    not_started = total - started
+    parts = [f"{succeeded} saved", f"{failed} failed"]
+    if stopped_story > 0:
+        parts.append(f"{stopped_story} stopped part-way")
+    parts.append(f"{not_started} not started")
+    return f"\n{label} stopped: " + ", ".join(parts) + f", out of {total}."
 
 
 class _RenderCancelled(Exception):
@@ -230,6 +303,8 @@ class _WxLogHandler(logging.Handler):
 
 from . import legacy as _legacy
 from .download_queue import (
+    DownloadCancelled,
+    owns,
     DownloadOutcome,
     DownloadQueues,
     site_slot,
@@ -459,6 +534,14 @@ class MainFrame(wx.Frame):
         # manual AO3 download can run while an FFN sweep is in flight.
         self._global_busy = False
         self._busy_kind = None
+        # Stop (the Add Story button and File > Stop downloads). Every
+        # download snapshot records this count; pressing Stop raises it,
+        # which stops every download asked for before. The futures are
+        # the jobs this window has queued and not seen finish, so Stop
+        # can drop the ones still waiting.
+        self._stop_generation = 0
+        self._stop_lock = threading.Lock()
+        self._own_download_futures: set = set()
         # Which operation currently holds the global busy flag, when it
         # claimed ownership. Lets a late callback tell "still mine" from
         # "somebody else started something".
@@ -959,9 +1042,12 @@ class MainFrame(wx.Frame):
         self.voices_btn.Bind(wx.EVT_BUTTON, self._on_preview_voices)
         btn_sizer.Add(self.voices_btn, 0, wx.RIGHT, 8)
 
-        # Enabled only while an audiobook render is running. Renders are
-        # hours-long and used to be uncancellable short of killing the
-        # app (which orphaned piper/ffmpeg children mid-write).
+        # Stops every download and audiobook in progress, like File >
+        # Stop downloads. It was "Cancel render" and stopped only
+        # audiobooks: a download, which on FanFiction.net can take ten
+        # minutes or more, could not be stopped short of closing the
+        # program. Always enabled, so it stays in the Tab order; with
+        # nothing running it says so.
         self._render_cancel = None
         # Every in-flight render's cancel event. Concurrent per-site
         # downloads can each be exporting audio, and a single pointer
@@ -969,46 +1055,79 @@ class MainFrame(wx.Frame):
         # disabled the shared button while it was still running.
         self._render_cancels = []
         self._render_cancel_lock = threading.Lock()
-        self.cancel_render_btn = wx.Button(panel, label="Cancel &render")
-        self.cancel_render_btn.SetName(
-            "Cancel the running audiobook render after the current segment"
-        )
+        self.cancel_render_btn = wx.Button(panel, label=STOP_BUTTON_LABEL)
+        self.cancel_render_btn.SetName("Stop downloads and audiobooks in progress")
         set_help(
             self.cancel_render_btn,
-            "Stop the audiobook render in progress; it finishes the current "
-            "segment first so no half-written files are left behind. "
-            "Enabled only while a render is running.",
+            "Stop every download and audiobook in progress. A story stops "
+            "at the end of the chapter it is on and an audiobook after the "
+            "piece it is speaking, so no half-written files are left. "
+            "Chapters already fetched are kept, so trying again carries on "
+            "from there. File > Stop downloads (Ctrl+.) does the same.",
         )
-        self.cancel_render_btn.Bind(wx.EVT_BUTTON, self._on_cancel_render)
-        self.cancel_render_btn.Disable()
+        self.cancel_render_btn.Bind(wx.EVT_BUTTON, self._on_stop)
         btn_sizer.Add(self.cancel_render_btn, 0)
 
         sizer.Add(btn_sizer, 0, wx.ALL, pad)
 
-    def _on_cancel_render(self, event):
-        """Cancel every audiobook render currently in flight.
+    def _cancel_renders(self) -> int:
+        """Ask every audiobook render in progress to stop. Returns how
+        many were asked.
 
         With concurrent per-site downloads there can be more than one,
         and one shared button cannot mean "the one you were thinking
-        of" — so it means all of them, and the log says so.
-        """
+        of", so it means all of them."""
         with self._render_cancel_lock:
             pending = [c for c in self._render_cancels if not c.is_set()]
-        if not pending:
-            return
         for cancel in pending:
             cancel.set()
-        if len(pending) == 1:
-            self._log(
-                "\nCancelling audiobook render — stopping after the "
-                "current segment..."
-            )
-        else:
-            self._log(
-                f"\nCancelling {len(pending)} audiobook renders — each "
-                "stops after its current segment..."
-            )
-        self.cancel_render_btn.Disable()
+        return len(pending)
+
+    def _stop_requested(self, params) -> bool:
+        """True once Stop has been pressed since ``params`` was taken.
+        A snapshot from before this existed, or a stand-in without the
+        field, is never stopped."""
+        taken_at = getattr(params, "stop_generation", None)
+        if not isinstance(taken_at, int):
+            return False
+        return taken_at < self._stop_generation
+
+    def _raise_if_stopped(self, params) -> None:
+        if self._stop_requested(params):
+            raise DownloadCancelled("Stopped part-way through the story.")
+
+    def _on_stop(self, event=None):
+        """Stop every download and audiobook in progress: the Add Story
+        window's Stop button and File > Stop downloads.
+
+        Downloads still waiting in a queue are dropped. A story being
+        downloaded stops at the end of its current chapter (each
+        progress report checks), a batch stops with it, an audiobook
+        stops after the piece it is speaking, and a running library
+        update stops as its Cancel button would stop it. Chapters
+        already fetched stay in the download cache.
+        """
+        with self._stop_lock:
+            self._stop_generation += 1
+            waiting = [f for f in self._own_download_futures if not f.done()]
+        dropped = sum(1 for future in waiting if future.cancel())
+        running = sum(1 for future in waiting if not future.cancelled() and not future.done())
+        batch_running = bool(
+            getattr(self, "_global_busy", False)
+            and getattr(self, "_busy_kind", None) in ("download", "preview")
+        )
+        renders = self._cancel_renders()
+        library_update = False
+        library_frame = getattr(self, "_library_frame", None)
+        if library_frame is not None:
+            try:
+                library_update = bool(library_frame.cancel_running_update())
+            except Exception:  # noqa: BLE001 - a closing window must not stop Stop
+                logger.debug("Could not stop the library update", exc_info=True)
+        self._log(_stop_summary(
+            running=running, batch_running=batch_running, dropped=dropped,
+            renders=renders, library_update=library_update,
+        ))
 
     # ── Helpers ───────────────────────────────────────────────
 
@@ -1321,7 +1440,18 @@ class MainFrame(wx.Frame):
         intent = _job_intent(params, update_path)
         if intent:
             dedupe_key = f"{dedupe_key}|{intent}"
-        return DownloadQueues.enqueue(site_name, job_fn, dedupe_key=dedupe_key)
+        future = DownloadQueues.enqueue(site_name, job_fn, dedupe_key=dedupe_key)
+        # Only a job this window queued is Stop's to drop. One it joined
+        # belongs to whoever queued it (a library update, say).
+        if owns(future, job_fn):
+            with self._stop_lock:
+                self._own_download_futures.add(future)
+            future.add_done_callback(self._forget_download_future)
+        return future
+
+    def _forget_download_future(self, future) -> None:
+        with self._stop_lock:
+            self._own_download_futures.discard(future)
 
     def _site_slot_for(self, url):
         """The download slot of ``url``'s site, as a ``with`` block.
@@ -2673,6 +2803,7 @@ class MainFrame(wx.Frame):
             def progress(current, total, title, cached):
                 tag = " (cached)" if cached else ""
                 self._log(f"  [{current}/{total}] {title}{tag}")
+                self._raise_if_stopped(params)
 
             # One chapter is enough to get a speaker inventory for most
             # fics. Users running preview on a 500-chapter fic shouldn't
@@ -2695,6 +2826,9 @@ class MainFrame(wx.Frame):
                 f"Detected {len(voices)} character(s). "
                 f"Voice map: {map_path.name}"
             )
+        except DownloadCancelled:
+            self._log("Voice preview stopped.")
+            return
         except Exception as exc:
             self._log(f"Preview failed: {exc}")
             return
@@ -2891,10 +3025,13 @@ class MainFrame(wx.Frame):
             def progress(current, total, title, cached):
                 tag = " (cached)" if cached else ""
                 self._log(f"    [{current}/{total}] {title}{tag}")
+                self._raise_if_stopped(params)
 
             stories = []
             failed = []
             for i, work_url in enumerate(work_urls, 1):
+                if self._stop_requested(params):
+                    raise DownloadCancelled("Stopped between parts of the series.")
                 self._log(f"\n[{i}/{len(work_urls)}] {work_url}")
                 try:
                     work_scraper = self._scraper_for(
@@ -2910,6 +3047,8 @@ class MainFrame(wx.Frame):
                         stories.append(
                             work_scraper.download(work_url, progress_callback=progress)
                         )
+                except DownloadCancelled:
+                    raise
                 except Exception as exc:
                     self._log(f"  Error: {exc}")
                     failed.append(work_url)
@@ -2932,6 +3071,16 @@ class MainFrame(wx.Frame):
             )
             path = self._export_story(merged, params)
             self._log(f"Saved: {path}")
+        except DownloadCancelled:
+            # A merged book short of parts would read as complete, so
+            # nothing is written.
+            self._log(
+                "\nSeries download stopped. Nothing was saved; the parts "
+                "fetched so far are kept, so trying again carries on from "
+                "there."
+            )
+        except _RenderCancelled as exc:
+            self._log(f"\n{exc}")
         except Exception as exc:
             self._log(f"Series download failed: {exc}")
         finally:
@@ -3163,6 +3312,7 @@ class MainFrame(wx.Frame):
             send_to_abs=(
                 self.abs_send_ctrl.GetValue() if fmt == "audio" else False
             ),
+            stop_generation=self._stop_generation,
         )
 
     def _resolve_output_dir(self, story, params: _DownloadParams) -> str:
@@ -3471,7 +3621,11 @@ class MainFrame(wx.Frame):
             with self._render_cancel_lock:
                 self._render_cancels.append(cancel)
                 self._render_cancel = cancel
-            wx.CallAfter(self.cancel_render_btn.Enable)
+            # Stop pressed after this job was asked for, but before its
+            # render was registered above, must still stop it. The
+            # render checks the event before doing anything.
+            if self._stop_requested(params):
+                cancel.set()
             try:
                 try:
                     m4b = generate_audiobook(
@@ -3506,8 +3660,6 @@ class MainFrame(wx.Frame):
                         self._render_cancel = (
                             remaining[-1] if remaining else None
                         )
-                if not remaining:
-                    wx.CallAfter(self.cancel_render_btn.Disable)
             if params.send_to_abs and m4b is not None:
                 self._upload_to_abs(m4b, story)
             if m4b is not None:
@@ -3617,6 +3769,11 @@ class MainFrame(wx.Frame):
             )
             params = self._snapshot_download_params()
         try:
+            if self._stop_requested(params):
+                # Queued before Stop and started just as Stop was
+                # dropping the waiting ones.
+                self._log(f"Not started, downloads were stopped: {url}")
+                return DownloadOutcome(ok=False, reason="stopped")
             from .ao3 import AO3Scraper
             from .erotica import LiteroticaScraper
             from .updater import ChaptersNotReadableError, read_chapters
@@ -3699,6 +3856,7 @@ class MainFrame(wx.Frame):
             def progress(current, total, title, cached):
                 tag = " (cached)" if cached else ""
                 self._log(f"  [{current}/{total}] {title}{tag}")
+                self._raise_if_stopped(params)
 
             # Fresh-copies updates always re-fetch the whole story, so
             # skipping the existing chapters on the initial download is
@@ -3791,6 +3949,9 @@ class MainFrame(wx.Frame):
             # like the render broke.
             self._log(f"\n{exc}")
             return DownloadOutcome(ok=False, reason="cancelled")
+        except DownloadCancelled:
+            self._log(STOPPED_PART_WAY_MESSAGE)
+            return DownloadOutcome(ok=False, reason="stopped")
         except Exception as e:
             self._log(f"\nError: {e}")
             return DownloadOutcome(ok=False, reason=str(e))
@@ -4064,7 +4225,13 @@ class MainFrame(wx.Frame):
             # still AO3 works). Use per-URL scraper resolution.
             succeeded = 0
             failed = []
+            started = 0
+            stopped = False
             for i, story_url in enumerate(urls, 1):
+                if self._stop_requested(params):
+                    stopped = True
+                    break
+                started = i
                 self._log(f"\n[{i}/{len(urls)}] {story_url}")
                 # The click-time snapshot governs the whole batch: without
                 # it, restricted AO3 works in a picker batch downloaded
@@ -4083,6 +4250,7 @@ class MainFrame(wx.Frame):
                 def progress(current, total, t, cached):
                     tag = " (cached)" if cached else ""
                     self._log(f"    [{current}/{total}] {t}{tag}")
+                    self._raise_if_stopped(params)
 
                 try:
                     with self._site_slot_for(story_url):
@@ -4092,6 +4260,14 @@ class MainFrame(wx.Frame):
                     path = self._export_story(story, params)
                     self._log(f"  Saved: {path}")
                     succeeded += 1
+                except DownloadCancelled:
+                    self._log(STOPPED_PART_WAY_MESSAGE)
+                    stopped = True
+                    break
+                except _RenderCancelled as exc:
+                    self._log(f"  {exc}")
+                    stopped = True
+                    break
                 except Exception as exc:
                     self._log(f"  Error: {exc}")
                     failed.append(story_url)
@@ -4099,10 +4275,10 @@ class MainFrame(wx.Frame):
                 "bookmarks": "Bookmarks batch",
                 "forum": "Forum section batch",
             }.get(kind, "Author batch")
-            self._log(
-                f"\n{label} complete: {succeeded} succeeded, "
-                f"{len(failed)} failed out of {len(urls)}."
-            )
+            self._log(_batch_summary(
+                label, total=len(urls), succeeded=succeeded,
+                failed=len(failed), started=started, stopped=stopped,
+            ))
             for u in failed:
                 self._log(f"  Failed: {u}")
         finally:
@@ -4118,10 +4294,17 @@ class MainFrame(wx.Frame):
         def progress(current, total, title, cached):
             tag = " (cached)" if cached else ""
             self._log(f"    [{current}/{total}] {title}{tag}")
+            self._raise_if_stopped(params)
 
         succeeded = 0
         failed = []
+        started = 0
+        stopped = False
         for i, story_url in enumerate(story_urls, 1):
+            if self._stop_requested(params):
+                stopped = True
+                break
+            started = i
             self._log(f"\n[{i}/{len(story_urls)}] {story_url}")
             try:
                 with self._site_slot_for(story_url):
@@ -4129,14 +4312,22 @@ class MainFrame(wx.Frame):
                 path = self._export_story(story, params)
                 self._log(f"  Saved: {path}")
                 succeeded += 1
+            except DownloadCancelled:
+                self._log(STOPPED_PART_WAY_MESSAGE)
+                stopped = True
+                break
+            except _RenderCancelled as exc:
+                self._log(f"  {exc}")
+                stopped = True
+                break
             except Exception as e:
                 self._log(f"  Error: {e}")
                 failed.append(story_url)
 
-        self._log(
-            f"\n{summary_label} complete: {succeeded} succeeded, "
-            f"{len(failed)} failed out of {len(story_urls)}."
-        )
+        self._log(_batch_summary(
+            summary_label, total=len(story_urls), succeeded=succeeded,
+            failed=len(failed), started=started, stopped=stopped,
+        ))
         for u in failed:
             self._log(f"  Failed: {u}")
 
@@ -4194,6 +4385,13 @@ class MainFrame(wx.Frame):
         self.Bind(
             wx.EVT_MENU, self._on_add_from_url_list, add_from_list_item,
         )
+        # Ctrl+. is also the reader's Stop reading.
+        stop_item = file_menu.Append(
+            wx.ID_ANY, STOP_MENU_LABEL,
+            "Stop every download and audiobook in progress. Chapters "
+            "already fetched are kept.",
+        )
+        self.Bind(wx.EVT_MENU, self._on_stop, stop_item)
         file_menu.AppendSeparator()
         self._confirm_close_item = file_menu.AppendCheckItem(
             wx.ID_ANY, "&Warn before closing during downloads",

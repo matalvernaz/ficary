@@ -472,11 +472,20 @@ class LibraryFrame(wx.Frame):
         ]))
 
     def _on_cancel_update(self, event: wx.Event) -> None:
+        self.cancel_running_update()
+
+    def cancel_running_update(self) -> bool:
+        """Stop the library update in progress, as the Cancel button
+        does. Returns whether there was one to stop. Also used by the
+        main window's Stop."""
         if self._update_cancel_event is None or not self._update_running:
-            return
+            return False
+        if self._update_cancel_event.is_set():
+            return False
         self._update_cancel_event.set()
         self._append_status("Cancel requested — finishing current step...")
         self.cancel_btn.Disable()
+        return True
 
     def _post_status(self, line: str) -> None:
         """Thread-safe status-pane append. Used as the progress callback

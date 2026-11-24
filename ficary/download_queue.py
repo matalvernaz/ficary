@@ -283,6 +283,21 @@ class _SiteQueue:
                 self._fire_state_change()
 
 
+class DownloadCancelled(Exception):
+    """A download was stopped part-way through a story.
+
+    Raised from the progress callback a scraper calls after each
+    chapter, so a story stops at its next chapter. Chapters fetched
+    before that are already in the download cache, and nothing has been
+    written to the story's file: that only happens once every chapter
+    has arrived.
+
+    A plain ``Exception``, not a ``RuntimeError`` or one of the scraper
+    errors, so none of the handlers that report a failed download
+    catches it by accident.
+    """
+
+
 def owns(future: Future, job_fn: Callable[[], object]) -> bool:
     """True when ``future`` is the one queued for ``job_fn``, false when
     the enqueue joined a download of the same story that someone else

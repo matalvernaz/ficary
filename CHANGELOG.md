@@ -2,6 +2,26 @@
 
 ## Unreleased
 
+**Downloads can be stopped**
+
+* Once a story download had started, nothing stopped it short of
+  closing the program; a long FanFiction.net story takes ten minutes or
+  more. The only stop button, Cancel render in the Add Story window,
+  stopped audiobooks and nothing else.
+* File > Stop downloads (Ctrl+., the same key as Stop reading in the
+  reader) and the Add Story window's Stop button, which replaces Cancel
+  render, stop everything in progress. The story being downloaded
+  stops at the end of the chapter it is on; downloads still waiting
+  their turn are dropped; a batch, series or author download stops with
+  its current story and starts no more; an audiobook stops after the
+  piece it is speaking; a running library update stops as its own
+  Cancel would stop it. Nothing half-made is saved, and chapters
+  already fetched are kept, so trying again carries on from there.
+* The status pane says what was stopped. With nothing running it says
+  so. The Stop button is always enabled, so it stays in the Tab order.
+* A batch that is stopped ends with how far it got: saved, failed,
+  stopped part-way and not started.
+
 **Cancel in a library update stops the story being downloaded**
 
 * Cancel used to drop the stories still waiting, report the update as
@@ -19,6 +39,9 @@
 * A story started by hand that the update found already waiting in the
   queue, and so shared instead of queueing again, was cancelled along
   with the update. It is now left to finish.
+* A site whose download code caught the stop and handed back the
+  chapters it had would have had that short story saved over the book.
+  A story stopped part-way is never saved.
 
 ## 2.20.12 — 2026-11-23
 

@@ -351,6 +351,10 @@ def test_concurrent_renders_keep_their_own_cancel_events():
     frame._log = lambda *a, **k: None
     frame._resolve_output_dir.return_value = "/tmp/unused"
     frame.format_ctrl.GetString.return_value = "audio"
+    # Stop has not been pressed: the real check, not a MagicMock that
+    # answers every question truthily.
+    frame._stop_generation = 0
+    frame._stop_requested = lambda params: MainFrame._stop_requested(frame, params)
 
     params = SimpleNamespace(
         fmt="audio", audio_backend="builtin", audio_size=None, speech_rate=0,
@@ -382,7 +386,8 @@ def test_concurrent_renders_keep_their_own_cancel_events():
         releases["A"].set()
         a.join(3)
         assert frame._render_cancels == [events["B"]]
-        MainFrame._on_cancel_render(frame, None)
+        assert not events["B"].is_set()
+        MainFrame._cancel_renders(frame)
         assert events["B"].is_set()
         releases["B"].set()
         b.join(3)

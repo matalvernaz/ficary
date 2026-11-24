@@ -202,6 +202,38 @@ class TestOneStory:
             )
         assert handed["cancel_event"] is cancel
 
+    def test_a_story_handed_back_by_a_site_that_swallowed_the_stop_is_not_saved(self, tmp_path, monkeypatch, no_real_reading):
+        """A scraper whose chapter loop sits inside a broad ``except`` catches the stop and returns the chapters it had. Saved, that short story would replace the book."""
+        cancel = threading.Event()
+
+        class SwallowingSite(FakeStorySite):
+            def download(self, url, progress_callback=None, skip_chapters=0, chapters=None):
+                story = Story(id=self.parse_story_id(url), title="Story", author="Nobody", summary="", url=url)
+                try:
+                    for number in range(skip_chapters + 1, self.chapters + 1):
+                        self.fetched.append((url, number))
+                        story.chapters.append(Chapter(number=number, title=f"Chapter {number}", html="<p>x</p>"))
+                        if number == 3:
+                            cancel.set()
+                        progress_callback(number, self.chapters, f"Chapter {number}", False)
+                except Exception:  # noqa: BLE001 - this is the scraper the test is about
+                    pass
+                return story
+
+        site = SwallowingSite(a_site_name())
+        plug_in(monkeypatch, site)
+        saved = []
+        monkeypatch.setitem(cli.EXPORTERS, "epub", lambda story, folder, **options: saved.append(len(story.chapters)) or str(tmp_path / "story.epub"))
+        path = an_existing_file(tmp_path, "story.epub")
+        with pytest.raises(cli.DownloadCancelled):
+            cli._download_one(
+                "https://example.invalid/s/7", DownloadJob(format="epub"), tmp_path,
+                update_path=path, existing_chapters=1,
+                status_callback=lambda line: None, cancel_event=cancel,
+            )
+        assert saved == []
+        assert path.read_bytes() == b"the book as it was before the update"
+
     def test_the_cancel_is_not_mistaken_for_a_failure_by_the_handlers_that_report_one(self):
         """It must get past every except clause in the download and reach the update's own."""
         assert not issubclass(cli.DownloadCancelled, cli._DOWNLOAD_EXPECTED_ERRORS)

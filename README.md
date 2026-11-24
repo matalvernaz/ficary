@@ -161,7 +161,12 @@ A quick tour of the menus:
   downloaded file with new chapters (Ctrl+Shift+F), re-download one
   from scratch (Ctrl+Shift+R), or add every story behind a listing
   page — an author profile, AO3 series, tag listing, FFN community or
-  Wattpad reading list (Ctrl+Shift+L).
+  Wattpad reading list (Ctrl+Shift+L). **Stop downloads** (Ctrl+.)
+  stops everything in progress: the story being downloaded stops at
+  the end of its current chapter, downloads still waiting their turn
+  are dropped, and an audiobook stops after the piece it is speaking.
+  Chapters already fetched are kept, so trying again carries on from
+  there. The Add Story window's **Stop** button does the same.
 - **Edit** — Preferences (Ctrl+,) and Optional Features.
 - **Search** — find stories without leaving the app; see the next
   section.

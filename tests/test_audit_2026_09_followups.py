@@ -355,6 +355,11 @@ def test_a_cancelled_render_is_reported_as_cancelled_not_as_an_error():
     logged: list[str] = []
     frame._log = logged.append
     frame._resolve_output_dir.return_value = "/tmp/unused"
+    # Stop has not been pressed: the real checks, not a MagicMock that
+    # answers every question truthily.
+    frame._stop_generation = 0
+    frame._stop_requested = lambda p: gui_mod.MainFrame._stop_requested(frame, p)
+    frame._raise_if_stopped = lambda p: gui_mod.MainFrame._raise_if_stopped(frame, p)
 
     # The production snapshot type, so this exercises the real call
     # path instead of a stand-in that drifts from it.

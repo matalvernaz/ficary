@@ -933,19 +933,9 @@ def _merge_with_existing(
     return new_story
 
 
-class DownloadCancelled(Exception):
-    """Raised out of :func:`_download_one` when its ``cancel_event`` is
-    set part-way through a story.
-
-    The check runs each time a chapter has been fetched, so a story
-    stops at its next chapter. Chapters fetched before that are already
-    in the download cache, and nothing has been written to the story's
-    file: that only happens once every chapter has arrived.
-
-    A plain ``Exception``, not a ``RuntimeError`` or one of the scraper
-    errors, so none of the handlers that report a failed download
-    catches it by accident.
-    """
+# Defined beside the download queues, because the window raises it too.
+# Kept importable from here for the command line's own callers.
+from .download_queue import DownloadCancelled  # noqa: E402
 
 
 def _raise_if_download_cancelled(cancel_event) -> None:
@@ -1000,13 +990,21 @@ def _download_one(
         else:
             print(msg, file=sys.stderr)
 
+    # Set once the progress callback below has raised to stop the
+    # download. A scraper that caught that (a broad ``except`` around a
+    # helper that reports progress) would hand back a story short of
+    # chapters, which must not be written over the book.
+    stopped_part_way: list[int] = []
+
     def progress(current, total, title, cached):
         tag = " (cached)" if cached else ""
         status(f"  [{current}/{total}] {title}{tag}")
         # Scrapers report each chapter right after saving it to the
-        # cache, and none of them catches what this raises, so a cancel
-        # lands between chapters and keeps everything fetched so far.
-        _raise_if_download_cancelled(cancel_event)
+        # cache, so a cancel lands between chapters and keeps
+        # everything fetched so far.
+        if cancel_event is not None and cancel_event.is_set():
+            stopped_part_way.append(current)
+            raise DownloadCancelled("Stopped part-way through the story.")
 
     try:
         check_format_deps(args.format)
@@ -1109,6 +1107,13 @@ def _download_one(
             skip_chapters=0 if refetch_spec is not None else initial_skip,
             chapters=refetch_spec if refetch_spec is not None else chapter_spec,
         )
+        if stopped_part_way:
+            # The scraper caught the stop and returned what it had.
+            logger.warning(
+                "%s returned a story after being stopped at chapter %d; "
+                "not saving it", scraper.site_name, stopped_part_way[0],
+            )
+            raise DownloadCancelled("Stopped part-way through the story.")
 
         new_count = len(story.chapters)
         words = story.metadata.get("words", "")
