@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 2.20.24 — 2026-11-24
 
 **A book keeps the chapters its site took down, and gets only the new ones**
 
