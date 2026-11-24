@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 2.20.14 — 2026-11-23
 
 **Your screen reader says when a download finishes**
 
