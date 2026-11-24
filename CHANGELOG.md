@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+**An update is over when it says so**
+
+* After its summary, an update went on to rescan the whole library,
+  reading every book. On a big library, or one in Dropbox where opening
+  a book can mean downloading it first, that took minutes, with the
+  Library window still busy and the computer slowed down until Ficary
+  was closed. Only the books the update rewrote are refreshed in the
+  index now, which takes a moment. The command line's library update
+  works the same way.
+
+**The status bar's key with NVDA's laptop layout**
+
+* The line pointing at the status bar said only "NVDA+End reads it".
+  With NVDA's laptop keyboard layout the key is NVDA+Shift+End;
+  NVDA+End moves the review cursor to the end of the line, and reads
+  its last character. The line names both now.
+
 **Stories taken down by their site are not called failures**
 
 * A story the site says no longer exists was counted as "failed" in

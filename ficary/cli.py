@@ -3581,7 +3581,7 @@ def _refresh_fulltext_for(
 def _handle_update_library(args: argparse.Namespace) -> None:
     """Check every indexed story in a library for new chapters upstream."""
     from .library.refresh import build_refresh_queue
-    from .library.scanner import scan as rescan_library
+    from .library.scanner import record_downloaded_file
 
     root = Path(args.update_library)
     if not root.is_dir():
@@ -3689,9 +3689,13 @@ def _handle_update_library(args: argparse.Namespace) -> None:
     # chapter); the index save is batched inside the helper by only
     # saving when something actually changed.
 
+    # The books this run rewrote, to refresh in the index at the end.
+    updated_files: list[Path] = []
+
     def _on_download_complete(url: str, path: "Path") -> None:
         if args.dry_run:
             return
+        updated_files.append(path)
         try:
             from .library import compute_local_hashes, store_hashes
             from .library.index import LibraryIndex
@@ -3747,15 +3751,14 @@ def _handle_update_library(args: argparse.Namespace) -> None:
                 logger.debug("Failed to stamp last_probed", exc_info=True)
                 print(f"\nWarning: could not record probe timestamps: {exc}")
 
-    # Refresh the index so chapter counts reflect any updates we just
-    # applied. Cheap compared to the downloads themselves, and keeps
-    # the next --update-library run from re-probing unchanged stories.
-    if not args.dry_run:
-        try:
-            rescan_library(root_resolved)
-        except (OSError, ValueError) as exc:
-            logger.debug("Post-update rescan failed", exc_info=True)
-            print(f"\nWarning: post-update index refresh failed: {exc}")
+    # Refresh the index entries of the books this run rewrote, so their
+    # chapter counts are current and the next run doesn't fetch them
+    # again. Only those: this used to rescan the whole library, which
+    # reads every book, and on a big library (or one in Dropbox, where
+    # opening a book can mean downloading it first) that took minutes
+    # after the summary had said the update was complete.
+    for path in updated_files:
+        record_downloaded_file(path, library_root=root_resolved)
 
     sys.exit(exit_code)
 

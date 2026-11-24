@@ -1,6 +1,6 @@
 """A status bar that says what Ficary is doing now, for a screen reader's "read the status bar" key.
 
-NVDA reads a window's status bar with NVDA+End (NVDA+Shift+End on the laptop layout) and JAWS with Insert+Page Down, without moving focus. The bar shows ficary.activity: what each running job is doing, or how the last one went, or "Ready." before anything has run.
+NVDA reads a window's status bar with NVDA+End, or NVDA+Shift+End with its laptop keyboard layout, where NVDA+End moves the review cursor to the end of the line instead (NVDA 2026.3 user guide). JAWS reads it with Insert+Page Down. Neither moves focus. The bar shows ficary.activity: what each running job is doing, or how the last one went, or "Ready." before anything has run.
 """
 
 from __future__ import annotations
@@ -15,7 +15,8 @@ IDLE_TEXT = "Ready."
 
 HINT = (
     "The status bar at the bottom of this window says which story and "
-    "chapter it's on: NVDA+End reads it, or Insert+Page Down in JAWS."
+    "chapter it's on: NVDA+End reads it (NVDA+Shift+End with NVDA's "
+    "laptop keyboard layout), or Insert+Page Down in JAWS."
 )
 """Said once per window when its first download or update starts. A line per chapter in the status log used to show a download was alive; that is in the status bar now."""
 

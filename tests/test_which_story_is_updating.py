@@ -1022,3 +1022,85 @@ class TestNotFoundOnTheSite:
         wait_until_idle(site.site_name)
         # One left: "was", not "were", and never the old "1 of 3 entry were".
         assert "1 of 3 stories was not checked. Run the update again to carry on." in lines
+
+
+# ── After an update ──────────────────────────────────────────────
+
+
+class TestAfterAnUpdate:
+    """Matt, 2026-11-24: "The update check still says it's running after it's done", and the computer slowed down until he closed Ficary. After its summary, an update rescanned the whole library, reading every book: five minutes on his 840-story library in Dropbox (his log has the gap), with the window still busy. Only the books the run rewrote need their index entries refreshing."""
+
+    @pytest.fixture
+    def library_root(self, tmp_path):
+        from ficary.library.scanner import scan
+
+        from .library_fixtures import ficary_epub
+
+        root = tmp_path / "library"
+        root.mkdir()
+        for number in (101, 102):
+            ficary_epub(root, title=f"Story {number}", url=f"https://www.fanfiction.net/s/{number}/1/", chapters=3, story_id=number)
+        scan(root)
+        return root.resolve()
+
+    @pytest.fixture
+    def no_rescan(self, monkeypatch):
+        from ficary.library import scanner
+
+        scanned = []
+        monkeypatch.setattr(scanner, "scan", lambda *args, **kwargs: scanned.append(args) or pytest.fail("the whole library was rescanned"))
+        recorded = []
+        real_record = scanner.record_downloaded_file
+        monkeypatch.setattr(
+            scanner, "record_downloaded_file",
+            lambda path, **options: recorded.append((Path(path), options)) or real_record(path, **options),
+        )
+        return recorded
+
+    def rewrite_one(self, monkeypatch, root):
+        """Stands in for the update: rewrites story 101's book with a fourth chapter, as a download would, and says so."""
+        from .library_fixtures import ficary_epub
+
+        def run(queue, args, workers, **options):
+            entry = next(entry for entry in queue if "/s/101" in entry["url"])
+            book = ficary_epub(root, title="Story 101", url="https://www.fanfiction.net/s/101/1/", chapters=4, story_id=101)
+            options["on_download_complete"](entry["url"], Path(book))
+            return 0
+
+        monkeypatch.setattr(cli, "_run_update_queue", run)
+
+    def chapters_in_the_index(self, root, number):
+        from ficary.library.index import LibraryIndex
+
+        stories = LibraryIndex.load().library_state(root)["stories"]
+        return next(entry for url, entry in stories.items() if f"/s/{number}" in url)["chapter_count"]
+
+    def test_the_library_window_refreshes_only_the_rewritten_book(self, library_root, monkeypatch, no_rescan):
+        pytest.importorskip("wx")
+        from ficary.library.gui import LibraryFrame
+
+        self.rewrite_one(monkeypatch, library_root)
+        window = types.SimpleNamespace(_post_status=lambda line: None)
+        LibraryFrame._probe_one_root(
+            window, library_root, force=True, refetch_all=False, recheck_interval=0,
+            cancel_event=threading.Event(),
+        )
+        assert [path.name for path, _options in no_rescan] == ["Story 101 - Test Author.epub"]
+        assert no_rescan[0][1]["library_root"] == library_root
+        assert self.chapters_in_the_index(library_root, 101) == 4
+
+    def test_the_command_line_refreshes_only_the_rewritten_book(self, library_root, monkeypatch, no_rescan):
+        """No library folder is set in the desktop app's settings here, so the re-index after saving skips the book: this one has to do it."""
+        self.rewrite_one(monkeypatch, library_root)
+        with pytest.raises(SystemExit):
+            cli.main(["--update-library", str(library_root), "--force-recheck"])
+        assert [path.name for path, _options in no_rescan] == ["Story 101 - Test Author.epub"]
+        assert self.chapters_in_the_index(library_root, 101) == 4
+
+
+def test_the_hint_names_the_laptop_layouts_key():
+    """Matt uses NVDA's laptop layout, where NVDA+End moves the review cursor to the end of the line, and heard "the last character"."""
+    pytest.importorskip("wx")
+    from ficary.gui_status_bar import HINT
+
+    assert "NVDA+End reads it (NVDA+Shift+End with NVDA's laptop keyboard layout)" in HINT

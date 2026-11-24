@@ -795,7 +795,7 @@ class LibraryFrame(wx.Frame):
         each run it. Self-contained probe-stamp buffer per root."""
         from .. import cli
         from .index import LibraryIndex
-        from .scanner import scan as rescan
+        from .scanner import record_downloaded_file
 
         args = default_refresh_args(
             recheck_interval_s=recheck_interval,
@@ -887,12 +887,19 @@ class LibraryFrame(wx.Frame):
                 if len(pending_stamps) >= STAMP_FLUSH_EVERY:
                     _flush_stamps_locked()
 
+        # The books this run rewrote, to refresh in the index at the end.
+        updated_files: list[Path] = []
+
+        def on_download_complete(url: str, path: Path) -> None:
+            updated_files.append(path)
+
         cli._run_update_queue(
             probe_queue, args, args.probe_workers,
             skipped_count=len(skipped),
             label="Library update",
             progress=self._post_status,
             on_probe_complete=on_probe_complete,
+            on_download_complete=on_download_complete,
             cancel_event=cancel_event,
             # A line when each story starts and one when it ends; its
             # chapters go to the status bar.
@@ -902,12 +909,15 @@ class LibraryFrame(wx.Frame):
         with stamp_lock:
             _flush_stamps_locked()
 
-        try:
-            rescan(root)
-        except Exception as exc:
-            self._post_status(
-                f"Warning: post-update index refresh failed: {exc}"
-            )
+        # Each rewritten book was re-indexed as it was saved; this makes
+        # sure of it, under this library folder. A rescan of the whole
+        # library used to run here instead. It reads every book, so on a
+        # big library, or one in Dropbox where opening a book can mean
+        # downloading it first, it took minutes after the summary had
+        # said the update was complete, with the window still busy and
+        # the computer slowed down.
+        for path in updated_files:
+            record_downloaded_file(path, library_root=root)
 
     def _update_finished(self) -> None:
         cancelled = self._update_cancel_event is not None and self._update_cancel_event.is_set()
