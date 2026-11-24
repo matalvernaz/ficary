@@ -5935,6 +5935,25 @@ def _configure_console_logging(verbose: bool) -> None:
     root.setLevel(logging.DEBUG if verbose else logging.INFO)
 
 
+# Options that only change what another command does, and the commands
+# they belong to. main() refuses one given without any of them.
+_MODIFIERS_AND_THEIR_COMMANDS = (
+    ("clear_library", "--clear-library", "--scan-library DIR"),
+    ("abandoned_after_days", "--abandoned-after-days", "--scan-library DIR"),
+    ("prune", "--prune", "--cache-doctor"),
+    ("heal", "--heal", "--library-doctor DIR, --watchlist-doctor or --doctor"),
+    ("heal_drop_missing", "--heal-drop-missing", "--library-doctor DIR or --doctor"),
+    ("heal_prune_stale", "--heal-prune-stale", "--library-doctor DIR or --doctor"),
+    ("heal_drop_watches", "--heal-drop-watches", "--watchlist-doctor or --doctor"),
+    ("heal_all", "--heal-all", "--library-doctor DIR, --watchlist-doctor or --doctor"),
+    ("apply", "--apply", "--reorganize DIR"),
+    ("force_rehash", "--force-rehash", "--populate-hashes DIR"),
+    ("mirrors_metadata_only", "--mirrors-metadata-only", "--find-mirrors"),
+    ("library_dir", "--library-dir", "--library-find, --library-search, --list-abandoned or --revive-abandoned"),
+    ("dry_run", "--dry-run", "-U DIR or --update-library DIR"),
+)
+
+
 def main(argv: list[str] | None = None) -> None:
     """CLI entry point. Parses args and dispatches to a handler."""
     parser = _build_parser()
@@ -6055,6 +6074,24 @@ def main(argv: list[str] | None = None) -> None:
     if args.watch:
         _handle_watch(args)
         return
+
+    # Every command that a modifier belongs to has had its turn above, so
+    # a modifier still set here was given without it. It used to fall
+    # through to the download path, which read a library folder as a
+    # story address and answered "Expected a URL like
+    # https://www.fanfiction.net/s/12345 or a numeric ID".
+    for dest, flag, partners in _MODIFIERS_AND_THEIR_COMMANDS:
+        if getattr(args, dest, None) not in (None, False):
+            parser.error(f"{flag} only works together with {partners}.")
+    for target in args.url or []:
+        # A plain number is a story id (FanFiction.net takes one), whatever
+        # folders happen to be where Ficary was started.
+        if not target.isdigit() and os.path.isdir(os.path.expanduser(target)):
+            parser.error(
+                f"{target} is a folder, not a story address. To work on a "
+                "library folder, use --scan-library DIR, --update-library DIR, "
+                "--library-doctor DIR or -U DIR."
+            )
 
     # --- Single-file --update (not batch) ---
     if args.update:

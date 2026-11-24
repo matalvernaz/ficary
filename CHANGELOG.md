@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+**Clearer command-line errors**
+
+* An option that only changes what another command does, used without
+  it, now says which command it belongs to: `ficary --heal` says it
+  works together with `--library-doctor DIR`, `--watchlist-doctor` or
+  `--doctor`, and the same for `--prune`, `--clear-library`, `--apply`,
+  `--dry-run`, `--library-dir` and the others. Before, these fell
+  through to downloading and answered "Expected a URL like
+  https://www.fanfiction.net/s/12345 or a numeric ID".
+* A folder given where a story address goes is called a folder, with
+  the options that work on a library folder.
+
 ## 2.20.16 — 2026-11-23
 
 **The web page no longer cuts off long stories**
