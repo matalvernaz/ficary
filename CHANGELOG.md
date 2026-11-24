@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 2.20.17 — 2026-11-24
 
 **SubscribeStar: a subscribers-only post says so**
 
