@@ -3,10 +3,13 @@
 Part of the library-first main window, chosen by the maintainer: when
 Ficary opens it quietly asks each site how many chapters the stories it
 has not checked lately now have, and says in one line how many stories
-have new chapters waiting. Nothing is downloaded here. Library > Check
-for Story Updates (Ctrl+U) does that, and finds what this check found
-without asking the sites again: the answers go into the library index
-as ``remote_chapter_count``, which an update reads as "owed chapters".
+have new chapters waiting. How often a story is asked goes by how
+recently it last updated (see ``recheck_interval_for``). Nothing is
+downloaded here. Library > Download New Chapters (Ctrl+Shift+N) does
+that, for exactly what this check found and without asking the sites
+again: the answers go into the library index as ``remote_chapter_count``,
+which an update reads as "owed chapters". Library > Check All Stories
+for Updates (Ctrl+U) asks about every story and downloads what is new.
 
 It runs the same probe loop as Ctrl+U (``cli._run_update_queue`` in
 dry-run), so the Cloudflare breaker and the per-site pacing apply, and
@@ -17,6 +20,7 @@ from __future__ import annotations
 
 import logging
 import threading
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Callable, Iterable, Optional
 
@@ -27,6 +31,18 @@ logger = logging.getLogger(__name__)
 # re-check nearly the whole library, which for a big FanFiction.net
 # library is over an hour of requests every time Ficary opens.
 LAUNCH_RECHECK_INTERVAL_S = 24 * 60 * 60
+
+# How often a story is asked about at launch goes by how long ago it last
+# updated on its site (chosen by the maintainer): asking every story every
+# day made the check take most of an hour on a big FanFiction.net library,
+# at its six seconds a story. Most unfinished stories in a library have
+# been quiet for months. A quiet one that wakes up is found within a month
+# by this check, and at once by Check All Stories for Updates.
+_DAY_S = 24 * 60 * 60
+ACTIVE_STORY_DAYS = 30          # updated this recently: asked daily
+SLOWING_STORY_DAYS = 182        # this recently: weekly; older: monthly
+_WEEK_S = 7 * _DAY_S
+_MONTH_S = 30 * _DAY_S
 
 # Answers kept in memory before they are written to the index, so a
 # check cut short by closing Ficary still keeps most of what it learned.
@@ -41,6 +57,43 @@ def _quiet(line: str) -> None:
     """Where the probe loop's per-story lines go: the debug log only.
     At launch one line at the end is the whole report."""
     logger.debug("%s", line.rstrip())
+
+
+def _day_of(text) -> Optional[date]:
+    """The date at the start of ``text`` (YYYY-MM-DD...), or None."""
+    try:
+        return date.fromisoformat(str(text or "")[:10])
+    except ValueError:
+        return None
+
+
+def recheck_interval_for(story_updated, *, today: date) -> int:
+    """How long a story may go between checks at launch, by when it last
+    updated on its site. A story with no date is asked daily, as before."""
+    updated = _day_of(story_updated)
+    if updated is None:
+        return LAUNCH_RECHECK_INTERVAL_S
+    quiet_days = (today - updated).days
+    if quiet_days <= ACTIVE_STORY_DAYS:
+        return LAUNCH_RECHECK_INTERVAL_S
+    if quiet_days <= SLOWING_STORY_DAYS:
+        return _WEEK_S
+    return _MONTH_S
+
+
+def _due_at_launch(index_entry, *, now: datetime) -> bool:
+    """Whether a story is due to be asked about at launch."""
+    if not index_entry:
+        return True
+    raw = str(index_entry.get("last_probed") or "")
+    try:
+        last = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        return True
+    if last.tzinfo is None:
+        last = last.replace(tzinfo=timezone.utc)
+    interval = recheck_interval_for(index_entry.get("story_updated"), today=now.date())
+    return (now - last).total_seconds() >= interval
 
 
 def library_roots(prefs) -> list[Path]:
@@ -102,6 +155,7 @@ def check_for_new_chapters(
     index_path: Optional[Path] = None,
     recheck_interval_s: int = LAUNCH_RECHECK_INTERVAL_S,
     run_update_queue: Optional[Callable] = None,
+    now: Optional[Callable[[], datetime]] = None,
 ) -> Optional[int]:
     """Ask each site for the chapter count of every unfinished story in
     ``roots`` not checked within ``recheck_interval_s``, record the
@@ -130,8 +184,18 @@ def check_for_new_chapters(
             recheck_interval_s=recheck_interval_s, progress=_quiet,
         )
         # Stories whose last check already found new chapters are known
-        # to be waiting; only the rest need asking about.
-        to_ask = [entry for entry in probe_queue if "remote" not in entry]
+        # to be waiting; of the rest, only those due by how recently they
+        # last updated are asked about.
+        moment = (now or (lambda: datetime.now(timezone.utc)))()
+        try:
+            in_index = dict(LibraryIndex.load(index_path).stories_in(root))
+        except Exception:  # noqa: BLE001 - ask about everything rather than nothing
+            logger.debug("library index could not be read for the launch schedule", exc_info=True)
+            in_index = {}
+        to_ask = [
+            entry for entry in probe_queue
+            if "remote" not in entry and _due_at_launch(in_index.get(entry["url"]), now=moment)
+        ]
         if not to_ask:
             continue
         args = default_refresh_args(dry_run=True, recheck_interval_s=recheck_interval_s)
@@ -173,6 +237,12 @@ def check_for_new_chapters(
     return sum(stories_waiting(root, index_path=index_path) for root in roots)
 
 
+# The menu item the line points at: it downloads exactly the stories
+# this check found, without asking the sites again.
+DOWNLOAD_NEW_CHAPTERS = "Download New Chapters"
+DOWNLOAD_NEW_CHAPTERS_KEYS = "Ctrl+Shift+N"
+
+
 def waiting_summary(waiting: int) -> str:
     """The one line the status pane gets when the check is done."""
     if waiting <= 0:
@@ -180,6 +250,6 @@ def waiting_summary(waiting: int) -> str:
     stories = "1 story in your library has" if waiting == 1 else f"{waiting} stories in your library have"
     them = "it" if waiting == 1 else "them"
     return (
-        f"{stories} new chapters. Library > Check for Story Updates "
-        f"(Ctrl+U) downloads {them}."
+        f"{stories} new chapters. Library > {DOWNLOAD_NEW_CHAPTERS} "
+        f"({DOWNLOAD_NEW_CHAPTERS_KEYS}) gets {them}."
     )

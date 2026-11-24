@@ -179,8 +179,9 @@ A quick tour of the menus:
 - **Library** — the Library window (Ctrl+L), a browsable list of
   everything you've downloaded (Ctrl+B), Import Existing Folder to read
   stories already in your library folder into the list, including ones
-  Ficary didn't download, and a one-keystroke "check everything for new
-  chapters" (Ctrl+U).
+  Ficary didn't download, Download New Chapters (Ctrl+Shift+N) for the
+  stories already known to have them, and a one-keystroke "check
+  everything for new chapters" (Ctrl+U).
 - **Reader** — read a downloaded story inside the app (Ctrl+R), and
   build ambient soundscapes for it.
 - **Watchlist** — follow stories, authors, or searches and get told
@@ -334,13 +335,17 @@ Library covers both folders in one pass.
 ### Keeping stories up to date
 
 - **When Ficary opens** it quietly asks each site how many chapters
-  your unfinished stories now have (each story at most once a day) and
-  says in the status pane how many have new chapters. Nothing is
-  downloaded until you press Ctrl+U, which then fetches exactly those
-  without asking the sites again. It takes turns with your own
-  downloads, stops if you press Stop downloads or Ctrl+U, and can be
-  switched off in Preferences → General.
-- **Check everything at once:** Ctrl+U in the app, or
+  your unfinished stories now have and says in the status pane how many
+  have new chapters. How often a story is asked goes by how recently it
+  last updated: daily if in the last month, weekly if in the last six
+  months, monthly if longer ago. Nothing is downloaded until you choose
+  Library → Download New Chapters (Ctrl+Shift+N), which fetches exactly
+  those without asking the sites again. The check takes turns with
+  your own downloads, stops if you press Stop downloads or Ctrl+U, and
+  can be switched off in Preferences → General.
+- **Check everything at once:** Library → Check All Stories for
+  Updates (Ctrl+U) in the app asks the sites about every story and
+  downloads what's new, or
   `ficary -U ~/Fanfic --recursive` on the command line. Stories that
   haven't changed cost one quick check each; finished stories are
   skipped by default.

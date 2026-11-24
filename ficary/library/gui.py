@@ -274,11 +274,22 @@ class LibraryFrame(wx.Frame):
         self.reorg_btn.Bind(wx.EVT_BUTTON, self._on_reorganize)
         btn_row.Add(self.reorg_btn, 0, wx.RIGHT, 6)
 
-        self.update_btn = wx.Button(panel, label="Check for &Updates")
+        # The quick one first: only what is already known to be waiting.
+        self.download_new_btn = wx.Button(panel, label="Download New Cha&pters")
+        set_help(
+            self.download_new_btn,
+            "Download the stories already known to have new chapters, "
+            "found when Ficary opened or by an earlier check, without "
+            "asking the sites about any other story.",
+        )
+        self.download_new_btn.Bind(wx.EVT_BUTTON, self._on_download_new_chapters)
+        btn_row.Add(self.download_new_btn, 0, wx.RIGHT, 6)
+
+        self.update_btn = wx.Button(panel, label="Check All Stories for &Updates")
         set_help(
             self.update_btn,
-            "Check every indexed story for new chapters and merge any it "
-            "finds. Finished and abandoned stories are skipped.",
+            "Ask the sites about every indexed story for new chapters and "
+            "merge any it finds. Finished and abandoned stories are skipped.",
         )
         self.update_btn.Bind(wx.EVT_BUTTON, self._on_check_updates)
         btn_row.Add(self.update_btn, 0, wx.RIGHT, 6)
@@ -404,6 +415,22 @@ class LibraryFrame(wx.Frame):
             return
         self._on_scan(None)
 
+    def trigger_download_new_chapters(self) -> None:
+        """Public entry point for the main window's Download New Chapters
+        (Ctrl+Shift+N). No-ops quietly if a run is already in flight."""
+        if self._update_running:
+            return
+        self._on_download_new_chapters(None)
+
+    def _on_download_new_chapters(self, event) -> None:
+        """Download only the stories already known to have new chapters.
+
+        Chosen by the maintainer as its own command beside Check All
+        Stories for Updates: that one asks the sites about every story,
+        which on a big library takes most of an hour, while what the
+        check at launch found can be fetched at once."""
+        self._on_check_updates(event, force=False, refetch_all=False, only_waiting=True)
+
     def trigger_update_check(self) -> None:
         """Public entry point for the main window's Ctrl+U accelerator.
 
@@ -469,6 +496,7 @@ class LibraryFrame(wx.Frame):
         self.scan_btn.Enable(not busy)
         self.reorg_btn.Enable(not busy)
         self.update_btn.Enable(not busy)
+        self.download_new_btn.Enable(not busy)
         self.force_recheck_chk.Enable(not busy)
         self.refetch_all_chk.Enable(not busy)
         self.review_btn.Enable(not busy)
@@ -633,8 +661,13 @@ class LibraryFrame(wx.Frame):
         *,
         force: bool | None = None,
         refetch_all: bool | None = None,
+        only_waiting: bool = False,
     ) -> None:
         """Start a library-update run.
+
+        ``only_waiting`` (Download New Chapters) downloads just the
+        stories already known to have new chapters and asks the sites
+        about nothing else.
 
         ``force`` and ``refetch_all`` default to reading the adjacent
         checkboxes so users tick the combination they want before
@@ -672,7 +705,11 @@ class LibraryFrame(wx.Frame):
             f"{len(roots)} library roots"
             if len(roots) > 1 else str(root)
         )
-        if mode_bits:
+        if only_waiting:
+            self._append_status(
+                f"Downloading the stories in {scope} already known to have new chapters..."
+            )
+        elif mode_bits:
             self._append_status(f"Updating {scope} ({', '.join(mode_bits)})...")
         else:
             self._append_status(f"Checking {scope} for updates...")
@@ -703,6 +740,7 @@ class LibraryFrame(wx.Frame):
                         refetch_all=refetch_all,
                         recheck_interval=recheck_interval,
                         cancel_event=cancel_event,
+                        only_waiting=only_waiting,
                     )
             except Exception as exc:
                 self._post_status(f"Update failed: {exc}")
@@ -730,6 +768,7 @@ class LibraryFrame(wx.Frame):
 
     def _probe_one_root(
         self, root, *, force, refetch_all, recheck_interval, cancel_event,
+        only_waiting: bool = False,
     ) -> None:
         """Probe one library root for updates. Worker-thread body,
         factored out of _on_check_updates so the main + adult roots can
@@ -744,12 +783,31 @@ class LibraryFrame(wx.Frame):
             refetch_all=refetch_all,
             skip_complete=not force,
         )
+        def queue_progress(line: str) -> None:
+            # Download New Chapters names only the stories it will fetch;
+            # a "checked 2 days ago" line for every other story would bury
+            # them.
+            if not only_waiting or "[resume]" in line:
+                self._post_status(line)
+
         probe_queue, skipped = build_refresh_queue(
             root,
             skip_complete=not force,
             recheck_interval_s=recheck_interval,
-            progress=self._post_status,
+            progress=queue_progress,
         )
+        if only_waiting:
+            probe_queue = [
+                entry for entry in probe_queue
+                if isinstance(entry.get("remote"), int) and entry["remote"] > (entry.get("local") or 0)
+            ]
+            skipped = []
+            if not probe_queue:
+                self._post_status(
+                    f"No stories in {root} are known to have new chapters. "
+                    "Check All Stories for Updates (Ctrl+U) asks the sites."
+                )
+                return
         if not probe_queue and not skipped:
             self._post_status(
                 f"No indexed stories for {root}. Use {IMPORT_EXISTING_FOLDER} first."
@@ -760,7 +818,7 @@ class LibraryFrame(wx.Frame):
         # Updates twice in a row can see whether the recent-probe skip is
         # firing (N stories in TTL) or whether no entries have a
         # ``last_probed`` stamp yet (fresh index) and everything queued.
-        if recheck_interval > 0:
+        if recheck_interval > 0 and not only_waiting:
             ttl_hours = recheck_interval / 3600
             self._post_status(
                 f"TTL {ttl_hours:.1f}h: {len(skipped)} recently-probed "

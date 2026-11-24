@@ -271,7 +271,7 @@ class PreferencesDialog(wx.Dialog):
             "When Ficary opens, ask each site how many chapters the stories "
             "not checked in the last day now have, and say in the status "
             "pane how many have new chapters. Nothing is downloaded; "
-            "Library > Check for Story Updates does that."
+            "Library > Download New Chapters does that."
         )
         sizer.Add(self.check_stories_ctrl, 0, wx.ALL, 6)
 

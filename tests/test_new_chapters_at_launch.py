@@ -302,8 +302,10 @@ class TestTheLine:
         "waiting, line",
         [
             (0, "No stories in your library have new chapters."),
-            (1, "1 story in your library has new chapters. Library > Check for Story Updates (Ctrl+U) downloads it."),
-            (4, "4 stories in your library have new chapters. Library > Check for Story Updates (Ctrl+U) downloads them."),
+            # It points at the command that fetches exactly these, without
+            # asking the sites again (Matt, 2026-11-24).
+            (1, "1 story in your library has new chapters. Library > Download New Chapters (Ctrl+Shift+N) gets it."),
+            (4, "4 stories in your library have new chapters. Library > Download New Chapters (Ctrl+Shift+N) gets them."),
         ],
     )
     def test_what_the_status_pane_says(self, waiting, line):

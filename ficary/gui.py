@@ -4648,9 +4648,19 @@ class MainFrame(wx.Frame):
             "including ones Ficary did not download.",
         )
         self.Bind(wx.EVT_MENU, self._on_import_existing_folder, import_item)
+        # Two commands, chosen by the maintainer: the quick one fetches
+        # what is already known to be waiting (found at launch), the
+        # other asks the sites about every story first.
+        download_new_item = library_menu.Append(
+            wx.ID_ANY, "Download &New Chapters\tCtrl+Shift+N",
+            "Download the stories already known to have new chapters, "
+            "without asking the sites about any other story.",
+        )
+        self.Bind(wx.EVT_MENU, self._on_download_new_chapters, download_new_item)
         check_updates_item = library_menu.Append(
-            wx.ID_ANY, "Check for Story &Updates\tCtrl+U",
-            "Check every story in the library for new chapters.",
+            wx.ID_ANY, "Check All Stories for &Updates\tCtrl+U",
+            "Ask the sites about every story in the library for new "
+            "chapters, and download any it finds.",
         )
         self.Bind(
             wx.EVT_MENU, self._on_check_library_updates, check_updates_item,
@@ -4846,7 +4856,8 @@ class MainFrame(wx.Frame):
             self._watchlist_poller.reconfigure()
 
     def _on_library_menu(self, event, *, check_updates: bool = False,
-                         import_folder: bool = False):
+                         import_folder: bool = False,
+                         download_new_chapters: bool = False):
         """Open the library-management window (non-modal).
 
         Modeless so users can kick off a scan or update run and flip
@@ -4888,11 +4899,22 @@ class MainFrame(wx.Frame):
                 self._library_frame.trigger_import()
             except RuntimeError:
                 logger.debug("library import trigger failed", exc_info=True)
+        if download_new_chapters and self._library_frame is not None:
+            try:
+                self._library_frame.trigger_download_new_chapters()
+            except RuntimeError:
+                logger.debug("download-new-chapters trigger failed", exc_info=True)
 
     def _on_import_existing_folder(self, event):
         """Library > Import Existing Folder: open the Library window and
         read the library folder into the index, as its button does."""
         self._on_library_menu(event, import_folder=True)
+
+    def _on_download_new_chapters(self, event):
+        """Ctrl+Shift+N: open the library window (if needed) and download
+        the stories already known to have new chapters, asking the sites
+        about nothing else."""
+        self._on_library_menu(event, download_new_chapters=True)
 
     def _on_check_library_updates(self, event):
         """Ctrl+U — open the library window (if needed) and start a

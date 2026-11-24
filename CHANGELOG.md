@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+**The check at launch is quicker, and new chapters have their own command**
+
+* The check for new chapters when Ficary opens asked every site about
+  every unfinished story each day, at FanFiction.net's pace of about
+  six seconds a story, so on a big library it took most of an hour.
+  Asking faster is what gets a site to start blocking, so it now asks
+  less: a story that updated in the last month is asked daily, in the
+  last six months weekly, and longer ago monthly. A long-quiet story
+  that updates is found within a month, or at once with Check All
+  Stories for Updates.
+* Library → Download New Chapters (Ctrl+Shift+N), also a button in the
+  Library window (Alt+P), downloads the stories already known to have
+  new chapters, found at launch or by an earlier check, without asking
+  the sites about anything else. The launch check's line now points at
+  it.
+* Library → Check for Story Updates is now Check All Stories for
+  Updates (Ctrl+U, as before; in the Library window, Alt+U): it asks
+  the sites about every story and downloads what's new.
+
 **EPUBs pass the standard EPUB check**
 
 * Stories written in Word and pasted into AO3 carry Word's hidden
