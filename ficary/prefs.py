@@ -182,6 +182,10 @@ KEY_LIBRARY_REORGANIZE_CONFIRM_EACH = "library_reorganize_confirm_each"
 # prompt. Flipped to True on the first answer (yes or no); we never
 # re-ask so users who opt out aren't nagged on every launch.
 KEY_LIBRARY_DEFAULT_PROMPTED = "library_default_prompted"
+# Has the GUI asked, the first time it opened, where the library folder
+# should be. Set on the first ask whatever the answer, so it is asked
+# once; Cancel leaves the question to the first download, as before.
+KEY_LIBRARY_ASKED_AT_START = "library_asked_at_start"
 # Per-tab JSON blobs: {"query": "...", "filters": {key: value, ...}}
 KEY_SEARCH_STATE_FFN = "search_state_ffn"
 KEY_SEARCH_STATE_AO3 = "search_state_ao3"

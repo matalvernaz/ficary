@@ -183,7 +183,7 @@ def test_skip_reason_names_the_library_when_file_is_outside_it(tmp_path: Path):
     reason = library_skip_reason(story, str(lib))
     assert "outside your library folder" in reason
     assert str(lib) in reason
-    assert "Scan Library" in reason  # tells the user how to recover
+    assert "Import Existing Folder" in reason  # tells the user how to recover
 
 
 def test_skip_reason_flags_an_unconfigured_library(tmp_path: Path):

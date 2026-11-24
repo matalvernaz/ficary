@@ -150,8 +150,9 @@ arguments. The main window is your library. To download a story:
 3. Pick an output format — EPUB, HTML, plain text, or audiobook.
 4. Press **Download**.
 
-The first download asks where your library folder should live if you
-haven't chosen one yet. After that, downloads are sorted into fandom
+The first time Ficary opens it asks where your library folder should
+live; press Cancel to decide later, and your first download asks
+instead. After that, downloads are sorted into fandom
 subfolders automatically (see [Your library](#your-library)), and the
 new story appears in the library list behind the Add Story window.
 
@@ -171,8 +172,10 @@ A quick tour of the menus:
 - **Search** — find stories without leaving the app; see the next
   section.
 - **Library** — the Library window (Ctrl+L), a browsable list of
-  everything you've downloaded (Ctrl+B), and a one-keystroke "check
-  everything for new chapters" (Ctrl+U).
+  everything you've downloaded (Ctrl+B), Import Existing Folder to read
+  stories already in your library folder into the list, including ones
+  Ficary didn't download, and a one-keystroke "check everything for new
+  chapters" (Ctrl+U).
 - **Reader** — read a downloaded story inside the app (Ctrl+R), and
   build ambient soundscapes for it.
 - **Watchlist** — follow stories, authors, or searches and get told
@@ -291,8 +294,10 @@ the same.
 Point Ficary at a folder of downloaded stories and it becomes a
 library: every story is indexed with its title, author, fandom, and
 source, and a set of tools builds on top of that. Set your library
-folder in the Library window (Ctrl+L), then scan it once (the
-window's Scan button, or `ficary --scan-library ~/Fanfic`).
+folder in the Library window (Ctrl+L), then read it in once with
+**Library → Import Existing Folder** (the same button is in the Library
+window, or run `ficary --scan-library ~/Fanfic`). That also picks up
+stories Ficary didn't download.
 
 ### Browsing
 

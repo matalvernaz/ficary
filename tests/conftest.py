@@ -29,6 +29,26 @@ def isolate_mcstories_title_cache(tmp_path, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def isolate_ficary_data(tmp_path_factory, monkeypatch):
+    """Give every test its own Ficary data folder.
+
+    Settings, caches, the library index and the watchlist all live under
+    ``portable.portable_root()``, which is ``~/.ficary`` when running
+    from source. Without this every test that built a window or saved a
+    setting read and wrote the real settings file of whoever ran the
+    tests, and a test of anything that happens at launch would have
+    seen their real library. A test that wants a particular folder sets
+    ``portable._cached_root`` itself, which overrides this.
+    """
+    from ficary import portable
+
+    # Its own folder, not inside tmp_path: several tests check that
+    # nothing but what they wrote is in tmp_path.
+    data = tmp_path_factory.mktemp("ficary-data")
+    monkeypatch.setattr(portable, "_cached_root", data)
+
+
+@pytest.fixture(autouse=True)
 def isolate_chapter_audio_cache(tmp_path, monkeypatch):
     """Keep every test's audiobook chapter cache in a per-test temp folder.
 
@@ -57,6 +77,26 @@ def no_update_check_at_launch(monkeypatch):
     ``monkeypatch.delenv``.
     """
     monkeypatch.setenv("FICARY_SKIP_UPDATE_CHECK", "1")
+
+
+@pytest.fixture(autouse=True)
+def no_launch_questions(monkeypatch):
+    """Keep the library questions a new main window asks at launch out of
+    every test.
+
+    They are modal dialogs shown from a wx.CallAfter, so any test that
+    lets pending events run after building a window would sit on them.
+    With each test's own empty data folder, the first-start question
+    would come up every time. Tests of the questions call
+    ``MainFrame._library_questions_at_start`` themselves through the
+    original, which this fixture keeps as ``original_library_questions``.
+    """
+    try:
+        import ficary.gui as gui
+    except Exception:  # noqa: BLE001 - no wx here, so no window either
+        return
+    monkeypatch.setattr(gui.MainFrame, "original_library_questions", gui.MainFrame._library_questions_at_start, raising=False)
+    monkeypatch.setattr(gui.MainFrame, "_library_questions_at_start", lambda self: None)
 
 
 @pytest.fixture(autouse=True)

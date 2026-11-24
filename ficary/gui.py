@@ -312,6 +312,7 @@ from .download_queue import (
     site_from_thread_name,
 )
 from .gui_help import set_help, is_own_destroy
+from .library.scanner import IMPORT_EXISTING_FOLDER
 from .gui_dialogs import (
     OptionalFeaturesDialog,
     StoryPickerDialog,
@@ -602,7 +603,7 @@ class MainFrame(wx.Frame):
         self._start_update_check()
         # Deferred so the main window paints first — a modal dialog
         # popping up during the paint cycle looks like a crash.
-        wx.CallAfter(self._maybe_offer_library_as_default)
+        wx.CallAfter(self._library_questions_at_start)
         self._start_watchlist_poller()
 
     def _build_ui(self):
@@ -2601,10 +2602,21 @@ class MainFrame(wx.Frame):
 
         MAIN THREAD ONLY — it can show a modal folder picker.
         """
-        from . import prefs as _p
-
         if self._save_target_ready():
             return True
+        return self._ask_for_library_folder(
+            "No download: choose a library folder first "
+            "(Save-to is empty and no library is set)."
+        )
+
+    def _ask_for_library_folder(self, cancelled_message: str) -> bool:
+        """Ask where the library should be and make the answer the
+        library folder and the Save-to folder. Returns False, after
+        logging ``cancelled_message``, if the user cancels.
+
+        MAIN THREAD ONLY — it shows a modal folder picker.
+        """
+        from . import prefs as _p
 
         with wx.DirDialog(
             self,
@@ -2614,16 +2626,41 @@ class MainFrame(wx.Frame):
             style=wx.DD_DEFAULT_STYLE | wx.DD_DIR_MUST_EXIST,
         ) as dlg:
             if dlg.ShowModal() != wx.ID_OK:
-                self._log(
-                    "No download: choose a library folder first "
-                    "(Save-to is empty and no library is set)."
-                )
+                self._log(cancelled_message)
                 return False
             chosen = dlg.GetPath()
 
         self.prefs.set(_p.KEY_LIBRARY_PATH, chosen)
         self.output_ctrl.SetValue(chosen)
         self._log(f"Library folder set: {chosen}")
+        return True
+
+    def _library_questions_at_start(self) -> None:
+        """The one-time library questions at launch, at most one per
+        launch: first the offer to use a library that was already
+        scanned, and if that did not come up, the question of where the
+        library should be."""
+        if self._maybe_offer_library_as_default():
+            return
+        self._maybe_ask_for_library_at_first_start()
+
+    def _maybe_ask_for_library_at_first_start(self) -> bool:
+        """Ask where the library should be, the first time Ficary opens
+        with none set. Returns whether it asked.
+
+        Asked once: the answer is remembered whatever it was. Cancel
+        means the first download asks, as it always did.
+        """
+        from . import prefs as _p
+
+        if self.prefs.get_bool(_p.KEY_LIBRARY_ASKED_AT_START):
+            return False
+        self.prefs.set_bool(_p.KEY_LIBRARY_ASKED_AT_START, True)
+        if self._save_target_ready():
+            return False
+        self._ask_for_library_folder(
+            "No library folder chosen yet. Your first download will ask again."
+        )
         return True
 
     def _on_add_story(self, event=None):
@@ -3539,30 +3576,30 @@ class MainFrame(wx.Frame):
                     self._pending_worker_dialogs.discard(done)
         return answer["value"]
 
-    def _maybe_offer_library_as_default(self) -> None:
+    def _maybe_offer_library_as_default(self) -> bool:
         """One-time offer: if the user has scanned a library but hasn't
         set it as their default download folder, ask once.
 
         Silent no-op in every other case: already asked, already set,
         no library scanned, no scanned root with stories. The pref
         flag is flipped regardless of the user's answer so we don't
-        nag on every launch.
+        nag on every launch. Returns whether it asked.
         """
         from . import prefs as _p
 
         if self.prefs.get_bool(_p.KEY_LIBRARY_DEFAULT_PROMPTED):
-            return
+            return False
         if (self.prefs.get(_p.KEY_LIBRARY_PATH, "") or "").strip():
-            return
+            return False
         try:
             from .library.index import LibraryIndex
         except Exception:
-            return
+            return False
         try:
             idx = LibraryIndex.load()
             roots = idx.library_roots()
         except Exception:
-            return
+            return False
         # Pick the root with the most tracked stories — that's
         # overwhelmingly the user's real library even if they poked
         # one-off scans elsewhere.
@@ -3577,7 +3614,7 @@ class MainFrame(wx.Frame):
                 best_count = count
                 best_root = root_str
         if not best_root or best_count == 0:
-            return
+            return False
 
         choice = wx.MessageBox(
             (
@@ -3597,6 +3634,7 @@ class MainFrame(wx.Frame):
             self.prefs.set(_p.KEY_LIBRARY_PATH, best_root)
             self.output_ctrl.SetValue(best_root)
             self._log(f"Library root set: {best_root}")
+        return True
 
     def _export_story(self, story, params: _DownloadParams,
                       update_path=None):
@@ -4474,6 +4512,13 @@ class MainFrame(wx.Frame):
             "mark adult, abandon, or delete one.",
         )
         self.Bind(wx.EVT_MENU, self._open_library_browser, browse_item)
+        # Was the Library window's Scan Library button only.
+        import_item = library_menu.Append(
+            wx.ID_ANY, f"&{IMPORT_EXISTING_FOLDER}...",
+            "Read every story file in your library folder into the library, "
+            "including ones Ficary did not download.",
+        )
+        self.Bind(wx.EVT_MENU, self._on_import_existing_folder, import_item)
         check_updates_item = library_menu.Append(
             wx.ID_ANY, "Check for Story &Updates\tCtrl+U",
             "Check every story in the library for new chapters.",
@@ -4671,7 +4716,8 @@ class MainFrame(wx.Frame):
         if getattr(self, "_watchlist_poller", None) is not None:
             self._watchlist_poller.reconfigure()
 
-    def _on_library_menu(self, event, *, check_updates: bool = False):
+    def _on_library_menu(self, event, *, check_updates: bool = False,
+                         import_folder: bool = False):
         """Open the library-management window (non-modal).
 
         Modeless so users can kick off a scan or update run and flip
@@ -4708,6 +4754,16 @@ class MainFrame(wx.Frame):
                 self._library_frame.trigger_update_check()
             except RuntimeError:
                 logger.debug("library update trigger failed", exc_info=True)
+        if import_folder and self._library_frame is not None:
+            try:
+                self._library_frame.trigger_import()
+            except RuntimeError:
+                logger.debug("library import trigger failed", exc_info=True)
+
+    def _on_import_existing_folder(self, event):
+        """Library > Import Existing Folder: open the Library window and
+        read the library folder into the index, as its button does."""
+        self._on_library_menu(event, import_folder=True)
 
     def _on_check_library_updates(self, event):
         """Ctrl+U — open the library window (if needed) and start a

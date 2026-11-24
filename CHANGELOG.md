@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+**The library: Import Existing Folder, and a library folder from the start**
+
+* The Library window's Scan Library button is now Import Existing
+  Folder (Alt+I), and it is on the main window's Library menu too. It
+  does what Scan Library did: reads every story file in the library
+  folder into the library, including ones Ficary did not download.
+  Messages that said "run Scan Library" now name it. The command-line
+  option `--scan-library` keeps its name.
+* The first time Ficary opens with no library folder, it asks where
+  the library should be. It asks once; Cancel leaves the question to
+  the first download, as before. It does not ask in the same launch as
+  the offer to use a library that was already scanned.
+
 **Closing the Library window can no longer crash Ficary later**
 
 * The Library window's status pane writes its lines on a timer, and

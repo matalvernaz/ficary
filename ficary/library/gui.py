@@ -33,7 +33,7 @@ from .index import LibraryIndex
 from .refresh import build_refresh_queue, default_refresh_args
 from .reorganizer import MoveOp, apply as apply_moves, plan
 from .review import promote_untrackable, untrackable_for_root
-from .scanner import scan
+from .scanner import scan, IMPORT_EXISTING_FOLDER
 from .template import DEFAULT_MISC_FOLDER, DEFAULT_TEMPLATE
 
 
@@ -206,7 +206,7 @@ class LibraryFrame(wx.Frame):
         self.abandoned_after_ctrl.SetName("Abandoned-after threshold in days")
         set_help(
             self.abandoned_after_ctrl,
-            "When Scan Library runs, unfinished stories whose file hasn't "
+            "When Import Existing Folder runs, unfinished stories whose file hasn't "
             "changed in this many days are marked abandoned and skipped in "
             "later update checks. Set 0 to turn this off. Around 730 "
             "(two years) is a reasonable starting point.",
@@ -249,12 +249,15 @@ class LibraryFrame(wx.Frame):
 
         # ── Action buttons ──────────────────────────────
         btn_row = wx.BoxSizer(wx.HORIZONTAL)
-        self.scan_btn = wx.Button(panel, label="&Scan Library")
+        # Was "Scan Library". Alt+I; Alt+S is not used in this window now.
+        self.scan_btn = wx.Button(panel, label=f"&{IMPORT_EXISTING_FOLDER}")
         set_help(
             self.scan_btn,
-            "Read every story file in the library folder, record its "
-            "details, and build the index the browser and update checks "
-            "use. Run this once, and again after adding files by hand.",
+            "Read every story file in the library folder, including ones "
+            "Ficary did not download, record its details, and build the "
+            "index the library list and update checks use. Run this once, "
+            "and again after adding files by hand. Also on the Library "
+            "menu of the main window.",
         )
         self.scan_btn.Bind(wx.EVT_BUTTON, self._on_scan)
         btn_row.Add(self.scan_btn, 0, wx.RIGHT, 6)
@@ -389,6 +392,14 @@ class LibraryFrame(wx.Frame):
             _prefs.KEY_LIBRARY_ABANDONED_AFTER_DAYS,
             str(int(self.abandoned_after_ctrl.GetValue())),
         )
+
+    def trigger_import(self) -> None:
+        """Public entry point for the main window's Library > Import
+        Existing Folder: the same as pressing the button here. No-ops
+        quietly while a scan or update is already running."""
+        if not self.scan_btn.IsEnabled():
+            return
+        self._on_scan(None)
 
     def trigger_update_check(self) -> None:
         """Public entry point for the main window's Ctrl+U accelerator.
@@ -727,7 +738,7 @@ class LibraryFrame(wx.Frame):
         )
         if not probe_queue and not skipped:
             self._post_status(
-                f"No indexed stories for {root}. Run Scan Library first."
+                f"No indexed stories for {root}. Use {IMPORT_EXISTING_FOLDER} first."
             )
             return
 
@@ -813,7 +824,7 @@ class LibraryFrame(wx.Frame):
             wx.MessageBox(
                 (
                     "No untrackable files in this library. "
-                    "Run Scan Library first, or everything is already identified."
+                    f"Use {IMPORT_EXISTING_FOLDER} first, or everything is already identified."
                 ),
                 "Library", wx.OK | wx.ICON_INFORMATION, self,
             )

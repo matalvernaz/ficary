@@ -38,6 +38,7 @@ import wx
 
 from .. import prefs as _prefs
 from ..gui_help import is_own_destroy, set_help
+from .scanner import IMPORT_EXISTING_FOLDER
 
 logger = logging.getLogger(__name__)
 
@@ -582,7 +583,8 @@ class LibraryPanel(wx.Panel):
             if not self._rows:
                 self._set_summary(
                     "The library index is empty. Set a library folder in the "
-                    "Library window and run Scan Library, then Rescan here."
+                    f"Library window and use {IMPORT_EXISTING_FOLDER}, then "
+                    "Rescan here."
                 )
             else:
                 self._set_summary("No stories match the current filter.")

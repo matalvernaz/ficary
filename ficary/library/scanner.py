@@ -48,6 +48,9 @@ def _owning_root(
 # own source, so renaming either without updating these fails a test.
 LIBRARY_FOLDER_MENU_PATH = "Library > Library... (Ctrl+L)"
 LIBRARY_FOLDER_FIELD_NAME = "Library folder"
+# The Library window's button and the Library menu item that read the
+# library folder into the index. It was "Scan Library".
+IMPORT_EXISTING_FOLDER = "Import Existing Folder"
 
 
 def library_skip_reason(
@@ -92,11 +95,11 @@ def library_skip_reason(
         return (
             f"Not added to library index — {path} is outside your library "
             f"folder ({', '.join(roots)}). Point Save-to inside the library, "
-            "or run Scan Library after moving the file."
+            f"or use Library > {IMPORT_EXISTING_FOLDER} after moving the file."
         )
     return (
-        "Not added to library index — indexing failed; the next Scan "
-        "Library will pick it up."
+        "Not added to library index — indexing failed; the next "
+        f"{IMPORT_EXISTING_FOLDER} (Library menu) will pick it up."
     )
 
 
