@@ -296,6 +296,10 @@ class FictionmaniaScraper(BaseScraper):
             return story
 
         cached = self._load_chapter_cache(story_id, 1)
+        if cached is not None and 'id="menu"' in (cached.html or ""):
+            # Cached before the story block was taken on its own: the
+            # whole page, the site's menu first. Read the page again.
+            cached = None
         if cached is not None:
             story.chapters.append(cached)
             if progress_callback:

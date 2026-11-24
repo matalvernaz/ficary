@@ -94,3 +94,31 @@ def test_a_short_story_beside_a_long_menu_is_still_the_story():
     html = FictionmaniaScraper._parse_chapter_html(BeautifulSoup(f"<html><body>{menu}<h3>Title</h3>{story}</body></html>", "lxml"))
     assert "word59" in html
     assert "Menu entry" not in html
+
+
+def test_a_chapter_cached_with_the_menu_is_read_again():
+    """Chapters cached before the fix hold the whole page, the menu first.
+    A download or an audiobook from the address would have used them."""
+    from ficary.models import Chapter
+
+    probe = FictionmaniaScraper(use_cache=False)
+    scraper = scraper_answering({probe._details_url(77): "<html><body></body></html>"})
+    scraper._fetch_with_text_fallback = lambda story_id: (layout_page(), False)
+    stale = Chapter(number=1, title="A Made-Up Story", html='<div id="menu"><dir><li>Message Board</li></dir></div><div>old</div>')
+    scraper._load_chapter_cache = lambda story_id, number: stale
+    scraper._save_chapter_cache = lambda story_id, chapter: None
+    story = scraper.download("https://fictionmania.tv/stories/readhtmlstory.html?storyID=77")
+    assert "Message Board" not in story.chapters[0].html
+    assert "Paragraph 12 of a story made up for this test" in story.chapters[0].html
+
+
+def test_a_clean_cached_chapter_is_still_used():
+    from ficary.models import Chapter
+
+    probe = FictionmaniaScraper(use_cache=False)
+    scraper = scraper_answering({probe._details_url(77): "<html><body></body></html>"})
+    scraper._fetch_with_text_fallback = lambda story_id: (layout_page(), False)
+    clean = Chapter(number=1, title="A Made-Up Story", html="<p>the cached story text</p>")
+    scraper._load_chapter_cache = lambda story_id, number: clean
+    story = scraper.download("https://fictionmania.tv/stories/readhtmlstory.html?storyID=77")
+    assert story.chapters[0].html == "<p>the cached story text</p>"

@@ -16,7 +16,9 @@
   prompts, copyright notice and disclaimer at the end, with the
   title box, links and synopsis box before the story, so an audiobook
   read the menu out first. Ficary now takes the story's own block of
-  text and nothing around it.
+  text and nothing around it. A story downloaded before keeps the old
+  copy in Ficary's chapter cache; that copy is now noticed and the
+  story read again from the site.
 * A Fictionmania story number that does not exist used to make a book
   of one word by "Unknown Author". It now says there is no such story.
 
