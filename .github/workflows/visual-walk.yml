@@ -5,9 +5,14 @@ name: Visual walk
 # order, for looking at what a sighted helper sees there. GTK on Linux
 # lays windows out differently (it squeezes what doesn't fit; Windows
 # clips it), so a Linux screenshot doesn't stand in for this one.
-# Run by hand: gh workflow run visual-walk.yml --ref reader
+# Run by hand once this file is on master:
+#   gh workflow run visual-walk.yml --ref reader
+# or from any commit, by pushing it to the visual-walk branch:
+#   git push -f origin HEAD:refs/heads/visual-walk
 on:
   workflow_dispatch:
+  push:
+    branches: [visual-walk]
 
 permissions:
   contents: read
