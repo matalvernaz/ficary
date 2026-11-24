@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+**Settings survive a power cut**
+
+* A power cut soon after Ficary saved its settings could leave the
+  settings file empty or full of zeros. Ficary then started with every
+  setting at its default (the library folder, cookies, keys and voices
+  gone) and the next save made that permanent, without a word. Now
+  Ficary keeps a copy of the settings file from each start where it
+  was sound, beside it as "settings.last-good.ini". When the settings
+  file turns out damaged, Ficary keeps the damaged one with
+  "unreadable" in its name, puts the good copy back, and says so in the
+  status pane. The copy is private to the account, like the settings
+  file, and holds the same cookies and keys; it is replaced at the next
+  start.
+
 **A damaged library index no longer leaves the library stuck empty**
 
 * When the library index (the file where Ficary keeps track of the

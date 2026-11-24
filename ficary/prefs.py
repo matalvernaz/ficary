@@ -11,6 +11,9 @@ below stay identical.
 import logging
 import os
 import re as _re
+import threading
+import time
+import uuid
 from pathlib import Path
 
 from . import portable
@@ -464,11 +467,82 @@ class _FileStore:
         return True
 
 
+# The copy of the settings file kept from the last time Ficary started
+# with a sound one, beside the settings file itself.
+LAST_GOOD_SETTINGS_NAME = "settings.last-good.ini"
+
+# Whether this run has checked the settings file yet. Each window makes
+# its own Prefs; the check, and the copy it keeps, belong to the first.
+_settings_checked = False
+_settings_check_lock = threading.Lock()
+
+
+def _looks_damaged(body: bytes) -> bool:
+    """What a power cut part-way through a save leaves: nothing, or
+    zeros where the text should be."""
+    return not body.strip() or b"\x00" in body
+
+
+def _check_settings_file() -> None:
+    """Once per run, before the settings are read: if the settings file
+    is damaged, keep it aside and put back the last good copy; if it is
+    sound, keep it as the last good copy.
+
+    wx writes the settings file itself, through a temporary file and a
+    rename but without flushing it to the disk, so a power cut soon
+    after a save can leave a file of zeros or nothing at all. wx then
+    read no settings, the next save wrote the defaults over the file,
+    and the library folder, cookies and keys were gone without a word.
+    """
+    global _settings_checked
+    with _settings_check_lock:
+        if _settings_checked:
+            return
+        _settings_checked = True
+    from .atomic import atomic_write_bytes
+
+    try:
+        path = portable.settings_file()
+        if not path.is_file():
+            return
+        body = path.read_bytes()
+        good = path.with_name(LAST_GOOD_SETTINGS_NAME)
+        if not _looks_damaged(body):
+            # Private, like the settings: it holds the same cookies and keys.
+            atomic_write_bytes(good, body)
+            return
+        stamp = time.strftime("%Y%m%d-%H%M%S")
+        aside = path.with_name(f"{path.stem}.unreadable-{stamp}-{uuid.uuid4().hex[:8]}{path.suffix}")
+        path.rename(aside)
+        try:
+            saved = good.read_bytes()
+        except OSError:
+            saved = b""
+        if saved and not _looks_damaged(saved):
+            atomic_write_bytes(path, saved)
+            logger.warning(
+                "Ficary's settings file was damaged, probably by a power "
+                "cut, so it was kept as %s and the settings from the last "
+                "time Ficary started were put back.",
+                aside.name,
+            )
+        else:
+            logger.warning(
+                "Ficary's settings file was damaged, probably by a power "
+                "cut, so it was kept as %s and Ficary started with its "
+                "default settings.",
+                aside.name,
+            )
+    except OSError:
+        logger.debug("Could not check the settings file", exc_info=True)
+
+
 class Prefs:
     """Thin wrapper over wx.Config with string and bool accessors."""
 
     def __init__(self):
         self.last_save_error = ""
+        _check_settings_file()
         # Portable frozen build: keep settings.ini next to the exe
         # (or in the writable-fallback dir). Pip-installed / dev mode
         # uses the platform default so users keep their existing prefs.

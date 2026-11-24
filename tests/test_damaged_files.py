@@ -312,3 +312,108 @@ def test_a_damaged_index_found_while_the_window_opens_is_in_the_status_pane(wx_a
         frame._clip_timer.Stop()
         frame.Destroy()
         wx.SafeYield()
+
+
+# ── The settings file ────────────────────────────────────────────
+
+from ficary import portable  # noqa: E402
+from ficary import prefs as prefs_module  # noqa: E402
+
+SOUND_SETTINGS = b"library_path=/home/someone/Stories\nformat=epub\n"
+
+
+@pytest.fixture
+def settings_file(monkeypatch):
+    """The settings file in this test's data folder, and a run that has
+    not checked it yet."""
+    monkeypatch.setattr(prefs_module, "_settings_checked", False, raising=False)
+    path = portable.settings_file()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def warnings_from(caplog, name):
+    return [record.getMessage() for record in caplog.records if record.name == name and record.levelname == "WARNING"]
+
+
+class TestSettings:
+    def test_a_sound_settings_file_is_kept_as_the_last_good_copy(self, settings_file):
+        settings_file.write_bytes(SOUND_SETTINGS)
+        prefs_module._check_settings_file()
+        good = settings_file.with_name("settings.last-good.ini")
+        assert good.read_bytes() == SOUND_SETTINGS
+        if os.name == "posix":
+            # It holds the same cookies and keys as the settings.
+            assert good.stat().st_mode & 0o077 == 0
+
+    @pytest.mark.parametrize(
+        "body",
+        [b"", b"\x00" * 300, SOUND_SETTINGS[:20] + b"\x00" * 40],
+        ids=["empty", "all zeros", "zeros after the start"],
+    )
+    def test_a_damaged_settings_file_gets_the_last_good_copy_back(self, settings_file, caplog, body):
+        """What a power cut soon after a save leaves. wx read no settings
+        from it, and the next save wrote the defaults over it."""
+        settings_file.with_name("settings.last-good.ini").write_bytes(SOUND_SETTINGS)
+        settings_file.write_bytes(body)
+        prefs_module._check_settings_file()
+        assert settings_file.read_bytes() == SOUND_SETTINGS
+        [kept] = list(settings_file.parent.glob("settings.unreadable-*.ini"))
+        assert kept.read_bytes() == body
+        [line] = warnings_from(caplog, "ficary.prefs")
+        assert kept.name in line and "put back" in line
+
+    def test_with_no_good_copy_it_starts_from_the_defaults_and_says_so(self, settings_file, caplog):
+        settings_file.write_bytes(b"\x00" * 300)
+        prefs_module._check_settings_file()
+        assert not settings_file.exists()
+        [kept] = list(settings_file.parent.glob("settings.unreadable-*.ini"))
+        [line] = warnings_from(caplog, "ficary.prefs")
+        assert kept.name in line and "default settings" in line
+
+    def test_a_damaged_last_good_copy_is_not_put_back(self, settings_file, caplog):
+        settings_file.with_name("settings.last-good.ini").write_bytes(b"\x00" * 300)
+        settings_file.write_bytes(b"")
+        prefs_module._check_settings_file()
+        assert not settings_file.exists()
+        [line] = warnings_from(caplog, "ficary.prefs")
+        assert "default settings" in line
+
+    def test_it_is_checked_once_a_run(self, settings_file):
+        """Every window makes its own Prefs."""
+        settings_file.write_bytes(SOUND_SETTINGS)
+        prefs_module._check_settings_file()
+        settings_file.write_bytes(b"library_path=/elsewhere\n")
+        prefs_module._check_settings_file()
+        assert settings_file.with_name("settings.last-good.ini").read_bytes() == SOUND_SETTINGS
+
+    def test_the_settings_are_checked_before_they_are_read(self, settings_file, monkeypatch):
+        events = []
+        real_settings_file = portable.settings_file
+        monkeypatch.setattr(prefs_module, "_check_settings_file", lambda: events.append("check"))
+
+        def settings_file_read():
+            events.append("read")
+            return real_settings_file()
+
+        monkeypatch.setattr(portable, "settings_file", settings_file_read)
+        prefs_module.Prefs()
+        assert events and events[0] == "check"
+
+
+@pytest.mark.skipif(not os.environ.get("DISPLAY"), reason="builds real windows (run under xvfb-run -a)")
+def test_damaged_settings_found_while_the_window_opens_are_in_the_status_pane(wx_app, settings_file):
+    from ficary import gui
+
+    settings_file.write_bytes(b"\x00" * 300)
+    frame = gui.MainFrame()
+    try:
+        for _ in range(20):
+            wx.SafeYield()
+        with frame._log_lock:
+            text = frame.log_ctrl.GetValue() + "".join(frame._log_queue)
+        assert "settings file was damaged" in text
+    finally:
+        frame._clip_timer.Stop()
+        frame.Destroy()
+        wx.SafeYield()
