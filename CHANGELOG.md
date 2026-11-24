@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 2.20.13 — 2026-11-23
 
 **Ficary tells you when it opens which stories have new chapters**
 
