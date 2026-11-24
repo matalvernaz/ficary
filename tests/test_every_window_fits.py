@@ -530,7 +530,10 @@ def test_a_list_and_a_text_box_squeezed_to_nothing_widen_and_lengthen_the_window
     row = wx.BoxSizer(wx.HORIZONTAL)
     row.Add(wx.StaticText(panel, label="A label that takes up most of the row:"), 0, wx.RIGHT, 4)
     find = wx.TextCtrl(panel, name="Find")
-    row.Add(find, 1)
+    row.Add(find, 1, wx.RIGHT, 4)
+    # After the box, so the box isn't at the right-hand edge: squeezed,
+    # it still sits inside the window.
+    row.Add(wx.Button(panel, label="Search"), 0)
     sizer.Add(row, 0, wx.EXPAND | wx.ALL, 8)
     channels = wx.CheckListBox(panel, choices=["Status pane", "Email"], name="Channels")
     sizer.Add(channels, 1, wx.EXPAND | wx.ALL, 8)
@@ -818,26 +821,28 @@ def test_preferences_is_no_wider_than_its_widest_setting_needs(main_window):
         _settle(wx)
 
 
+_PLACED_PAST_AN_EDGE = {
+    "a button past the right": lambda wx, panel: wx.Button(panel, label="Right", pos=(340, 10)),
+    "a button below": lambda wx, panel: wx.Button(panel, label="Below", pos=(10, 260)),
+    "a list past the right": lambda wx, panel: wx.ListBox(panel, choices=["One", "Two"], pos=(360, 60), name="List placed right"),
+    "a text box below": lambda wx, panel: wx.TextCtrl(panel, pos=(10, 320), name="Box placed below"),
+    "a spin box past the right": lambda wx, panel: wx.SpinCtrl(panel, pos=(380, 130), name="Spin box placed right"),
+}
+
+
 @needs_display
-def test_controls_placed_past_an_edge_widen_and_lengthen_the_window(wx_app):
-    """Windows doesn't squeeze what doesn't fit, as Linux does: it puts it past the window's edge. Placed there by hand here."""
+@pytest.mark.parametrize("placed", list(_PLACED_PAST_AN_EDGE))
+def test_a_control_placed_past_an_edge_widens_or_lengthens_the_window(wx_app, placed):
+    """Windows doesn't squeeze what doesn't fit, as Linux does: it puts it past the window's edge. Placed there by hand here, one at a time, so each kind has to be counted on its own."""
     import wx
 
     from ficary.gui_layout import fit_to_contents
 
     frame = wx.Frame(None, size=(300, 200))
     panel = wx.Panel(frame)
-    right = wx.Button(panel, label="Right", pos=(340, 10))
-    below = wx.Button(panel, label="Below", pos=(10, 260))
-    # A list, a text box and a spin box need room too.
-    wx.ListBox(panel, choices=["One", "Two"], pos=(700, 60), name="List placed right")
-    wx.TextCtrl(panel, pos=(10, 320), name="Box placed below")
-    wx.SpinCtrl(panel, pos=(380, 130), name="Spin box placed right")
+    _PLACED_PAST_AN_EDGE[placed](wx, panel)
     try:
         fit_to_contents(frame, (300, 200))
-        client = frame.GetClientSize()
-        assert client.width >= 340 + right.GetSize().width
-        assert client.height >= 260 + below.GetSize().height
         frame.Show()
         _settle(wx)
         assert misfits(frame, wx) == []

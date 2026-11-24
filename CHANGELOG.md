@@ -12,15 +12,16 @@
   Each window now opens at its usual size and grows by whatever would
   otherwise be cut off or squeezed, and grows again when what it shows
   changes (Add Story's BookNLP size, AI settings' Ollama buttons, the
-  reader's voice). At the usual text size no window changes size.
+  reader's voice). At the usual text size only Add Story changes size:
+  its speech rate box takes the width it needs, which on Linux gives
+  it back its plus and minus buttons.
 * Windows display scaling at 125% or 150% was never affected: Ficary
   isn't DPI-aware, so Windows draws its windows as at 100% and enlarges
   them, a little blurred.
-* On a screen 768 pixels tall with text at 150%, the FFN search
-  window's results list and the main window's Details box show only a
-  line or two: there isn't room for more.
-* Add Story's speech rate box has room for its plus and minus buttons
-  on Linux.
+* On a screen 768 pixels tall with text at 150%, the main window and
+  the FFN search window don't have room for everything: the Details box
+  and the search results list are squeezed to a sliver or less. A
+  taller screen has room.
 * Long notes in the Library, Reorganize and Add from URL List windows
   wrap; the folder path in Abandoned Stories shortens in the middle on
   screen (a screen reader still reads it whole); buttons that had fixed
