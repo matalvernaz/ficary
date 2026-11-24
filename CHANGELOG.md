@@ -1,5 +1,36 @@
 # Changelog
 
+## Unreleased
+
+**Every window shows all of its text and controls**
+
+* On Windows the Library window drew every control on top of the others
+  in its top left-hand corner, from 2.20.20 on: it was never laid out
+  until it was resized. A screen reader read it all as usual, so only
+  someone looking at the screen saw it.
+* Optional Features had its Install buttons past the right-hand edge and
+  its log and Close button below the bottom, with nothing to scroll. It
+  now scrolls, one feature to a block, with the log and Close always in
+  view.
+* Instructions cut off mid-sentence in Review Ambiguous Files, the story
+  picker, the genre picker, a series' parts and TTS providers now wrap
+  to the window, and wrap again when it is resized.
+* The main window opens no bigger than the screen: 820 pixels tall, it
+  ran under the taskbar of a 768-pixel laptop screen. The Add Story
+  window fits the screen too, its options wrapping onto a second line
+  where needed.
+* Buttons that wrap onto another line keep their own width (Rescan and
+  AI settings were stretched to the end of their line), and on Linux the
+  library list's last buttons and the story picker's Select None are no
+  longer squeezed out of sight.
+* TTS providers says what to do when it can't fetch the voice list, in
+  place of a raw error naming an SSL object.
+* Nothing a screen reader meets has changed: every control is made in
+  the same order with the same label.
+* For checking: tools/visual_walk.py opens every window with a made-up
+  library and saves a screenshot of each, and the Visual walk workflow
+  runs it on Windows.
+
 ## 2.20.24 — 2026-11-24
 
 **A book keeps the chapters its site took down, and gets only the new ones**
