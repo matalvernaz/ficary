@@ -51,6 +51,11 @@ KEY_FORMAT = "format"
 # pre-2.19 value into KEY_LIBRARY_PATH and then deletes it.
 KEY_OUTPUT_DIR = "output_dir"
 KEY_CHECK_UPDATES = "check_updates"
+# Check the library for new chapters when the main window opens. Only
+# chapter counts are asked for, only for stories not checked in the last
+# day, and nothing is downloaded; the result is one line in the status
+# pane. On by default.
+KEY_CHECK_STORIES_AT_LAUNCH = "check_stories_at_launch"
 KEY_SKIPPED_VERSION = "skipped_update_version"
 # Unix timestamp (seconds) until which the update prompt is suppressed
 # even when a new version is available. Set when the user clicks
@@ -238,6 +243,7 @@ DEFAULTS = {
     KEY_NAME_TEMPLATE: "{title} - {author}",
     KEY_FORMAT: "epub",
     KEY_CHECK_UPDATES: True,
+    KEY_CHECK_STORIES_AT_LAUNCH: True,
     KEY_HR_AS_STARS: False,
     KEY_STRIP_NOTES: False,
     KEY_HTML_STYLE: "modern",  # exporters.HTML_STYLE_MODERN

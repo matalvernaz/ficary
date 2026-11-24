@@ -97,6 +97,10 @@ def no_launch_questions(monkeypatch):
         return
     monkeypatch.setattr(gui.MainFrame, "original_library_questions", gui.MainFrame._library_questions_at_start, raising=False)
     monkeypatch.setattr(gui.MainFrame, "_library_questions_at_start", lambda self: None)
+    # Likewise the check for new chapters at launch, which would ask
+    # real sites about whatever library a test had set up.
+    monkeypatch.setattr(gui.MainFrame, "original_story_check", gui.MainFrame._start_story_check_at_launch, raising=False)
+    monkeypatch.setattr(gui.MainFrame, "_start_story_check_at_launch", lambda self: None)
 
 
 @pytest.fixture(autouse=True)

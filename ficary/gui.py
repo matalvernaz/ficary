@@ -543,6 +543,10 @@ class MainFrame(wx.Frame):
         self._stop_generation = 0
         self._stop_lock = threading.Lock()
         self._own_download_futures: set = set()
+        # The check for new chapters that runs at launch. Stop, Ctrl+U,
+        # the Library window's own update and the window closing all
+        # set this.
+        self._story_check_cancel = threading.Event()
         # Which operation currently holds the global busy flag, when it
         # claimed ownership. Lets a late callback tell "still mine" from
         # "somebody else started something".
@@ -601,6 +605,7 @@ class MainFrame(wx.Frame):
         self.Bind(wx.EVT_CLOSE, self._on_close)
         self.Centre()
         self._start_update_check()
+        self._start_story_check_at_launch()
         # Deferred so the main window paints first — a modal dialog
         # popping up during the paint cycle looks like a crash.
         wx.CallAfter(self._library_questions_at_start)
@@ -1117,6 +1122,8 @@ class MainFrame(wx.Frame):
         update stops as its Cancel button would stop it. Chapters
         already fetched stay in the download cache.
         """
+        # The launch-time check for new chapters stops too, quietly.
+        self._cancel_story_check()
         with self._stop_lock:
             self._stop_generation += 1
             waiting = [f for f in self._own_download_futures if not f.done()]
@@ -2036,6 +2043,9 @@ class MainFrame(wx.Frame):
         """
         # EVT_WINDOW_DESTROY also arrives for every child window.
         if is_own_destroy(self._own_window_id, event):
+            cancel = getattr(self, "_story_check_cancel", None)
+            if cancel is not None:
+                cancel.set()
             for name in ("_log_timer", "_clip_timer"):
                 timer = getattr(self, name, None)
                 if timer is not None:
@@ -2160,6 +2170,38 @@ class MainFrame(wx.Frame):
         return result == wx.ID_YES
 
     # ── Watchlist autopoll ───────────────────────────────────
+
+    def _start_story_check_at_launch(self) -> None:
+        """Check the library for new chapters in the background, if the
+        setting is on and there is a library. One line in the status
+        pane at the end; nothing is downloaded."""
+        from . import prefs as _p
+        from .library.launch_check import library_roots
+
+        if not self.prefs.get_bool(_p.KEY_CHECK_STORIES_AT_LAUNCH):
+            return
+        roots = library_roots(self.prefs)
+        if not roots:
+            return
+        threading.Thread(
+            target=self._run_story_check, args=(roots,),
+            daemon=True, name="ficary-launch-story-check",
+        ).start()
+
+    def _run_story_check(self, roots) -> None:
+        from .library.launch_check import check_for_new_chapters, waiting_summary
+
+        try:
+            waiting = check_for_new_chapters(roots, cancel_event=self._story_check_cancel)
+        except Exception:  # noqa: BLE001 - a failed check must not trouble the user at launch
+            logger.warning("Checking the library for new chapters failed", exc_info=True)
+            return
+        if waiting is None:
+            return
+        self._log(waiting_summary(waiting))
+
+    def _cancel_story_check(self) -> None:
+        self._story_check_cancel.set()
 
     def _start_watchlist_poller(self):
         """Instantiate the watchlist poller and, if the user has
@@ -4767,7 +4809,8 @@ class MainFrame(wx.Frame):
 
     def _on_check_library_updates(self, event):
         """Ctrl+U — open the library window (if needed) and start a
-        bulk update check on the current root."""
+        bulk update check on the current root. The launch-time check is
+        stopped by the update itself (LibraryFrame._on_check_updates)."""
         self._on_library_menu(event, check_updates=True)
 
     def _on_manage_abandoned_menu(self, event):

@@ -328,6 +328,13 @@ Library covers both folders in one pass.
 
 ### Keeping stories up to date
 
+- **When Ficary opens** it quietly asks each site how many chapters
+  your unfinished stories now have (each story at most once a day) and
+  says in the status pane how many have new chapters. Nothing is
+  downloaded until you press Ctrl+U, which then fetches exactly those
+  without asking the sites again. It takes turns with your own
+  downloads, stops if you press Stop downloads or Ctrl+U, and can be
+  switched off in Preferences → General.
 - **Check everything at once:** Ctrl+U in the app, or
   `ficary -U ~/Fanfic --recursive` on the command line. Stories that
   haven't changed cost one quick check each; finished stories are

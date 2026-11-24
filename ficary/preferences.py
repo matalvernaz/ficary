@@ -259,6 +259,22 @@ class PreferencesDialog(wx.Dialog):
         )
         sizer.Add(self.check_updates_ctrl, 0, wx.ALL, 6)
 
+        # Alt+H: the other letters of "library" and "chapters" are taken
+        # on this page or by the tabs.
+        self.check_stories_ctrl = wx.CheckBox(
+            panel, label="Check the library for new c&hapters on launch",
+        )
+        self.check_stories_ctrl.SetName(
+            "Check the library for new chapters on launch"
+        )
+        self.check_stories_ctrl.SetToolTip(
+            "When Ficary opens, ask each site how many chapters the stories "
+            "not checked in the last day now have, and say in the status "
+            "pane how many have new chapters. Nothing is downloaded; "
+            "Library > Check for Story Updates does that."
+        )
+        sizer.Add(self.check_stories_ctrl, 0, wx.ALL, 6)
+
         self.confirm_close_ctrl = wx.CheckBox(
             panel, label="&Warn before closing during an active download",
         )
@@ -803,6 +819,9 @@ class PreferencesDialog(wx.Dialog):
         self.check_updates_ctrl.SetValue(
             self.prefs.get_bool(_p.KEY_CHECK_UPDATES)
         )
+        self.check_stories_ctrl.SetValue(
+            self.prefs.get_bool(_p.KEY_CHECK_STORIES_AT_LAUNCH)
+        )
         self.confirm_close_ctrl.SetValue(
             self.prefs.get_bool(_p.KEY_CONFIRM_CANCEL_ON_CLOSE)
         )
@@ -952,6 +971,9 @@ class PreferencesDialog(wx.Dialog):
         self.prefs.set(_p.KEY_NAME_TEMPLATE, self.name_template_ctrl.GetValue())
         self.prefs.set_bool(
             _p.KEY_CHECK_UPDATES, self.check_updates_ctrl.GetValue(),
+        )
+        self.prefs.set_bool(
+            _p.KEY_CHECK_STORIES_AT_LAUNCH, self.check_stories_ctrl.GetValue(),
         )
         self.prefs.set_bool(
             _p.KEY_CONFIRM_CANCEL_ON_CLOSE, self.confirm_close_ctrl.GetValue(),

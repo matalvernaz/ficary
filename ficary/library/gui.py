@@ -647,6 +647,13 @@ class LibraryFrame(wx.Frame):
 
         roots = self._update_roots(root)
 
+        # One sweep of the library at a time: the check the main window
+        # runs at launch stops here, and this update finds what it had
+        # already found without asking the sites again.
+        stop_launch_check = getattr(self.GetParent(), "_cancel_story_check", None)
+        if callable(stop_launch_check):
+            stop_launch_check()
+
         # Describe exactly what combination is about to run so the
         # status log reflects the toggle state (easier to diagnose
         # "why is it slow" / "why did it re-probe").

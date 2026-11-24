@@ -1,6 +1,7 @@
 """Command-line interface for ficary."""
 
 import argparse
+import contextlib
 import copy
 import logging
 import os
@@ -1771,6 +1772,7 @@ def _run_update_queue(
     on_probe_complete=None,
     on_download_complete=None,
     cancel_event: "threading.Event | None" = None,
+    probe_guard=None,
 ) -> int:
     """Run the probe + download cycle on a pre-built queue.
 
@@ -1797,6 +1799,13 @@ def _run_update_queue(
     starting the next story. Used by the GUI's library window so
     closing it mid-run stops upstream traffic instead of leaving a
     zombie worker grinding for another hour.
+
+    ``probe_guard`` (optional) is a callable taking a site name and
+    returning a context manager held around each chapter-count check.
+    The launch-time check passes the site's download slot, so its
+    checks take turns with downloads instead of doubling the requests
+    a site gets. If the guard raises ``DownloadCancelled`` (it was
+    waiting and the run was cancelled), the story counts as cancelled.
 
     A site that serves ``_CF_BREAKER_THRESHOLD`` consecutive Cloudflare
     interactive challenges trips a per-site breaker: its remaining
@@ -1916,10 +1925,22 @@ def _run_update_queue(
                     return
             remote_count: int | None = None
             try:
-                entry["remote"] = scraper.probe_chapter_count(entry["url"])
+                with (
+                    probe_guard(scraper.site_name) if probe_guard is not None
+                    else contextlib.nullcontext()
+                ):
+                    entry["remote"] = scraper.probe_chapter_count(entry["url"])
                 remote_count = entry["remote"]
                 outcome = f"{entry['remote']} chapter(s) upstream"
                 probe_answered = True
+            except DownloadCancelled:
+                # The guard gave up waiting for its turn: the run was
+                # cancelled. Nothing was asked of the site.
+                entry["error"] = "cancelled"
+                entry["cancelled"] = True
+                with probe_progress_lock:
+                    completed_count[0] += 1
+                return
             except StoryNotFoundError as exc:
                 entry["error"] = exc
                 entry["upstream_missing"] = True

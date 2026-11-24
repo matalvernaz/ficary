@@ -107,8 +107,16 @@ _site_slots: dict[str, threading.RLock] = {}
 _site_slots_guard = threading.Lock()
 
 
+# How often a wait for a site's slot looks at its cancel event.
+_SLOT_WAIT_POLL_S = 0.25
+
+
 @contextlib.contextmanager
-def site_slot(site_name: str, on_wait: Callable[[], None] | None = None):
+def site_slot(
+    site_name: str,
+    on_wait: Callable[[], None] | None = None,
+    cancel_event: "threading.Event | None" = None,
+):
     """Hold ``site_name``'s one download slot for the length of the
     ``with`` block.
 
@@ -121,6 +129,11 @@ def site_slot(site_name: str, on_wait: Callable[[], None] | None = None):
 
     ``on_wait`` is called once, before blocking, when something else
     has the slot, so the caller can say why nothing seems to happen.
+
+    ``cancel_event``, if given, ends the wait as soon as it is set, by
+    raising :class:`DownloadCancelled`. Without it a check parked
+    behind somebody's ten-minute download held up Stop, and closing
+    the program, for as long as that download took.
     """
     with _site_slots_guard:
         slot = _site_slots.get(site_name)
@@ -132,7 +145,15 @@ def site_slot(site_name: str, on_wait: Callable[[], None] | None = None):
                 on_wait()
             except Exception:  # noqa: BLE001 — a status line must not stop a download
                 logger.debug("site_slot on_wait callback raised", exc_info=True)
-        slot.acquire()
+        if cancel_event is None:
+            slot.acquire()
+        else:
+            while not slot.acquire(timeout=_SLOT_WAIT_POLL_S):
+                if cancel_event.is_set():
+                    raise DownloadCancelled(
+                        "Stopped while waiting for another download from "
+                        "the same site."
+                    )
     try:
         yield
     finally:

@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+**Ficary tells you when it opens which stories have new chapters**
+
+* When Ficary opens with a library, it asks each site how many
+  chapters your unfinished stories now have, and says in the status
+  pane how many stories have new chapters, for instance "3 stories in
+  your library have new chapters. Library > Check for Story Updates
+  (Ctrl+U) downloads them." Nothing is downloaded until you press
+  Ctrl+U, which then fetches exactly those stories without asking the
+  sites again.
+* A story is asked about at most once a day this way. The check takes
+  turns with your own downloads on each site, so no site gets more
+  requests at once than before, and the same safeguards as Ctrl+U
+  apply (a site that starts challenging every request is left alone).
+  It stops for Stop downloads, Ctrl+U, the Library window's update and
+  closing Ficary.
+* On by default. Preferences > General, "Check the library for new
+  chapters on launch" (Alt+H), switches it off.
+
 **The library: Import Existing Folder, and a library folder from the start**
 
 * The Library window's Scan Library button is now Import Existing
