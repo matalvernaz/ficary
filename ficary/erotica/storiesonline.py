@@ -305,10 +305,20 @@ class StoriesOnlineScraper(BaseScraper):
             raise ValueError("Could not find SOL <article> on page.")
         # Drop the story header/notice (cover + caution tags); the
         # reader already has that metadata separately.
-        for selector in ("header", "div.notice", "nav", "div.breadcrumb"):
+        # div.invis is hidden on the page ("The source of this story is
+        # Storiesonline"); a screen reader or an audiobook read it out.
+        for selector in ("header", "div.notice", "nav", "div.breadcrumb", "div.invis"):
             for el in article.select(selector):
                 el.decompose()
         return article.decode_contents()
+
+    @staticmethod
+    def _only_the_free_part(soup) -> bool:
+        """Whether the page stops where SOL's free part does: someone not
+        signed in sees "There is more of this story..." and "To read the
+        complete story you need to be logged in"."""
+        text = soup.get_text(" ", strip=True)
+        return "There is more of this story" in text or "To read the complete story you need to be logged in" in text
 
     def get_chapter_count(self, url_or_id):
         story_id = self.parse_story_id(url_or_id)
@@ -352,6 +362,17 @@ class StoriesOnlineScraper(BaseScraper):
 
         if skip_chapters >= num_chapters:
             return story
+
+        if self._only_the_free_part(soup):
+            # Said, so a book that stops part-way is not taken for the
+            # whole story. Ficary has no way to sign in to SOL.
+            logger.warning(
+                "StoriesOnline shows only the start of \"%s\" to someone who "
+                "is not signed in, so the book stops where the free part "
+                "does, at \"There is more of this story...\". Ficary cannot "
+                "sign in to StoriesOnline.",
+                meta["title"],
+            )
 
         if skip_chapters < 1 and chapter_in_spec(1, chapters):
             html = self._parse_chapter_html(soup)

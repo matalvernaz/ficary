@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+**GreatFeet and StoriesOnline books lose the site's own lines**
+
+* GreatFeet books ended with the site's navigation ("Back to the Story
+  Gallery", "Great Feet Foot Fetish Menu"); they end with the story now.
+* StoriesOnline books carried a line the site keeps hidden, "The source
+  of this story is Storiesonline", which a screen reader or an
+  audiobook read out; it is left out now.
+* StoriesOnline shows only the start of a story to someone who is not
+  signed in, and Ficary cannot sign in there, so the book stops where
+  the free part does, at "There is more of this story...". The status
+  pane now says so when it happens, instead of leaving it to be found
+  at the end of the book.
+
 **SexStories books are just the story**
 
 * A SexStories book ended with the site's own page furniture: how many

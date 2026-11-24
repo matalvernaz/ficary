@@ -139,6 +139,12 @@ class GreatFeetScraper(BaseScraper):
                 text, re.I,
             ):
                 continue
+            # A paragraph that is nothing but a link is the site's
+            # navigation ("Back to the Story Gallery", "Great Feet Foot
+            # Fetish Menu"), which ended every book.
+            link_text = " ".join(a.get_text(" ", strip=True) for a in p.find_all("a"))
+            if link_text and " ".join(link_text.split()) == " ".join(text.split()):
+                continue
             pieces.append(str(p))
         if not pieces:
             raise ValueError("Could not find GreatFeet story body.")
