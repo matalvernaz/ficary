@@ -1,6 +1,7 @@
 """ScribbleHub (scribblehub.com) scraper.
 
-A series lives at ``/series/<id>/<slug>/``; each chapter is a separate
+A series lives at ``/series/<id>/<slug>/`` (fetched as ``/?p=<id>``, which
+redirects there; the slug-less form now answers 404); each chapter is a separate
 page at ``/read/<id>-<slug>/chapter/<chapter_id>/``. The series page
 carries the metadata (title, author, description, genres) but only the
 most recent handful of chapters — the full table of contents is fetched
@@ -79,9 +80,33 @@ class ScribbleHubScraper(CookieAuthMixin, BaseScraper):
         return bool(_PROFILE_URL_RE.search(str(url)))
 
     def _series_url(self, story_id) -> str:
-        # The slug is cosmetic — ScribbleHub redirects the slug-less form
-        # to the canonical one, so a bare id is enough to load the page.
+        """The series address Ficary records for a story.
+
+        It is the story's identity in the library (``canonical_url``
+        keeps a slug, so recording the slugged form would make every
+        ScribbleHub story already in a library look like a new one).
+        ScribbleHub itself no longer serves this slug-less form, so pages
+        are fetched from :meth:`_series_page_url`.
+        """
         return f"{SH_BASE}/series/{story_id}/"
+
+    def _series_page_url(self, story_id) -> str:
+        """Where to fetch a series page from.
+
+        The slug-less ``/series/<id>/`` used to redirect to the series
+        page; ScribbleHub now answers it with 404 (found 2026-11-23), and
+        every download and update check failed with "Not found". The
+        site is WordPress, and ``/?p=<id>`` redirects to the series page
+        with its slug, whatever the slug is.
+        """
+        return f"{SH_BASE}/?p={story_id}"
+
+    @staticmethod
+    def _page_address(series_soup) -> str:
+        """The series page's own address, as it gives it, or ""."""
+        link = series_soup.find("link", rel="canonical") if series_soup else None
+        href = (link.get("href") or "") if link else ""
+        return href if _SERIES_URL_RE.search(href) else ""
 
     @staticmethod
     def _parse_metadata(soup) -> dict:
@@ -181,6 +206,9 @@ class ScribbleHubScraper(CookieAuthMixin, BaseScraper):
         # them", and the difference decides whether the embedded
         # excerpt may be presented as a whole book.
         enumerated = False
+        # Whether Cloudflare answered the chapter-list request with a
+        # challenge, which waiting does not get past.
+        self._toc_challenged = False
         try:
             sess = self._session()
             for pagenum in range(1, self._MAX_TOC_PAGES + 1):
@@ -194,11 +222,17 @@ class ScribbleHubScraper(CookieAuthMixin, BaseScraper):
                     },
                     headers={
                         "X-Requested-With": "XMLHttpRequest",
-                        "Referer": self._series_url(story_id),
+                        # The page the request comes from, as a browser
+                        # would send it.
+                        "Referer": self._page_address(series_soup) or self._series_page_url(story_id),
                     },
                     timeout=30,
                 )
                 if resp.status_code != 200:
+                    headers = getattr(resp, "headers", None) or {}
+                    self._toc_challenged = (
+                        str(headers.get("cf-mitigated") or "").lower() == "challenge"
+                    )
                     logger.warning(
                         "ScribbleHub TOC request for %s returned HTTP %s; "
                         "the chapter list may be incomplete",
@@ -257,7 +291,7 @@ class ScribbleHubScraper(CookieAuthMixin, BaseScraper):
 
     def get_chapter_count(self, url_or_id):
         story_id = self.parse_story_id(url_or_id)
-        html = self._fetch(self._series_url(story_id))
+        html = self._fetch(self._series_page_url(story_id))
         soup = BeautifulSoup(html, "lxml")
         chapters, enumerated = self._fetch_full_toc(story_id, soup)
         declared = self._parse_metadata(soup).get("declared_chapters")
@@ -295,7 +329,7 @@ class ScribbleHubScraper(CookieAuthMixin, BaseScraper):
         series_url = self._series_url(story_id)
 
         logger.info("Fetching ScribbleHub series %s...", story_id)
-        html = self._fetch(series_url)
+        html = self._fetch(self._series_page_url(story_id))
         soup = BeautifulSoup(html, "lxml")
 
         meta = self._parse_metadata(soup)
@@ -310,6 +344,18 @@ class ScribbleHubScraper(CookieAuthMixin, BaseScraper):
         # forty-chapter serial, so refuse rather than guess.
         declared = meta.get("declared_chapters")
         incomplete = (declared or 0) > len(chapter_list) or not enumerated
+        if incomplete and getattr(self, "_toc_challenged", False):
+            raise PartialTableOfContentsError(
+                "ScribbleHub's Cloudflare protection blocked the request "
+                f"for the full chapter list of series {story_id}, so only "
+                f"{len(chapter_list)} chapter(s) "
+                + (f"of {declared} " if declared else "")
+                + "could be seen. Nothing was saved, because the book "
+                "would be missing chapters. Waiting will not get past it: "
+                "copy a ScribbleHub cookie from a browser where the site "
+                "works into Preferences > Downloads, ScribbleHub cookie "
+                "(--scribblehub-cookie on the command line), and try again."
+            )
         if incomplete:
             raise PartialTableOfContentsError(
                 f"ScribbleHub returned only {len(chapter_list)} chapter(s) "

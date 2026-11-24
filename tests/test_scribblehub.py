@@ -10,6 +10,8 @@ shape.
 
 from pathlib import Path
 
+import pytest
+
 from bs4 import BeautifulSoup
 
 from ficary.scribblehub import ScribbleHubScraper
@@ -213,3 +215,96 @@ class TestChapterBody:
         out = ScribbleHubScraper._parse_chapter_html(soup)
         assert "Real prose." in out
         assert "subscribe" not in out.lower()
+
+
+# ── 2026-11-23: the slug-less series address answers 404 ─────────
+
+
+class TestSeriesAddress:
+    """ScribbleHub stopped serving ``/series/<id>/`` (it answers 404, where
+    it used to redirect), so every download and update check said "Not
+    found". Pages are fetched from ``/?p=<id>``, which WordPress redirects
+    to the series page whatever its slug. The address recorded for the
+    story stays the slug-less one: it is the story's identity in the
+    library."""
+
+    def _scraper_recording_fetches(self, monkeypatch):
+        sc = ScribbleHubScraper(use_cache=False)
+        fetched = []
+
+        def fetch(url, *args, **kwargs):
+            fetched.append(url)
+            return SERIES
+
+        monkeypatch.setattr(sc, "_fetch", fetch)
+        return sc, fetched
+
+    def test_the_chapter_count_fetches_the_address_that_redirects(self, monkeypatch):
+        sc, fetched = self._scraper_recording_fetches(monkeypatch)
+        monkeypatch.setattr(sc, "_fetch_full_toc", lambda story_id, soup: ([{"id": 1}] * 3, True))
+        sc.get_chapter_count("https://www.scribblehub.com/series/1000564/apokalypsis-lost-magic-awakening/")
+        assert fetched == ["https://www.scribblehub.com/?p=1000564"]
+
+    def test_a_download_fetches_it_too_and_keeps_the_story_address(self, monkeypatch):
+        sc, fetched = self._scraper_recording_fetches(monkeypatch)
+        chapters = [{"id": number, "title": f"Chapter {number}", "url": f"https://www.scribblehub.com/read/1000564-x/chapter/{number}/"} for number in (1, 2)]
+        monkeypatch.setattr(sc, "_fetch_full_toc", lambda story_id, soup: (chapters, True))
+        monkeypatch.setattr(sc, "_parse_metadata", lambda soup: {"title": "T", "author": "A", "summary": "", "declared_chapters": 2})
+        monkeypatch.setattr(sc, "_materialise_chapters", lambda **kwargs: [])
+        story = sc.download("https://www.scribblehub.com/series/1000564/apokalypsis-lost-magic-awakening/")
+        assert fetched == ["https://www.scribblehub.com/?p=1000564"]
+        assert story.url == "https://www.scribblehub.com/series/1000564/"
+
+    def test_the_chapter_list_request_comes_from_the_page_itself(self, monkeypatch):
+        sc = ScribbleHubScraper(use_cache=False)
+        sent = []
+
+        class FakeResp:
+            status_code = 200
+            text = ""
+            headers = {}
+
+        class FakeSession:
+            def post(self, url, data=None, headers=None, timeout=None):
+                sent.append(headers)
+                return FakeResp()
+
+        monkeypatch.setattr(sc, "_session", lambda: FakeSession())
+        monkeypatch.setattr(sc, "_delay", lambda: None)
+        sc._fetch_full_toc(1000564, BeautifulSoup(SERIES, "lxml"))
+        assert sent[0]["Referer"] == "https://www.scribblehub.com/series/1000564/apokalypsis-lost-magic-awakening/"
+
+
+class TestBlockedChapterList:
+    def _download_with_toc_answer(self, monkeypatch, status, headers):
+        from ficary.scribblehub import PartialTableOfContentsError
+
+        sc = ScribbleHubScraper(use_cache=False)
+        monkeypatch.setattr(sc, "_fetch", lambda url, *a, **k: SERIES)
+        monkeypatch.setattr(sc, "_delay", lambda: None)
+
+        class FakeResp:
+            status_code = status
+            text = "<html><title>Just a moment...</title></html>"
+
+        FakeResp.headers = headers
+
+        class FakeSession:
+            def post(self, url, data=None, headers=None, timeout=None):
+                return FakeResp()
+
+        monkeypatch.setattr(sc, "_session", lambda: FakeSession())
+        with pytest.raises(PartialTableOfContentsError) as error:
+            sc.download("https://www.scribblehub.com/series/1000564/apokalypsis-lost-magic-awakening/")
+        return str(error.value)
+
+    def test_a_cloudflare_challenge_says_what_gets_past_it(self, monkeypatch):
+        """Waiting does not get past a challenge; the cookie does."""
+        message = self._download_with_toc_answer(monkeypatch, 403, {"cf-mitigated": "challenge", "server": "cloudflare"})
+        assert "Cloudflare" in message
+        assert "Preferences > Downloads, ScribbleHub cookie" in message
+        assert "Wait a moment" not in message
+
+    def test_another_failure_still_says_to_try_again(self, monkeypatch):
+        message = self._download_with_toc_answer(monkeypatch, 503, {"server": "nginx"})
+        assert "Wait a moment and try again" in message
