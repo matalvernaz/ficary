@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 2.20.18 — 2026-11-24
 
 **The check at launch is quicker, and new chapters have their own command**
 
