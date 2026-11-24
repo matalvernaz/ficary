@@ -63,6 +63,9 @@ class LibraryFrame(wx.Frame):
             size=(760, 640),
             style=wx.DEFAULT_FRAME_STYLE,
         )
+        # The size above is in pixels at 100% scaling. On a screen scaled
+        # up, the buttons and text grow with it and need the room.
+        self.SetSize(self.FromDIP(wx.Size(760, 640)))
         self._prefs = prefs
         # _alive guards worker-thread callbacks — they fire through
         # wx.CallAfter and can land after the window is destroyed

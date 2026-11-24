@@ -1064,11 +1064,11 @@ def _download_one(
             print(msg, file=sys.stderr)
 
     def routine(line: str) -> None:
-        """A line the status pane gets unless ``brief`` asked for one line per story. Debug level, since the root logger is shown in the main window's status log from INFO up."""
+        """A line the status pane gets unless ``brief`` asked for one line per story. Then it goes to the log file only: marked ``ui_already_emitted``, which the main window's status log leaves out at every log level. Unmarked, at Debug it landed there instead."""
         if brief is None:
             status(line)
         elif line.strip():
-            logger.debug("%s", line.strip())
+            logger.info("%s", line.strip(), extra={"ui_already_emitted": True})
 
     def brief_export_line(line: str) -> None:
         """A line from the exporter when ``brief`` is on. The AI note check says something about every chapter, an update's old ones included, which put a long run of lines back between the story's name and its outcome. Those are tagged "[AI notes]", and the exporter logs them itself, so they go no further. Its one-line tally at the end, and anything else, still goes to the pane."""

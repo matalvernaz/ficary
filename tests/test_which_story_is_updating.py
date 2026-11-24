@@ -911,3 +911,35 @@ def test_the_line_before_an_update_counts_what_it_will_do(tmp_path, monkeypatch)
     ) in posted
     # Nor is the known one listed by the queue builder: it is named when it downloads.
     assert not any("[resume]" in line for line in posted)
+
+
+# ── At the Debug log level ───────────────────────────────────────
+#
+# The main window's status log shows log records down to whatever level
+# the log is set to, so at Debug it shows debug records too. A record
+# marked ``ui_already_emitted`` goes to the log file only.
+
+
+def shown_in_the_main_window(records) -> list[str]:
+    return [record.getMessage() for record in records if not getattr(record, "ui_already_emitted", False)]
+
+
+def test_at_debug_a_storys_details_do_not_reach_the_main_windows_log(tmp_path, monkeypatch, saving, caplog):
+    caplog.set_level(logging.DEBUG)
+    site = TitledSite()
+    plug_in(monkeypatch, site)
+    update(stories(tmp_path, "First Story"), site)
+    shown = shown_in_the_main_window(caplog.records)
+    for detail in ("Title:", "Author:", "Chapters:", "Words:", "Merging", "Saved to", "Checking story"):
+        assert not any(detail in message for message in shown), detail
+    # Still in the log file.
+    assert any("Saved to" in record.getMessage() for record in caplog.records)
+
+
+def test_at_debug_the_launch_checks_lines_do_not_reach_the_main_windows_log(caplog):
+    from ficary.library import launch_check
+
+    caplog.set_level(logging.DEBUG)
+    launch_check._quiet("  [skip] Some Story.epub: checked 2h ago")
+    assert shown_in_the_main_window(caplog.records) == []
+    assert [record.getMessage() for record in caplog.records] == ["  [skip] Some Story.epub: checked 2h ago"]

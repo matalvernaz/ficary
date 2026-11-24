@@ -55,8 +55,13 @@ _NEVER_DUE_S = 10 ** 12
 
 def _quiet(line: str) -> None:
     """Where the probe loop's per-story lines go: the debug log only.
-    At launch one line at the end is the whole report."""
-    logger.debug("%s", line.rstrip())
+    At launch one line at the end is the whole report.
+
+    Marked ``ui_already_emitted`` so the main window's status log leaves
+    them out. It shows whatever level the log is set to, so at Debug a
+    launch put a line there for every story in the library, thousands
+    in a big one."""
+    logger.debug("%s", line.rstrip(), extra={"ui_already_emitted": True})
 
 
 def _day_of(text) -> Optional[date]:

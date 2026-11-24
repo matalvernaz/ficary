@@ -36,6 +36,10 @@
 * The AI author's-note check's line per chapter, a "cache hit" for
   every chapter already in the book on an update, stays out of the
   pane; its one-line tally at the end is still there.
+* At the Debug log level the main window's status log showed the
+  launch check's line for every story in the library, thousands in a
+  big one, and would have shown each updated story's details; those go
+  to the log file only now.
 * An update cancelled while its last story was downloading was summed
   up as "complete". It says "cancelled" now.
 * The command line keeps its line per chapter, since it has no status
@@ -47,8 +51,8 @@
   (Check All Stories for Updates, Review Ambiguous, Open Story Browser,
   Cancel Update and Close) were drawn squeezed to nothing or past the
   right-hand edge. They wrap onto three lines now, and the window opens
-  a little bigger so the status pane keeps its room. The keyboard order
-  is unchanged.
+  a little bigger (more on a screen scaled above 100%) so the status
+  pane keeps its room. The keyboard order is unchanged.
 
 ## 2.20.19 — 2026-11-24
 
