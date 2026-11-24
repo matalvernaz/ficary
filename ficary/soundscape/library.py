@@ -37,7 +37,8 @@ def load(slug: str) -> Optional[Soundscape]:
         return None
     try:
         return Soundscape.from_dict(json.loads(path.read_text(encoding="utf-8")))
-    except (OSError, ValueError) as exc:
+    except (OSError, ValueError, TypeError) as exc:
+        # TypeError: a hand-edited number that is a list or an object.
         logger.warning("Soundscape %s unreadable (%s); ignoring", slug, exc)
         return None
 
@@ -45,7 +46,11 @@ def load(slug: str) -> Optional[Soundscape]:
 def save(sc: Soundscape) -> str:
     slug = slugify(sc.name)
     path = _dir() / f"{slug}.json"
-    path.write_text(json.dumps(sc.to_dict(), indent=2) + "\n", encoding="utf-8")
+    # Atomic, so a power cut or a full disk part-way through keeps the
+    # soundscape as it was instead of leaving half a file.
+    from ..atomic import atomic_write_text
+
+    atomic_write_text(path, json.dumps(sc.to_dict(), indent=2) + "\n")
     return slug
 
 

@@ -1,5 +1,23 @@
 # Changelog
 
+## Unreleased
+
+**Damaged audiobook files no longer stop a render or get written over**
+
+* A character voice list saved in another encoding (UTF-16, which
+  Notepad uses when asked for "Unicode") or in the wrong shape no
+  longer ends the audiobook with an error. Like a voice list that is
+  cut off, it is kept beside the original with ".corrupt-" in its
+  name, and a new one is started. An entry whose voice is not text is
+  skipped.
+* When the AI suggests pronunciations for a story whose pronunciation
+  list cannot be read (a typing mistake in it, say), the list is left
+  exactly as it is, and the status pane says why the suggestions were
+  not added. Before, the suggestions replaced everything in it.
+* Pronunciation lists and soundscapes are saved the same safe way as
+  Ficary's other files, so a power cut or a full disk part-way through
+  a save keeps the previous copy.
+
 ## 2.20.14 — 2026-11-23
 
 **Your screen reader says when a download finishes**

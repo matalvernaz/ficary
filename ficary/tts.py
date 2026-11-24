@@ -1419,7 +1419,15 @@ class VoiceMapper:
         if self.map_path and self.map_path.exists():
             try:
                 raw = json.loads(self.map_path.read_text(encoding="utf-8"))
-            except (OSError, json.JSONDecodeError) as exc:
+                if not isinstance(raw, dict):
+                    raise ValueError(
+                        f"expected character names and voices, found a {type(raw).__name__}"
+                    )
+            except (OSError, ValueError) as exc:
+                # ValueError covers bad JSON, a file that is not UTF-8 (a
+                # UTF-16 save from Notepad) and the wrong shape. Any of
+                # them used to escape as an exception and end the render.
+                #
                 # Quarantine the unreadable file rather than letting the
                 # next save() silently overwrite a user-edited map that
                 # had a typo. Voice consistency across a long fic is
@@ -1449,7 +1457,12 @@ class VoiceMapper:
                         rename_exc,
                     )
                 raw = {}
-            self.mapping = {k: _namespace_legacy(v) for k, v in raw.items()}
+            # A hand-edited entry whose voice is not text (a number, a
+            # null) is left out instead of ending the render.
+            self.mapping = {
+                k: _namespace_legacy(v) for k, v in raw.items()
+                if isinstance(k, str) and isinstance(v, str)
+            }
             logger.info("Loaded voice map with %d characters", len(self.mapping))
 
     def save(self):
@@ -2199,6 +2212,38 @@ def _load_pronunciation_map(path):
         # crash the render here instead of degrading.
         logger.warning("Pronunciation map at %s unreadable: %s", path, exc)
     return {}
+
+
+def _seed_pronunciation_file(path, suggestions) -> bool:
+    """Add the AI's suggested pronunciations to a story's pronunciation
+    file, keeping every entry already in it. Returns whether it wrote.
+
+    A file that is there but cannot be read is left exactly as it is:
+    it is the user's own list with a typo in it, and writing the
+    suggestions over it used to throw away everything they had typed.
+    The write is atomic, so a power cut part-way leaves the old file.
+    """
+    from .atomic import atomic_write_text
+
+    path = Path(path)
+    existing: dict = {}
+    if path.exists():
+        try:
+            existing = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            existing = exc
+        if not isinstance(existing, dict):
+            logger.warning(
+                "The AI's suggested pronunciations were not added to %s, "
+                "because that file could not be read; it was left as it "
+                "is. Fix it and make the audiobook again to use both.",
+                path,
+            )
+            return False
+    for key, value in suggestions.items():
+        existing.setdefault(key, value)
+    atomic_write_text(path, json.dumps(existing, indent=2) + "\n")
+    return True
 
 
 def _build_voice_pool(
@@ -3731,7 +3776,9 @@ def generate_audiobook(
                 "Example: \"Hermione\": \"Her-my-oh-nee\""
             )
         }
-        pron_path.write_text(json.dumps(skeleton, indent=2) + "\n", encoding="utf-8")
+        from .atomic import atomic_write_text
+
+        atomic_write_text(pron_path, json.dumps(skeleton, indent=2) + "\n")
 
     # Unified per-story LLM analysis — one round-trip producing
     # pronunciations + profiles + narrator suggestion in a single
@@ -3764,20 +3811,11 @@ def generate_audiobook(
         and unified_analysis.get("pronunciations")
     ):
         seeded_pron = unified_analysis["pronunciations"]
-        existing = {}
-        try:
-            existing = json.loads(pron_path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            existing = {}
-        for key, val in seeded_pron.items():
-            existing.setdefault(key, val)
-        pron_path.write_text(
-            json.dumps(existing, indent=2) + "\n", encoding="utf-8",
-        )
-        pronunciation_map = _load_pronunciation_map(pron_path)
-        logger.info(
-            "AI suggested %d pronunciations", len(seeded_pron),
-        )
+        if _seed_pronunciation_file(pron_path, seeded_pron):
+            pronunciation_map = _load_pronunciation_map(pron_path)
+            logger.info(
+                "AI suggested %d pronunciations", len(seeded_pron),
+            )
 
     if pronunciation_map:
         logger.info("Loaded %d pronunciation overrides", len(pronunciation_map))
