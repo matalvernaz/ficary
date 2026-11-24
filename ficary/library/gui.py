@@ -88,12 +88,6 @@ class LibraryFrame(wx.Frame):
         self._load_prefs()
         # Escape closes the window (mirrors the old dialog affordance).
         self._install_escape_accel()
-        # Lay the window out now it is built. Its last size event came
-        # with the status bar, before the controls were handed to their
-        # sizer, and Windows sends no other until the window is resized:
-        # every control sat on top of the others in the top left-hand
-        # corner. Linux lays a window out when it is shown, which hid it.
-        self.SendSizeEvent()
 
     # ── UI construction ────────────────────────────────────────
 
@@ -395,6 +389,13 @@ class LibraryFrame(wx.Frame):
         sizer.Add(btn_row, 0, wx.EXPAND | wx.ALL, 8)
 
         panel.SetSizer(sizer)
+        # Lay the controls out now. Adding the status bar above sized the
+        # panel to the window before its controls had a sizer, and on
+        # Windows nothing sizes it again until the window is resized, so
+        # its sizer never ran: every control sat on top of the others in
+        # the top left-hand corner. Linux sizes the panel again when the
+        # window is shown, which hid it.
+        panel.Layout()
 
     # ── Preference plumbing ────────────────────────────────────
 

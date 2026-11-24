@@ -328,10 +328,20 @@ def test_a_window_that_fits_is_left_where_it_is(wx_app):
 
 
 @needs_display
-def test_the_library_window_lays_itself_out_without_waiting_to_be_resized(main_window):
-    """Windows sends a window no size event when it is shown, so it has to lay itself out once built. The Library window's only size event came with its status bar, before its controls had a sizer, so on Windows every one of them sat on top of the others in the top left-hand corner (Linux lays a window out when it is shown, which hid it)."""
+def test_the_library_window_lays_itself_out_without_waiting_to_be_resized(main_window, monkeypatch):
+    """Adding a status bar sizes a window's panel at once; on Windows that came before the Library window's controls had a sizer, nothing sized the panel again until the window was resized, and every control sat on top of the others in the top left-hand corner. Linux sizes the panel again when the window is shown, so this does what Windows does at the status bar."""
+    from ficary.library import gui as library_gui
     from ficary.library.gui import LibraryFrame
 
+    real_status_bar = library_gui.add_activity_status_bar
+
+    def status_bar_as_on_windows(frame):
+        bar = real_status_bar(frame)
+        panel = frame.GetChildren()[0]
+        panel.SetSize(frame.GetClientSize())
+        return bar
+
+    monkeypatch.setattr(library_gui, "add_activity_status_bar", status_bar_as_on_windows)
     window = LibraryFrame(main_window, main_window.prefs)
     try:
         panel = window.scan_btn.GetParent()
