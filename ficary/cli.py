@@ -25,6 +25,7 @@ from .exporters import (
 )
 from .merge import merge_stories
 from .erotica import LiteroticaScraper
+from .erotica.literotica import MERGED_SERIES_CHAPTERS_PER_PART
 from .models import Story, merge_chapter_lists, parse_chapter_spec
 from .scraper import (
     CloudflareBlockError,
@@ -981,21 +982,70 @@ def _chapters(count: int) -> str:
     return f"{count} chapter" if count == 1 else f"{count} chapters"
 
 
+def _parts(count: int) -> str:
+    """'1 part', '5 parts'."""
+    return f"{count} part" if count == 1 else f"{count} parts"
+
+
+def _new_parts(count: int) -> str:
+    """'1 new part', '5 new parts'."""
+    return f"{count} new part" if count == 1 else f"{count} new parts"
+
+
+def _is_literotica_series(scraper, url: str) -> bool:
+    """Whether ``url`` is a Literotica series, which a library holds as one merged book."""
+    return isinstance(scraper, LiteroticaScraper) and LiteroticaScraper.is_series_url(url)
+
+
+def _download_series_as_one(scraper, series_url: str, *, report_part, cancel_event=None):
+    """Download every part of a Literotica series and merge them into one book, as a series download does. Returns the merged story and how many parts it has.
+
+    ``report_part(number, count, title)`` is told as each part arrives. Any part that can't be downloaded stops the whole thing with a ValueError naming it: an update must not write a book with fewer parts than the one it replaces. Parts already read come from the scraper's cache, so only the first page of each is asked for again.
+    """
+    series_name, part_urls = scraper.scrape_series_works(series_url)
+    if not part_urls:
+        raise StoryNotFoundError(f"No parts were found in the series at {series_url}.")
+    parts = []
+    for number, part_url in enumerate(part_urls, 1):
+        _raise_if_download_cancelled(cancel_event)
+        try:
+            part = scraper.download(part_url)
+        except (RateLimitError, CloudflareBlockError, StoryNotFoundError, ValueError, OSError) as exc:
+            raise ValueError(
+                f"part {number} of {len(part_urls)} could not be downloaded, "
+                f"so the book was left as it was: {_failure_reason(exc)}"
+            ) from exc
+        parts.append(part)
+        report_part(number, len(part_urls), part.title)
+    return merge_stories(series_name, series_url, parts), len(parts)
+
+
 def _new_chapters(count: int) -> str:
     """'1 new chapter', '5 new chapters'."""
     return f"{count} new chapter" if count == 1 else f"{count} new chapters"
 
 
-def _check_verdict(local: int, remote: int) -> str:
-    """What the site's chapter count means for the copy in the library."""
+def _check_verdict(local: int, remote: int, *, in_parts: bool = False) -> str:
+    """What the site's chapter count means for the copy in the library. ``in_parts`` says it in parts, for a series saved as one book, whose counts are its chapters (MERGED_SERIES_CHAPTERS_PER_PART to a part)."""
+    if in_parts:
+        local //= MERGED_SERIES_CHAPTERS_PER_PART
+        remote //= MERGED_SERIES_CHAPTERS_PER_PART
+        units, new_ones = _parts, _new_parts
+    else:
+        units, new_ones = _chapters, _new_chapters
     if remote == local:
-        return f"up to date, {_chapters(remote)}"
+        return f"up to date, {units(remote)}"
     if remote > local:
-        return f"{_new_chapters(remote - local)}, {remote} on the site"
+        return f"{new_ones(remote - local)}, {remote} on the site"
     return (
-        f"the site has {_chapters(remote)}, fewer than the {local} here, "
+        f"the site has {units(remote)}, fewer than the {local} here, "
         "so it is left alone"
     )
+
+
+def _is_merged_series(entry: dict) -> bool:
+    """Whether an update's ``entry`` is a series saved as one book (a Literotica series: the others are skipped)."""
+    return LiteroticaScraper.is_series_url(entry["url"])
 
 
 def _checking_sentence(checked: int, total: int, waiting: int) -> str:
@@ -1105,10 +1155,19 @@ def _download_one(
             stopped_part_way.append(current)
             raise DownloadCancelled("Stopped part-way through the story.")
 
+    # A Literotica series saved as one book is updated by downloading
+    # every part again and merging them, the old parts from the cache.
+    series_update = update_path is not None and _is_literotica_series(scraper, url)
+
     try:
         check_format_deps(args.format)
-        story_id = scraper.parse_story_id(url)
-        if update_path:
+        story_id = None if series_update else scraper.parse_story_id(url)
+        if series_update:
+            routine(
+                f"Checking the series at {url} "
+                f"(existing file has {existing_chapters} chapters)..."
+            )
+        elif update_path:
             routine(
                 f"Checking story {story_id} on {scraper.site_name} "
                 f"(existing file has {existing_chapters} chapters)..."
@@ -1123,7 +1182,7 @@ def _download_one(
         # everything from 1. Short-circuit to a single full fetch and
         # bypass the merge helper entirely below.
         refetch_all_update = bool(
-            update_path and getattr(args, "refetch_all", False)
+            update_path and (getattr(args, "refetch_all", False) or series_update)
         )
 
         # Merge-feasibility pre-check. The merge-in-place shortcut
@@ -1200,12 +1259,24 @@ def _download_one(
         # Reading the existing file can take a moment on a long story;
         # a cancel that landed meanwhile stops before any request.
         _raise_if_download_cancelled(cancel_event)
-        story = scraper.download(
-            url,
-            progress_callback=progress,
-            skip_chapters=0 if refetch_spec is not None else initial_skip,
-            chapters=refetch_spec if refetch_spec is not None else chapter_spec,
-        )
+        series_parts = 0
+        if series_update:
+            def report_part(number, count, title):
+                if brief is not None:
+                    brief.now(f"part {number} of {count}")
+                else:
+                    status(f"  [{number}/{count}] {title}")
+
+            story, series_parts = _download_series_as_one(
+                scraper, url, report_part=report_part, cancel_event=cancel_event,
+            )
+        else:
+            story = scraper.download(
+                url,
+                progress_callback=progress,
+                skip_chapters=0 if refetch_spec is not None else initial_skip,
+                chapters=refetch_spec if refetch_spec is not None else chapter_spec,
+            )
         if stopped_part_way:
             # The scraper caught the stop and returned what it had.
             logger.warning(
@@ -1355,7 +1426,13 @@ def _download_one(
         _auto_index_exported(path)
         if on_export is not None:
             on_export(path)
-        if brief is not None:
+        if brief is not None and series_update:
+            had = existing_chapters // MERGED_SERIES_CHAPTERS_PER_PART
+            status(
+                f'Updated "{brief.name}": {_parts(series_parts)}, '
+                f"{max(series_parts - had, 0)} new."
+            )
+        elif brief is not None:
             status(_brief_ending(
                 brief.name, update=update_path is not None, total=total,
                 new=new_count - stub_count, refetched_all=refetch_all_update,
@@ -1394,7 +1471,7 @@ def _download_one(
                 logger.debug("Audiobookshelf upload failed", exc_info=True)
                 report_error(f"Audiobookshelf upload failed: {exc}")
 
-        if args.clean_cache:
+        if args.clean_cache and story_id is not None:
             scraper.clean_cache(story_id)
 
         return True
@@ -2098,7 +2175,9 @@ def _run_update_queue(
                 ):
                     entry["remote"] = scraper.probe_chapter_count(entry["url"])
                 remote_count = entry["remote"]
-                outcome = _check_verdict(entry["local"], entry["remote"])
+                outcome = _check_verdict(
+                    entry["local"], entry["remote"], in_parts=_is_merged_series(entry),
+                )
                 probe_answered = True
             except DownloadCancelled:
                 # The guard gave up waiting for its turn: the run was
@@ -2335,7 +2414,10 @@ def _run_update_queue(
         local = entry["local"]
         remote = entry["remote"]
         new_count = remote - local
-        plan = _new_chapters(new_count)
+        if _is_merged_series(entry):
+            plan = _new_parts(new_count // MERGED_SERIES_CHAPTERS_PER_PART)
+        else:
+            plan = _new_chapters(new_count)
         if getattr(args, "refetch_all", False):
             plan += ", downloading every chapter again"
         progress(f"{doing}, {plan}.")

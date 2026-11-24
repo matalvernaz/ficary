@@ -34,6 +34,9 @@ LIT_BASE = "https://www.literotica.com"
 MERGED_CACHE_KEY = "submission"
 
 _SLUG_RE = re.compile(r"literotica\.com/s/([a-z0-9-]+)", re.IGNORECASE)
+
+MERGED_SERIES_CHAPTERS_PER_PART = 2
+"""Chapters each part adds to a series saved as one book: the title page merge_stories gives every part, and the part, since a submission is always one chapter."""
 _SERIES_RE = re.compile(r"literotica\.com/series/se/(\d+)", re.IGNORECASE)
 _AUTHOR_RE = re.compile(r"literotica\.com/authors/([^/?#]+)", re.IGNORECASE)
 
@@ -230,7 +233,15 @@ class LiteroticaScraper(BaseScraper):
         """A submission is always exactly one chapter (its pages are a
         length split, not story structure), so this never needs the
         network. New parts of a serial arrive as new submissions in
-        the series — an existing submission doesn't grow."""
+        the series — an existing submission doesn't grow.
+
+        A series address is a series saved as one book: its count is
+        the chapters that book would have now, a title page and the
+        part itself for each part the series page lists.
+        """
+        if self.is_series_url(url_or_id):
+            _name, part_urls = self.scrape_series_works(url_or_id)
+            return MERGED_SERIES_CHAPTERS_PER_PART * len(part_urls)
         self.parse_story_id(url_or_id)  # still validate the URL shape
         return 1
 

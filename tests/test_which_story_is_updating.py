@@ -1212,3 +1212,131 @@ class TestBooksAnUpdateCannotCheck:
     def test_a_storys_own_address_is_checked_as_before(self, tmp_path, url):
         queue, skipped, _lines = self.queue_for(tmp_path, url)
         assert [entry["url"] for entry in queue] == [url]
+
+
+# ── A Literotica series saved as one book ────────────────────────
+
+
+SERIES_URL = "https://www.literotica.com/series/se/12345"
+
+
+def literotica_part_url(number: int) -> str:
+    return f"https://www.literotica.com/s/ruth-ch-{number}"
+
+
+def made_up_series(parts: int, *, fail_at: int | None = None, on_part=None):
+    """A Literotica site whose series at SERIES_URL has ``parts`` parts, each one chapter, as every submission is. No network: the series page and the parts are made up."""
+    from ficary.erotica.literotica import LiteroticaScraper
+
+    class MadeUpSeries(LiteroticaScraper):
+        site_name = "literotica"
+        concurrency = 1
+
+        def __init__(self):
+            super().__init__(use_cache=False)
+            self.downloaded: list[str] = []
+
+        def _delay(self):
+            pass
+
+        def scrape_series_works(self, url):
+            return "Ruth", [literotica_part_url(number) for number in range(1, parts + 1)]
+
+        def download(self, url_or_id, progress_callback=None, skip_chapters=0, chapters=None):
+            number = int(str(url_or_id).rsplit("-", 1)[1])
+            if on_part is not None:
+                on_part(number)
+            if number == fail_at:
+                raise ValueError("Literotica answered 503")
+            self.downloaded.append(url_or_id)
+            story = Story(id=number, title=f"Ruth Ch. {number:02d}", author="Someone", summary="", url=url_or_id)
+            story.chapters.append(Chapter(number=1, title=f"Ruth Ch. {number:02d}", html=f"<p>Part {number}.</p>"))
+            return story
+
+    return MadeUpSeries()
+
+
+class TestAMergedLiteroticaSeries:
+    """Matt chose 2026-11-24: a Literotica series saved as one book is checked for new parts, and rebuilt when there are some, the old parts' text from the cache. His two failed at every check: the update couldn't read a series address."""
+
+    def test_its_count_is_the_chapters_its_book_would_have(self):
+        site = made_up_series(3)
+        # A title page and the part itself, for each part.
+        assert site.get_chapter_count(SERIES_URL) == 6
+        assert site.get_chapter_count(literotica_part_url(1)) == 1
+
+    def test_the_count_comes_from_the_real_series_page(self):
+        from unittest.mock import patch
+
+        from ficary.erotica.literotica import LiteroticaScraper
+
+        page = (Path(__file__).parent / "fixtures" / "literotica_series.html").read_text(encoding="utf-8")
+        scraper = LiteroticaScraper(use_cache=False)
+        with patch.object(scraper, "_fetch", return_value=page):
+            assert scraper.get_chapter_count(SERIES_URL) == 6
+
+    def update(self, tmp_path, monkeypatch, site, *, in_status_bar=True, cancel=None):
+        exported = []
+
+        def export(story, folder, **options):
+            exported.append((story, options.get("output_path"), activity.current()))
+            return Path(options["output_path"])
+
+        monkeypatch.setitem(cli.EXPORTERS, "html", export)
+        plug_in(monkeypatch, site)
+        book = tmp_path / "Ruth.html"
+        book.write_bytes(b"the merged book with two parts")
+        # Two parts in the book: four chapters.
+        queue = [{"path": book, "rel": "Ruth.html", "url": SERIES_URL, "local": 4, "title": "Ruth"}]
+        lines = update(queue, site, in_status_bar=in_status_bar, cancel=cancel)
+        return lines, exported
+
+    def test_a_new_part_is_found_and_the_book_rebuilt(self, tmp_path, monkeypatch):
+        site = made_up_series(3)
+        lines, exported = self.update(tmp_path, monkeypatch, site)
+        assert '  1 of 1: "Ruth", 1 new part, 3 on the site' in lines
+        assert 'Updating 1 of 1: "Ruth", 1 new part.' in lines
+        assert 'Updated "Ruth": 3 parts, 1 new.' in lines
+        (story, written_to, _bar), = exported
+        assert written_to == tmp_path / "Ruth.html"
+        assert story.url == SERIES_URL
+        assert len(story.chapters) == 6
+        assert site.downloaded == [literotica_part_url(number) for number in (1, 2, 3)]
+
+    def test_the_status_bar_says_which_part(self, tmp_path, monkeypatch):
+        said = []
+        site = made_up_series(3, on_part=lambda number: said.append(activity.current()))
+        self.update(tmp_path, monkeypatch, site)
+        assert said[1:] == [
+            'Updating 1 of 1: "Ruth", part 1 of 3.',
+            'Updating 1 of 1: "Ruth", part 2 of 3.',
+        ]
+
+    def test_a_part_that_fails_leaves_the_book_as_it_was(self, tmp_path, monkeypatch):
+        site = made_up_series(3, fail_at=2)
+        lines, exported = self.update(tmp_path, monkeypatch, site)
+        assert exported == []
+        assert 'Could not update "Ruth": part 2 of 3 could not be downloaded, so the book was left as it was: Literotica answered 503' in lines
+        assert (tmp_path / "Ruth.html").read_bytes() == b"the merged book with two parts"
+
+    def test_a_cancel_between_parts_stops_without_writing(self, tmp_path, monkeypatch):
+        cancel = threading.Event()
+        site = made_up_series(3, on_part=lambda number: number == 1 and cancel.set())
+        lines, exported = self.update(tmp_path, monkeypatch, site, cancel=cancel)
+        assert exported == []
+        assert site.downloaded == [literotica_part_url(1)]
+        assert any(line.startswith('Stopped part-way through "Ruth"') for line in lines)
+
+    def test_the_command_line_lists_the_parts(self, tmp_path, monkeypatch):
+        site = made_up_series(3)
+        lines, exported = self.update(tmp_path, monkeypatch, site, in_status_bar=False)
+        assert "  [1/3] Ruth Ch. 01" in lines
+        assert "  [3/3] Ruth Ch. 03" in lines
+        assert len(exported) == 1
+
+    def test_one_with_no_new_parts_is_left_alone(self, tmp_path, monkeypatch):
+        site = made_up_series(2)
+        lines, exported = self.update(tmp_path, monkeypatch, site)
+        assert '  1 of 1: "Ruth", up to date, 2 parts' in lines
+        assert exported == []
+        assert site.downloaded == []

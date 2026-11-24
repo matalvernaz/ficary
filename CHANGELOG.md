@@ -9,6 +9,17 @@
   FanFiction.net chapter. It keeps to the normal level now; DEBUG only
   adds detail to the saved log file.
 
+**Literotica series saved as one book get their new parts**
+
+* Literotica serials grow by adding parts to the series, and a series
+  downloaded as one book was never checked for them: its address is the
+  series', which updates couldn't read, so it failed at every check.
+  Updates now ask the series page how many parts it has, and when there
+  are new ones they download the series again and rebuild the book in
+  place, the old parts' text coming from the cache. The status pane
+  says it in parts ("1 new part, 6 on the site"), and if any part can't
+  be downloaded the book is left exactly as it was.
+
 **Books an update can't check are skipped with a note**
 
 * A SubscribeStar story saved from the creator's page, before Ficary
