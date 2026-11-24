@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+**SubscribeStar: a subscribers-only post says so**
+
+* A SubscribeStar post for the creator's subscribers used to be retried
+  for a minute and reported as "Failed after 3 retries". Ficary now says
+  at once that the post is only for subscribers, and that the
+  SubscribeStar cookie in Preferences > Downloads is what lets a
+  subscriber download it.
+
 **Fictionmania books are just the story**
 
 * A Fictionmania book had the site's menu at the start and its review

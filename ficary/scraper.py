@@ -556,6 +556,13 @@ class BaseScraper:
         """
         return None
 
+    def _forbidden_page_problem(self, resp, url: str):
+        """An error to raise at once for a 403 this site's page explains,
+        or None to go on with the usual retries. A site whose refusal
+        page says why (a paywall, an age gate) overrides this, so the
+        user is told that instead of "Failed after N retries"."""
+        return None
+
     def _log_fetch_diagnostic(self, resp, sess, label: str, url: str) -> None:
         """Emit a DEBUG line describing a response, for 403 root-causing.
 
@@ -1028,6 +1035,9 @@ class BaseScraper:
                         "to the site: it answered with its sign-in page, "
                         "so retrying will not help."
                     )
+                refusal = self._forbidden_page_problem(resp, url)
+                if refusal is not None:
+                    raise refusal
                 last_was_403 = True
                 # First 403: try the on-disk cookie cache (free) in
                 # case a previous session already solved the challenge.

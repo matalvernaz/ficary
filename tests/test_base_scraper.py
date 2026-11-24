@@ -817,3 +817,70 @@ class TestSignInPage:
         members = source.index("except SignInRequiredError as exc:")
         rate = source.index("except RateLimitError as exc:\n        report_error(f\"\\nRate limited")
         assert members < rate
+
+
+class TestSubscribersOnlyPost:
+    """A SubscribeStar post for the creator's subscribers answers 403 with
+    an age gate and "Subscribe to access this content now or simply Log
+    in". It used to be retried and reported as "Failed after N retries"."""
+
+    # The real page's markup around the words, from a post seen
+    # 2026-11-24, with the creator's name, ids and pictures left out.
+    # "Subscribe" and "Log in" are links, so the sentence is never one
+    # piece of text; a first version of this page had it as one, and the
+    # check it passed missed the real page.
+    PAGE = (
+        "<html><head><title>SubscribeStar.art</title></head><body>"
+        '<div class="post_landing-wrapper"><div class="post_landing-title">'
+        "You are about to reach content published by&nbsp;<strong>someone</strong></div>"
+        '<div class="post_landing-actions is-login"><div class="post_landing-actions is-signup">'
+        '<div class="warning_button"><a data-modal="/someone/subscribe" href="#">Subscribe</a></div>'
+        'to access this content now&nbsp;or simply<div class="warning_button">'
+        '<a data-modal="/login" href="#">Log in</a></div>if you already subscribed to&nbsp;someone'
+        "</div></div></div>"
+        '<div class="age_restriction">You must be 18+ to visit this website</div>'
+        "</body></html>"
+    )
+
+    def _scraper_answering(self, monkeypatch, text, count=5):
+        from ficary.subscribestar import SubscribeStarScraper
+
+        monkeypatch.setattr("ficary.scraper.time.sleep", lambda s: None)
+        scraper = SubscribeStarScraper(use_cache=False, max_retries=3)
+        answer = type("R", (), {"status_code": 403, "text": text, "headers": {}})
+        sess = _StubSession([answer() for _ in range(count)])
+        monkeypatch.setattr(scraper, "_rotate_browser", lambda: sess)
+        monkeypatch.setattr(scraper, "_maybe_seed_cf_cookies", lambda s, u: False)
+        return scraper, sess
+
+    def test_it_says_the_post_is_for_subscribers_and_where_the_cookie_goes(self, monkeypatch):
+        from ficary.scraper import SignInRequiredError
+
+        scraper, sess = self._scraper_answering(monkeypatch, self.PAGE)
+        with pytest.raises(SignInRequiredError) as error:
+            scraper._fetch("https://subscribestar.adult/posts/1", session=sess)
+        assert len(sess.urls) == 1
+        assert "only for subscribers" in str(error.value)
+        assert "Preferences > Downloads, SubscribeStar cookie" in str(error.value)
+
+    def test_another_403_from_it_is_retried_as_before(self, monkeypatch):
+        from ficary.scraper import RateLimitError, SignInRequiredError
+
+        scraper, sess = self._scraper_answering(monkeypatch, "<html><title>Forbidden</title></html>", count=8)
+        with pytest.raises(RateLimitError) as error:
+            scraper._fetch("https://subscribestar.adult/posts/1", session=sess)
+        assert not isinstance(error.value, SignInRequiredError)
+        assert len(sess.urls) > 1
+
+    def test_other_sites_are_not_affected(self, monkeypatch):
+        """The words on another site's 403 page mean nothing to it."""
+        from ficary.scraper import SignInRequiredError
+
+        monkeypatch.setattr("ficary.scraper.time.sleep", lambda s: None)
+        scraper = BaseScraper(use_cache=False, max_retries=2)
+        answer = type("R", (), {"status_code": 403, "text": self.PAGE.replace("<title>SubscribeStar.art</title>", ""), "headers": {}})
+        sess = _StubSession([answer() for _ in range(6)])
+        monkeypatch.setattr(scraper, "_rotate_browser", lambda: sess)
+        with pytest.raises(Exception) as error:
+            scraper._fetch("https://www.example-site.net/1", session=sess)
+        assert not isinstance(error.value, SignInRequiredError)

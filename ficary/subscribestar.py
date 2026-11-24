@@ -42,7 +42,7 @@ from urllib.parse import quote, unquote
 from bs4 import BeautifulSoup
 
 from .models import Chapter, Story, chapter_in_spec
-from .scraper import BaseScraper, CookieAuthMixin, StoryNotFoundError
+from .scraper import BaseScraper, CookieAuthMixin, SignInRequiredError, StoryNotFoundError
 
 logger = logging.getLogger(__name__)
 
@@ -95,6 +95,26 @@ class SubscribeStarScraper(CookieAuthMixin, BaseScraper):
 
     site_name = "subscribestar"
     _auth_cookie_domain = ".subscribestar.adult"
+
+    # What the 403 page says when a post is for the creator's subscribers:
+    # "Subscribe to access this content now or simply Log in", where
+    # "Subscribe" and "Log in" are links, so only this middle part is
+    # one piece of text in the page.
+    _SUBSCRIBERS_ONLY_MARKER = "to access this content"
+
+    def _forbidden_page_problem(self, resp, url: str):
+        """A post for the creator's subscribers answers 403 with an age
+        gate and "Subscribe to access this content now or simply Log in".
+        It was retried for a while and reported as "Failed after N
+        retries"."""
+        if self._SUBSCRIBERS_ONLY_MARKER not in (getattr(resp, "text", "") or ""):
+            return None
+        return SignInRequiredError(
+            f"{url} is only for subscribers of the creator who posted it. "
+            "If you subscribe, put your SubscribeStar cookie in Preferences "
+            "> Downloads, SubscribeStar cookie (--subscribestar-cookie on "
+            "the command line), and try again."
+        )
 
     @staticmethod
     def parse_story_id(url_or_id):
