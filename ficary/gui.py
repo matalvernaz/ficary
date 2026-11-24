@@ -165,6 +165,13 @@ STOPPED_PART_WAY_MESSAGE = (
 )
 
 
+def _finished_sentence(title: str, fmt: str) -> str:
+    """What the screen reader says when one story has finished."""
+    if fmt == "audio":
+        return f"Audiobook finished: {title}."
+    return f"Downloaded {title}."
+
+
 def _batch_summary(label: str, *, total: int, succeeded: int, failed: int,
                    started: int, stopped: bool) -> str:
     """The last line of a batch: how it went, or how far it got before Stop."""
@@ -1147,6 +1154,23 @@ class MainFrame(wx.Frame):
         ))
 
     # ── Helpers ───────────────────────────────────────────────
+
+    def _announce(self, text: str) -> None:
+        """Have the screen reader say ``text`` when a job finishes, if the
+        setting is on (ficary.announce: only ever through a screen
+        reader, never the computer's own voice). Said as well as the
+        status pane line, never instead of it. Safe from any thread."""
+        from . import prefs as _p
+
+        try:
+            if not self.prefs.get_bool(_p.KEY_ANNOUNCE_FINISHED):
+                return
+        except Exception:  # noqa: BLE001 - settings being saved or gone
+            return
+        from .announce import announce
+
+        # Status lines can start with a blank line for the pane's sake.
+        announce(text.strip())
 
     def _log(self, msg):
         # Auto-prefix log lines emitted on a per-site queue worker so
@@ -3182,6 +3206,7 @@ class MainFrame(wx.Frame):
             )
             path = self._export_story(merged, params)
             self._log(f"Saved: {path}")
+            self._announce(_finished_sentence(merged.title, params.fmt))
         except DownloadCancelled:
             # A merged book short of parts would read as complete, so
             # nothing is written.
@@ -3989,6 +4014,7 @@ class MainFrame(wx.Frame):
 
             if is_update and not refetch_all and len(story.chapters) == 0:
                 self._log("Up to date. No new chapters.")
+                self._announce(f"{story.title} is up to date. No new chapters.")
                 return DownloadOutcome(ok=True, reason="already up to date")
 
             if is_update and not refetch_all:
@@ -4049,6 +4075,7 @@ class MainFrame(wx.Frame):
 
             path = self._export_story(story, params, update_path=update_path)
             self._log(f"\nDone! Saved to: {path}")
+            self._announce(_finished_sentence(story.title, params.fmt))
             # Hand back what was written. Another caller may be joined to
             # this job through the per-site queue's single-flight
             # registry, and it needs the paths as much as the verdict.
@@ -4066,6 +4093,7 @@ class MainFrame(wx.Frame):
             return DownloadOutcome(ok=False, reason="stopped")
         except Exception as e:
             self._log(f"\nError: {e}")
+            self._announce("A download failed. The status pane says why.")
             return DownloadOutcome(ok=False, reason=str(e))
         finally:
             # Legacy raw-thread callers (batch/series/author dispatch)
@@ -4387,10 +4415,13 @@ class MainFrame(wx.Frame):
                 "bookmarks": "Bookmarks batch",
                 "forum": "Forum section batch",
             }.get(kind, "Author batch")
-            self._log(_batch_summary(
+            summary = _batch_summary(
                 label, total=len(urls), succeeded=succeeded,
                 failed=len(failed), started=started, stopped=stopped,
-            ))
+            )
+            self._log(summary)
+            if not stopped:
+                self._announce(summary)
             for u in failed:
                 self._log(f"  Failed: {u}")
         finally:
@@ -4436,10 +4467,13 @@ class MainFrame(wx.Frame):
                 self._log(f"  Error: {e}")
                 failed.append(story_url)
 
-        self._log(_batch_summary(
+        summary = _batch_summary(
             summary_label, total=len(story_urls), succeeded=succeeded,
             failed=len(failed), started=started, stopped=stopped,
-        ))
+        )
+        self._log(summary)
+        if not stopped:
+            self._announce(summary)
         for u in failed:
             self._log(f"  Failed: {u}")
 

@@ -42,9 +42,13 @@ cf-solve = ["playwright>=1.40"]
 # answers "PyOpenAL>=0.7" with "no matching distribution". A requirement
 # that names a pre-release is accepted by every pip, so name one.
 playback = ["PyOpenAL>=0.7.11a1"]
+# prism tells the user's screen reader when a download or update has
+# finished. It has no promise of keeping its interface between minor
+# versions, so stay on 0.18.
+announce = ["prismatoid~=0.18.4"]
 # PyYAML: the release-plumbing tests parse the build workflows.
 dev = ["pytest>=7.0", "hypothesis>=6.100", "PyYAML>=6.0"]
-all = ["ebooklib>=0.18", "edge-tts>=7.3.1", "wxPython>=4.2", "pyperclip>=1.8", "PyOpenAL>=0.7.11a1"]
+all = ["ebooklib>=0.18", "edge-tts>=7.3.1", "wxPython>=4.2", "pyperclip>=1.8", "PyOpenAL>=0.7.11a1", "prismatoid~=0.18.4"]
 
 [project.scripts]
 ficary = "ficary.entrypoint:main"

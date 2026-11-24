@@ -70,6 +70,9 @@ class LibraryFrame(wx.Frame):
         # probes and between downloads.
         self._update_cancel_event: threading.Event | None = None
         self._update_running = False
+        # The closing lines of the update in progress, one per library
+        # folder, for the screen reader when it ends.
+        self._update_summaries: list[str] = []
         self.Bind(wx.EVT_CLOSE, self._on_close_event)
         self._build_ui()
         self._load_prefs()
@@ -513,6 +516,9 @@ class LibraryFrame(wx.Frame):
         site = site_from_thread_name(threading.current_thread().name)
         if site and line and line.strip():
             line = f"[{site}] {line}"
+        if line and line.lstrip().startswith(("Library update complete", "Library update cancelled")):
+            # Said once the whole update has ended (_update_finished).
+            self._update_summaries.append(line.strip())
         # The pane queues from any thread and writes on its own timer,
         # so there is no per-line hop onto the UI thread any more.
         self.status_ctrl.post_line(line)
@@ -675,6 +681,7 @@ class LibraryFrame(wx.Frame):
         # toggles.
         self._update_cancel_event = threading.Event()
         self._update_running = True
+        self._update_summaries = []
         self._set_busy(True)
         cancel_event = self._update_cancel_event
 
@@ -813,12 +820,19 @@ class LibraryFrame(wx.Frame):
             )
 
     def _update_finished(self) -> None:
+        cancelled = self._update_cancel_event is not None and self._update_cancel_event.is_set()
         self._update_running = False
         self._update_cancel_event = None
+        summaries, self._update_summaries = self._update_summaries, []
         if not self._alive:
             return
         self._set_busy(False)
         self._notify_main_refresh()
+        # Not after Cancel: the user asked for that and heard it happen.
+        if summaries and not cancelled:
+            announce = getattr(self.GetParent(), "_announce", None)
+            if callable(announce):
+                announce(" ".join(summaries))
 
     def _on_review(self, event: wx.Event) -> None:
         root = self._current_path()

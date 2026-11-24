@@ -149,6 +149,8 @@ jobs:
             --hidden-import wx \
             --collect-all curl_cffi \
             --collect-all wx \
+            --collect-all prism \
+            --additional-hooks-dir tools/pyinstaller_hooks \
             ficary/__main__.py
 
       - name: Smoke-test executable
@@ -181,6 +183,22 @@ jobs:
             exit 1
           fi
           echo "The sound library loaded (exit status $status)."
+
+      - name: Check the screen-reader announcements load from the bundle
+        # prism's speech bridge sits where PyInstaller does not look by
+        # itself (tools/pyinstaller_hooks/hook-prism.py brings it in).
+        # Exit status 0 means a screen reader spoke a test sentence; 2
+        # means prism loaded and no screen reader is running, the normal
+        # state of a build machine. 1 means prism is missing from the
+        # bundle, and that fails the build.
+        run: |
+          status=0
+          dist/ficary/ficary --check-announcements || status=$?
+          if [ "$status" -ne 0 ] && [ "$status" -ne 2 ]; then
+            echo "prism did not load from the bundle (exit status $status)."
+            exit 1
+          fi
+          echo "prism loaded (exit status $status)."
 
       - name: Package
         # tar.gz preserves the executable bit so the binary stays

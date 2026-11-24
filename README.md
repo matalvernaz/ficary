@@ -92,6 +92,7 @@ If you'd rather install only what you need, the pieces are:
 - `gui` — the desktop app
 - `clipboard` — clipboard-watch mode
 - `playback` — in-app read-aloud voices and soundscapes
+- `announce` — has your screen reader say when a download finishes
 - `cf-solve` — a browser-based fallback for the most stubborn
   Cloudflare-protected sites. It's a ~400 MB download (it includes a
   headless Chromium via `playwright install chromium`), which is why
@@ -643,6 +644,13 @@ audience:
   same commands as Safari or Mail.
 - **Linux** — native GTK controls; Orca reads it through the standard
   accessibility bus, active by default on GNOME and KDE.
+- **Finished downloads are announced.** When a download, a batch, a
+  library update or an audiobook finishes, your screen reader says so
+  wherever you are working, after whatever it is saying and without
+  cutting in. It works with NVDA, JAWS, VoiceOver and Orca 49 or
+  later, not yet with Narrator, and never uses the computer's own
+  voice. Switch it off in Preferences → General.
+  `ficary --check-announcements` tests it.
 - **The command line** prints plain text, one line per event — no
   animated progress bars, no cursor tricks. Works in any terminal a
   screen reader can read.

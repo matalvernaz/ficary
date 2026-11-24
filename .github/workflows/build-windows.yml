@@ -111,6 +111,8 @@ jobs:
             --collect-all curl_cffi \
             --collect-all wx \
             --collect-binaries openal \
+            --collect-all prism \
+            --additional-hooks-dir tools/pyinstaller_hooks \
             ficary/__main__.py
 
       - name: Smoke-test executable
@@ -146,6 +148,24 @@ jobs:
             exit 0
           }
           Write-Error "The reader's sound library did not load (exit status $status)."
+          exit 1
+
+      - name: Check the screen-reader announcements load from the bundle
+        # prism's speech bridge sits where PyInstaller does not look by
+        # itself (tools/pyinstaller_hooks/hook-prism.py brings it in).
+        # Exit status 0 means a screen reader spoke a test sentence; 2
+        # means prism loaded and no screen reader is running, which is
+        # the normal state of a build runner. 1 means prism is missing
+        # from the bundle, and that fails the build.
+        shell: pwsh
+        run: |
+          dist\ficary\ficary.exe --check-announcements
+          $status = $LASTEXITCODE
+          if ($status -eq 0 -or $status -eq 2) {
+            Write-Host "prism loaded (exit status $status)."
+            exit 0
+          }
+          Write-Error "prism did not load from the bundle (exit status $status)."
           exit 1
 
       # Drop the update helper alongside ficary.exe so the auto-updater

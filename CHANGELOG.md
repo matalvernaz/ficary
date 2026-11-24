@@ -1,5 +1,31 @@
 # Changelog
 
+## Unreleased
+
+**Your screen reader says when a download finishes**
+
+* When a download, a batch, a library update or an audiobook finishes,
+  your screen reader says so, wherever you are working, so there is no
+  need to go to the status pane to find out: "Downloaded" and the
+  story's title, "Audiobook finished:" and the title, the title and
+  "is up to date. No new chapters." for an update with nothing new, or
+  the same one-line summary the status pane gets for a batch or a
+  library update. A failed download is said as "A download failed. The
+  status pane says why." A download or batch you stop is not
+  announced, since you already know.
+* It is said after whatever your screen reader is saying, never
+  cutting in, and only through a screen reader: NVDA, JAWS, VoiceOver,
+  or Orca 49 or later. With no screen reader running, nothing is said,
+  and Ficary never uses the computer's own voice. Narrator is not
+  reached yet. The status pane still gets every line, as before.
+* On by default. Preferences > General, "Have your screen reader say
+  when a download finishes" (Alt+R), switches it off.
+* `ficary --check-announcements` says whether announcements work on
+  the computer, and with a screen reader running, has it say a test
+  sentence. Installs with pip get announcements from the new
+  `announce` extra, which `all` includes; the desktop downloads have
+  them built in.
+
 ## 2.20.13 — 2026-11-23
 
 **Ficary tells you when it opens which stories have new chapters**

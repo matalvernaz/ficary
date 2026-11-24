@@ -275,6 +275,19 @@ class PreferencesDialog(wx.Dialog):
         )
         sizer.Add(self.check_stories_ctrl, 0, wx.ALL, 6)
 
+        self.announce_ctrl = wx.CheckBox(
+            panel, label="Have your screen &reader say when a download finishes",
+        )
+        self.announce_ctrl.SetName(
+            "Have your screen reader say when a download finishes"
+        )
+        self.announce_ctrl.SetToolTip(
+            "Your screen reader says when a download, a library update or "
+            "an audiobook finishes, wherever you are working. Only ever "
+            "through a screen reader, never the computer's own voice."
+        )
+        sizer.Add(self.announce_ctrl, 0, wx.ALL, 6)
+
         self.confirm_close_ctrl = wx.CheckBox(
             panel, label="&Warn before closing during an active download",
         )
@@ -822,6 +835,9 @@ class PreferencesDialog(wx.Dialog):
         self.check_stories_ctrl.SetValue(
             self.prefs.get_bool(_p.KEY_CHECK_STORIES_AT_LAUNCH)
         )
+        self.announce_ctrl.SetValue(
+            self.prefs.get_bool(_p.KEY_ANNOUNCE_FINISHED)
+        )
         self.confirm_close_ctrl.SetValue(
             self.prefs.get_bool(_p.KEY_CONFIRM_CANCEL_ON_CLOSE)
         )
@@ -974,6 +990,9 @@ class PreferencesDialog(wx.Dialog):
         )
         self.prefs.set_bool(
             _p.KEY_CHECK_STORIES_AT_LAUNCH, self.check_stories_ctrl.GetValue(),
+        )
+        self.prefs.set_bool(
+            _p.KEY_ANNOUNCE_FINISHED, self.announce_ctrl.GetValue(),
         )
         self.prefs.set_bool(
             _p.KEY_CONFIRM_CANCEL_ON_CLOSE, self.confirm_close_ctrl.GetValue(),

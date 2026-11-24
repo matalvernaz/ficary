@@ -130,13 +130,28 @@ FEATURES: dict[str, dict] = {
         ),
         "post_install": None,
     },
+    "announce": {
+        "extra": "announce",
+        "pip_name": "prismatoid~=0.18.4",
+        "import_name": "prism",
+        "display": "Screen reader announcements (prism)",
+        "size_hint": "~3 MB",
+        "description": (
+            "Has your screen reader say when a download, a library update "
+            "or an audiobook finishes, wherever you are working. Speaks "
+            "only through a screen reader (NVDA, JAWS, Narrator, VoiceOver "
+            "or Orca), never with the computer's own voice. The Windows, "
+            "Mac and Linux downloads already include it."
+        ),
+        "post_install": None,
+    },
 }
 
 
 def available() -> list[str]:
     """Ordered feature names for the UI. Stable so a test asserting
     against the list order doesn't churn when the registry grows."""
-    return ["epub", "audio", "clipboard", "cf-solve", "playback"]
+    return ["epub", "audio", "clipboard", "cf-solve", "playback", "announce"]
 
 
 def is_installed(feature: str) -> bool:

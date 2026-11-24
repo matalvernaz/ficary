@@ -3791,6 +3791,16 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--check-announcements",
+        action="store_true",
+        help=(
+            "Check whether the app can tell your screen reader when a "
+            "download or update finishes: says a test sentence through "
+            "it if one is running, reports what is missing if not, and "
+            "exits"
+        ),
+    )
+    parser.add_argument(
         "url",
         nargs="*",
         help=(
@@ -5848,6 +5858,44 @@ def _handle_check_reader_audio() -> int:
     return _EXIT_READER_AUDIO_BROKEN
 
 
+_EXIT_ANNOUNCE_SPOKE = 0
+_EXIT_ANNOUNCE_BROKEN = 1
+_EXIT_ANNOUNCE_NO_SCREEN_READER = 2
+
+
+def _handle_check_announcements() -> int:
+    """Report whether the app can speak through a screen reader.
+
+    Exit 0: a screen reader is running and was given the test sentence.
+    Exit 2: prism works but no screen reader is running (every build
+    machine). Exit 1: prism is missing or would not start, which in a
+    release build means it was left out of the bundle.
+    """
+    from . import announce
+
+    result = announce.check()
+    print("Screen reader announcement check")
+    print(f"  prism speech library: {'working' if result.working else 'NOT working'}")
+    if result.backend:
+        print(f"  Best voice found: {result.backend}")
+    if result.detail:
+        print(f"  Detail: {result.detail}")
+    if not result.working:
+        print(
+            "Result: announcements are off. The prism package is missing or "
+            "broken; installing the 'announce' optional feature puts it back."
+        )
+        return _EXIT_ANNOUNCE_BROKEN
+    if not result.screen_reader:
+        print(
+            "Result: no screen reader is running, so announcements are not "
+            "spoken. Start one and they will be."
+        )
+        return _EXIT_ANNOUNCE_NO_SCREEN_READER
+    print("Result: your screen reader was sent a test sentence.")
+    return _EXIT_ANNOUNCE_SPOKE
+
+
 def _was_not_already_printed(record: logging.LogRecord) -> bool:
     """Log filter for the console: drop a record whose text the status
     callback has already printed.
@@ -5887,6 +5935,8 @@ def main(argv: list[str] | None = None) -> None:
 
     if getattr(args, "check_reader_audio", False):
         sys.exit(_handle_check_reader_audio())
+    if getattr(args, "check_announcements", False):
+        sys.exit(_handle_check_announcements())
 
     if getattr(args, "install_attribution", None):
         sys.exit(_handle_install_attribution(args.install_attribution))

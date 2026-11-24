@@ -56,6 +56,10 @@ KEY_CHECK_UPDATES = "check_updates"
 # day, and nothing is downloaded; the result is one line in the status
 # pane. On by default.
 KEY_CHECK_STORIES_AT_LAUNCH = "check_stories_at_launch"
+# Have the screen reader say when a download, library update or
+# audiobook finishes (ficary.announce). Only ever through a screen
+# reader. On by default.
+KEY_ANNOUNCE_FINISHED = "announce_finished"
 KEY_SKIPPED_VERSION = "skipped_update_version"
 # Unix timestamp (seconds) until which the update prompt is suppressed
 # even when a new version is available. Set when the user clicks
@@ -244,6 +248,7 @@ DEFAULTS = {
     KEY_FORMAT: "epub",
     KEY_CHECK_UPDATES: True,
     KEY_CHECK_STORIES_AT_LAUNCH: True,
+    KEY_ANNOUNCE_FINISHED: True,
     KEY_HR_AS_STARS: False,
     KEY_STRIP_NOTES: False,
     KEY_HTML_STYLE: "modern",  # exporters.HTML_STYLE_MODERN
