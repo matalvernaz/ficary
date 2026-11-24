@@ -155,6 +155,10 @@ class ReaderFrame(wx.Frame):
         nav.Add(self.btn_next, 0, wx.ALL, 4)
         nav.Add(wx.StaticText(panel, label="&Jump to"), 0, wx.ALIGN_CENTER_VERTICAL | wx.LEFT, 8)
         self.jump = wx.Choice(panel, choices=[])
+        # A fixed width: it lists chapter headings now, and a long one made
+        # it as wide as the heading, past the window's edge on Windows. The
+        # list it drops down shows each heading whole.
+        self.jump.SetMinSize(wx.Size(self.FromDIP(240), -1))
         self.jump.SetName("Jump to chapter")
         self.jump.Bind(wx.EVT_CHOICE, self._on_jump)
         nav.Add(self.jump, 0, wx.ALL, 4)

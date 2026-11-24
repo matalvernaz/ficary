@@ -14,8 +14,10 @@ import pytest
 
 needs_display = pytest.mark.skipif(not os.environ.get("DISPLAY"), reason="builds real windows (run under xvfb-run -a)")
 
-# Controls whose text must be shown whole.
-_TEXT_CONTROL_KINDS = ("StaticText", "Button", "CheckBox", "RadioButton")
+# Controls whose text must be shown whole, and drop-downs, which must at
+# least get the width they ask for (one given a fixed width shows a long
+# item cut short, and its list shows it whole).
+_TEXT_CONTROL_KINDS = ("StaticText", "Button", "CheckBox", "RadioButton", "Choice", "ComboBox")
 
 
 def _settle(wx, rounds=8):
@@ -48,7 +50,7 @@ def misfits(top, wx) -> list[str]:
             if kind is not None:
                 label = " ".join(child.GetLabel().split())[:60]
                 rect = child.GetScreenRect()
-                if child.GetSize().width < child.GetBestSize().width - 2:
+                if child.GetSize().width < child.GetEffectiveMinSize().width - 2:
                     problems.append(f"{kind} squeezed: {label!r}")
                 if not _scrolls(child, wx):
                     if rect.GetRight() > right_edge + 1:

@@ -214,3 +214,28 @@ def test_a_story_read_from_the_download_cache_has_its_headings_too(tmp_path):
     story = reader_source.StorySource.from_cache_dir(cache, "https://www.fanfiction.net/s/1/1/", title="Lanterns")
     story._loader = lambda number: pytest.fail("a heading needs no chapter text")
     assert [story.chapter_heading(n) for n in (1, 2, 3)] == ["Prologue", "Chapter 1. The Gate", "Chapter 2. The Inn"]
+
+
+@needs_display
+def test_long_chapter_headings_keep_the_reader_inside_its_window(wx_app, tmp_path):
+    """Jump to lists headings now; a long one made it as wide as the heading, past the window's edge."""
+    import wx
+
+    from ficary import gui
+    from ficary.reader.gui import ReaderFrame
+    from ficary.reader.source import StorySource
+
+    from .test_every_window_fits import misfits
+
+    long_title = "In Which Our Heroes Discover That the Road to the Northern Kingdom Is Longer Than Anyone Had Thought"
+    frame = gui.MainFrame()
+    reader = ReaderFrame(frame, frame.prefs, StorySource.from_file(a_book(tmp_path, [f"{long_title} (Part {n})" for n in range(1, 4)])))
+    try:
+        reader.Show()
+        for _ in range(10):
+            wx.SafeYield()
+        assert misfits(reader, wx) == []
+    finally:
+        reader.Destroy()
+        frame._clip_timer.Stop()
+        frame.Destroy()
