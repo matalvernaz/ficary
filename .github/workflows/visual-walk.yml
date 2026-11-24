@@ -34,9 +34,25 @@ jobs:
       - name: Take the screenshots
         run: python tools/visual_walk.py walk-output
 
+      - name: Take them again with larger text
+        # As with Windows' "Make text bigger" at 150%. Ficary isn't
+        # DPI-aware, so display scaling stretches its windows as laid
+        # out at 100%; larger text is what changes their layout.
+        if: success() || failure()
+        env:
+          FICARY_WALK_TEXT_SCALE: "1.5"
+        run: python tools/visual_walk.py walk-output-larger-text
+
       - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: visual-walk-windows
           path: walk-output/
+          retention-days: 7
+
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: visual-walk-windows-larger-text
+          path: walk-output-larger-text/
           retention-days: 7

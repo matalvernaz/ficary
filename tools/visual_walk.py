@@ -2,9 +2,12 @@
 
 Usage: python tools/visual_walk.py <output folder>
 
+With FICARY_WALK_TEXT_SCALE=1.5 on Windows, the system's text is made that much larger while the walk runs, as Windows' "Make text bigger" setting does, and put back when it ends. Ficary isn't DPI-aware, so Windows display scaling stretches its windows as laid out at 100%; larger text is what changes their layout. On Linux, GDK_DPI_SCALE=1.5 does the same.
+
 No network: every connection attempt fails at once, so nothing is fetched and nothing waits. Settings and the library index go under the output folder, never into the real ones.
 """
 
+import os
 import socket
 import subprocess
 import sys
@@ -37,6 +40,79 @@ from ficary import portable  # noqa: E402
 # Settings, logs and the library index live in the output folder.
 portable._cached_root = output / "data"
 portable._cached_root.mkdir(parents=True, exist_ok=True)
+
+
+
+def scale_system_text(factor):
+    """Make the system's text ``factor`` times its size, as Windows' Make text bigger does, until this process ends. Returns a line for the report."""
+    import atexit
+    import ctypes
+    from ctypes import wintypes
+
+    class LOGFONTW(ctypes.Structure):
+        _fields_ = [
+            ("lfHeight", wintypes.LONG),
+            ("lfWidth", wintypes.LONG),
+            ("lfEscapement", wintypes.LONG),
+            ("lfOrientation", wintypes.LONG),
+            ("lfWeight", wintypes.LONG),
+            ("lfItalic", ctypes.c_ubyte),
+            ("lfUnderline", ctypes.c_ubyte),
+            ("lfStrikeOut", ctypes.c_ubyte),
+            ("lfCharSet", ctypes.c_ubyte),
+            ("lfOutPrecision", ctypes.c_ubyte),
+            ("lfClipPrecision", ctypes.c_ubyte),
+            ("lfQuality", ctypes.c_ubyte),
+            ("lfPitchAndFamily", ctypes.c_ubyte),
+            ("lfFaceName", wintypes.WCHAR * 32),
+        ]
+
+    class NONCLIENTMETRICSW(ctypes.Structure):
+        _fields_ = [
+            ("cbSize", wintypes.UINT),
+            ("iBorderWidth", ctypes.c_int),
+            ("iScrollWidth", ctypes.c_int),
+            ("iScrollHeight", ctypes.c_int),
+            ("iCaptionWidth", ctypes.c_int),
+            ("iCaptionHeight", ctypes.c_int),
+            ("lfCaptionFont", LOGFONTW),
+            ("iSmCaptionWidth", ctypes.c_int),
+            ("iSmCaptionHeight", ctypes.c_int),
+            ("lfSmCaptionFont", LOGFONTW),
+            ("iMenuWidth", ctypes.c_int),
+            ("iMenuHeight", ctypes.c_int),
+            ("lfMenuFont", LOGFONTW),
+            ("lfStatusFont", LOGFONTW),
+            ("lfMessageFont", LOGFONTW),
+            ("iPaddedBorderWidth", ctypes.c_int),
+        ]
+
+    get_metrics = 0x0029
+    set_metrics = 0x002A
+    tell_every_window = 0x0002
+    user32 = ctypes.windll.user32
+    metrics = NONCLIENTMETRICSW()
+    metrics.cbSize = ctypes.sizeof(NONCLIENTMETRICSW)
+    if not user32.SystemParametersInfoW(get_metrics, metrics.cbSize, ctypes.byref(metrics), 0):
+        raise ctypes.WinError()
+    original = NONCLIENTMETRICSW.from_buffer_copy(metrics)
+    before = metrics.lfMessageFont.lfHeight
+    for font in ("lfCaptionFont", "lfSmCaptionFont", "lfMenuFont", "lfStatusFont", "lfMessageFont"):
+        getattr(metrics, font).lfHeight = round(getattr(metrics, font).lfHeight * factor)
+    # Title and menu bars as tall as their larger text.
+    for height in ("iCaptionHeight", "iSmCaptionHeight", "iMenuHeight"):
+        setattr(metrics, height, round(getattr(metrics, height) * factor))
+    if not user32.SystemParametersInfoW(set_metrics, metrics.cbSize, ctypes.byref(metrics), tell_every_window):
+        raise ctypes.WinError()
+    atexit.register(user32.SystemParametersInfoW, set_metrics, original.cbSize, ctypes.byref(original), tell_every_window)
+    return f"system text made {factor} times larger: message font height {before} -> {metrics.lfMessageFont.lfHeight}"
+
+
+# Before wx starts, which reads the system's text size once.
+text_scale = float(os.environ.get("FICARY_WALK_TEXT_SCALE") or 1)
+text_scale_note = None
+if text_scale != 1 and sys.platform == "win32":
+    text_scale_note = scale_system_text(text_scale)
 
 import wx  # noqa: E402
 
@@ -81,6 +157,11 @@ main_window = gui.MainFrame()
 main_window.prefs.set(prefs_module.KEY_LIBRARY_PATH, str(library_root))
 main_window.Show()
 report = [f"display: {wx.GetDisplaySize().width}x{wx.GetDisplaySize().height}, platform: {wx.PlatformInfo[1]}"]
+if text_scale_note:
+    report.append(text_scale_note)
+# The size text is drawn at: proof the larger text took.
+default_font = wx.SystemSettings.GetFont(wx.SYS_DEFAULT_GUI_FONT)
+report.append(f"default font: {default_font.GetFaceName()} {default_font.GetFractionalPointSize()}pt, {main_window.GetTextExtent('Ficary').height}px tall")
 if wx.Platform == "__WXMSW__":
     # Whether the process scales itself for the display or Windows
     # stretches it: a process Windows stretches is laid out as at 100%.
