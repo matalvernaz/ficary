@@ -173,7 +173,7 @@ def test_the_guard_names_what_a_write_would_lose():
 
 import threading  # noqa: E402
 
-from ficary import activity, cli  # noqa: E402
+from ficary import cli  # noqa: E402
 from ficary.jobs import DownloadJob  # noqa: E402
 
 
@@ -284,15 +284,20 @@ def test_an_old_book_gets_the_sites_ids_written_in_once_matched(tmp_path, monkey
     assert [chapter.site_id for chapter in read_chapters(book)] == ["id-1", "id-2", "id-3", "id-4"]
 
 
-def test_a_book_none_of_whose_chapters_is_on_the_site_is_left_alone(tmp_path, monkeypatch):
+def test_a_book_none_of_whose_chapters_can_be_found_updates_by_count_as_before(tmp_path, monkeypatch):
+    """Nothing in the book matches the site (titles written some other way, every chapter renamed out of recognition): the update goes by chapter count, as every update did before, and doesn't fail every check."""
     book = a_book(tmp_path, "1", "2")
-    before = book.read_bytes()
-    site = royal_road_site("8", "9")
+    site = royal_road_site("8", "9", "10")
     plug_in(monkeypatch, site)
-    ok, lines, _nothing_new = update_one(book, site)
-    assert not ok
-    assert any(line.startswith('Could not update "Sky": none of the book\'s chapters could be found on the site') for line in lines)
-    assert book.read_bytes() == before
+    ok, _lines, _nothing_new = update_one(book, site)
+    assert ok
+    assert site.downloaded_positions == [3]
+    assert titles(read_chapters(book)) == ["1", "2", "10"]
+
+
+def test_the_check_of_such_a_book_counts_as_before(tmp_path, monkeypatch):
+    lines, _site = check_lines(tmp_path, monkeypatch, ["1", "2"], ["8", "9", "10"])
+    assert '  1 of 1: "Sky", 1 new chapter, 3 on the site' in lines
 
 
 def test_the_guard_stops_any_write_that_would_lose_a_chapter(tmp_path, monkeypatch):
@@ -414,6 +419,24 @@ class TestTheMainWindowsUpdate:
         assert titles(written) == ["1", "2", "3", "4"]
         assert "Kept 1 chapter the site no longer has." in self.logged(window)
 
+    def test_a_fresh_copy_of_a_book_from_before_ids_keeps_the_chapters_the_site_took_down(self, window, monkeypatch, tmp_path):
+        """Royal Road's "Chapter 3" is the author's own: the book's chapter 3 is the one the site took down, not a made-up title that moved."""
+        book = a_book(tmp_path, "1", "2", "3", "4", ids=False)
+        site = royal_road_site("1", "2", "4")
+        outcome = self.update(window, monkeypatch, book, site, refetch_all=True)
+        assert outcome.ok
+        (written,) = window.written
+        assert titles(written) == ["1", "2", "3", "4"]
+
+    def test_a_book_none_of_whose_chapters_can_be_found_updates_by_count(self, window, monkeypatch, tmp_path):
+        book = a_book(tmp_path, "1", "2")
+        site = royal_road_site("8", "9", "10")
+        outcome = self.update(window, monkeypatch, book, site)
+        assert outcome.ok
+        assert site.downloaded_positions == [3]
+        (written,) = window.written
+        assert titles(written) == ["1", "2", "10"]
+
     def test_the_guard_stops_a_write_that_would_lose_a_chapter(self, window, monkeypatch, tmp_path):
         book = a_book(tmp_path, "1", "2", "3")
         site = royal_road_site("1", "2", "3", "4")
@@ -427,7 +450,277 @@ class TestTheMainWindowsUpdate:
 
 def test_a_fresh_copy_that_matches_nothing_in_the_book_is_refused_not_doubled():
     """Titles an older version wrote differently, or an author renamed every chapter: keeping every "taken down" chapter would put the story in twice."""
-    book = book_of("1", "2", "3", ids=False)
-    fresh = [Chapter(number=n, title=f"Part {n}", html=f"<p>{n}</p>") for n in (1, 2, 3)]
+    book = [Chapter(number=n, title=title, html=f"<p>{n}</p>") for n, title in enumerate(["Alpha", "Beta", "Gamma"], 1)]
+    fresh = [Chapter(number=n, title=title, html=f"<p>{n}</p>") for n, title in enumerate(["One", "Two", "Three"], 1)]
     with pytest.raises(CannotMatch):
         chapter_match.keep_taken_down(book, fresh)
+
+
+def test_a_fresh_copy_where_chapter_n_became_part_n_takes_them_for_the_same_chapters():
+    book = book_of("1", "2", "3", ids=False)
+    fresh = [Chapter(number=n, title=f"Part {n}", html=f"<p>{n}</p>") for n in (1, 2, 3)]
+    assert [chapter.title for chapter in chapter_match.keep_taken_down(book, fresh)] == ["Part 1", "Part 2", "Part 3"]
+
+
+# ── Every shape of title, through a real book, and the update after ──
+#
+# From a review of the first version (2026-11-24): a renamed chapter
+# skipped by one update looked new to the next, once the chapters
+# around it had ids; and a title doesn't always come back from a book
+# as it went in ("Chapter 3. Foo" reads back as "Foo", a bare "3" is
+# written as "Chapter 3").
+
+
+def a_real_book(folder: Path, chapter_titles, *, fmt="html", ids=None):
+    """The chapters of a book written by the real exporter with these titles, read back: what an update really matches against."""
+    story = Story(id=1, title="Sky", author="Someone", summary="", url="https://www.royalroad.com/fiction/1/sky")
+    story.chapters = [
+        Chapter(number=number, title=title, html=f"<p>text {number}</p>", site_id=ids[number - 1] if ids else "")
+        for number, title in enumerate(chapter_titles, 1)
+    ]
+    return read_chapters(Path(EXPORTERS[fmt](story, str(folder), template="{title}")))
+
+
+def listed(chapter_titles, ids):
+    return [SiteChapter(position=position, site_id=site_id, title=title) for position, (title, site_id) in enumerate(zip(chapter_titles, ids), 1)]
+
+
+def update(book, site):
+    """One update by plan: (new site positions, the book after)."""
+    plan = chapter_match.plan_update(book, site)
+    new = {
+        chapter.position: Chapter(number=chapter.position, title=chapter.title, html=f"<p>new {chapter.position}</p>", site_id=chapter.site_id)
+        for chapter in site if chapter.position in plan.new_positions
+    }
+    return plan.new_positions, chapter_match.apply_plan(book, new, plan)
+
+
+EVERY_SHAPE = [
+    "Prologue",              # structural, written as it is
+    "Chapter 1. Arrival",    # reads back from the book as "Arrival"
+    "Chapter 2 - The Road",  # written as it is
+    "The Inn",               # written "Chapter 3. The Inn"
+    "Chapter 4",             # reads back with no title
+    "5",                     # a bare number, written "Chapter 5"
+    "",                      # no title, written "Chapter 6"
+    "Interlude",
+    "Chapter 7: Home",
+]
+SHAPE_IDS = [f"id-{n}" for n in range(1, len(EVERY_SHAPE) + 1)]
+
+
+@pytest.mark.parametrize("fmt", ["html", "epub"])
+@pytest.mark.parametrize("book_ids", [False, True], ids=["book from before ids", "book with ids"])
+class TestEveryShapeOfTitle:
+    def test_the_same_list_is_nothing_new_twice(self, tmp_path, fmt, book_ids):
+        book = a_real_book(tmp_path, EVERY_SHAPE, fmt=fmt, ids=SHAPE_IDS if book_ids else None)
+        site = listed(EVERY_SHAPE, SHAPE_IDS)
+        new, after = update(book, site)
+        assert new == []
+        assert [chapter.site_id for chapter in after] == SHAPE_IDS, "every chapter's id is recorded"
+        assert chapter_match.plan_update(after, site).new_positions == []
+
+    def test_a_takedown_and_a_new_chapter(self, tmp_path, fmt, book_ids):
+        book = a_real_book(tmp_path, EVERY_SHAPE, fmt=fmt, ids=SHAPE_IDS if book_ids else None)
+        kept = [index for index, title in enumerate(EVERY_SHAPE) if title != "The Inn"]
+        site = listed([EVERY_SHAPE[index] for index in kept] + ["Epilogue"], [SHAPE_IDS[index] for index in kept] + ["id-new"])
+        new, after = update(book, site)
+        assert new == [9]
+        assert len(after) == len(EVERY_SHAPE) + 1
+        assert after[3].html == book[3].html, "the chapter the site took down stays where it was"
+        assert after[-1].title == "Epilogue"
+        assert chapter_match.plan_update(after, site).new_positions == []
+
+    def test_a_renamed_chapter_is_not_new_now_or_next_time(self, tmp_path, fmt, book_ids):
+        book = a_real_book(tmp_path, EVERY_SHAPE, fmt=fmt, ids=SHAPE_IDS if book_ids else None)
+        renamed = [title.replace("The Road", "The Long Road") for title in EVERY_SHAPE]
+        site = listed(renamed + ["Epilogue"], SHAPE_IDS + ["id-new"])
+        new, after = update(book, site)
+        assert new == [10]
+        assert chapter_match.plan_update(after, site).new_positions == []
+
+
+@pytest.mark.parametrize("fmt", ["html", "epub"])
+def test_titles_that_lose_their_chapter_number_in_the_book_still_match(tmp_path, fmt):
+    """Every title "Chapter N. Something": the book reads them back as "Something"."""
+    chapter_titles = [f"Chapter {n}. Day {n}" for n in range(1, 6)]
+    book = a_real_book(tmp_path, chapter_titles, fmt=fmt)
+    assert [chapter.title for chapter in book] == [f"Day {n}" for n in range(1, 6)]
+    site = listed(chapter_titles + ["Chapter 6. Day 6"], [f"id-{n}" for n in range(1, 7)])
+    new, after = update(book, site)
+    assert new == [6]
+    assert chapter_match.plan_update(after, site).new_positions == []
+
+
+def test_a_chapter_inserted_among_titles_that_lose_their_numbers_is_the_only_new_one(tmp_path):
+    """The book reads "Chapter 2. Middle" back as "Middle"; matched in order by that alone, the inserted chapter would be taken for chapter 2 and chapter 2 for one the site took down."""
+    chapter_titles = ["Chapter 1. Start", "Chapter 2. Middle", "Chapter 3. End"]
+    book = a_real_book(tmp_path, chapter_titles)
+    site = listed(["Chapter 1. Start", "Chapter 1.5. Interlude", "Chapter 2. Middle", "Chapter 3. End"], ["a", "x", "b", "c"])
+    new, after = update(book, site)
+    assert new == [2]
+    assert [chapter.site_id for chapter in after] == ["a", "x", "b", "c"]
+
+
+def test_bare_numbers_after_an_unnumbered_first_chapter_go_by_place_not_by_number(tmp_path):
+    """A book writes a bare-number title with its own count: after "Synopsis", the author's "1" is the book's "Chapter 2". Matching by number would take the site's "2" for it."""
+    chapter_titles = ["Synopsis", "1", "2", "3", "4"]
+    book = a_real_book(tmp_path, chapter_titles)
+    assert [chapter.heading for chapter in book][1:3] == ["Chapter 2", "Chapter 3"]
+    site = listed(chapter_titles + ["5"], [f"id-{n}" for n in range(1, 7)])
+    new, after = update(book, site)
+    assert new == [6]
+    assert [chapter.site_id for chapter in after] == [f"id-{n}" for n in range(1, 7)]
+    assert chapter_match.plan_update(after, site).new_positions == []
+
+
+def test_by_title_a_chapter_the_book_has_no_counterpart_for_between_two_it_has_is_new():
+    book = book_of("1", "3", ids=False)
+    site = site_of("1", "2", "3")
+    assert chapter_match.plan_update(book, site).new_positions == [2]
+
+
+def test_by_id_an_unmatched_chapter_where_the_book_has_an_unmatched_one_is_not_added():
+    """The book's chapter there has no id (an update before ids skipped it), and two the site has there don't look like it: either could be it, renamed. Adding both could put it in twice."""
+    book = [
+        Chapter(number=1, title="Beginning", html="<p>1</p>", site_id="id-1"),
+        Chapter(number=2, title="Middle", html="<p>2</p>"),
+        Chapter(number=3, title="End", html="<p>3</p>", site_id="id-3"),
+    ]
+    site = [SiteChapter(1, "id-1", "Beginning"), SiteChapter(2, "id-x", "Crossroads"), SiteChapter(3, "id-y", "Detour"), SiteChapter(4, "id-3", "End")]
+    assert chapter_match.plan_update(book, site).new_positions == []
+
+
+def test_by_id_a_renamed_chapter_beside_a_new_one_leaves_just_the_new_one():
+    book = book_of("1", "2", "3")
+    book[1] = Chapter(number=2, title="Chapter 2", html="<p>2</p>", site_id="")
+    site = site_of("1", "2: Renamed", "2b", "3")
+    plan = chapter_match.plan_update(book, site)
+    assert plan.new_positions == [3]
+    assert plan.book_site_ids == {1: "id-2: Renamed"}
+
+
+def test_a_titled_chapter_taken_down_before_untitled_ones_doesnt_hide_them(tmp_path):
+    """After the last matched chapter: the book's titled chapter the site took down is passed over, and the untitled ones after it still go by place."""
+    book = a_real_book(tmp_path, ["Synopsis", "Side Story", "1", "2"])
+    site = listed(["Synopsis", "1", "2", "3"], ["s", "a", "b", "c"])
+    assert chapter_match.plan_update(book, site).new_positions == [4]
+
+
+def test_repeated_titles_pair_in_order():
+    """Two chapters called "Interlude", the first taken down: the site's is the book's second, not its first."""
+    book = [Chapter(number=n, title=title, html=f"<p>{n}</p>") for n, title in enumerate(["Interlude", "Battle", "Interlude", "Aftermath"], 1)]
+    site = [SiteChapter(1, "b", "Battle"), SiteChapter(2, "i2", "Interlude"), SiteChapter(3, "a", "Aftermath"), SiteChapter(4, "n", "Next")]
+    plan = chapter_match.plan_update(book, site)
+    assert plan.new_positions == [4]
+    assert plan.book_site_ids == {1: "b", 2: "i2", 3: "a"}
+
+
+def test_by_id_a_new_chapter_titled_like_one_taken_down_is_still_new():
+    book = [
+        Chapter(number=1, title="Battle", html="<p>1</p>", site_id="b"),
+        Chapter(number=2, title="Interlude", html="<p>2</p>", site_id="i1"),
+        Chapter(number=3, title="Aftermath", html="<p>3</p>", site_id="a"),
+    ]
+    site = [SiteChapter(1, "b", "Battle"), SiteChapter(2, "a", "Aftermath"), SiteChapter(3, "i2", "Interlude")]
+    assert chapter_match.plan_update(book, site).new_positions == [3]
+
+
+def test_a_new_chapter_whose_title_starts_like_a_taken_down_ones_is_still_new():
+    """"Chapter 90" starts with "Chapter 9", but they are different chapters."""
+    book = book_of(*[str(n) for n in range(1, 10)], ids=False)
+    site = site_of(*[str(n) for n in range(1, 9)], "90")
+    assert chapter_match.plan_update(book, site).new_positions == [9]
+
+
+def test_a_typo_fixed_in_the_last_chapters_title_is_not_a_new_chapter():
+    book = [Chapter(number=n, title=title, html=f"<p>{n}</p>") for n, title in enumerate(["Alpha", "Beta", "The Grand Batle"], 1)]
+    site = [SiteChapter(n, f"id-{n}", title) for n, title in enumerate(["Alpha", "Beta", "The Grand Battle", "Next"], 1)]
+    assert chapter_match.plan_update(book, site).new_positions == [4]
+
+
+# ── Fresh copies: titles a site makes up from the chapter's place ──
+
+
+def fresh_chapters(chapter_titles, ids=None):
+    return [Chapter(number=n, title=title, html=f"<p>fresh {n}</p>", site_id=ids[n - 1] if ids else "") for n, title in enumerate(chapter_titles, 1)]
+
+
+def test_a_fresh_copy_of_untitled_chapters_with_the_same_count_keeps_nothing_extra(tmp_path):
+    book = a_real_book(tmp_path, [f"Chapter {n}" for n in range(1, 6)])
+    fresh = fresh_chapters([f"Chapter {n}" for n in range(1, 6)])
+    merged = chapter_match.keep_taken_down(book, fresh)
+    assert [chapter.html for chapter in merged] == [chapter.html for chapter in fresh]
+    assert chapter_match.dropped(book, merged) == []
+
+
+def test_a_fresh_copy_of_untitled_chapters_one_short_is_refused_not_guessed(tmp_path):
+    """"Chapter N" made up from the place: once one is gone every number after it moves, and nothing says which went. Keeping the last would double one and lose another."""
+    book = a_real_book(tmp_path, [f"Chapter {n}" for n in range(1, 6)])
+    with pytest.raises(CannotMatch, match="no titles of their own"):
+        chapter_match.keep_taken_down(book, fresh_chapters([f"Chapter {n}" for n in range(1, 5)]))
+
+
+def test_a_fresh_copy_keeps_a_titled_chapter_taken_down_from_between_untitled_ones(tmp_path):
+    """The site numbers its untitled chapters by their place: once "Battle" went, the book's "Chapter 3" became the site's "Chapter 2"."""
+    book = a_real_book(tmp_path, ["Chapter 1", "Battle", "Chapter 3"])
+    fresh = fresh_chapters(["Chapter 1", "Chapter 2"])
+    merged = chapter_match.keep_taken_down(book, fresh)
+    assert [chapter.html for chapter in merged] == [fresh[0].html, book[1].html, fresh[1].html]
+
+
+def test_a_fresh_copy_takes_a_renamed_chapter_for_the_same_one(tmp_path):
+    book = a_real_book(tmp_path, ["Alpha", "Beta", "Gamma"])
+    fresh = fresh_chapters(["Alpha", "Beta, revised", "Gamma"])
+    merged = chapter_match.keep_taken_down(book, fresh)
+    assert [chapter.title for chapter in merged] == ["Alpha", "Beta, revised", "Gamma"]
+    assert chapter_match.dropped(book, merged) == []
+
+
+def test_a_fresh_copy_keeps_a_titled_chapter_the_site_took_down_in_its_place(tmp_path):
+    book = a_real_book(tmp_path, ["Alpha", "Beta", "Gamma"])
+    fresh = fresh_chapters(["Alpha", "Gamma", "Delta"])
+    merged = chapter_match.keep_taken_down(book, fresh)
+    assert [chapter.title for chapter in merged] == ["Alpha", "Beta", "Gamma", "Delta"]
+    assert merged[1].html == book[1].html
+
+
+def test_a_royal_road_fresh_copy_knows_chapter_n_is_the_authors_own(tmp_path):
+    book = a_real_book(tmp_path, [f"Chapter {n}" for n in range(1, 5)])
+    fresh = fresh_chapters(["Chapter 1", "Chapter 2", "Chapter 4", "Chapter 5"], ids=["a", "b", "d", "e"])
+    merged = chapter_match.keep_taken_down(book, fresh, titles_from_author=True)
+    assert [chapter.title or chapter.heading for chapter in merged] == ["Chapter 1", "Chapter 2", "Chapter 3", "Chapter 4", "Chapter 5"]
+    assert merged[2].html == book[2].html
+
+
+def test_the_guard_still_sees_a_chapter_swapped_for_a_different_one(tmp_path):
+    book = a_real_book(tmp_path, ["Alpha", "Beta", "Gamma"])
+    swapped = [book[0], Chapter(number=2, title="Omega", html="<p>other</p>"), book[2]]
+    assert [chapter.title for chapter in chapter_match.dropped(book, swapped)] == ["Beta"]
+
+
+# ── Royal Road's own download, by place ──────────────────────────
+
+
+def test_royal_road_downloads_just_the_chapters_an_update_asks_for(monkeypatch):
+    """The update asks Royal Road for chapters by their place in its list; every other test stands a made-up site in for it."""
+    from ficary.royalroad import RoyalRoadScraper
+
+    page = (Path(__file__).parent / "fixtures" / "royalroad_fiction.html").read_text(encoding="utf-8")
+    scraper = RoyalRoadScraper(use_cache=False)
+    monkeypatch.setattr(scraper, "_fetch", lambda url, session=None: page)
+    asked: list[str] = []
+
+    def chapter_pages(urls):
+        asked.extend(urls)
+        yield [(f'<div class="chapter-inner"><p>page {url}</p></div>', None) for url in urls]
+
+    monkeypatch.setattr(scraper, "_fetch_batches", chapter_pages)
+    listing = scraper.list_chapters("https://www.royalroad.com/fiction/1/sky")
+    assert len(listing) > 40
+    wanted = [listing[2], listing[40]]
+    story = scraper.download("https://www.royalroad.com/fiction/1/sky", chapters=[(chapter.position, chapter.position) for chapter in wanted])
+    assert [chapter.number for chapter in story.chapters] == [chapter.position for chapter in wanted]
+    assert [chapter.site_id for chapter in story.chapters] == [chapter.site_id for chapter in wanted]
+    assert [chapter.title for chapter in story.chapters] == [chapter.title for chapter in wanted]
+    assert len(asked) == 2

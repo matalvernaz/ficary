@@ -4167,7 +4167,14 @@ class MainFrame(wx.Frame):
                 with self._site_slot_for(url):
                     site_chapters = scraper.list_chapters(url)
                 if site_chapters is not None:
-                    update_plan = chapter_match.plan_update(book, site_chapters)
+                    try:
+                        update_plan = chapter_match.plan_update(book, site_chapters)
+                    except chapter_match.CannotMatch:
+                        self._log(
+                            "None of the book's chapters could be found on the "
+                            "site by title, so it is updated by chapter count, as before."
+                        )
+                if update_plan is not None:
                     if not update_plan.new_positions:
                         self._log("Up to date. No new chapters.")
                         job_result = f"{Path(update_path).stem} is up to date. No new chapters."
@@ -4238,7 +4245,10 @@ class MainFrame(wx.Frame):
                 # A fresh copy keeps the book's chapters the site no
                 # longer has, each after the chapter it followed.
                 fresh_count = len(story.chapters)
-                story.chapters = chapter_match.keep_taken_down(book, story.chapters)
+                story.chapters = chapter_match.keep_taken_down(
+                    book, story.chapters,
+                    titles_from_author=getattr(scraper, "lists_chapters", False),
+                )
                 if len(story.chapters) > fresh_count:
                     self._log(
                         f"  Kept {cli._chapters(len(story.chapters) - fresh_count)} "
@@ -4248,7 +4258,10 @@ class MainFrame(wx.Frame):
             if is_update:
                 # Whatever the update did, everything the book had must
                 # be in what is about to be written.
-                cli._refuse_to_lose_chapters(book, story.chapters, skip_chapters)
+                cli._refuse_to_lose_chapters(
+                    book, story.chapters, skip_chapters,
+                    titles_from_author=getattr(scraper, "lists_chapters", False),
+                )
 
             self._log(f"\n  Title:    {story.title}")
             self._log(f"  Author:   {story.author}")

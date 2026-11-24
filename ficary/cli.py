@@ -1089,7 +1089,7 @@ def _check_verdict(local: int, remote: int, *, in_parts: bool = False, site_coun
 def _probe_for_update(scraper, entry: dict) -> int:
     """The chapter count an update would bring the book in ``entry`` to.
 
-    For a site that lists its chapters, the book's chapters plus the site's it lacks, found by matching them (chapter_match), with the book's own count put in ``entry["local"]`` and the site's in ``entry["site_count"]``. After a site has taken chapters down its count can be below the book's while it has new chapters; counting alone never saw them. Raises CannotMatch (a ValueError) when none of the book's chapters is on the site. For other sites, and for a book that can't be read, the site's count, as before.
+    For a site that lists its chapters, the book's chapters plus the site's it lacks, found by matching them (chapter_match), with the book's own count put in ``entry["local"]`` and the site's in ``entry["site_count"]``. After a site has taken chapters down its count can be below the book's while it has new chapters; counting alone never saw them. For other sites, for a book that can't be read, and for one none of whose chapters can be found on the site, the site's count, as before: the update then goes by position.
     """
     if not getattr(scraper, "lists_chapters", False):
         return scraper.probe_chapter_count(entry["url"])
@@ -1100,7 +1100,10 @@ def _probe_for_update(scraper, entry: dict) -> int:
         book = read_chapters(entry["path"])
     except ChaptersNotReadableError:
         return len(site)
-    plan = chapter_match.plan_update(book, site)
+    try:
+        plan = chapter_match.plan_update(book, site)
+    except chapter_match.CannotMatch:
+        return len(site)
     entry["local"] = len(book)
     entry["site_count"] = len(site)
     return len(book) + len(plan.new_positions)
@@ -1313,7 +1316,14 @@ def _download_one(
         ):
             site_chapters = scraper.list_chapters(url) if getattr(scraper, "lists_chapters", False) else None
             if site_chapters is not None:
-                update_plan = chapter_match.plan_update(existing_chapters_list, site_chapters)
+                try:
+                    update_plan = chapter_match.plan_update(existing_chapters_list, site_chapters)
+                except chapter_match.CannotMatch:
+                    routine(
+                        "  None of the book's chapters could be found on the "
+                        "site by title, so it is updated by chapter count, as before."
+                    )
+            if update_plan is not None:
                 if not update_plan.new_positions:
                     if on_nothing_new is not None:
                         on_nothing_new()
@@ -1482,7 +1492,10 @@ def _download_one(
             # A fresh copy keeps the book's chapters the site no longer
             # has, each after the chapter it followed.
             fresh_count = len(story.chapters)
-            story.chapters = chapter_match.keep_taken_down(existing_chapters_list, story.chapters)
+            story.chapters = chapter_match.keep_taken_down(
+                existing_chapters_list, story.chapters,
+                titles_from_author=getattr(scraper, "lists_chapters", False),
+            )
             if len(story.chapters) > fresh_count:
                 status(
                     f"  Kept {_chapters(len(story.chapters) - fresh_count)} "
@@ -1492,7 +1505,10 @@ def _download_one(
         # Never lose a chapter: whatever the update did, everything the
         # book had must be in what is about to be written.
         if update_path is not None and not series_update:
-            _refuse_to_lose_chapters(existing_chapters_list, story.chapters, book_count_given)
+            _refuse_to_lose_chapters(
+                existing_chapters_list, story.chapters, book_count_given,
+                titles_from_author=getattr(scraper, "lists_chapters", False),
+            )
 
         # Library auto-sort: for fresh downloads only, route into
         # <library>/<fandom>/... based on the story's metadata.
@@ -1662,10 +1678,10 @@ def _download_one(
         return False
 
 
-def _refuse_to_lose_chapters(book, chapters, book_count) -> None:
-    """Stop an update, with a ValueError saying why, before it writes a book that would lose any chapter it has. ``book`` is the book's chapters, read from it, or None when it couldn't be read; then all that can be checked is that it doesn't shrink below ``book_count``."""
+def _refuse_to_lose_chapters(book, chapters, book_count, *, titles_from_author: bool = False) -> None:
+    """Stop an update, with a ValueError saying why, before it writes a book that would lose any chapter it has. ``book`` is the book's chapters, read from it, or None when it couldn't be read; then all that can be checked is that it doesn't shrink below ``book_count``. ``titles_from_author`` says the site's titles are the author's own (chapter_match.keep_taken_down)."""
     if book is not None:
-        lost = chapter_match.dropped(book, chapters)
+        lost = chapter_match.dropped(book, chapters, titles_from_author=titles_from_author)
         if lost:
             raise ValueError(
                 f"writing it would have lost {_chapters(len(lost))} the book has "

@@ -15,12 +15,22 @@
   by title for books made before. Only chapters the book doesn't have
   are downloaded, each put in where the site has it, and every chapter
   the book has is kept.
+* Titles are matched the way the book wrote them ("Chapter 3. Foo"
+  comes back from a book as "Foo"), a renamed chapter is taken for the
+  same chapter, and chapters whose titles say nothing (a bare number,
+  or none) are matched by their place between the others. A book none
+  of whose chapters can be found on the site is updated by chapter
+  count, as before, instead of failing every check.
 * The check before an update says so: "up to date, 404 chapters; your
   copy keeps the 6 the site took down", or "2 new chapters, 400 on the
   site; ...".
 * A fresh copy (re-download all chapters) keeps the chapters the site
   no longer has, on every site, matched by title where there are no
-  ids, and says how many it kept.
+  ids, and says how many it kept. Where the site has fewer chapters
+  and they have no titles of their own (several sites number untitled
+  chapters by their place, so the numbers move when one goes), there
+  is no telling which went: the fresh copy is refused and the book
+  left as it was, rather than keeping the wrong one.
 * Whatever an update does, a book is never written with fewer of its
   chapters: if it would be, it is left as it was and the status pane
   says which chapter would have been lost. This holds for the Library
