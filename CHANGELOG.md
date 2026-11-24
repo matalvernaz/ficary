@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased
+
+**An address from a site Ficary does not support says so**
+
+* Pasting an address from a site Ficary does not download from (a
+  forum, say) used to give "Expected a URL like
+  https://www.fanfiction.net/s/12345 or a numeric ID", whatever the
+  site. It now says Ficary does not download from that site, and lists
+  the sites it does.
+* The list of sites at the end of `ficary --help` is made from the
+  sites Ficary actually handles. It had fallen nine sites behind,
+  ScribbleHub, SubscribeStar and Webnovel among them.
+
 ## 2.20.17 — 2026-11-24
 
 **SubscribeStar: a subscribers-only post says so**

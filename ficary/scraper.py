@@ -7,6 +7,7 @@ import random
 import re
 import threading
 import time
+from urllib.parse import urlsplit
 from pathlib import Path
 from typing import Optional, Union
 
@@ -134,6 +135,35 @@ _CHROMIUM_CLIENT_HINTS = {
 
 class RateLimitError(Exception):
     """Raised when rate-limit retries are exhausted."""
+
+
+def _not_a_fanfiction_net_story(text: str) -> str:
+    """Why ``text`` is not a FanFiction.net story, for the user.
+
+    An address from a site Ficary does not support lands on the
+    FanFiction.net adapter (it takes bare story numbers, so it is the
+    fallback), and its message used to name FanFiction.net's address
+    shape whatever site the address was from. For another site it now
+    says Ficary does not download from it, and which sites it does.
+    """
+    candidate = text if "://" in text else "https://" + text
+    try:
+        host = (urlsplit(candidate).hostname or "").lower()
+    except ValueError:
+        host = ""
+    if host and "." in host and " " not in host and not (
+        host == "fanfiction.net" or host.endswith(".fanfiction.net")
+    ):
+        from .sites import supported_sites
+
+        return (
+            f"Ficary does not download from {host}. It works with: "
+            + ", ".join(supported_sites()) + "."
+        )
+    return (
+        f"Cannot parse story ID from: {text!r}\n"
+        "Expected a URL like https://www.fanfiction.net/s/12345 or a numeric ID."
+    )
 
 
 class SignInRequiredError(RateLimitError):
@@ -2251,10 +2281,7 @@ class FFNScraper(BaseScraper):
         match = re.search(r"fanfiction\.net/s/(\d+)", text)
         if match:
             return int(match.group(1))
-        raise ValueError(
-            f"Cannot parse story ID from: {text!r}\n"
-            "Expected a URL like https://www.fanfiction.net/s/12345 or a numeric ID."
-        )
+        raise ValueError(_not_a_fanfiction_net_story(text))
 
     @staticmethod
     def _parse_metadata(soup):

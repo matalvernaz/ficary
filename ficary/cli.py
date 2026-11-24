@@ -38,6 +38,7 @@ from .sites import (
     is_author_url as _is_author_url,
     is_forum_url as _is_forum_url,
     is_series_url as _is_series_url,
+    supported_sites as _supported_sites,
 )
 from .updater import (
     ChaptersNotReadableError,
@@ -3769,12 +3770,9 @@ def _build_parser() -> argparse.ArgumentParser:
         prog="ficary",
         description="Cross-platform fanfiction + erotica downloader",
         epilog=(
-            "Supported sites: fanfiction.net, ficwad.com, "
-            "archiveofourown.org, royalroad.com, mediaminer.org, "
-            "literotica.com, wattpad.com, adult-fanfiction.org, "
-            "storiesonline.net, nifty.org, sexstories.com, mcstories.com, "
-            "lushstories.com, fictionmania.tv, tgstorytime.com, chyoa.com, "
-            "darkwanderer.net, greatfeet.com\n"
+            # Made from the adapter table: the list written out here by
+            # hand had fallen nine sites behind.
+            "Supported sites: " + ", ".join(_supported_sites()) + "\n"
             "Name template placeholders: "
             "{title} {author} {id} {words} {status} {rating} {language} {chapters}"
         ),

@@ -338,6 +338,26 @@ EROTICA_SCRAPERS: tuple[type[BaseScraper], ...] = (
 )
 
 
+# The table's hostnames as people are shown them: an alias left out, and
+# the one forum Ficary reads on a shared host named by its address.
+_NOT_SHOWN_AS_A_SITE = {"ao3.org"}
+_SITE_SHOWN_AS = {"tapatalk.com": "tapatalk.com/groups/themousepad"}
+
+
+def supported_sites() -> list[str]:
+    """Every site Ficary downloads from, FanFiction.net first, for the
+    command line's help and for the message about an unsupported site.
+    Made from the table that picks the adapter, so it cannot go stale."""
+    names = ["fanfiction.net"]
+    for hostname, _scraper_cls in _HOSTNAME_TO_SCRAPER:
+        if hostname in _NOT_SHOWN_AS_A_SITE:
+            continue
+        name = _SITE_SHOWN_AS.get(hostname, hostname)
+        if name not in names:
+            names.append(name)
+    return names
+
+
 def detect_scraper(url: str) -> type[BaseScraper]:
     """Return the scraper class that handles ``url``.
 
