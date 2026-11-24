@@ -67,10 +67,11 @@ jobs:
         run: xvfb-run -a python -m pytest tests/ -v
 
       - name: Every window at 150% text
-        # Windows are sized in pixels, so larger text (Windows display
-        # scaling at 125% or 150%, which laptops often come set to) cut
-        # buttons and lines off in eight of them. GTK scales the text
-        # alone with GDK_DPI_SCALE, which stands in for it.
+        # Windows are sized in pixels, so larger system text cut buttons
+        # and lines off in eight of them and squeezed lists to nothing.
+        # GDK_DPI_SCALE makes GTK's text larger and nothing else, as
+        # Windows' larger text setting does. (Windows display scaling
+        # only stretches Ficary, which isn't DPI-aware.)
         run: GDK_DPI_SCALE=1.5 xvfb-run -a -s "-screen 0 1920x1200x24" python -m pytest tests/test_every_window_fits.py tests/test_update_lines_and_reader_headings.py -q
 
       - name: Lint for undefined names and syntax errors

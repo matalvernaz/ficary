@@ -17,7 +17,12 @@ needs_display = pytest.mark.skipif(not os.environ.get("DISPLAY"), reason="builds
 # Controls whose text must be shown whole, and drop-downs, which must at
 # least get the width they ask for (one given a fixed width shows a long
 # item cut short, and its list shows it whole).
-_TEXT_CONTROL_KINDS = ("StaticText", "Button", "CheckBox", "RadioButton", "Choice", "ComboBox")
+_TEXT_CONTROL_KINDS = ("StaticText", "Button", "CheckBox", "RadioButton", "Choice", "ComboBox", "SpinCtrl")
+
+# Controls that scroll, so can be smaller than they would like, but must
+# still show enough to use: three lines (a one-line box, one) and eight
+# characters, or what the control itself asks for if that is less.
+_SCROLLING_KINDS = ("ListBox", "ListCtrl", "TreeCtrl", "TextCtrl", "ScrolledWindow")
 
 
 def _settle(wx, rounds=8):
@@ -48,7 +53,7 @@ def misfits(top, wx) -> list[str]:
                 continue
             kind = next((name for name in _TEXT_CONTROL_KINDS if isinstance(child, getattr(wx, name))), None)
             if kind is not None:
-                label = " ".join(child.GetLabel().split())[:60]
+                label = " ".join(child.GetLabel().split())[:60] or child.GetName()
                 rect = child.GetScreenRect()
                 shortened = isinstance(child, wx.StaticText) and child.GetWindowStyleFlag() & (wx.ST_ELLIPSIZE_START | wx.ST_ELLIPSIZE_MIDDLE | wx.ST_ELLIPSIZE_END)
                 # Text and buttons need the room their text takes, even
@@ -61,6 +66,20 @@ def misfits(top, wx) -> list[str]:
                         problems.append(f"{kind} past the right-hand edge: {label!r}")
                     if rect.GetBottom() > bottom_edge + 1:
                         problems.append(f"{kind} below the bottom: {label!r}")
+            scrolling = next((name for name in _SCROLLING_KINDS if isinstance(child, getattr(wx, name))), None)
+            # (Inside an area that scrolls, its contents get the room they ask for.)
+            if scrolling is not None and not _scrolls(child.GetParent(), wx):
+                name = child.GetName()
+                one_line = isinstance(child, wx.TextCtrl) and not child.IsMultiLine()
+                asks = child.GetEffectiveMinSize()
+                least_width = min(8 * child.GetCharWidth(), asks.width)
+                least_height = min(child.GetCharHeight() * (1 if one_line else 3), asks.height)
+                size = child.GetSize()
+                corner = child.GetScreenPosition()
+                if size.width < least_width - 2 or size.height < least_height - 2:
+                    problems.append(f"{scrolling} squeezed to {size.width}x{size.height}: {name!r}")
+                elif corner.x + least_width > right_edge + 2 or corner.y + least_height > bottom_edge + 2:
+                    problems.append(f"{scrolling} past the edge: {name!r}")
             look(child)
 
     look(top)
@@ -196,6 +215,31 @@ def test_everything_in_the_window_shows_whole(main_window, name):
         if window is main_window.add_story_frame:
             window.Hide()
         else:
+            window.Destroy()
+        _settle(wx)
+
+
+@needs_display
+@pytest.mark.parametrize("name", WINDOWS + ["main window"])
+def test_fitting_a_window_again_leaves_it_as_it_was(main_window, name):
+    """Windows are fitted again whenever some of their contents change (a status line, the voice): a shortfall that growing can't cure would make one creep larger every time."""
+    import wx
+
+    from ficary.gui_layout import grow_to_fit
+
+    window = main_window if name == "main window" else _open(name, main_window)
+    try:
+        window.Show()
+        window.Layout()
+        _settle(wx)
+        before = window.GetRect()
+        assert grow_to_fit(window) is False
+        _settle(wx)
+        assert window.GetRect() == before
+    finally:
+        if window is main_window.add_story_frame:
+            window.Hide()
+        elif window is not main_window:
             window.Destroy()
         _settle(wx)
 
@@ -474,6 +518,138 @@ def test_a_window_whose_contents_fit_keeps_its_size(wx_app):
 
 
 @needs_display
+def test_a_list_and_a_text_box_squeezed_to_nothing_widen_and_lengthen_the_window(wx_app):
+    """With larger text, Add saved-search watch squeezed its Channels list to nothing and the story picker its Find box to a sliver: they scroll, so they may be smaller than they would like, but not too small to use."""
+    import wx
+
+    from ficary.gui_layout import fit_to_contents
+
+    frame = wx.Frame(None, size=(300, 160))
+    panel = wx.Panel(frame)
+    sizer = wx.BoxSizer(wx.VERTICAL)
+    row = wx.BoxSizer(wx.HORIZONTAL)
+    row.Add(wx.StaticText(panel, label="A label that takes up most of the row:"), 0, wx.RIGHT, 4)
+    find = wx.TextCtrl(panel, name="Find")
+    row.Add(find, 1)
+    sizer.Add(row, 0, wx.EXPAND | wx.ALL, 8)
+    channels = wx.CheckListBox(panel, choices=["Status pane", "Email"], name="Channels")
+    sizer.Add(channels, 1, wx.EXPAND | wx.ALL, 8)
+    # Below the list, so the list isn't at the bottom edge: squeezed, it
+    # still sits inside the window.
+    for line in range(5):
+        sizer.Add(wx.StaticText(panel, label=f"Line {line} of the instructions"), 0, wx.LEFT, 8)
+    panel.SetSizer(sizer)
+    try:
+        frame.SetClientSize(frame.FromDIP(wx.Size(300, 160)))
+        panel.Layout()
+        assert find.GetSize().width < 8 * find.GetCharWidth(), "the test needs the box squeezed to begin with"
+        assert channels.GetSize().height < 3 * channels.GetCharHeight(), "the test needs the list squeezed to begin with"
+        fit_to_contents(frame, (300, 160))
+        frame.Show()
+        _settle(wx)
+        assert misfits(frame, wx) == []
+        assert find.GetSize().width >= 8 * find.GetCharWidth() - 2
+        assert channels.GetSize().height >= 3 * channels.GetCharHeight() - 2
+    finally:
+        frame.Destroy()
+        _settle(wx)
+
+
+@needs_display
+def test_a_window_asked_to_be_bigger_than_the_screen_is_fitted_onto_it(wx_app):
+    """Fitted at first even when nothing in it needs more room."""
+    import wx
+
+    from ficary.gui_layout import fit_to_contents
+
+    frame = wx.Frame(None)
+    try:
+        fit_to_contents(frame, (6000, 6000))
+        area = wx.Display(0).GetClientArea()
+        assert frame.GetSize().width <= area.width
+        assert frame.GetSize().height <= area.height
+    finally:
+        frame.Destroy()
+        _settle(wx)
+
+
+@needs_display
+def test_a_shortfall_of_a_pixel_or_two_is_rounding_not_a_cut(wx_app):
+    """At fractional text sizes, measurements round a pixel or two either way; each grew a window by a few pixels as if something were cut off."""
+    import wx
+
+    from ficary.gui_layout import fit_to_contents
+
+    frame = wx.Frame(None, size=(400, 200))
+    panel = wx.Panel(frame)
+    sizer = wx.BoxSizer(wx.VERTICAL)
+    button = wx.Button(panel, label="A button two pixels short")
+    button.SetMinSize(wx.Size(button.GetBestSize().width - 2, -1))
+    sizer.Add(button, 0, wx.ALL, 8)
+    panel.SetSizer(sizer)
+    try:
+        fit_to_contents(frame, (400, 200))
+        assert frame.GetSize() == frame.FromDIP(wx.Size(400, 200))
+    finally:
+        frame.Destroy()
+        _settle(wx)
+
+
+@needs_display
+def test_a_list_made_small_on_purpose_is_left_small(wx_app):
+    """A control kept small whatever the window's size can't be helped by growing the window, which would grow again every time it was fitted."""
+    import wx
+
+    from ficary.gui_layout import fit_to_contents, grow_to_fit
+
+    frame = wx.Frame(None, size=(300, 200))
+    panel = wx.Panel(frame)
+    sizer = wx.BoxSizer(wx.VERTICAL)
+    small = wx.ListBox(panel, choices=["One", "Two", "Three", "Four"], name="Small on purpose")
+    small.SetMinSize(wx.Size(40, 20))
+    sizer.Add(small, 0, wx.ALL, 8)
+    panel.SetSizer(sizer)
+    try:
+        fit_to_contents(frame, (300, 200))
+        frame.Show()
+        _settle(wx)
+        size = frame.GetSize()
+        assert size == frame.FromDIP(wx.Size(300, 200))
+        assert grow_to_fit(frame) is False
+        assert frame.GetSize() == size
+    finally:
+        frame.Destroy()
+        _settle(wx)
+
+
+@needs_display
+def test_a_window_that_needs_no_more_room_is_left_where_it_was_put(wx_app):
+    """Fitted again after its status changed, a window someone put partly off the screen stays there."""
+    import wx
+
+    from ficary.gui_layout import grow_to_fit
+
+    frame = wx.Frame(None, size=(400, 300))
+    panel = wx.Panel(frame)
+    sizer = wx.BoxSizer(wx.VERTICAL)
+    sizer.Add(wx.Button(panel, label="Short"), 0, wx.ALL, 8)
+    panel.SetSizer(sizer)
+    try:
+        frame.Show()
+        _settle(wx)
+        frame.SetPosition(wx.Point(-150, 40))
+        _settle(wx)
+        put = frame.GetPosition()
+        assert put.x < 0, "the test needs the window partly off the screen"
+        assert grow_to_fit(frame) is False
+        _settle(wx)
+        assert frame.GetPosition() == put
+    finally:
+        frame.Destroy()
+        _settle(wx)
+
+
+@needs_display
 def test_a_window_grows_by_what_would_be_cut_off_and_no_more(wx_app):
     """Sized to what everything in it would like, windows that already fitted grew; it grows only by what doesn't fit."""
     import wx
@@ -537,6 +713,48 @@ def test_a_window_with_pages_is_fitted_to_its_widest_page_once_shown(wx_app):
         _settle(wx)
         assert misfits(frame, wx) == []
         assert frame.GetSize().width <= wide.GetBestSize().width + 120, "grown far past the widest page"
+    finally:
+        frame.Destroy()
+        _settle(wx)
+
+
+@needs_display
+def test_measuring_a_windows_pages_puts_the_focus_back(wx_app, monkeypatch):
+    """Each page of a notebook is shown in turn to measure it. Windows moves the focus out of a page it hides; left there, a screen reader would start somewhere else. (A test display with no window manager gives no window the focus, so the focus is played here.)"""
+    import wx
+
+    from ficary.gui_layout import grow_to_fit
+
+    frame = wx.Frame(None, size=(400, 300))
+    panel = wx.Panel(frame)
+    notebook = wx.Notebook(panel)
+    pages = []
+    for title in ("First", "Second"):
+        page = wx.Panel(notebook)
+        page_sizer = wx.BoxSizer(wx.VERTICAL)
+        page_sizer.Add(wx.TextCtrl(page, name=f"{title} field"), 0, wx.ALL, 8)
+        page.SetSizer(page_sizer)
+        notebook.AddPage(page, title)
+        pages.append(page)
+    sizer = wx.BoxSizer(wx.VERTICAL)
+    sizer.Add(notebook, 1, wx.EXPAND | wx.ALL, 8)
+    panel.SetSizer(sizer)
+    field = pages[0].GetChildren()[0]
+    focus = {"on": field}
+    monkeypatch.setattr(wx.Window, "FindFocus", staticmethod(lambda: focus["on"]))
+    real_change = wx.Notebook.ChangeSelection
+
+    def change_and_move_the_focus(self, page):
+        focus["on"] = self
+        return real_change(self, page)
+
+    monkeypatch.setattr(wx.Notebook, "ChangeSelection", change_and_move_the_focus)
+    field.SetFocus = lambda: focus.update(on=field)
+    try:
+        frame.Show()
+        _settle(wx)
+        grow_to_fit(frame)
+        assert focus["on"] is field
     finally:
         frame.Destroy()
         _settle(wx)
@@ -611,13 +829,21 @@ def test_controls_placed_past_an_edge_widen_and_lengthen_the_window(wx_app):
     panel = wx.Panel(frame)
     right = wx.Button(panel, label="Right", pos=(340, 10))
     below = wx.Button(panel, label="Below", pos=(10, 260))
+    # A list, a text box and a spin box need room too.
+    wx.ListBox(panel, choices=["One", "Two"], pos=(700, 60), name="List placed right")
+    wx.TextCtrl(panel, pos=(10, 320), name="Box placed below")
+    wx.SpinCtrl(panel, pos=(380, 130), name="Spin box placed right")
     try:
         fit_to_contents(frame, (300, 200))
         client = frame.GetClientSize()
         assert client.width >= 340 + right.GetSize().width
         assert client.height >= 260 + below.GetSize().height
+        frame.Show()
+        _settle(wx)
+        assert misfits(frame, wx) == []
     finally:
         frame.Destroy()
+        _settle(wx)
 
 
 @needs_display

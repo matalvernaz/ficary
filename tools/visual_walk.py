@@ -105,7 +105,19 @@ def scale_system_text(factor):
     if not user32.SystemParametersInfoW(set_metrics, metrics.cbSize, ctypes.byref(metrics), tell_every_window):
         raise ctypes.WinError()
     atexit.register(user32.SystemParametersInfoW, set_metrics, original.cbSize, ctypes.byref(original), tell_every_window)
-    return f"system text made {factor} times larger: message font height {before} -> {metrics.lfMessageFont.lfHeight}"
+    # Lists and trees draw their items in the icon title font, a setting of its own.
+    get_icon_font = 0x001F
+    set_icon_font = 0x0022
+    icon_font = LOGFONTW()
+    if not user32.SystemParametersInfoW(get_icon_font, ctypes.sizeof(LOGFONTW), ctypes.byref(icon_font), 0):
+        raise ctypes.WinError()
+    original_icon_font = LOGFONTW.from_buffer_copy(icon_font)
+    icon_before = icon_font.lfHeight
+    icon_font.lfHeight = round(icon_font.lfHeight * factor)
+    if not user32.SystemParametersInfoW(set_icon_font, ctypes.sizeof(LOGFONTW), ctypes.byref(icon_font), tell_every_window):
+        raise ctypes.WinError()
+    atexit.register(user32.SystemParametersInfoW, set_icon_font, ctypes.sizeof(LOGFONTW), ctypes.byref(original_icon_font), tell_every_window)
+    return f"system text made {factor} times larger: message font height {before} -> {metrics.lfMessageFont.lfHeight}, icon title font {icon_before} -> {icon_font.lfHeight}"
 
 
 # Before wx starts, which reads the system's text size once.

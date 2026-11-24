@@ -806,8 +806,10 @@ class MainFrame(wx.Frame):
             wx.StaticText(self.audio_panel, label="Speech &rate:"),
             0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 4,
         )
+        # Its own size: a fixed 70 pixels left no room for the plus and
+        # minus buttons on Linux.
         self.speech_rate_ctrl = wx.SpinCtrl(
-            self.audio_panel, min=-50, max=100, initial=0, size=self.FromDIP(wx.Size(70, -1)),
+            self.audio_panel, min=-50, max=100, initial=0,
         )
         self.speech_rate_ctrl.SetName("Speech rate percent")
         self.speech_rate_ctrl.SetToolTip(

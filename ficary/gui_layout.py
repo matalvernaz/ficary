@@ -101,10 +101,16 @@ def fit_on_screen(window, area=None) -> None:
         window.SetSize(left, top, width, height)
 
 
-# What must show whole: text and the controls that carry it. A list, a text
-# box or a scrolled area can be smaller than it would like and scroll.
-_SHOWN_WHOLE = (wx.StaticText, wx.Button, wx.CheckBox, wx.RadioButton, wx.Choice, wx.ComboBox)
+# What must show whole: text and the controls that carry it.
+_SHOWN_WHOLE = (wx.StaticText, wx.Button, wx.CheckBox, wx.RadioButton, wx.Choice, wx.ComboBox, wx.SpinCtrl)
 _SHORTENED = wx.ST_ELLIPSIZE_START | wx.ST_ELLIPSIZE_MIDDLE | wx.ST_ELLIPSIZE_END
+
+# What can be smaller than it would like, since it scrolls, but must still
+# show enough to be used: with larger text, Add saved-search watch squeezed
+# its Channels list to nothing and the story picker its Find box to a sliver.
+_SCROLLS = (wx.ListBox, wx.ListCtrl, wx.TreeCtrl, wx.TextCtrl, wx.ScrolledWindow)
+_LINES_AT_LEAST = 3
+_CHARACTERS_AT_LEAST = 8
 
 # Room added beyond the shortfall, so a control isn't drawn hard against the edge.
 _SPARE = 8
@@ -120,6 +126,15 @@ def _room_asked(control) -> wx.Size:
     if isinstance(control, (wx.Choice, wx.ComboBox)):
         return control.GetEffectiveMinSize()
     return control.GetBestSize()
+
+
+def _least_room(control) -> wx.Size:
+    """The least room a list, text box or scrolled area can have and still be used: eight characters wide, and three lines tall (a one-line box, one). Never more than the control asks for itself, so one made small on purpose, which stays that size however big the window grows, isn't counted."""
+    width = _CHARACTERS_AT_LEAST * control.GetCharWidth()
+    one_line = isinstance(control, wx.TextCtrl) and not control.IsMultiLine()
+    height = (1 if one_line else _LINES_AT_LEAST) * control.GetCharHeight()
+    own = control.GetEffectiveMinSize()
+    return wx.Size(min(width, own.width), min(height, own.height))
 
 
 def _place_in(window, control) -> wx.Point:
@@ -142,7 +157,7 @@ def _place_in(window, control) -> wx.Point:
 
 
 def _shortfall(window) -> tuple[int, int]:
-    """How much wider and taller ``window`` needs to be for every label, button and drop-down in it to show whole: none squeezed below the size it asks for, none past the right-hand or bottom edge. Inside an area that scrolls up and down, only the height is free: something too wide for it is cut off all the same."""
+    """How much wider and taller ``window`` needs to be for every label, button and drop-down in it to show whole, and every list, text box and scrolled area to show enough to be used: none squeezed below that, none past the right-hand or bottom edge. Inside an area that scrolls up and down, only the height is free: something too wide for it is cut off all the same."""
     client = window.GetClientSize()
     need_width = need_height = 0
 
@@ -151,6 +166,20 @@ def _shortfall(window) -> tuple[int, int]:
         for child in parent.GetChildren():
             if isinstance(child, wx.TopLevelWindow) or not child.IsShown():
                 continue
+            if isinstance(child, _SCROLLS):
+                least = _least_room(child)
+                size = child.GetSize()
+                if size.width < least.width:
+                    need_width = max(need_width, least.width - size.width)
+                if scrolled is None:
+                    if size.height < least.height:
+                        need_height = max(need_height, least.height - size.height)
+                    place = _place_in(window, child)
+                    need_width = max(need_width, place.x + least.width - client.width)
+                    need_height = max(need_height, place.y + least.height - client.height)
+                elif scrolled.GetClientSize().width >= NARROWEST_WRAP:
+                    place = _place_in(scrolled, child)
+                    need_width = max(need_width, place.x + least.width - scrolled.GetClientSize().width)
             if isinstance(child, wx.ScrolledWindow):
                 look(child, child)
                 continue
@@ -238,12 +267,13 @@ def _pages_unsized(window) -> bool:
     return False
 
 
-def grow_to_fit(window) -> None:
-    """Grow ``window`` by whatever in it would be cut off, then fit it on the screen. Called again after a window's contents change (a longer status, a control shown): it was measured as it opened."""
+def grow_to_fit(window) -> bool:
+    """Grow ``window`` by whatever in it would be cut off and, if it grew, fit it on the screen; returns whether it grew. Called again after a window's contents change (a longer status, a control shown): it was measured as it opened. A window that needn't grow is left where it is, even partly off the screen, where someone may have put it."""
     if not window:
-        return
+        return False
     window.Layout()
     borders = _page_borders(window)
+    grew = False
     # Laying out again after growing can wrap a label differently, so a
     # few rounds; each only ever grows the window.
     for _ in range(4):
@@ -259,13 +289,16 @@ def grow_to_fit(window) -> None:
             size.width + (extra_width + _SPARE if extra_width else 0),
             size.height + (extra_height + _SPARE if extra_height else 0),
         )
-    fit_on_screen(window)
+        grew = True
+    if grew:
+        fit_on_screen(window)
+    return grew
 
 
 def fit_to_contents(window, minimum) -> None:
     """Size the top-level ``window`` to ``minimum`` (width and height in pixels at 100% scaling, so larger on a screen scaled up), then larger wherever a label, button or drop-down in it would be cut off, and fit it on the screen.
 
-    Sized in fixed pixels, eight of Ficary's windows cut off a button or a line of text once the text was larger: with Windows display scaling at 125% or 150%, which laptops often come set to, or a larger system font. Matt chose to have that fixed (2026-11-24). A window grows only by what doesn't fit: lists, text boxes and scrolled areas can be smaller than they would like, so sizing to what everything would like made windows that already fitted larger.
+    Sized in fixed pixels, Ficary's windows cut off buttons and lines of text, and squeezed lists to nothing, once the system's text was larger (Windows' larger text setting, or large text on Linux): eight of them at 150%. Matt chose to have that fixed (2026-11-24). Windows display scaling doesn't do this, as Ficary isn't DPI-aware: Windows draws its windows as at 100% and stretches them. A window grows only by what doesn't fit: lists, text boxes and scrolled areas can be smaller than they would like, so sizing to what everything would like made windows that already fitted larger.
 
     A window with notebook pages is measured when it is first shown, since on Linux its pages have no size before then.
     """
@@ -276,7 +309,8 @@ def fit_to_contents(window, minimum) -> None:
     if (width, height) != (size.width, size.height):
         window.SetSize(width, height)
     if not _pages_unsized(window):
-        grow_to_fit(window)
+        if not grow_to_fit(window):
+            fit_on_screen(window)
         return
 
     def on_first_show(event):

@@ -2,15 +2,25 @@
 
 ## Unreleased
 
-**Every window works with larger text: 125% and 150% display scaling**
+**Every window works with larger system text**
 
-* Windows were sized in fixed pixels, so with Windows display scaling at
-  125% or 150%, which laptops often come set to, or a larger font, eight
-  of them cut off a button or a line of text: Preferences, TTS
-  providers, AI settings, the Library window, Reorganize, Add from URL
-  List, the reader and the watchlist. Each window now opens at its usual
-  size and grows by exactly what would otherwise be cut off. At 100%
-  nothing changes size.
+* With the system's text set larger (Windows' larger text setting, or
+  large text on Linux), windows sized in fixed pixels cut off buttons
+  and lines of text, and some squeezed a list or a text box to nothing:
+  Add saved-search watch lost its Channels list, the story picker's
+  Find box shrank to a sliver on Linux, and AI settings hid its log.
+  Each window now opens at its usual size and grows by whatever would
+  otherwise be cut off or squeezed, and grows again when what it shows
+  changes (Add Story's BookNLP size, AI settings' Ollama buttons, the
+  reader's voice). At the usual text size no window changes size.
+* Windows display scaling at 125% or 150% was never affected: Ficary
+  isn't DPI-aware, so Windows draws its windows as at 100% and enlarges
+  them, a little blurred.
+* On a screen 768 pixels tall with text at 150%, the FFN search
+  window's results list and the main window's Details box show only a
+  line or two: there isn't room for more.
+* Add Story's speech rate box has room for its plus and minus buttons
+  on Linux.
 * Long notes in the Library, Reorganize and Add from URL List windows
   wrap; the folder path in Abandoned Stories shortens in the middle on
   screen (a screen reader still reads it whole); buttons that had fixed
