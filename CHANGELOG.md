@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+**Members-only pages say so**
+
+* When a site answers with its sign-in page, as forums do for threads
+  only their members can read, Ficary now stops at once and says the
+  page is only open to members who are signed in. Before, it retried
+  for about a minute and then reported "Failed after 5 retries", and
+  the command line added advice to slow down.
+
 ## 2.20.15 — 2026-11-23
 
 **ScribbleHub: update checks work again; downloads are being blocked**

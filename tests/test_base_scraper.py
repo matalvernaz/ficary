@@ -760,3 +760,60 @@ class TestBrowserFetchFastFail:
             scraper._fetch("https://archiveofourown.org/works/1", session=sess)
         # Fast-fail: exactly one request, not the full retry budget.
         assert len(sess.urls) == 1
+
+
+class TestSignInPage:
+    """A 403 that is the site's sign-in page (a members-only forum thread)
+    used to be retried for about a minute, rotating browsers, and then
+    reported as "Failed after N retries", which on the command line came
+    with advice to slow down."""
+
+    def _sign_in_response(self, title="Log in | The Tickling Media Forum"):
+        return type("R", (), {"status_code": 403, "text": f"<html><head><title>{title}</title></head></html>", "headers": {}})()
+
+    def test_it_stops_at_once_and_says_the_page_is_for_members(self, monkeypatch):
+        from ficary.scraper import RateLimitError, SignInRequiredError
+
+        monkeypatch.setattr("ficary.scraper.time.sleep", lambda s: None)
+        scraper = BaseScraper(use_cache=False, max_retries=5)
+        sess = _StubSession([self._sign_in_response() for _ in range(5)])
+        monkeypatch.setattr(scraper, "_rotate_browser", lambda: sess)
+        monkeypatch.setattr(scraper, "_maybe_seed_cf_cookies", lambda s, u: False)
+        with pytest.raises(SignInRequiredError) as error:
+            scraper._fetch("https://www.ticklingforum.com/threads/a-thread.1/", session=sess)
+        assert len(sess.urls) == 1
+        assert "signed in" in str(error.value)
+        # Callers that stop and move on for a RateLimitError still do.
+        assert isinstance(error.value, RateLimitError)
+
+    @pytest.mark.parametrize("title", ["Sign In", "Login - Example", "Log-in required"])
+    def test_other_sign_in_titles(self, monkeypatch, title):
+        from ficary.scraper import SignInRequiredError
+
+        monkeypatch.setattr("ficary.scraper.time.sleep", lambda s: None)
+        scraper = BaseScraper(use_cache=False, max_retries=3)
+        sess = _StubSession([self._sign_in_response(title) for _ in range(3)])
+        monkeypatch.setattr(scraper, "_rotate_browser", lambda: sess)
+        with pytest.raises(SignInRequiredError):
+            scraper._fetch("https://www.example-forum.net/threads/1/", session=sess)
+
+    def test_a_cloudflare_block_page_is_not_taken_for_one(self, monkeypatch):
+        from ficary.scraper import SignInRequiredError
+
+        monkeypatch.setattr("ficary.scraper.time.sleep", lambda s: None)
+        scraper = BaseScraper(use_cache=False, max_retries=2)
+        blocked = type("R", (), {"status_code": 403, "text": "<title>Attention Required! | Cloudflare</title>", "headers": {}})
+        sess = _StubSession([blocked() for _ in range(4)])
+        monkeypatch.setattr(scraper, "_rotate_browser", lambda: sess)
+        with pytest.raises(Exception) as error:
+            scraper._fetch("https://www.example-forum.net/threads/1/", session=sess)
+        assert not isinstance(error.value, SignInRequiredError)
+
+    def test_the_command_line_does_not_tell_members_to_slow_down(self):
+        import inspect
+        from ficary import cli
+
+        source = inspect.getsource(cli)
+        members = source.index("except SignInRequiredError as exc:")
+        rate = source.index("except RateLimitError as exc:\n        report_error(f\"\\nRate limited")
+        assert members < rate

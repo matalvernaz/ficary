@@ -29,6 +29,7 @@ from .scraper import (
     CloudflareBlockError,
     CloudflareChallengeError,
     RateLimitError,
+    SignInRequiredError,
     StoryNotFoundError,
 )
 from .sites import (
@@ -1297,6 +1298,9 @@ def _download_one(
         return False
     except CloudflareBlockError as exc:
         report_error(f"Blocked: {exc}")
+        return False
+    except SignInRequiredError as exc:
+        report_error(f"Members only: {exc}")
         return False
     except RateLimitError as exc:
         report_error(f"\nRate limited: {exc}")

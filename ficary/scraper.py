@@ -136,6 +136,31 @@ class RateLimitError(Exception):
     """Raised when rate-limit retries are exhausted."""
 
 
+class SignInRequiredError(RateLimitError):
+    """The site answered 403 with its sign-in page: the page is only open
+    to signed-in members, and retrying will not change that.
+
+    A RateLimitError, so every caller that stops, reports and moves on
+    for one does the same for this. It used to be one: after about a
+    minute of retries and browser rotations, the user was told "Failed
+    after 5 retries" and, on the command line, to slow down.
+    """
+
+
+_SIGN_IN_TITLE_RE = re.compile(r"\b(?:log\s*-?\s*in|sign\s*-?\s*in)\b", re.IGNORECASE)
+_TITLE_RE = re.compile(r"<title[^>]*>(.*?)</title>", re.IGNORECASE | re.DOTALL)
+
+
+def _is_sign_in_page(resp) -> bool:
+    """Whether a response is a site's sign-in page, judged by its title
+    ("Log in | The Tickling Media Forum", "Sign In", "Login")."""
+    try:
+        match = _TITLE_RE.search(resp.text or "")
+    except Exception:  # noqa: BLE001 - no text, no verdict
+        return False
+    return bool(match and _SIGN_IN_TITLE_RE.search(match.group(1)))
+
+
 class StoryNotFoundError(Exception):
     """Raised when the story does not exist."""
 
@@ -997,6 +1022,12 @@ class BaseScraper:
                 self._log_fetch_diagnostic(
                     sess=sess, resp=resp, url=url, label="403",
                 )
+                if _is_sign_in_page(resp):
+                    raise SignInRequiredError(
+                        f"{url} is only open to members who are signed in "
+                        "to the site: it answered with its sign-in page, "
+                        "so retrying will not help."
+                    )
                 last_was_403 = True
                 # First 403: try the on-disk cookie cache (free) in
                 # case a previous session already solved the challenge.
