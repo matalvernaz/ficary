@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 2.20.22 — 2026-11-24
 
 **Debug adds detail to the log file only**
 
