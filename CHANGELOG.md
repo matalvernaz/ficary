@@ -2,20 +2,17 @@
 
 ## Unreleased
 
-**ScribbleHub works again**
+**ScribbleHub: update checks work again; downloads are being blocked**
 
 * ScribbleHub stopped serving the series address Ficary used, so every
   ScribbleHub download and update check failed with "Not found". Ficary
   now asks for an address the site sends on to the series page, so
-  checking a story for new chapters works again, and so do downloads
-  wherever ScribbleHub lets Ficary see the full chapter list. Stories
-  already in a library keep the address they have, so none of them
-  looks new or downloads twice.
-* ScribbleHub's Cloudflare protection now often blocks the request for
-  the full chapter list. When it does, the message says so and says
-  what gets past it, a ScribbleHub cookie from a browser where the site
-  works, in Preferences > Downloads, instead of suggesting waiting and
-  trying again.
+  checking a story for new chapters works again. Stories already in a
+  library keep the address they have, so none of them looks new.
+* Downloads from ScribbleHub are still blocked for now: its Cloudflare
+  protection turns away the request for the full chapter list, and
+  Ficary will not save a book with chapters missing. The message now
+  says that, instead of suggesting waiting and trying again.
 
 **Settings survive a power cut**
 

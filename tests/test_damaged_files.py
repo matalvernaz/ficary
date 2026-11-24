@@ -379,6 +379,19 @@ class TestSettings:
         [line] = warnings_from(caplog, "ficary.prefs")
         assert "default settings" in line
 
+    @pytest.mark.parametrize("encoding", ["utf-16", "utf-16-be"])
+    def test_a_file_saved_by_hand_as_utf16_is_left_alone(self, settings_file, caplog, encoding):
+        """Notepad's "Unicode" is UTF-16: zero bytes everywhere, but sound,
+        and wx reads it by its byte-order mark."""
+        body = "library_path=/home/someone/Stories\n".encode(encoding)
+        if not body.startswith((b"\xff\xfe", b"\xfe\xff")):
+            body = b"\xfe\xff" + body
+        settings_file.write_bytes(body)
+        prefs_module._check_settings_file()
+        assert settings_file.read_bytes() == body
+        assert list(settings_file.parent.glob("settings.unreadable-*.ini")) == []
+        assert warnings_from(caplog, "ficary.prefs") == []
+
     def test_it_is_checked_once_a_run(self, settings_file):
         """Every window makes its own Prefs."""
         settings_file.write_bytes(SOUND_SETTINGS)

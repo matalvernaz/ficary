@@ -479,7 +479,14 @@ _settings_check_lock = threading.Lock()
 
 def _looks_damaged(body: bytes) -> bool:
     """What a power cut part-way through a save leaves: nothing, or
-    zeros where the text should be."""
+    zeros where the text should be.
+
+    wx writes UTF-8, which never has a zero byte. A file saved by hand
+    as UTF-16 (Notepad's "Unicode") is full of them but is sound: wx
+    reads it by its byte-order mark, so a file starting with one is not
+    taken for damage."""
+    if body.startswith((b"\xff\xfe", b"\xfe\xff")):
+        return False
     return not body.strip() or b"\x00" in body
 
 

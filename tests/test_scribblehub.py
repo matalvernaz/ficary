@@ -298,11 +298,15 @@ class TestBlockedChapterList:
             sc.download("https://www.scribblehub.com/series/1000564/apokalypsis-lost-magic-awakening/")
         return str(error.value)
 
-    def test_a_cloudflare_challenge_says_what_gets_past_it(self, monkeypatch):
-        """Waiting does not get past a challenge; the cookie does."""
+    def test_a_cloudflare_challenge_is_named_and_not_called_temporary(self, monkeypatch):
+        """Waiting does not get past a challenge, so the message must not
+        tell people to wait and try again. It promises no way past it
+        either: a pasted cookie has not been shown to work, and Cloudflare
+        ties its clearance to the browser's User-Agent, which ScribbleHub
+        has no setting for."""
         message = self._download_with_toc_answer(monkeypatch, 403, {"cf-mitigated": "challenge", "server": "cloudflare"})
         assert "Cloudflare" in message
-        assert "Preferences > Downloads, ScribbleHub cookie" in message
+        assert "unlikely to help" in message
         assert "Wait a moment" not in message
 
     def test_another_failure_still_says_to_try_again(self, monkeypatch):

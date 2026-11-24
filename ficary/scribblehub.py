@@ -351,10 +351,9 @@ class ScribbleHubScraper(CookieAuthMixin, BaseScraper):
                 f"{len(chapter_list)} chapter(s) "
                 + (f"of {declared} " if declared else "")
                 + "could be seen. Nothing was saved, because the book "
-                "would be missing chapters. Waiting will not get past it: "
-                "copy a ScribbleHub cookie from a browser where the site "
-                "works into Preferences > Downloads, ScribbleHub cookie "
-                "(--scribblehub-cookie on the command line), and try again."
+                "would be missing chapters. This is ScribbleHub turning "
+                "away automated downloads, so trying again soon is "
+                "unlikely to help."
             )
         if incomplete:
             raise PartialTableOfContentsError(
