@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+**New books can be read by a media server; audiobooks survive a power cut**
+
+* On Linux and Mac every new book was saved so that only its owner
+  could read it, so a media server such as Audiobookshelf running under
+  another account could not see a new book until its permissions were
+  changed by hand. New books and audiobooks now get the same
+  permissions as any other new file on the computer. A book that is
+  updated keeps the permissions it had. Settings, cookies, API keys and
+  caches stay readable by their owner only. Windows is unaffected.
+* An audiobook was written straight to its final name, so a power cut
+  or crash during the last step of making it left a cut-off audiobook
+  that looked finished, and a re-make that failed at that step
+  destroyed the good audiobook already there. It is now put together
+  under a temporary name and swapped in only once complete, as every
+  other book format already was. Cancelling during that step leaves
+  the old audiobook untouched.
+
 **Downloads can be stopped**
 
 * Once a story download had started, nothing stopped it short of

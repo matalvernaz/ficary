@@ -276,7 +276,7 @@ def render(monkeypatch, tmp_path):
     async def no_heading(*args, **kwargs):
         return False
 
-    def build_m4b(chapter_files, story, m4b_path, cover_path=None, intro_file=None):
+    def build_m4b(chapter_files, story, m4b_path, cover_path=None, intro_file=None, **options):
         Path(m4b_path).write_bytes(b"audiobook")
 
     monkeypatch.delenv("FICARY_CHAPTER_AUDIO_KEEP_DAYS", raising=False)

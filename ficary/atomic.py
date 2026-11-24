@@ -25,6 +25,14 @@ Design notes:
   and the actual data hitting the platter still leaves either the old
   file or the new one — never garbage.
 
+* Permissions. A file that already exists keeps its permission bits.
+  A new one is private (owner only) unless the caller passes
+  ``shared=True``, in which case it gets whatever any other new file in
+  that folder would get: the process umask and the folder's default
+  ACL decide. Books and audiobooks are written shared, so a media
+  server running under another account can read them. Settings,
+  cookies, keys and caches stay private.
+
 * We do *not* fsync the enclosing directory. On ext4 + most journalled
   filesystems the rename itself is journalled and durable; the extra
   sync would double the wall time of a library-wide export run for a
@@ -36,6 +44,7 @@ Design notes:
 from __future__ import annotations
 
 import os
+import secrets
 import shutil
 import tempfile
 from contextlib import contextmanager
@@ -43,6 +52,30 @@ from pathlib import Path
 from typing import Generator, Union
 
 PathLike = Union[str, os.PathLike[str]]
+
+
+def _new_temp(target_path: Path, suffix: str, shared: bool) -> tuple[int, str]:
+    """Create the temporary file a write goes into, beside the target.
+
+    Private by default: ``tempfile.mkstemp`` makes it owner-only, and a
+    new target keeps that. With ``shared`` it is created the way any
+    program creates a new file, asking for read and write for everyone
+    and letting the umask and the folder's default ACL take away what
+    they take away. That is "the system's usual setting" exactly, with
+    no reading of the umask (reading it means changing it for a moment,
+    which would race other threads creating files).
+    """
+    prefix = f".{target_path.name}."
+    if not shared:
+        return tempfile.mkstemp(prefix=prefix, suffix=suffix, dir=str(target_path.parent))
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0)
+    for _attempt in range(100):
+        name = target_path.parent / f"{prefix}{secrets.token_hex(4)}{suffix}"
+        try:
+            return os.open(str(name), flags, 0o666), str(name)
+        except FileExistsError:
+            continue
+    raise FileExistsError(f"Could not find a free temporary name beside {target_path}")
 
 
 def _inherit_target_perms(tmp_path: Path, target_path: Path) -> None:
@@ -54,7 +87,8 @@ def _inherit_target_perms(tmp_path: Path, target_path: Path) -> None:
     tool) had granted — a shared library on a NAS becomes unreadable
     by the Plex / Calibre user, a chmod 644 config file silently
     becomes private. We only run it when the target already exists;
-    new files keep mkstemp's secure default."""
+    a new file keeps the mode its temporary file was created with (see
+    :func:`_new_temp`)."""
     if not target_path.exists():
         return
     try:
@@ -72,17 +106,20 @@ def atomic_write_text(
     *,
     encoding: str = "utf-8",
     fsync_dir: bool = False,
+    shared: bool = False,
 ) -> None:
     """Write ``content`` to ``path`` atomically.
 
     The target path either ends up with the full new content or is
     left untouched; there's no half-written window a concurrent
-    reader (or a crash-restart re-scan) could observe.
+    reader (or a crash-restart re-scan) could observe. ``shared``: see
+    the module notes on permissions.
     """
     _atomic_write(
         path,
         content.encode(encoding),
         fsync_dir=fsync_dir,
+        shared=shared,
     )
 
 
@@ -91,6 +128,7 @@ def atomic_write_bytes(
     content: bytes,
     *,
     fsync_dir: bool = False,
+    shared: bool = False,
 ) -> None:
     """Binary equivalent of :func:`atomic_write_text`.
 
@@ -98,7 +136,7 @@ def atomic_write_bytes(
     cover images, the EPUB zip (when we've built it in memory first),
     and other binary artefacts.
     """
-    _atomic_write(path, content, fsync_dir=fsync_dir)
+    _atomic_write(path, content, fsync_dir=fsync_dir, shared=shared)
 
 
 @contextmanager
@@ -107,6 +145,7 @@ def atomic_path(
     *,
     suffix: str = ".tmp",
     fsync_dir: bool = False,
+    shared: bool = False,
 ) -> Generator[Path, None, None]:
     """Yield a temporary Path in the same directory as ``target``.
 
@@ -121,14 +160,10 @@ def atomic_path(
     """
     target_path = Path(target)
     target_path.parent.mkdir(parents=True, exist_ok=True)
-    # mkstemp returns a file descriptor we immediately close — the
-    # third-party writer opens the path itself. The mkstemp prefix
-    # keeps the temp file hidden in directory listings.
-    fd, tmp_name = tempfile.mkstemp(
-        prefix=f".{target_path.name}.",
-        suffix=suffix,
-        dir=str(target_path.parent),
-    )
+    # The file descriptor is closed at once: the third-party writer
+    # opens the path itself. The leading dot keeps the temp file hidden
+    # in directory listings.
+    fd, tmp_name = _new_temp(target_path, suffix, shared)
     os.close(fd)
     tmp_path = Path(tmp_name)
     try:
@@ -178,14 +213,11 @@ def _atomic_write(
     payload: bytes,
     *,
     fsync_dir: bool,
+    shared: bool = False,
 ) -> None:
     target_path = Path(path)
     target_path.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp_name = tempfile.mkstemp(
-        prefix=f".{target_path.name}.",
-        suffix=".tmp",
-        dir=str(target_path.parent),
-    )
+    fd, tmp_name = _new_temp(target_path, ".tmp", shared)
     try:
         with os.fdopen(fd, "wb") as f:
             f.write(payload)

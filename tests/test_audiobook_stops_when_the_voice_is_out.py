@@ -321,7 +321,7 @@ def render(quick, monkeypatch, tmp_path):
     async def no_heading(*args, **kwargs):
         return False
 
-    def build_m4b(chapter_files, story, m4b_path, cover_path=None, intro_file=None):
+    def build_m4b(chapter_files, story, m4b_path, cover_path=None, intro_file=None, **options):
         Path(m4b_path).write_bytes(b"audiobook")
 
     monkeypatch.setattr(tts, "_check_ffmpeg", lambda *args, **kwargs: None)

@@ -2883,8 +2883,19 @@ def _run_ffmpeg(cmd, *, step, timeout=_FFMPEG_BUILD_TIMEOUT_S):
     return result
 
 
-def build_m4b(chapter_files, story, output_path, cover_path=None, intro_file=None):
+def build_m4b(chapter_files, story, output_path, cover_path=None, intro_file=None,
+              *, cancel_event=None):
     """Merge per-chapter MP3s into a single M4B with chapter markers.
+
+    The audiobook is made under a temporary name beside ``output_path``
+    and put in place only once it is complete. ffmpeg used to write the
+    final name directly, so a power cut or a crash during the last step
+    left a cut-off audiobook that looked finished, and a failed re-make
+    wrecked the good one already there. A new audiobook gets the
+    system's usual permissions, like the other book formats; one that
+    is replaced keeps the old file's. ``cancel_event``, set while the
+    audiobook was being put together, stops it before it replaces
+    anything.
 
     ``chapter_files`` is either:
 
@@ -2912,10 +2923,19 @@ def build_m4b(chapter_files, story, output_path, cover_path=None, intro_file=Non
     # same .m4b (e.g. the same story queued twice from different entry
     # points) would otherwise have ffmpeg write over each other.
     from . import single_flight
+    from .atomic import atomic_path
     with single_flight.path_lock(output_path):
-        return _build_m4b_locked(
-            chapter_files, story, output_path, cover_path, intro_file,
-        )
+        # ".m4b" last, so ffmpeg picks the same container from the
+        # temporary name as from the real one.
+        with atomic_path(output_path, suffix=".m4b", shared=True) as partial:
+            _build_m4b_locked(
+                chapter_files, story, partial, cover_path, intro_file,
+            )
+            _raise_if_cancelled(
+                cancel_event,
+                "Audiobook render cancelled during the final assembly.",
+            )
+        return output_path
 
 
 def _build_m4b_locked(chapter_files, story, output_path, cover_path, intro_file):
@@ -4317,7 +4337,10 @@ def _generate_audiobook_inner(
     # build_tmp cleanup is handled by the outer ``generate_audiobook``
     # finally clause so any exception path before this point also clears
     # the per-run scratch dir.
-    build_m4b(chapter_files, story, m4b_path, cover_path, intro_file=intro_path)
+    build_m4b(
+        chapter_files, story, m4b_path, cover_path, intro_file=intro_path,
+        cancel_event=cancel_event,
+    )
 
     if cancel_event is not None and cancel_event.is_set():
         # Cancel landed during the mux. Don't hand back a file the user

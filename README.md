@@ -361,6 +361,16 @@ Library covers both folders in one pass.
 
 ### Housekeeping
 
+Every file Ficary saves is written whole or not at all: it goes to a
+hidden temporary file beside the real one and replaces it only once
+complete, so a crash or a power cut leaves the old file or the new
+one, never half of one. On Linux and Mac, new books and audiobooks get
+the same permissions as any other new file on the computer, so a media
+server such as Audiobookshelf or Jellyfin running under another
+account can read them; a book that is updated keeps the permissions
+its file already had. Settings, cookies and API keys are only ever
+readable by your own account.
+
 `ficary --doctor` checks the library index, the watchlist, and the
 download cache for problems and explains what it finds. Add `--heal`
 to apply the safe fixes. Anything that would delete data is a

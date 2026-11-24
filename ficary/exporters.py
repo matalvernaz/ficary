@@ -629,7 +629,9 @@ def export_txt(
         buf.write(html_to_text(html))
     _report_note_check(note_check, progress)
     with single_flight.path_lock(path):
-        atomic_write_text(path, buf.getvalue())
+        # Shared: a new book gets the system's usual permissions, so a
+        # media server under another account can read it.
+        atomic_write_text(path, buf.getvalue(), shared=True)
     return path
 
 
@@ -787,7 +789,9 @@ def export_html(
 
     buf.write("</body>\n</html>\n")
     with single_flight.path_lock(path):
-        atomic_write_text(path, buf.getvalue())
+        # Shared: a new book gets the system's usual permissions, so a
+        # media server under another account can read it.
+        atomic_write_text(path, buf.getvalue(), shared=True)
     return path
 
 
@@ -2655,7 +2659,7 @@ def export_epub(
     # the context manager commit the rename on a clean exit. A crash or
     # exception from inside ``write_epub`` leaves the existing file (if
     # any) untouched instead of corrupting it.
-    with single_flight.path_lock(path), atomic_path(path) as tmp:
+    with single_flight.path_lock(path), atomic_path(path, shared=True) as tmp:
         epub.write_epub(str(tmp), book)
     return path
 
