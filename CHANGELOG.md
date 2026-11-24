@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 2.20.19 — 2026-11-24
 
 **Whole StoriesOnline stories with a free account**
 
