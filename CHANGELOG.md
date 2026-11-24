@@ -18,7 +18,15 @@
   went, until the next one starts.
 * The check before an update gives each story one line with its
   answer ("up to date, 12 chapters", "3 new chapters, 15 on the site"),
-  instead of saying it again in two more lines afterwards.
+  instead of saying it again in two more lines afterwards. Stories
+  already known to have new chapters, which is all Download New
+  Chapters fetches, are not listed as checked: they get their two
+  lines when they download.
+* Downloads from the main window work the same way: their chapters go
+  to the status bar instead of the status log, along with saving and,
+  for an audiobook, the chapter being spoken. Stories picked from an
+  author's page or bookmarks are named as they download, and a series
+  says which part it is on.
 * The AI author's-note check's line per chapter, a "cache hit" for
   every chapter already in the book on an update, stays out of the
   pane; its one-line tally at the end is still there.

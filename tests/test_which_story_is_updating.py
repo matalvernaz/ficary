@@ -194,9 +194,11 @@ class TestEachStory:
             'Updating 2 of 2: "Second Story", 3 new chapters.',
             'Updated "Second Story": 4 chapters, 3 new.',
         ]
-        # Three lines a story in all, the checking's one included.
+        # Two lines a story in all: an earlier check found these, so
+        # nothing is asked and nothing said about them before they start.
         for title in ("First Story", "Second Story"):
-            assert len([line for line in lines if f'"{title}"' in line]) == 3, title
+            assert len([line for line in lines if f'"{title}"' in line]) == 2, title
+        assert not any("Checking" in line for line in lines)
 
     def test_the_status_bar_says_which_story_and_chapter(self, tmp_path, monkeypatch, saving):
         site = TitledSite()
@@ -341,9 +343,15 @@ class TestTheChecking:
         # The checking is over; a dry run has no result of its own to show.
         assert activity.current() == ""
 
-    def test_one_known_from_an_earlier_check_says_so(self, tmp_path, monkeypatch):
-        _site, lines = self.checked(tmp_path, monkeypatch, [None], extra=[{"remote": 4}])
-        assert '  1 of 1: "Story A", 3 new chapters, 4 on the site (found by an earlier check)' in lines
+    def test_one_already_known_to_have_new_chapters_is_not_asked_or_listed(self, tmp_path, monkeypatch):
+        """Download New Chapters, or a story an earlier check found: it is named when it downloads."""
+        site, lines = self.checked(tmp_path, monkeypatch, [None, 2], extra=[{"remote": 4}, {}])
+        assert "\nChecking 1 story for new chapters..." in lines
+        assert '  1 of 1: "Story B", 1 new chapter, 2 on the site' in lines
+        assert not any('"Story A"' in line for line in lines[:lines.index("")])
+        assert site.checking_said == ["Checking for new chapters: 0 of 1 story checked."]
+        # The dry run's summary still lists it.
+        assert "  Story A  (1 -> 4)" in lines
 
     def test_one_that_could_not_be_checked_is_named_and_listed_at_the_end(self, tmp_path, monkeypatch, caplog):
         caplog.set_level(logging.WARNING, logger="ficary.cli")
@@ -383,6 +391,14 @@ class TestOneStoryOnItsOwn:
         )
         assert ok is False
         assert lines == ['Could not update "A Story": The site said no.']
+
+    def test_with_the_ai_check_on_the_status_bar_says_so(self, tmp_path, monkeypatch, saving):
+        """The check can take minutes, which "saving" alone would not explain."""
+        monkeypatch.setattr(cli, "_llm_strip_notes_config", lambda args: {"provider": "ollama", "model": "a-model"})
+        site = TitledSite()
+        plug_in(monkeypatch, site)
+        update(stories(tmp_path, "First Story"), site)
+        assert saving == ['Updating 1 of 1: "First Story", checking for author\'s notes, then saving.']
 
     def test_the_ai_note_checks_line_per_chapter_stays_out_of_the_pane(self, tmp_path, monkeypatch, saving):
         """Its tally at the end still reaches it."""
@@ -533,3 +549,290 @@ class TestTheStatusBars:
             frame._clip_timer.Stop()
             frame.Destroy()
             wx.SafeYield()
+
+
+# ── The main window's downloads ──────────────────────────────────
+
+
+class NotingSite:
+    """A site whose stories have ``chapters`` chapters. It notes what the status bar would say right after each chapter is reported."""
+
+    site_name = "royalroad"
+    concurrency = 1
+
+    def __init__(self, chapters: int = 3, fail_with: Exception | None = None):
+        self.chapters = chapters
+        self.fail_with = fail_with
+        self.status_bar_said: list[str] = []
+
+    def parse_story_id(self, url):
+        return int(url.split("/")[4])
+
+    def is_forum_url(self, url):
+        return False
+
+    def is_author_url(self, url):
+        return False
+
+    def download(self, url, progress_callback=None, skip_chapters=0, chapters=None):
+        if self.fail_with is not None:
+            raise self.fail_with
+        story = Story(id=self.parse_story_id(url), title=f"Story {self.parse_story_id(url)}", author="Nobody", summary="", url=url)
+        for number in range(skip_chapters + 1, self.chapters + 1):
+            story.chapters.append(Chapter(number=number, title=f"Chapter {number}", html=f"<p>{number}</p>"))
+            if progress_callback:
+                progress_callback(number, self.chapters, f"Chapter {number}", False)
+            self.status_bar_said.append(activity.current())
+        return story
+
+
+def royal_road(number: int) -> str:
+    return f"https://www.royalroad.com/fiction/{number}/a-story"
+
+
+@pytest.fixture
+def main_window(wx_app, monkeypatch, tmp_path):
+    """A real main window whose exports are noted, with what the status bar said at the time, instead of written."""
+    from ficary import announce, gui
+
+    frame = gui.MainFrame()
+    frame.saving_said = []
+
+    def export(story, params, update_path=None, job=None, doing=None):
+        frame.saving_said.append(activity.current())
+        return tmp_path / f"{story.id}.epub"
+
+    monkeypatch.setattr(frame, "_export_story", export)
+    monkeypatch.setattr(announce, "announce", lambda text: None)
+    with frame._log_lock:
+        frame._log_queue.clear()
+    yield frame
+    frame._clip_timer.Stop()
+    frame.Destroy()
+
+
+def download_params(window, **changes):
+    from ficary import gui
+
+    return gui._DownloadParams(
+        fmt=changes.pop("fmt", "epub"), raw_output_dir="", filename_template="{title}",
+        hr_as_stars=False, strip_notes=False, llm_strip_notes=changes.pop("llm_strip_notes", False),
+        stop_generation=window._stop_generation, **changes,
+    )
+
+
+def logged(window) -> str:
+    with window._log_lock:
+        return "".join(window._log_queue)
+
+
+@needs_display
+class TestTheMainWindowsDownloads:
+    def test_a_download_keeps_its_chapters_in_the_status_bar(self, main_window, monkeypatch):
+        site = NotingSite()
+        monkeypatch.setattr(main_window, "_scraper_for", lambda *a, **k: site)
+        outcome = main_window._run_download(royal_road(7), params=download_params(main_window))
+        assert outcome.ok
+        assert site.status_bar_said == [
+            "Downloading from Royal Road, chapter 1 of 3.",
+            "Downloading from Royal Road, chapter 2 of 3.",
+            "Downloading from Royal Road, chapter 3 of 3.",
+        ]
+        assert "Chapter 2" not in logged(main_window)
+        assert "Title:    Story 7" in logged(main_window)
+
+    def test_once_done_the_bar_says_how_it_went(self, main_window, monkeypatch):
+        monkeypatch.setattr(main_window, "_scraper_for", lambda *a, **k: NotingSite())
+        main_window._run_download(royal_road(7), params=download_params(main_window))
+        assert activity.current() == "Downloaded Story 7."
+
+    def test_a_failed_download_says_so_in_the_bar(self, main_window, monkeypatch):
+        monkeypatch.setattr(main_window, "_scraper_for", lambda *a, **k: NotingSite(fail_with=RuntimeError("HTTP 500")))
+        main_window._run_download(royal_road(7), params=download_params(main_window))
+        assert activity.current() == "A download failed. The status pane says why."
+
+    def test_an_update_names_its_file(self, main_window, monkeypatch, tmp_path):
+        from ficary import updater
+
+        site = NotingSite()
+        monkeypatch.setattr(main_window, "_scraper_for", lambda *a, **k: site)
+        monkeypatch.setattr(updater, "read_chapters", lambda path: [Chapter(number=1, title="Chapter 1", html="<p>1</p>")])
+        book = tmp_path / "Some Story - Someone.epub"
+        book.write_bytes(b"the book")
+        main_window._run_download(
+            royal_road(7), skip_chapters=1, is_update=True, update_path=book,
+            params=download_params(main_window),
+        )
+        assert site.status_bar_said == [
+            'Updating "Some Story - Someone", chapter 2 of 3.',
+            'Updating "Some Story - Someone", chapter 3 of 3.',
+        ]
+
+    def test_where_progress_went_is_said_once(self, main_window, monkeypatch):
+        from ficary.gui_status_bar import HINT
+
+        monkeypatch.setattr(main_window, "_scraper_for", lambda *a, **k: NotingSite())
+        main_window._run_download(royal_road(7), params=download_params(main_window))
+        main_window._run_download(royal_road(8), params=download_params(main_window))
+        assert logged(main_window).count(HINT) == 1
+
+    def test_a_picked_batch_names_each_story(self, main_window, monkeypatch):
+        site = NotingSite(chapters=2)
+        monkeypatch.setattr(main_window, "_scraper_for", lambda *a, **k: site)
+        urls = [royal_road(11), royal_road(12)]
+        main_window._run_picked_batch(
+            urls, "author", params=download_params(main_window),
+            titles={urls[0]: "The First One", urls[1]: "The\n  Second One"},
+        )
+        assert '\nDownloading 1 of 2: "The First One"\n' in logged(main_window)
+        assert '\nDownloading 2 of 2: "The Second One"\n' in logged(main_window)
+        assert site.status_bar_said == [
+            'Downloading 1 of 2: "The First One", chapter 1 of 2.',
+            'Downloading 1 of 2: "The First One", chapter 2 of 2.',
+            'Downloading 2 of 2: "The Second One", chapter 1 of 2.',
+            'Downloading 2 of 2: "The Second One", chapter 2 of 2.',
+        ]
+        assert 'Saved "Story 11":' in logged(main_window)
+        assert "Chapter 1" not in logged(main_window)
+
+    def test_a_picked_story_without_a_title_is_named_by_its_site(self, main_window, monkeypatch):
+        site = NotingSite(chapters=1)
+        monkeypatch.setattr(main_window, "_scraper_for", lambda *a, **k: site)
+        main_window._run_picked_batch([royal_road(11)], "author", params=download_params(main_window))
+        assert site.status_bar_said == ["Downloading 1 of 1 from Royal Road, chapter 1 of 1."]
+        assert f"\n[1/1] {royal_road(11)}\n" in logged(main_window)
+
+    def test_a_series_batch_names_the_series(self, main_window):
+        site = NotingSite(chapters=1)
+        main_window._batch_download(
+            [royal_road(21), royal_road(22)], site, params=download_params(main_window),
+            series_name="The Long Saga",
+        )
+        assert site.status_bar_said == [
+            'Downloading part 1 of 2 of "The Long Saga", chapter 1 of 1.',
+            'Downloading part 2 of 2 of "The Long Saga", chapter 1 of 1.',
+        ]
+
+    def test_a_batch_leaves_no_sentence_behind(self, main_window):
+        site = NotingSite(chapters=1, fail_with=RuntimeError("HTTP 500"))
+        main_window._batch_download([royal_road(21)], site, params=download_params(main_window))
+        assert activity.current() == ""
+
+    def test_the_picker_hands_the_batch_each_storys_title(self, main_window, monkeypatch):
+        from ficary import gui
+
+        handed = {}
+
+        class Thread:
+            def __init__(self, target=None, args=(), kwargs=None, daemon=None, **rest):
+                handed.update(kwargs or {})
+
+            def start(self):
+                pass
+
+        class AuthorPage(NotingSite):
+            def is_author_url(self, url):
+                return True
+
+            def scrape_author_works(self, url, **options):
+                return "Someone", [
+                    {"title": "The First One", "url": royal_road(11), "author": "Someone", "section": "own"},
+                    {"title": royal_road(12), "url": royal_road(12), "author": "Someone", "section": "own"},
+                ]
+
+        monkeypatch.setattr(gui.threading, "Thread", Thread)
+        monkeypatch.setattr(gui.wx, "CallAfter", lambda function, *args: function(*args))
+        monkeypatch.setattr(main_window, "_open_picker", lambda title, works, on_ok: on_ok([royal_road(11), royal_road(12)]))
+        main_window._run_picker_download("https://www.royalroad.com/profile/1", AuthorPage(), kind="author", params=download_params(main_window))
+        # A title that is only the address says nothing, so it is left out.
+        assert handed["titles"] == {royal_road(11): "The First One"}
+
+
+@needs_display
+class TestTheMainWindowsSaving:
+    @pytest.fixture
+    def window(self, wx_app, monkeypatch):
+        from ficary import gui
+
+        frame = gui.MainFrame()
+        monkeypatch.setattr(frame, "_auto_index_download", lambda path: None)
+        with frame._log_lock:
+            frame._log_queue.clear()
+        yield frame
+        frame._clip_timer.Stop()
+        frame.Destroy()
+
+    def a_story(self):
+        story = Story(id=7, title="The Loaf", author="Nobody", summary="", url=royal_road(7))
+        story.chapters.append(Chapter(number=1, title="Chapter 1", html="<p>1</p>"))
+        return story
+
+    def test_saving_is_said_in_the_bar_and_the_ai_checks_chapter_lines_stay_out(self, window, monkeypatch, tmp_path):
+        from ficary import exporters
+
+        said = []
+
+        def export(story, folder, **options):
+            said.append(activity.current())
+            options["progress"]("  [AI notes] chapter 1: cache hit")
+            options["progress"]("  AI note check: 1 chapter checked, notes removed from 0.")
+            return Path(options["output_path"])
+
+        monkeypatch.setitem(exporters.EXPORTERS, "epub", export)
+        with activity.Job("Downloading from Royal Road.") as job:
+            window._export_story(
+                self.a_story(), download_params(window), update_path=tmp_path / "The Loaf.epub",
+                job=job, doing="Downloading from Royal Road",
+            )
+        assert said == ["Downloading from Royal Road, saving."]
+        assert "[AI notes]" not in logged(window)
+        assert "AI note check: 1 chapter checked" in logged(window)
+
+    def test_with_the_ai_check_on_the_bar_says_so(self, window, monkeypatch, tmp_path):
+        from ficary import exporters
+
+        said = []
+        monkeypatch.setitem(exporters.EXPORTERS, "epub", lambda story, folder, **options: said.append(activity.current()) or Path(options["output_path"]))
+        params = download_params(
+            window, llm_strip_notes=True,
+            llm_render_config={"provider": "ollama", "model": "a-model"},
+        )
+        with activity.Job("Downloading from Royal Road.") as job:
+            window._export_story(
+                self.a_story(), params, update_path=tmp_path / "The Loaf.epub",
+                job=job, doing="Downloading from Royal Road",
+            )
+        assert said == ["Downloading from Royal Road, checking for author's notes, then saving."]
+
+    def test_an_audiobooks_chapters_are_said_in_the_bar(self, window, monkeypatch, tmp_path):
+        from ficary import tts
+
+        said = []
+
+        def render(story, folder, **options):
+            options["progress_callback"](1, 2, "Chapter 1")
+            said.append(activity.current())
+            return tmp_path / "The Loaf.m4b"
+
+        monkeypatch.setattr(tts, "generate_audiobook", render)
+        window._export_story(self.a_story(), download_params(window, fmt="audio"), update_path=tmp_path / "The Loaf.m4b")
+        assert said == ['Making the audiobook of "The Loaf", chapter 1 of 2.']
+        assert "Synthesizing" not in logged(window)
+        # Its own sentence goes when the audiobook is done.
+        assert activity.current() == ""
+
+    def test_an_audiobook_in_a_download_uses_the_downloads_sentence(self, window, monkeypatch, tmp_path):
+        from ficary import tts
+
+        def render(story, folder, **options):
+            options["progress_callback"](2, 2, "Chapter 2")
+            return tmp_path / "The Loaf.m4b"
+
+        monkeypatch.setattr(tts, "generate_audiobook", render)
+        with activity.Job("Downloading from Royal Road.") as job:
+            window._export_story(
+                self.a_story(), download_params(window, fmt="audio"), update_path=tmp_path / "The Loaf.m4b",
+                job=job, doing="Downloading from Royal Road",
+            )
+            assert activity.current() == 'Making the audiobook of "The Loaf", chapter 2 of 2.'
+

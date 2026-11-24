@@ -391,7 +391,7 @@ def window(wx_app, monkeypatch, tmp_path):
     monkeypatch.setattr(announce, "announce", lambda text: frame.announced.append(text))
     frame.exported = []
 
-    def export(story, params, update_path=None):
+    def export(story, params, update_path=None, **options):
         frame.exported.append(story.url)
         return str(tmp_path / f"{story.id}.epub")
 

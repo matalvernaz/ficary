@@ -376,9 +376,9 @@ def test_concurrent_renders_keep_their_own_cancel_events():
     with patch.object(tts, "generate_audiobook", render), \
          patch("ficary.gui.wx.CallAfter", side_effect=lambda cb, *a, **k: cb(*a, **k)):
         a = threading.Thread(target=MainFrame._export_story,
-                             args=(frame, SimpleNamespace(id="A"), params))
+                             args=(frame, SimpleNamespace(id="A", title="Story A"), params))
         b = threading.Thread(target=MainFrame._export_story,
-                             args=(frame, SimpleNamespace(id="B"), params))
+                             args=(frame, SimpleNamespace(id="B", title="Story B"), params))
         a.start()
         assert starts["A"].wait(3)
         b.start()

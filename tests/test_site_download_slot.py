@@ -231,7 +231,7 @@ class TestDownloadsThatAreNotQueued:
 
         monkeypatch.setattr(frame, "_scraper_for", lambda url, **options: StubScraper())
 
-        def export(story, params, update_path=None):
+        def export(story, params, update_path=None, **options):
             observed.setdefault("free during export", []).append(slot_is_free("ffn"))
             return "/tmp/book.epub"
 

@@ -349,7 +349,8 @@ from .download_queue import (
 )
 from .gui_help import set_help, is_own_destroy
 from . import activity
-from .gui_status_bar import add_activity_status_bar
+from .gui_status_bar import HINT as STATUS_BAR_HINT, add_activity_status_bar
+from .merge import source_display_name
 from .library.scanner import IMPORT_EXISTING_FOLDER
 from .gui_dialogs import (
     OptionalFeaturesDialog,
@@ -641,6 +642,7 @@ class MainFrame(wx.Frame):
         self._pending_worker_dialogs_lock = threading.Lock()
         self._log_queue = deque()
         self._log_lock = threading.Lock()
+        self._told_about_status_bar = False
         self._build_ui()
         self._load_prefs()
         self._show_early_warnings()
@@ -1238,6 +1240,27 @@ class MainFrame(wx.Frame):
             msg = f"[{site}] {msg}"
         with self._log_lock:
             self._log_queue.append(msg + "\n")
+
+    def _tell_about_status_bar_once(self) -> None:
+        """Say where download progress is, the first time anything downloads. Worker-thread safe."""
+        with self._log_lock:
+            if self._told_about_status_bar:
+                return
+            self._told_about_status_bar = True
+        self._log(STATUS_BAR_HINT)
+
+    def _chapter_progress(self, job, doing: str, params):
+        """The progress callback a download hands its site: each chapter goes to the status bar, as part of ``doing``, instead of a line in the status log, where a story's chapters buried its name. Stop is honoured between chapters."""
+        def progress(current, total, title, cached):
+            job.say(f"{doing}, chapter {current} of {total}.")
+            self._raise_if_stopped(params)
+        return progress
+
+    def _export_line(self, line: str) -> None:
+        """A line from the exporter. The AI note check says something about every chapter; the exporter logs those lines itself, so they stay out of the status log, where they buried the story's name. Its one-line tally at the end still goes in."""
+        if line.lstrip().startswith("[AI notes]"):
+            return
+        self._log(line)
 
     # ── Logging controls ─────────────────────────────────────
 
@@ -3220,11 +3243,7 @@ class MainFrame(wx.Frame):
 
             self._log(f"Series: {series_name}")
             self._log(f"Downloading and merging {len(work_urls)} works...")
-
-            def progress(current, total, title, cached):
-                tag = " (cached)" if cached else ""
-                self._log(f"    [{current}/{total}] {title}{tag}")
-                self._raise_if_stopped(params)
+            self._tell_about_status_bar_once()
 
             stories = []
             failed = []
@@ -3232,6 +3251,9 @@ class MainFrame(wx.Frame):
                 if self._stop_requested(params):
                     raise DownloadCancelled("Stopped between parts of the series.")
                 self._log(f"\n[{i}/{len(work_urls)}] {work_url}")
+                doing = f'Downloading part {i} of {len(work_urls)} of "{series_name}"'
+                part_job = activity.Job(f"{doing}.")
+                progress = self._chapter_progress(part_job, doing, params)
                 try:
                     work_scraper = self._scraper_for(
                         work_url,
@@ -3252,6 +3274,8 @@ class MainFrame(wx.Frame):
                 except Exception as exc:
                     self._log(f"  Error: {exc}")
                     failed.append(work_url)
+                finally:
+                    part_job.end()
 
             if failed:
                 self._log(
@@ -3269,9 +3293,13 @@ class MainFrame(wx.Frame):
             self._log(
                 f"\nMerged {len(stories)} works / {len(merged.chapters)} sections"
             )
-            path = self._export_story(merged, params)
+            doing = f'Downloaded {len(stories)} of {len(work_urls)} parts of "{series_name}"'
+            with activity.Job(f"{doing}, saving.") as saving_job:
+                path = self._export_story(merged, params, job=saving_job, doing=doing)
+                finished = _finished_sentence(merged.title, params.fmt)
+                saving_job.end(finished)
             self._log(f"Saved: {path}")
-            self._announce(_finished_sentence(merged.title, params.fmt))
+            self._announce(finished)
         except DownloadCancelled:
             # A merged book short of parts would read as complete, so
             # nothing is written.
@@ -3777,7 +3805,7 @@ class MainFrame(wx.Frame):
         return True
 
     def _export_story(self, story, params: _DownloadParams,
-                      update_path=None):
+                      update_path=None, job=None, doing=None):
         """Run the configured exporter for ``story`` using the snapshot
         in ``params``.
 
@@ -3786,6 +3814,11 @@ class MainFrame(wx.Frame):
         the filename template, so updating a book the user had renamed
         left the original untouched and wrote a second copy under the
         templated name.
+
+        ``job`` is the download's sentence in the status bar and
+        ``doing`` its start ("Downloading 2 of 5: "Title""): saving, and
+        an audiobook's chapters as they are spoken, are said there. A
+        caller without one gets a sentence of its own for an audiobook.
 
         Worker-thread safe: every value that used to be read live from
         ``self.<x>_ctrl`` now comes from the immutable snapshot. Audio
@@ -3803,8 +3836,10 @@ class MainFrame(wx.Frame):
         if params.fmt == "audio":
             from .tts import AudiobookCancelled, generate_audiobook
 
+            making = f'Making the audiobook of "{story.title}"'
+
             def audio_progress(current, total, title):
-                self._log(f"  Synthesizing [{current}/{total}] {title}")
+                render_job.say(f"{making}, chapter {current} of {total}.")
 
             backend = params.audio_backend or "builtin"
             size = params.audio_size
@@ -3836,6 +3871,7 @@ class MainFrame(wx.Frame):
             # render checks the event before doing anything.
             if self._stop_requested(params):
                 cancel.set()
+            render_job = job if job is not None else activity.Job(f"{making}.")
             try:
                 try:
                     m4b = generate_audiobook(
@@ -3860,6 +3896,8 @@ class MainFrame(wx.Frame):
                     # stack into application startup.
                     raise _RenderCancelled(str(exc)) from exc
             finally:
+                if job is None:
+                    render_job.end()
                 with self._render_cancel_lock:
                     if cancel in self._render_cancels:
                         self._render_cancels.remove(cancel)
@@ -3884,13 +3922,18 @@ class MainFrame(wx.Frame):
                 f"  AI A/N check: {an_llm_config['provider']}/"
                 f"{an_llm_config['model']} (one call per chapter)"
             )
+        if job is not None:
+            # The AI check can take minutes, which "saving" alone would
+            # not explain.
+            saving = "checking for author's notes, then saving" if an_llm_config else "saving"
+            job.say(f"{doing}, {saving}.")
         path = exporter(
             story, output_dir, template=params.filename_template,
             hr_as_stars=params.hr_as_stars, strip_notes=params.strip_notes,
             html_style=params.html_style,
             chapter_notes=params.chapter_notes,
             llm_config=an_llm_config,
-            progress=self._log,
+            progress=self._export_line,
             output_path=update_path,
         )
         self._auto_index_download(path)
@@ -3978,6 +4021,10 @@ class MainFrame(wx.Frame):
                 "current thread (legacy path)."
             )
             params = self._snapshot_download_params()
+        # The status bar's sentence for a single story, and what it says
+        # once the story is done.
+        job = None
+        job_result = ""
         try:
             if self._stop_requested(params):
                 # Queued before Stop and started just as Stop was
@@ -4064,10 +4111,13 @@ class MainFrame(wx.Frame):
 
             scraper.parse_story_id(url)
 
-            def progress(current, total, title, cached):
-                tag = " (cached)" if cached else ""
-                self._log(f"  [{current}/{total}] {title}{tag}")
-                self._raise_if_stopped(params)
+            if is_update and update_path is not None:
+                doing = f'Updating "{Path(update_path).stem}"'
+            else:
+                doing = f"Downloading from {source_display_name(url)}"
+            self._tell_about_status_bar_once()
+            job = activity.Job(f"{doing}.")
+            progress = self._chapter_progress(job, doing, params)
 
             # Fresh-copies updates always re-fetch the whole story, so
             # skipping the existing chapters on the initial download is
@@ -4088,7 +4138,8 @@ class MainFrame(wx.Frame):
 
             if is_update and not refetch_all and len(story.chapters) == 0:
                 self._log("Up to date. No new chapters.")
-                self._announce(f"{story.title} is up to date. No new chapters.")
+                job_result = f"{story.title} is up to date. No new chapters."
+                self._announce(job_result)
                 return DownloadOutcome(ok=True, reason="already up to date")
 
             if is_update and not refetch_all:
@@ -4147,9 +4198,12 @@ class MainFrame(wx.Frame):
             self._log(f"  Author:   {story.author}")
             self._log(f"  Chapters: {len(story.chapters)}")
 
-            path = self._export_story(story, params, update_path=update_path)
+            path = self._export_story(
+                story, params, update_path=update_path, job=job, doing=doing,
+            )
             self._log(f"\nDone! Saved to: {path}")
-            self._announce(_finished_sentence(story.title, params.fmt))
+            job_result = _finished_sentence(story.title, params.fmt)
+            self._announce(job_result)
             # Hand back what was written. Another caller may be joined to
             # this job through the per-site queue's single-flight
             # registry, and it needs the paths as much as the verdict.
@@ -4167,9 +4221,12 @@ class MainFrame(wx.Frame):
             return DownloadOutcome(ok=False, reason="stopped")
         except Exception as e:
             self._log(f"\nError: {e}")
-            self._announce("A download failed. The status pane says why.")
+            job_result = "A download failed. The status pane says why."
+            self._announce(job_result)
             return DownloadOutcome(ok=False, reason=str(e))
         finally:
+            if job is not None:
+                job.end(job_result)
             # Legacy raw-thread callers (batch/series/author dispatch)
             # set ``_global_busy`` before spawning the thread and rely
             # on this clear-on-exit. Per-site queue workers run on
@@ -4203,6 +4260,7 @@ class MainFrame(wx.Frame):
         self._log(f"Found {len(work_urls)} works. Downloading in series order...")
         self._batch_download(
             work_urls, scraper, summary_label="Series", params=params,
+            series_name=series_name,
         )
 
     def _run_author_download(self, url, scraper, *, params: Optional[_DownloadParams] = None):
@@ -4339,6 +4397,12 @@ class MainFrame(wx.Frame):
             self._log(f"No entries found on this {label}.")
             return
         self._log(f"Loaded {len(works)} entries. Showing picker...")
+        # What each story is called, so the batch can say which one it is on.
+        titles = {
+            work["url"]: work["title"]
+            for work in works
+            if work.get("url") and work.get("title") and work["title"] != work["url"]
+        }
 
         picker_done = threading.Event()
         with self._pending_worker_dialogs_lock:
@@ -4371,7 +4435,7 @@ class MainFrame(wx.Frame):
                 threading.Thread(
                     target=self._run_picked_batch,
                     args=(selected_urls, kind),
-                    kwargs={"params": batch_params},
+                    kwargs={"params": batch_params, "titles": titles},
                     daemon=True,
                 ).start()
                 spawned = True
@@ -4422,7 +4486,8 @@ class MainFrame(wx.Frame):
         finally:
             on_ok(picked_urls)
 
-    def _run_picked_batch(self, urls, kind, *, params: Optional[_DownloadParams] = None):
+    def _run_picked_batch(self, urls, kind, *, params: Optional[_DownloadParams] = None,
+                          titles: Optional[dict] = None):
         if params is None:
             # This runs on a worker thread; the fallback used to call
             # _snapshot_download_params() — a MAIN THREAD ONLY function
@@ -4446,7 +4511,14 @@ class MainFrame(wx.Frame):
                     stopped = True
                     break
                 started = i
-                self._log(f"\n[{i}/{len(urls)}] {story_url}")
+                self._tell_about_status_bar_once()
+                title = " ".join(str((titles or {}).get(story_url) or "").split())
+                if title:
+                    doing = f'Downloading {i} of {len(urls)}: "{title}"'
+                    self._log(f"\n{doing}")
+                else:
+                    doing = f"Downloading {i} of {len(urls)} from {source_display_name(story_url)}"
+                    self._log(f"\n[{i}/{len(urls)}] {story_url}")
                 # The click-time snapshot governs the whole batch: without
                 # it, restricted AO3 works in a picker batch downloaded
                 # anonymously (AO3LockedError despite a saved cookie) and
@@ -4462,18 +4534,16 @@ class MainFrame(wx.Frame):
                     storiesonline_cookie=params.storiesonline_cookie,
                 )
 
-                def progress(current, total, t, cached):
-                    tag = " (cached)" if cached else ""
-                    self._log(f"    [{current}/{total}] {t}{tag}")
-                    self._raise_if_stopped(params)
+                story_job = activity.Job(f"{doing}.")
+                progress = self._chapter_progress(story_job, doing, params)
 
                 try:
                     with self._site_slot_for(story_url):
                         story = scraper.download(
                             story_url, progress_callback=progress,
                         )
-                    path = self._export_story(story, params)
-                    self._log(f"  Saved: {path}")
+                    path = self._export_story(story, params, job=story_job, doing=doing)
+                    self._log(f'  Saved "{story.title}": {path}')
                     succeeded += 1
                 except DownloadCancelled:
                     self._log(STOPPED_PART_WAY_MESSAGE)
@@ -4486,6 +4556,8 @@ class MainFrame(wx.Frame):
                 except Exception as exc:
                     self._log(f"  Error: {exc}")
                     failed.append(story_url)
+                finally:
+                    story_job.end()
             label = {
                 "bookmarks": "Bookmarks batch",
                 "forum": "Forum section batch",
@@ -4505,14 +4577,11 @@ class MainFrame(wx.Frame):
     def _batch_download(
         self, story_urls, scraper, summary_label="Batch",
         *, params: Optional[_DownloadParams] = None,
+        series_name: Optional[str] = None,
     ):
         if params is None:
             params = self._snapshot_download_params()
-
-        def progress(current, total, title, cached):
-            tag = " (cached)" if cached else ""
-            self._log(f"    [{current}/{total}] {title}{tag}")
-            self._raise_if_stopped(params)
+        self._tell_about_status_bar_once()
 
         succeeded = 0
         failed = []
@@ -4524,11 +4593,17 @@ class MainFrame(wx.Frame):
                 break
             started = i
             self._log(f"\n[{i}/{len(story_urls)}] {story_url}")
+            if series_name:
+                doing = f'Downloading part {i} of {len(story_urls)} of "{series_name}"'
+            else:
+                doing = f"Downloading {i} of {len(story_urls)} from {source_display_name(story_url)}"
+            story_job = activity.Job(f"{doing}.")
+            progress = self._chapter_progress(story_job, doing, params)
             try:
                 with self._site_slot_for(story_url):
                     story = scraper.download(story_url, progress_callback=progress)
-                path = self._export_story(story, params)
-                self._log(f"  Saved: {path}")
+                path = self._export_story(story, params, job=story_job, doing=doing)
+                self._log(f'  Saved "{story.title}": {path}')
                 succeeded += 1
             except DownloadCancelled:
                 self._log(STOPPED_PART_WAY_MESSAGE)
@@ -4541,6 +4616,8 @@ class MainFrame(wx.Frame):
             except Exception as e:
                 self._log(f"  Error: {e}")
                 failed.append(story_url)
+            finally:
+                story_job.end()
 
         summary = _batch_summary(
             summary_label, total=len(story_urls), succeeded=succeeded,

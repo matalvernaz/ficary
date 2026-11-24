@@ -74,7 +74,7 @@ def window(wx_app, monkeypatch, tmp_path):
     frame = MainFrame()
     frame.exported = []
 
-    def export(story, params, update_path=None):
+    def export(story, params, update_path=None, **options):
         frame.exported.append(story.url)
         return str(tmp_path / f"{story.id}.epub")
 
@@ -300,7 +300,7 @@ class TestBatches:
         urls = [royal_road(next(_numbers)) for _ in range(3)]
         real_export = window._export_story
 
-        def export_then_stop(story, params, update_path=None):
+        def export_then_stop(story, params, update_path=None, **options):
             result = real_export(story, params, update_path=update_path)
             window._on_stop()
             return result

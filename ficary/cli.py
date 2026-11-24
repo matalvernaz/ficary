@@ -1071,10 +1071,8 @@ def _download_one(
             logger.debug("%s", line.strip())
 
     def brief_export_line(line: str) -> None:
-        """A line from the exporter when ``brief`` is on. The AI note check says something about every chapter, an update's old ones included, which put a long run of lines back between the story's name and its outcome; those are tagged "[AI notes]" and go to the debug log. Its one-line tally at the end, and anything else, still goes to the pane."""
-        if line.lstrip().startswith("[AI notes]"):
-            routine(line)
-        else:
+        """A line from the exporter when ``brief`` is on. The AI note check says something about every chapter, an update's old ones included, which put a long run of lines back between the story's name and its outcome. Those are tagged "[AI notes]", and the exporter logs them itself, so they go no further. Its one-line tally at the end, and anything else, still goes to the pane."""
+        if not line.lstrip().startswith("[AI notes]"):
             status(line)
 
     def report_failure(kind: str, exc: BaseException) -> None:
@@ -1317,7 +1315,12 @@ def _download_one(
             exporter = EXPORTERS[args.format]
             export_progress = status
             if brief is not None:
-                brief.now("saving")
+                # The AI check can take minutes, which "saving" alone
+                # would not explain.
+                if _llm_strip_notes_config(args):
+                    brief.now("checking for author's notes, then saving")
+                else:
+                    brief.now("saving")
                 export_progress = brief_export_line
             path = exporter(
                 story,
@@ -1990,8 +1993,37 @@ def _run_update_queue(
     # captcha-bans on bulk regardless of pacing, so its group must
     # stay at 1 worker even when ``--probe-workers`` is higher. The
     # global ``workers`` value is now an upper cap, not a fan-out count.
-    if probe_queue:
-        total = len(probe_queue)
+    # Stories an earlier check already found new chapters for are not
+    # asked about again (Download New Chapters is nothing else), and so
+    # get no line here: they are named when they download.
+    to_ask = [entry for entry in probe_queue if "remote" not in entry]
+
+    # Per-site Cloudflare-challenge circuit breakers, one for every site
+    # in the queue, asked about or not, since the downloads look theirs
+    # up. An interactive
+    # challenge (cf-mitigated: challenge) is served per-site and per-
+    # client, so once a site starts challenging us it challenges
+    # *every* subsequent request — each further probe just burns its
+    # whole retry budget (~10-15 s) and prints the same five-line
+    # guidance paragraph. On a 340-story FFN group that's an hour of
+    # guaranteed-futile grinding and hundreds of identical error
+    # paragraphs through a screen reader. After
+    # ``_CF_BREAKER_THRESHOLD`` *consecutive* challenge failures
+    # (each already representing a full retry loop's worth of
+    # challenge responses), the group stops contacting the site;
+    # skipped entries stay unstamped so the next update retries
+    # them. The streak resets only on a definitive upstream answer
+    # (a count, or story-gone) — neutral failures like timeouts
+    # neither feed nor clear it.
+    for entry in probe_queue:
+        site_cls = _detect_site(entry["url"])
+        breakers.setdefault(site_cls, {
+            "site": site_cls.site_name,
+            "streak": 0, "tripped": False, "skipped": 0,
+        })
+
+    if to_ask:
+        total = len(to_ask)
         stories = "story" if total == 1 else "stories"
         progress(f"\nChecking {total} {stories} for new chapters...")
 
@@ -2001,32 +2033,9 @@ def _run_update_queue(
         )
 
         by_site: dict[type, list[dict]] = {}
-        for entry in probe_queue:
+        for entry in to_ask:
             site_cls = _detect_site(entry["url"])
             by_site.setdefault(site_cls, []).append(entry)
-
-        # Per-site Cloudflare-challenge circuit breakers. An interactive
-        # challenge (cf-mitigated: challenge) is served per-site and per-
-        # client, so once a site starts challenging us it challenges
-        # *every* subsequent request — each further probe just burns its
-        # whole retry budget (~10-15 s) and prints the same five-line
-        # guidance paragraph. On a 340-story FFN group that's an hour of
-        # guaranteed-futile grinding and hundreds of identical error
-        # paragraphs through a screen reader. After
-        # ``_CF_BREAKER_THRESHOLD`` *consecutive* challenge failures
-        # (each already representing a full retry loop's worth of
-        # challenge responses), the group stops contacting the site;
-        # skipped entries stay unstamped so the next update retries
-        # them. The streak resets only on a definitive upstream answer
-        # (a count, or story-gone) — neutral failures like timeouts
-        # neither feed nor clear it.
-        breakers.update({
-            cls: {
-                "site": cls.site_name,
-                "streak": 0, "tripped": False, "skipped": 0,
-            }
-            for cls in by_site
-        })
 
         # Progress output during Phase 2. Without this, a library with
         # 700+ FFN stories goes silent for an hour+ while the serial
@@ -2067,14 +2076,6 @@ def _run_update_queue(
             # limit, Cloudflare block, timeout) do *not* answer the
             # question and must stay unstamped so the retry happens.
             probe_answered = False
-            # Pre-filled by build_refresh_queue for resumed-pending entries
-            # (remote_chapter_count in the index beats local → skip probe).
-            if "remote" in entry:
-                with probe_progress_lock:
-                    count_checked(entry)
-                    verdict = _check_verdict(entry["local"], entry["remote"])
-                    progress(check_line(entry, f"{verdict} (found by an earlier check)"))
-                return
             # Site breaker tripped: don't contact the site, don't print a
             # per-entry line (the trip notice + group summary cover it),
             # don't stamp — the unstamped TTL retries these next update.

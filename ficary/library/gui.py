@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 from .. import prefs as _prefs
 from ..gui_help import set_help
 from .. import activity
-from ..gui_status_bar import add_activity_status_bar
+from ..gui_status_bar import HINT as STATUS_BAR_HINT, add_activity_status_bar
 from ..gui_status_log import StatusLogCtrl
 from .gui_logic import format_move_label
 from .index import LibraryIndex
@@ -38,14 +38,6 @@ from .review import promote_untrackable, untrackable_for_root
 from .scanner import scan, IMPORT_EXISTING_FOLDER
 from .template import DEFAULT_MISC_FOLDER, DEFAULT_TEMPLATE
 
-
-# Said once per window at the start of an update. Each story gets a
-# line in the status pane when it starts and when it ends; what it is
-# doing in between is in the status bar.
-STATUS_BAR_HINT = (
-    "The status bar at the bottom of this window says which story and "
-    "chapter it's on: NVDA+End reads it, or Insert+Page Down in JAWS."
-)
 
 _TEMPLATE_HINT = (
     "Placeholders: {fandom} {title} {author} {ext} {rating} {status}. "
@@ -803,11 +795,14 @@ class LibraryFrame(wx.Frame):
             skip_complete=not force,
         )
         def queue_progress(line: str) -> None:
-            # Download New Chapters names only the stories it will fetch;
-            # a "checked 2 days ago" line for every other story would bury
-            # them.
-            if not only_waiting or "[resume]" in line:
-                self._post_status(line)
+            # A story already known to have new chapters is named when it
+            # downloads, so its "[resume]" line here would only say so
+            # twice. Download New Chapters says nothing about the other
+            # stories either: a "checked 2 days ago" line for each would
+            # bury the ones it fetches.
+            if only_waiting or "[resume]" in line:
+                return
+            self._post_status(line)
 
         probe_queue, skipped = build_refresh_queue(
             root,

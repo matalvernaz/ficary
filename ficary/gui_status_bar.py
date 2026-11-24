@@ -13,6 +13,12 @@ from .gui_help import is_own_destroy
 IDLE_TEXT = "Ready."
 """What the bar says before any job has run, and after a job that ended without a result."""
 
+HINT = (
+    "The status bar at the bottom of this window says which story and "
+    "chapter it's on: NVDA+End reads it, or Insert+Page Down in JAWS."
+)
+"""Said once per window when its first download or update starts. A line per chapter in the status log used to show a download was alive; that is in the status bar now."""
+
 REFRESH_INTERVAL_MS = 250
 """How often the bar looks for a new sentence. Four times a second keeps up with chapters arriving, and the bar is only redrawn when the sentence has changed."""
 
