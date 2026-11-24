@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 2.20.16 — 2026-11-23
 
 **The web page no longer cuts off long stories**
 
