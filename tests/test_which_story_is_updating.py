@@ -869,3 +869,45 @@ def test_the_library_windows_controls_all_fit_in_it(wx_app):
         frame._clip_timer.Stop()
         frame.Destroy()
         wx.SafeYield()
+
+
+def test_the_line_before_an_update_counts_what_it_will_do(tmp_path, monkeypatch):
+    """It said "TTL 6.0h: N recently-probed story(ies) skipped, M to probe", counting finished stories as recently checked and stories already known to have new chapters as ones to ask about."""
+    pytest.importorskip("wx")
+    from datetime import datetime, timedelta, timezone
+
+    from ficary.library.gui import LibraryFrame
+    from ficary.library.index import LibraryIndex
+    from ficary.library.scanner import scan
+
+    from .library_fixtures import ficary_epub
+
+    root = tmp_path / "library"
+    root.mkdir()
+    for number in (101, 102, 103, 104):
+        ficary_epub(root, title=f"Story {number}", url=f"https://www.fanfiction.net/s/{number}/1/", chapters=3, story_id=number)
+    scan(root)
+    index = LibraryIndex.load()
+    stories = index.library_state(root.resolve())["stories"]
+    recently = (datetime.now(timezone.utc) - timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    for url, entry in stories.items():
+        if "/s/102" in url:
+            entry["remote_chapter_count"] = 5
+        elif "/s/103" in url:
+            entry["last_probed"] = recently
+        elif "/s/104" in url:
+            entry["status"] = "Complete"
+    index.save()
+    monkeypatch.setattr(cli, "_run_update_queue", lambda queue, *args, **options: None)
+    posted: list[str] = []
+    window = types.SimpleNamespace(_post_status=posted.append)
+    LibraryFrame._probe_one_root(
+        window, root.resolve(), force=False, refetch_all=False, recheck_interval=6 * 60 * 60,
+        cancel_event=threading.Event(),
+    )
+    assert (
+        "1 to check; 1 already known to have new chapters; 2 skipped as finished, "
+        "abandoned or checked in the last 6 hours (Force recheck includes them)."
+    ) in posted
+    # Nor is the known one listed by the queue builder: it is named when it downloads.
+    assert not any("[resume]" in line for line in posted)

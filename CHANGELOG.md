@@ -22,6 +22,12 @@
   already known to have new chapters, which is all Download New
   Chapters fetches, are not listed as checked: they get their two
   lines when they download.
+* The line before Check All Stories for Updates says what the run will
+  do in plain words: how many stories it will ask about, how many are
+  already known to have new chapters, and how many are skipped as
+  finished, abandoned or checked in the last few hours. It used to say
+  "TTL 6.0h: ... recently-probed story(ies) skipped, ... to probe",
+  counting finished stories as recently checked.
 * Downloads from the main window work the same way: their chapters go
   to the status bar instead of the status log, along with saving and,
   for an audiobook, the chapter being spoken. Stories picked from an

@@ -834,17 +834,23 @@ class LibraryFrame(wx.Frame):
             )
             return
 
-        # Surface the TTL decision up front so users who click Check for
-        # Updates twice in a row can see whether the recent-probe skip is
-        # firing (N stories in TTL) or whether no entries have a
-        # ``last_probed`` stamp yet (fresh index) and everything queued.
+        # Say up front what the run will do, so someone who checks twice
+        # in a row can hear why the second one asks about so little.
+        # Stories already known to have new chapters are not asked again
+        # (the update runner downloads them straight away), so they are
+        # not counted as ones to check.
         if recheck_interval > 0 and not only_waiting:
-            ttl_hours = recheck_interval / 3600
-            self._post_status(
-                f"TTL {ttl_hours:.1f}h: {len(skipped)} recently-probed "
-                f"story(ies) skipped, {len(probe_queue)} to probe. "
-                f"(Click Force Full Recheck to ignore the TTL.)"
-            )
+            hours = recheck_interval / 3600
+            known = sum(1 for entry in probe_queue if "remote" in entry)
+            parts = [f"{len(probe_queue) - known} to check"]
+            if known:
+                parts.append(f"{known} already known to have new chapters")
+            if skipped:
+                parts.append(
+                    f"{len(skipped)} skipped as finished, abandoned or checked "
+                    f"in the last {hours:g} hours (Force recheck includes them)"
+                )
+            self._post_status("; ".join(parts) + ".")
 
         # Incremental ``last_probed`` stamping: buffer stamps and flush
         # every N probes plus once at the end, so closing the app
