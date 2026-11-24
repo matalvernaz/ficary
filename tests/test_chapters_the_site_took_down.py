@@ -273,7 +273,7 @@ class TestUpdatingARoyalRoadBook:
         assert titles(chapters) == ["1", "2", "3", "4", "5"]
         assert chapters[0].html.strip() == "<p>site 1</p>"
         assert chapters[2].html.strip() == "<p>3</p>"
-        assert "  Kept 1 chapter the site no longer has." in lines
+        assert '"Sky" keeps 1 chapter the site no longer has.' in lines
 
 
 def test_an_old_book_gets_the_sites_ids_written_in_once_matched(tmp_path, monkeypatch):
@@ -758,3 +758,9 @@ def test_royal_road_downloads_just_the_chapters_an_update_asks_for(monkeypatch):
     assert [chapter.site_id for chapter in story.chapters] == [chapter.site_id for chapter in wanted]
     assert [chapter.title for chapter in story.chapters] == [chapter.title for chapter in wanted]
     assert len(asked) == 2
+
+
+def test_the_check_names_the_site_as_it_goes_by(tmp_path, monkeypatch):
+    """It said "Checking 1 royalroad story", the site's code name."""
+    lines, _site = check_lines(tmp_path, monkeypatch, ["1", "2"], ["1", "2"])
+    assert "  Checking 1 Royal Road story, 1 at a time..." in lines

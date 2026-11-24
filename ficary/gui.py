@@ -349,6 +349,7 @@ from .download_queue import (
 )
 from .gui_help import set_help, is_own_destroy
 from .gui_layout import fit_on_screen
+from .sites import site_display_name
 from . import activity
 from .gui_status_bar import HINT as STATUS_BAR_HINT, add_activity_status_bar
 from .merge import source_display_name
@@ -1255,7 +1256,7 @@ class MainFrame(wx.Frame):
         # through unprefixed.
         site = site_from_thread_name(threading.current_thread().name)
         if site:
-            msg = f"[{site}] {msg}"
+            msg = f"[{site_display_name(site)}] {msg}"
         with self._log_lock:
             self._log_queue.append(msg + "\n")
 
@@ -1569,7 +1570,7 @@ class MainFrame(wx.Frame):
             active, pending = snapshot
             if active + pending > 0:
                 self._log(
-                    f"Queued on {site_name}: {url} "
+                    f"Queued on {site_display_name(site_name)}: {url} "
                     f"(behind {active + pending} job"
                     f"{'s' if (active + pending) != 1 else ''})"
                 )
@@ -1610,7 +1611,7 @@ class MainFrame(wx.Frame):
         return site_slot(
             site_name,
             on_wait=lambda: self._log(
-                f"  Waiting for another {site_name} download to finish..."
+                f"  Waiting for another {site_display_name(site_name)} download to finish..."
             ),
         )
 

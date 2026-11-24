@@ -907,7 +907,8 @@ def test_the_line_before_an_update_counts_what_it_will_do(tmp_path, monkeypatch)
     )
     assert (
         "1 to check; 1 already known to have new chapters; 2 skipped as finished, "
-        "abandoned or checked in the last 6 hours (Force recheck includes them)."
+        "abandoned or checked in the last 6 hours (Force recheck checks all but "
+        "the abandoned ones)."
     ) in posted
     # Nor is the known one listed by the queue builder: it is named when it downloads.
     assert not any("[resume]" in line for line in posted)

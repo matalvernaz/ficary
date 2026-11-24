@@ -146,13 +146,22 @@ def build_refresh_queue(
     progress: Callable[[str], None] = print,
     now: Callable[[], float] = time.time,
     cannot_check: list | None = None,
+    routine_skip: Callable[[str], None] | None = None,
 ) -> tuple[list[dict], list[str]]:
     """Build (probe_queue, skipped) from the library index for ``root``.
 
     ``cannot_check``, if given, collects ``(name, why)`` for each story
     skipped because an update can't check it at all (see
     ``_why_updates_cannot_check``), for a caller that lists them where
-    they can be found rather than among every other skip line.
+    they can be found rather than among every other skip line; such a
+    caller gets no line for them here.
+
+    ``routine_skip``, if given, takes the line for each story skipped as
+    a matter of course (finished, abandoned, or checked recently) in
+    place of ``progress``. The Library window counts them instead of
+    printing one line each: about 800 in Matt's library, before anything
+    useful (Matt, 2026-11-24). A skip that means something is wrong with
+    the book (missing, unreadable) still goes to ``progress``.
 
     Each queue entry has ``path``, ``rel`` (display name), ``title``
     (from the index, which an update names the story by), ``url``,
@@ -207,6 +216,7 @@ def build_refresh_queue(
 
     probe_queue: list[dict] = []
     skipped: list[str] = []
+    routine = routine_skip or progress
     for url, entry in stories:
         rel = entry.get("relpath") or ""
         path = root / rel
@@ -219,7 +229,8 @@ def build_refresh_queue(
 
         why_not = _why_updates_cannot_check(url)
         if why_not:
-            progress(f"  [skip] {display_rel}: {why_not}")
+            if cannot_check is None:
+                progress(f"  [skip] {display_rel}: {why_not}")
             skipped.append(display_rel)
             if cannot_check is not None:
                 name = " ".join(str(entry.get("title") or "").split()) or Path(display_rel).stem
@@ -246,7 +257,7 @@ def build_refresh_queue(
                     # is what a reader cares about — surfaces "marked Jan
                     # 2025" rather than a full second-resolution stamp.
                     date_prefix = str(abandoned_at)[:10]
-                    progress(
+                    routine(
                         f"  [skip] {display_rel}: marked abandoned "
                         f"({date_prefix}; --revive-abandoned to undo)"
                     )
@@ -268,7 +279,7 @@ def build_refresh_queue(
             )
             if not has_pending_download:
                 status_label = str(entry.get("status") or "").strip() or "Complete"
-                progress(
+                routine(
                     f"  [skip] {display_rel}: marked {status_label} "
                     "(--no-skip-complete / --force-recheck to override)"
                 )
@@ -347,7 +358,7 @@ def build_refresh_queue(
             if last_probed_epoch > 0:
                 age = now_epoch - last_probed_epoch
                 if age < recheck_interval_s:
-                    progress(
+                    routine(
                         f"  [skip] {display_rel}: checked "
                         f"{_human_duration(age)} ago "
                         "(use --force-recheck to override)"
@@ -374,7 +385,7 @@ def build_refresh_queue(
                     file_mtime = None
                 if file_mtime is not None and file_mtime < stale_cutoff_epoch:
                     age_days = int((now_epoch - file_mtime) // SECONDS_PER_DAY)
-                    progress(
+                    routine(
                         f"  [skip] {display_rel}: Complete and untouched "
                         f"for {age_days}d "
                         "(use --force-recheck to override)"

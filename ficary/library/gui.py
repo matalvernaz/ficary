@@ -558,17 +558,12 @@ class LibraryFrame(wx.Frame):
         """Thread-safe status-pane append. Used as the progress callback
         for long-running worker-thread operations.
 
-        Lines emitted on a per-site download-queue worker pick up a
-        ``[<site>] `` prefix so two sites running concurrently during
-        a library update-all Phase 3 don't interleave into an
-        unreadable mash.
+        Lines from two sites updating at once used to start with the
+        site's code name ("[royalroad]") to keep them apart. Each line
+        names its story now, so Matt chose to drop it (2026-11-24).
         """
         if not self._alive:
             return
-        from ..download_queue import site_from_thread_name
-        site = site_from_thread_name(threading.current_thread().name)
-        if site and line and line.strip():
-            line = f"[{site}] {line}"
         if line and line.lstrip().startswith(("Library update complete", "Library update cancelled")):
             # Said once the whole update has ended (_update_finished).
             self._update_summaries.append(line.strip())
@@ -827,12 +822,18 @@ class LibraryFrame(wx.Frame):
         # they can be found: their notes otherwise sit among hundreds of
         # other skip lines, or nowhere for Download New Chapters.
         cannot_check: list[tuple[str, str]] = []
+        # Stories skipped as a matter of course are counted, not listed
+        # one line each: about 800 lines in Matt's library, before
+        # anything useful, many naming command-line options (Matt,
+        # 2026-11-24: one summary line).
+        routine_skips: list[str] = []
         probe_queue, skipped = build_refresh_queue(
             root,
             skip_complete=not force,
             recheck_interval_s=recheck_interval,
             progress=queue_progress,
             cannot_check=cannot_check,
+            routine_skip=routine_skips.append,
         )
         try:
             if only_waiting:
@@ -858,17 +859,21 @@ class LibraryFrame(wx.Frame):
             # Stories already known to have new chapters are not asked again
             # (the update runner downloads them straight away), so they are
             # not counted as ones to check.
-            if recheck_interval > 0 and not only_waiting:
-                hours = recheck_interval / 3600
+            if not only_waiting:
                 known = sum(1 for entry in probe_queue if "remote" in entry)
                 parts = [f"{len(probe_queue) - known} to check"]
                 if known:
                     parts.append(f"{known} already known to have new chapters")
-                if skipped:
+                if routine_skips and recheck_interval > 0:
+                    hours = recheck_interval / 3600
                     parts.append(
-                        f"{len(skipped)} skipped as finished, abandoned or checked "
-                        f"in the last {hours:g} hours (Force recheck includes them)"
+                        f"{len(routine_skips)} skipped as finished, abandoned or checked "
+                        f"in the last {hours:g} hours (Force recheck checks all but "
+                        "the abandoned ones)"
                     )
+                elif routine_skips:
+                    # Force recheck: only the abandoned are still skipped.
+                    parts.append(f"{len(routine_skips)} skipped as abandoned")
                 self._post_status("; ".join(parts) + ".")
 
             # Incremental ``last_probed`` stamping: buffer stamps and flush

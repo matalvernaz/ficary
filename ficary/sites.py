@@ -344,6 +344,46 @@ _NOT_SHOWN_AS_A_SITE = {"ao3.org"}
 _SITE_SHOWN_AS = {"tapatalk.com": "tapatalk.com/groups/themousepad"}
 
 
+# The name each site goes by in anything Ficary says, by its scraper's
+# site_name: the update lines used to read "Checking 12 royalroad stories"
+# and start "[royalroad]". Spelled as the erotica search's site list
+# spells them.
+SITE_NAMES = {
+    "ffn": "FanFiction.net",
+    "ao3": "AO3",
+    "royalroad": "Royal Road",
+    "wattpad": "Wattpad",
+    "webnovel": "Webnovel",
+    "ficwad": "FicWad",
+    "mediaminer": "MediaMiner",
+    "scribblehub": "ScribbleHub",
+    "subscribestar": "SubscribeStar",
+    "literotica": "Literotica",
+    "aff": "Adult-FanFiction.org",
+    "storiesonline": "StoriesOnline",
+    "nifty": "Nifty",
+    "sexstories": "SexStories",
+    "mcstories": "MCStories",
+    "lushstories": "Lushstories",
+    "fictionmania": "Fictionmania",
+    "tgstorytime": "TGStorytime",
+    "chyoa": "Chyoa",
+    "darkwanderer": "Dark Wanderer",
+    "greatfeet": "GreatFeet",
+    "bdsmlibrary": "BDSM Library",
+    "mousepad": "The Mousepad",
+    "readonlymind": "ReadOnlyMind",
+    "giantessworld": "Giantess World",
+    "chastitymansion": "Chastity Mansion",
+    "ticklingforum": "TicklingForum",
+}
+
+
+def site_display_name(site_name: str) -> str:
+    """The name a site goes by, from its scraper's ``site_name``; the code name itself for one not in SITE_NAMES."""
+    return SITE_NAMES.get(site_name, site_name)
+
+
 def supported_sites() -> list[str]:
     """Every site Ficary downloads from, FanFiction.net first, for the
     command line's help and for the message about an unsupported site.

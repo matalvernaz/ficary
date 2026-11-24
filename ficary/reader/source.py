@@ -50,7 +50,8 @@ class StorySource:
 
     def __init__(self, *, title: str, author: str, story_key: str,
                  chapter_count: int, loader: Callable[[int], Chapter],
-                 display_numbers: Optional[dict[int, int]] = None):
+                 display_numbers: Optional[dict[int, int]] = None,
+                 titles: Optional[dict[int, str]] = None):
         self.title = title
         self.author = author
         self.story_key = story_key
@@ -60,9 +61,19 @@ class StorySource:
         # number → display number (structural chapters don't consume a
         # slot); missing entries fall back to the stored number.
         self._display_numbers = display_numbers or {}
+        # number → the chapter's raw title, for headings without loading
+        # its text; missing entries fall back to "Chapter N".
+        self._titles = titles or {}
 
     def chapter_count(self) -> int:
         return self._count
+
+    def chapter_heading(self, number: int) -> str:
+        """A chapter's heading as the book shows it ("Chapter 3. The Inn"), without loading its text: what the reader's chapter list shows (Matt, 2026-11-24: it said only "Chapter 3"). "Chapter N" where the title isn't known."""
+        title = self._titles.get(number)
+        if title is None:
+            return f"Chapter {number}"
+        return format_chapter_heading(self._display_numbers.get(number, number), title)
 
     def load_chapter(self, number: int) -> ReaderChapter:
         cached = self._cache.get(number)
@@ -113,6 +124,7 @@ class StorySource:
             chapter_count=count,
             loader=loader,
             display_numbers=chapter_display_numbers(pairs),
+            titles=dict(pairs),
         )
 
     @classmethod
@@ -148,6 +160,7 @@ class StorySource:
             display_numbers=chapter_display_numbers(
                 (c.number, c.title) for c in chapters
             ),
+            titles={c.number: c.title for c in chapters},
         )
 
 

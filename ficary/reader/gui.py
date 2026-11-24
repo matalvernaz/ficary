@@ -190,7 +190,7 @@ class ReaderFrame(wx.Frame):
     # ── population + position ─────────────────────────────────────
     def _populate_chapter_list(self) -> None:
         count = self.source.chapter_count()
-        labels = [f"Chapter {n}" for n in range(1, count + 1)]
+        labels = [self.source.chapter_heading(n) for n in range(1, count + 1)]
         for i, label in enumerate(labels):
             self.chapter_list.InsertItem(i, label)
         self.jump.Set(labels)

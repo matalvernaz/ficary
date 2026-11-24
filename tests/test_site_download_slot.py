@@ -295,7 +295,7 @@ class TestDownloadsThatAreNotQueued:
             waiting_thread = threading.Thread(target=waiter)
             waiting_thread.start()
             time.sleep(0.2)
-            assert lines == ["  Waiting for another ffn download to finish..."]
+            assert lines == ["  Waiting for another FanFiction.net download to finish..."]
             let_holder_finish.set()
             waiting_thread.join(5)
         finally:

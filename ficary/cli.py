@@ -43,6 +43,7 @@ from .sites import (
     is_author_url as _is_author_url,
     is_forum_url as _is_forum_url,
     is_series_url as _is_series_url,
+    site_display_name,
     supported_sites as _supported_sites,
 )
 from .updater import (
@@ -1247,11 +1248,11 @@ def _download_one(
             )
         elif update_path:
             routine(
-                f"Checking story {story_id} on {scraper.site_name} "
+                f"Checking story {story_id} on {site_display_name(scraper.site_name)} "
                 f"(existing file has {existing_chapters} chapters)..."
             )
         else:
-            routine(f"Downloading story {story_id} from {scraper.site_name}...")
+            routine(f"Downloading story {story_id} from {site_display_name(scraper.site_name)}...")
 
         chapter_spec = parse_chapter_spec(getattr(args, "chapters", None))
         # Fresh-copies updates re-fetch every chapter, so skipping the
@@ -1363,8 +1364,9 @@ def _download_one(
                     stub_count = len(stub_numbers)
                     refetch_spec = [(n, n) for n in stub_numbers]
                     refetch_spec.append((existing_chapters + 1, None))
+                    named = f'"{brief.name}": ' if brief is not None else "  "
                     status(
-                        f"  {stub_count} paywalled placeholder chapter(s) "
+                        f"{named}{stub_count} paywalled placeholder chapter(s) "
                         "in the existing file — retrying them with the "
                         "logged-in session."
                     )
@@ -1497,10 +1499,11 @@ def _download_one(
                 titles_from_author=getattr(scraper, "lists_chapters", False),
             )
             if len(story.chapters) > fresh_count:
-                status(
-                    f"  Kept {_chapters(len(story.chapters) - fresh_count)} "
-                    "the site no longer has."
-                )
+                kept = _chapters(len(story.chapters) - fresh_count)
+                if brief is not None:
+                    status(f'"{brief.name}" keeps {kept} the site no longer has.')
+                else:
+                    status(f"  Kept {kept} the site no longer has.")
 
         # Never lose a chapter: whatever the update did, everything the
         # book had must be in what is about to be written.
@@ -2421,7 +2424,7 @@ def _run_update_queue(
             breaker = breakers[site_cls]
             site_workers = max(1, min(workers, scraper.concurrency))
             progress(
-                f"  Checking {len(entries)} {site_cls.site_name} "
+                f"  Checking {len(entries)} {site_display_name(site_cls.site_name)} "
                 f"stor{'y' if len(entries) == 1 else 'ies'}, "
                 f"{site_workers} at a time..."
             )
@@ -2553,7 +2556,7 @@ def _run_update_queue(
         if downloads:
             parts.append(f"{downloads} queued download(s)")
         progress(
-            f"{site}: skipped {' and '.join(parts)} — site is behind a "
+            f"{site_display_name(site)}: skipped {' and '.join(parts)} — site is behind a "
             "Cloudflare interactive challenge; run the update again later."
         )
 
@@ -2853,7 +2856,7 @@ def _run_update_queue(
         probes = cf_skipped_probes.get(site, 0)
         downloads = cf_skipped_downloads.get(site, 0)
         progress(
-            f"{site}: {probes} probe(s) and {downloads} download(s) "
+            f"{site_display_name(site)}: {probes} probe(s) and {downloads} download(s) "
             "skipped (Cloudflare challenge) — they'll retry on the "
             "next update."
         )
