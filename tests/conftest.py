@@ -255,6 +255,21 @@ def no_real_clipboard(monkeypatch):
     monkeypatch.setattr(gui.MainFrame, "_get_clipboard", lambda self: "")
 
 
+@pytest.fixture(autouse=True)
+def fresh_activity():
+    """Start and end every test with nothing in the status bars' record.
+
+    ``ficary.activity`` is one record for the whole process. A test that
+    stopped part-way through a job would otherwise leave its sentence
+    for the next test's status bar to show.
+    """
+    from ficary import activity
+
+    activity.reset()
+    yield
+    activity.reset()
+
+
 @pytest.fixture(scope="session")
 def wx_app():
     """A single ``wx.App`` shared by every GUI test in the session.

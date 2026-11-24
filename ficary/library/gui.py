@@ -27,6 +27,8 @@ logger = logging.getLogger(__name__)
 
 from .. import prefs as _prefs
 from ..gui_help import set_help
+from .. import activity
+from ..gui_status_bar import add_activity_status_bar
 from ..gui_status_log import StatusLogCtrl
 from .gui_logic import format_move_label
 from .index import LibraryIndex
@@ -36,6 +38,14 @@ from .review import promote_untrackable, untrackable_for_root
 from .scanner import scan, IMPORT_EXISTING_FOLDER
 from .template import DEFAULT_MISC_FOLDER, DEFAULT_TEMPLATE
 
+
+# Said once per window at the start of an update. Each story gets a
+# line in the status pane when it starts and when it ends; what it is
+# doing in between is in the status bar.
+STATUS_BAR_HINT = (
+    "The status bar at the bottom of this window says which story and "
+    "chapter it's on: NVDA+End reads it, or Insert+Page Down in JAWS."
+)
 
 _TEMPLATE_HINT = (
     "Placeholders: {fandom} {title} {author} {ext} {rating} {status}. "
@@ -73,6 +83,7 @@ class LibraryFrame(wx.Frame):
         # The closing lines of the update in progress, one per library
         # folder, for the screen reader when it ends.
         self._update_summaries: list[str] = []
+        self._told_about_status_bar = False
         self.Bind(wx.EVT_CLOSE, self._on_close_event)
         self._build_ui()
         self._load_prefs()
@@ -249,6 +260,9 @@ class LibraryFrame(wx.Frame):
             "Progress and results of scans and update checks appear here.",
         )
         sizer.Add(self.status_ctrl, 1, wx.EXPAND | wx.LEFT | wx.RIGHT, 8)
+        # What's happening now, for NVDA+End: the story being updated and
+        # its chapter, which no longer go into the pane a line at a time.
+        self.status_bar = add_activity_status_bar(self)
 
         # ── Action buttons ──────────────────────────────
         btn_row = wx.BoxSizer(wx.HORIZONTAL)
@@ -713,6 +727,11 @@ class LibraryFrame(wx.Frame):
             self._append_status(f"Updating {scope} ({', '.join(mode_bits)})...")
         else:
             self._append_status(f"Checking {scope} for updates...")
+        if not self._told_about_status_bar:
+            # Chapter lines used to show the update was alive; they are
+            # in the status bar now, so say where, once per window.
+            self._told_about_status_bar = True
+            self._append_status(STATUS_BAR_HINT)
         # Fresh cancel event per run — creating it up here so the
         # worker closure captures the exact instance the Cancel button
         # toggles.
@@ -865,6 +884,9 @@ class LibraryFrame(wx.Frame):
             progress=self._post_status,
             on_probe_complete=on_probe_complete,
             cancel_event=cancel_event,
+            # A line when each story starts and one when it ends; its
+            # chapters go to the status bar.
+            chapters_in_status_bar=True,
         )
 
         with stamp_lock:
@@ -882,6 +904,10 @@ class LibraryFrame(wx.Frame):
         self._update_running = False
         self._update_cancel_event = None
         summaries, self._update_summaries = self._update_summaries, []
+        if summaries:
+            # Both libraries' results, when there are two, for the
+            # status bar to keep showing once the update is over.
+            activity.finished(" ".join(summaries))
         if not self._alive:
             return
         self._set_busy(False)

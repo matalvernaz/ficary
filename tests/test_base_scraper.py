@@ -813,9 +813,11 @@ class TestSignInPage:
         import inspect
         from ficary import cli
 
-        source = inspect.getsource(cli)
+        # SignInRequiredError is a kind of RateLimitError, so its handler
+        # has to come first in the download or it is never reached.
+        source = inspect.getsource(cli._download_one)
         members = source.index("except SignInRequiredError as exc:")
-        rate = source.index("except RateLimitError as exc:\n        report_error(f\"\\nRate limited")
+        rate = source.index("except RateLimitError as exc:")
         assert members < rate
 
 

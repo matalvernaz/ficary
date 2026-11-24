@@ -1,5 +1,32 @@
 # Changelog
 
+## Unreleased
+
+**Which story an update is on, said where it can be found**
+
+* A library update put every chapter of every story in the status
+  pane, with the story's details after them, and the line that started
+  each download named the story by its number. With several stories
+  updating, the name of the one being updated was lost among its
+  chapters. Each story now gets one line when it starts and one when it
+  ends, both naming it: "Updating 3 of 12: "Title", 5 new chapters."
+  and "Updated "Title": 25 chapters, 5 new.", or why it could not be.
+* The Library window and the main window have a status bar that says
+  what is happening now: which story, and which chapter of it, or how
+  many stories have been checked so far. NVDA+End reads it (Insert+Page
+  Down in JAWS) without moving focus. Once a job is over it says how it
+  went, until the next one starts.
+* The check before an update gives each story one line with its
+  answer ("up to date, 12 chapters", "3 new chapters, 15 on the site"),
+  instead of saying it again in two more lines afterwards.
+* The AI author's-note check's line per chapter, a "cache hit" for
+  every chapter already in the book on an update, stays out of the
+  pane; its one-line tally at the end is still there.
+* An update cancelled while its last story was downloading was summed
+  up as "complete". It says "cancelled" now.
+* The command line keeps its line per chapter, since it has no status
+  bar, and names each story the same way.
+
 ## 2.20.19 — 2026-11-24
 
 **Whole StoriesOnline stories with a free account**

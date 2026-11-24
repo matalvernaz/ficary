@@ -1,0 +1,535 @@
+"""Which story an update is on, said where it can be found.
+
+Matt, 2026-11-24: "When a bunch of stories are updating, it's pretty impossible to find the name of the story that's currently being updated in the status window." Each story got a line naming its file, then a line for every chapter (one story that night got 88) and a block of its details, and the line that started the download named the story by number. The checking before it said each story's answer three times over.
+
+Now each story gets one line in the library window's status pane when it starts and one when it ends, both naming it by its title. What it is doing in between, the chapter it is on and then saving, goes to a status bar on the library and main windows, which NVDA+End reads without moving focus. The checking gives each story one line. The command line, with no status bar, keeps its chapter lines.
+"""
+
+from __future__ import annotations
+
+import itertools
+import logging
+import os
+import threading
+import types
+from pathlib import Path
+
+import pytest
+
+from ficary import activity, cli
+from ficary.jobs import DownloadJob
+from ficary.models import Chapter, Story
+from ficary.scraper import RateLimitError
+from ficary.updater import ChaptersNotReadableError
+
+from .test_library_update_cancel_stops_the_story import wait_until_idle
+
+_site_numbers = itertools.count(1)
+
+needs_display = pytest.mark.skipif(not os.environ.get("DISPLAY"), reason="builds real windows (run under xvfb-run -a)")
+
+
+# ── What's happening now ─────────────────────────────────────────
+
+
+class TestTheRecord:
+    def test_a_job_says_what_it_is_doing_until_it_ends(self):
+        job = activity.Job("Checking.")
+        assert activity.current() == "Checking."
+        job.say("Checking more.")
+        assert activity.current() == "Checking more."
+        job.end()
+        assert activity.current() == ""
+
+    def test_two_jobs_are_both_said_and_one_ending_leaves_the_other(self):
+        first = activity.Job("Updating one.")
+        second = activity.Job("Updating two.")
+        assert activity.current() == "Updating one. Updating two."
+        first.end()
+        assert activity.current() == "Updating two."
+        second.end()
+
+    def test_a_job_ends_however_its_block_ends(self):
+        with pytest.raises(ValueError):
+            with activity.Job("Updating."):
+                raise ValueError("the site broke")
+        assert activity.current() == ""
+
+    def test_a_late_report_does_not_bring_an_ended_job_back(self):
+        job = activity.Job("Updating.")
+        job.end()
+        job.say("Updating, chapter 9 of 9.")
+        assert activity.current() == ""
+
+    def test_the_last_result_shows_until_another_job_starts(self):
+        activity.finished("Library update complete.")
+        assert activity.current() == "Library update complete."
+        job = activity.Job("Downloading.")
+        assert activity.current() == "Downloading."
+        job.end()
+        # Old news by now; it must not come back.
+        assert activity.current() == ""
+
+    def test_a_job_can_end_with_its_result(self):
+        job = activity.Job("Downloading.")
+        job.end("Downloaded.")
+        assert activity.current() == "Downloaded."
+
+
+# ── A fake site and library ──────────────────────────────────────
+
+
+class TitledSite:
+    """A site whose stories have ``chapters`` chapters. It notes what the status bar would say right after each chapter is reported, and ``on_chapter`` runs just before each is reported."""
+
+    def __init__(self, chapters: int = 4, on_chapter=None, fail_with: Exception | None = None):
+        self.site_name = f"which-story-site-{next(_site_numbers)}"
+        self.concurrency = 1
+        self.chapters = chapters
+        self.on_chapter = on_chapter or (lambda url, number: None)
+        self.fail_with = fail_with
+        self.status_bar_said: list[str] = []
+        self.counts: dict[str, object] = {}
+        self.checking_said: list[str] = []
+
+    def parse_story_id(self, url):
+        return int(url.rsplit("/", 1)[1])
+
+    def probe_chapter_count(self, url):
+        self.checking_said.append(activity.current())
+        answer = self.counts[url]
+        if isinstance(answer, Exception):
+            raise answer
+        return answer
+
+    def download(self, url, progress_callback=None, skip_chapters=0, chapters=None):
+        if self.fail_with is not None:
+            raise self.fail_with
+        story = Story(id=self.parse_story_id(url), title="The site's title", author="Nobody", summary="", url=url)
+        for number in range(skip_chapters + 1, self.chapters + 1):
+            story.chapters.append(Chapter(number=number, title=f"Chapter {number}", html=f"<p>Chapter {number}.</p>"))
+            self.on_chapter(url, number)
+            if progress_callback:
+                progress_callback(number, self.chapters, f"Chapter {number}", False)
+            self.status_bar_said.append(activity.current())
+        return story
+
+
+def plug_in(monkeypatch, site: TitledSite) -> None:
+    class SiteClass:
+        site_name = site.site_name
+
+    monkeypatch.setattr(cli, "_build_scraper", lambda url, args: site)
+    monkeypatch.setattr(cli, "_detect_site", lambda url: SiteClass)
+
+
+@pytest.fixture
+def saving(monkeypatch):
+    """Stands in for reading the old book (one chapter) and writing the new one. Returns what the status bar said while the book was being saved."""
+    said: list[str] = []
+
+    def export(story, folder, **options):
+        said.append(activity.current())
+        return Path(options.get("output_path") or Path(folder) / "story.epub")
+
+    monkeypatch.setattr(cli, "read_chapters", lambda path: [Chapter(number=1, title="Chapter 1", html="<p>Chapter 1.</p>")])
+    monkeypatch.setattr(cli, "_merge_chapter_lists", lambda old, new: (list(old) + list(new), 0))
+    monkeypatch.setitem(cli.EXPORTERS, "epub", export)
+    return said
+
+
+def stories(tmp_path: Path, *titles, local: int = 1, remote: int | None = 4) -> list[dict]:
+    made = []
+    for number, title in enumerate(titles, 1):
+        path = tmp_path / f"Fandom/story-{number}.epub"
+        path.parent.mkdir(exist_ok=True)
+        path.write_bytes(b"the book before the update")
+        entry = {
+            "path": path, "rel": f"Fandom/story-{number}.epub",
+            "url": f"https://example.invalid/s/{number}",
+            "local": local, "title": title,
+        }
+        if remote is not None:
+            entry["remote"] = remote
+        made.append(entry)
+    return made
+
+
+def update(queue, site, *, in_status_bar=True, cancel=None, **job):
+    """Runs a library update of ``queue`` and returns its status pane lines."""
+    lines: list[str] = []
+    cli._run_update_queue(
+        queue, DownloadJob(skip_complete=False, **job), workers=1,
+        skipped_count=0, label="Library update",
+        progress=lines.append, cancel_event=cancel or threading.Event(),
+        chapters_in_status_bar=in_status_bar,
+    )
+    # A story runs on its site's queue; let it finish posting.
+    wait_until_idle(site.site_name)
+    return lines
+
+
+# ── Each story's lines ───────────────────────────────────────────
+
+
+class TestEachStory:
+    def test_it_gets_a_line_when_it_starts_and_one_when_it_ends_naming_it(self, tmp_path, monkeypatch, saving):
+        site = TitledSite()
+        plug_in(monkeypatch, site)
+        lines = update(stories(tmp_path, "First Story", "Second Story"), site)
+        assert 'Updating 1 of 2: "First Story", 3 new chapters.' in lines
+        assert 'Updated "First Story": 4 chapters, 3 new.' in lines
+        assert 'Updating 2 of 2: "Second Story", 3 new chapters.' in lines
+        assert 'Updated "Second Story": 4 chapters, 3 new.' in lines
+
+    def test_its_chapters_and_details_stay_out_of_the_pane(self, tmp_path, monkeypatch, saving):
+        site = TitledSite()
+        plug_in(monkeypatch, site)
+        lines = update(stories(tmp_path, "First Story", "Second Story"), site)
+        first = lines.index('Updating 1 of 2: "First Story", 3 new chapters.')
+        summary = next(index for index, line in enumerate(lines) if line.startswith("\n====="))
+        assert lines[first:summary] == [
+            'Updating 1 of 2: "First Story", 3 new chapters.',
+            'Updated "First Story": 4 chapters, 3 new.',
+            'Updating 2 of 2: "Second Story", 3 new chapters.',
+            'Updated "Second Story": 4 chapters, 3 new.',
+        ]
+        # Three lines a story in all, the checking's one included.
+        for title in ("First Story", "Second Story"):
+            assert len([line for line in lines if f'"{title}"' in line]) == 3, title
+
+    def test_the_status_bar_says_which_story_and_chapter(self, tmp_path, monkeypatch, saving):
+        site = TitledSite()
+        plug_in(monkeypatch, site)
+        update(stories(tmp_path, "First Story"), site)
+        assert site.status_bar_said == [
+            'Updating 1 of 1: "First Story", chapter 2 of 4.',
+            'Updating 1 of 1: "First Story", chapter 3 of 4.',
+            'Updating 1 of 1: "First Story", chapter 4 of 4.',
+        ]
+
+    def test_then_saving_and_then_how_it_went(self, tmp_path, monkeypatch, saving):
+        site = TitledSite()
+        plug_in(monkeypatch, site)
+        update(stories(tmp_path, "First Story"), site)
+        assert saving == ['Updating 1 of 1: "First Story", saving.']
+        assert activity.current().startswith("Library update complete — 1 updated, 0 up to date, 0 failed")
+
+    def test_no_new_chapters_after_all_is_not_called_updated(self, tmp_path, monkeypatch, saving):
+        """The check said 4; the site gave nothing past the one already here."""
+        site = TitledSite(chapters=1)
+        plug_in(monkeypatch, site)
+        lines = update(stories(tmp_path, "First Story"), site)
+        assert '"First Story" had no new chapters after all.' in lines
+        assert not any(line.startswith('Updated "First Story"') for line in lines)
+
+    def test_fresh_copies_say_every_chapter_came_again(self, tmp_path, monkeypatch, saving):
+        site = TitledSite()
+        plug_in(monkeypatch, site)
+        lines = update(stories(tmp_path, "First Story"), site, refetch_all=True)
+        assert 'Updating 1 of 1: "First Story", 3 new chapters, downloading every chapter again.' in lines
+        assert 'Updated "First Story": downloaded all 4 chapters again.' in lines
+
+    def test_an_old_file_written_again_does_not_claim_every_chapter_is_new(self, tmp_path, monkeypatch, saving):
+        def unreadable(path):
+            raise ChaptersNotReadableError("not one of Ficary's own files")
+
+        monkeypatch.setattr(cli, "read_chapters", unreadable)
+        site = TitledSite()
+        plug_in(monkeypatch, site)
+        lines = update(stories(tmp_path, "First Story"), site)
+        assert 'Updated "First Story": 4 chapters.' in lines
+        assert any("[legacy-format]" in line for line in lines), "why every chapter was fetched is still said"
+
+    def test_a_story_that_fails_is_named(self, tmp_path, monkeypatch, saving):
+        site = TitledSite(fail_with=ValueError("The site said no."))
+        plug_in(monkeypatch, site)
+        lines = update(stories(tmp_path, "First Story"), site)
+        assert 'Could not update "First Story": The site said no.' in lines
+        failed = lines.index("Failed:")
+        assert lines[failed + 1:failed + 3] == ["  First Story", "    → download failed (see log above)"]
+
+    def test_a_story_that_breaks_is_named(self, tmp_path, monkeypatch, saving):
+        site = TitledSite(fail_with=RuntimeError("the connection dropped"))
+        plug_in(monkeypatch, site)
+        lines = update(stories(tmp_path, "First Story"), site)
+        assert 'Could not update "First Story": the connection dropped' in lines
+        assert not any("Download failed" in line for line in lines)
+
+    def test_a_rate_limit_is_named_without_command_line_advice(self, tmp_path, monkeypatch, saving):
+        site = TitledSite(fail_with=RateLimitError("too many requests"))
+        plug_in(monkeypatch, site)
+        lines = update(stories(tmp_path, "First Story"), site)
+        assert 'Could not update "First Story". Rate limited: too many requests' in lines
+        assert not any("--delay-min" in line for line in lines)
+
+    def test_a_cancelled_story_is_named_and_its_sentence_goes(self, tmp_path, monkeypatch, saving):
+        cancel = threading.Event()
+        site = TitledSite(chapters=6, on_chapter=lambda url, number: number == 3 and cancel.set())
+        plug_in(monkeypatch, site)
+        lines = update(stories(tmp_path, "First Story", remote=6), site, cancel=cancel)
+        assert 'Stopped part-way through "First Story"; its file was not changed. The next update carries on with it.' in lines
+        # It stopped at the chapter it was on, as on the command line.
+        assert site.status_bar_said == ['Updating 1 of 1: "First Story", chapter 2 of 6.']
+        assert '"First Story"' not in activity.current()
+        assert activity.current().startswith("Library update cancelled")
+
+    def test_without_a_title_the_file_name_names_it(self, tmp_path, monkeypatch, saving):
+        site = TitledSite()
+        plug_in(monkeypatch, site)
+        queue = stories(tmp_path, None)
+        queue[0]["rel"] = "Fandom/Some Story - Someone.epub"
+        lines = update(queue, site)
+        assert 'Updating 1 of 1: "Some Story - Someone", 3 new chapters.' in lines
+
+    def test_a_title_over_several_lines_is_said_on_one(self, tmp_path, monkeypatch, saving):
+        site = TitledSite()
+        plug_in(monkeypatch, site)
+        lines = update(stories(tmp_path, "First\n   Story"), site)
+        assert 'Updating 1 of 1: "First Story", 3 new chapters.' in lines
+
+    def test_the_command_line_keeps_its_chapter_lines(self, tmp_path, monkeypatch, saving):
+        """No status bar there: a line per chapter is how it shows it is still going."""
+        site = TitledSite()
+        plug_in(monkeypatch, site)
+        lines = update(stories(tmp_path, "First Story"), site, in_status_bar=False)
+        assert 'Updating 1 of 1: "First Story", 3 new chapters.' in lines
+        assert "  [2/4] Chapter 2" in lines
+        assert "  [4/4] Chapter 4" in lines
+        assert any(line.startswith("\nSaved to:") for line in lines)
+        assert not any(line.startswith('Updated "First Story"') for line in lines)
+
+    def test_the_command_lines_cancel_and_failure_lines_are_unchanged(self, tmp_path, monkeypatch, saving):
+        site = TitledSite(fail_with=RuntimeError("the connection dropped"))
+        plug_in(monkeypatch, site)
+        lines = update(stories(tmp_path, "First Story"), site, in_status_bar=False)
+        assert "  Download failed: the connection dropped" in lines
+
+
+# ── The checking before it ───────────────────────────────────────
+
+
+class TestTheChecking:
+    def checked(self, tmp_path, monkeypatch, counts, *, local=1, dry_run=True, **options):
+        site = TitledSite()
+        plug_in(monkeypatch, site)
+        queue = stories(tmp_path, *[f"Story {letter}" for letter in "ABC"[:len(counts)]], local=local, remote=None)
+        for entry, count in zip(queue, counts):
+            site.counts[entry["url"]] = count
+        for entry, extra in zip(queue, options.get("extra", [{}] * len(queue))):
+            entry.update(extra)
+        lines = update(queue, site, dry_run=dry_run)
+        return site, lines
+
+    def test_each_story_gets_one_line_with_its_answer(self, tmp_path, monkeypatch):
+        _site, lines = self.checked(tmp_path, monkeypatch, [1, 4, 0])
+        assert '  1 of 3: "Story A", up to date, 1 chapter' in lines
+        assert '  2 of 3: "Story B", 3 new chapters, 4 on the site' in lines
+        assert '  3 of 3: "Story C", the site has 0 chapters, fewer than the 1 here, so it is left alone' in lines
+        for title in ("Story A", "Story B", "Story C"):
+            assert len([line for line in lines if f'"{title}"' in line]) == 1, title
+        assert not any("local /" in line or "[1/3]" in line for line in lines)
+
+    def test_the_status_bar_counts_them(self, tmp_path, monkeypatch):
+        # The first is up to date, so it must not count as one with new chapters.
+        site, _lines = self.checked(tmp_path, monkeypatch, [1, 4, 4])
+        assert site.checking_said == [
+            "Checking for new chapters: 0 of 3 stories checked.",
+            "Checking for new chapters: 1 of 3 stories checked.",
+            "Checking for new chapters: 2 of 3 stories checked, 1 with new chapters so far.",
+        ]
+        # The checking is over; a dry run has no result of its own to show.
+        assert activity.current() == ""
+
+    def test_one_known_from_an_earlier_check_says_so(self, tmp_path, monkeypatch):
+        _site, lines = self.checked(tmp_path, monkeypatch, [None], extra=[{"remote": 4}])
+        assert '  1 of 1: "Story A", 3 new chapters, 4 on the site (found by an earlier check)' in lines
+
+    def test_one_that_could_not_be_checked_is_named_and_listed_at_the_end(self, tmp_path, monkeypatch, caplog):
+        caplog.set_level(logging.WARNING, logger="ficary.cli")
+        _site, lines = self.checked(tmp_path, monkeypatch, [RateLimitError("slow down")], dry_run=False)
+        assert '  1 of 1: "Story A", could not be checked: slow down' in lines
+        failed = lines.index("Failed:")
+        assert lines[failed + 1:failed + 3] == ["  Story A", "    → could not be checked: slow down"]
+        # The log names the file, to find it by.
+        assert "Fandom/story-1.epub failed: could not be checked: slow down" in caplog.text
+
+    def test_a_cancelled_check_lists_nothing_story_by_story(self, tmp_path, monkeypatch):
+        site = TitledSite()
+        plug_in(monkeypatch, site)
+        queue = stories(tmp_path, "Story A", "Story B", remote=None)
+        cancel = threading.Event()
+        cancel.set()
+        lines = update(queue, site, cancel=cancel, dry_run=False)
+        assert not any('"Story A"' in line or '"Story B"' in line for line in lines)
+        assert any("2 of 2 entries were not checked" in line for line in lines)
+        assert activity.current().startswith("Library update cancelled")
+
+
+# ── One story on its own ─────────────────────────────────────────
+
+
+class TestOneStoryOnItsOwn:
+    def test_the_brief_report_names_a_failure(self, tmp_path, monkeypatch, saving):
+        site = TitledSite(fail_with=ValueError("The site said no."))
+        plug_in(monkeypatch, site)
+        lines: list[str] = []
+        path = tmp_path / "story.epub"
+        path.write_bytes(b"the book")
+        ok = cli._download_one(
+            "https://example.invalid/s/1", DownloadJob(format="epub"), tmp_path,
+            update_path=path, existing_chapters=1, status_callback=lines.append,
+            brief=cli.BriefReport("A Story", lambda now: None),
+        )
+        assert ok is False
+        assert lines == ['Could not update "A Story": The site said no.']
+
+    def test_the_ai_note_checks_line_per_chapter_stays_out_of_the_pane(self, tmp_path, monkeypatch, saving):
+        """Its tally at the end still reaches it."""
+        def export(story, folder, **options):
+            options["progress"]("  [AI notes] chapter 1: cache hit")
+            options["progress"]("  [AI notes] chapter 2: no A/N paragraphs found")
+            options["progress"]("  AI note check: 2 chapters checked, notes removed from 0.")
+            return Path(options["output_path"])
+
+        monkeypatch.setitem(cli.EXPORTERS, "epub", export)
+        site = TitledSite()
+        plug_in(monkeypatch, site)
+        lines = update(stories(tmp_path, "First Story"), site)
+        assert not any("[AI notes]" in line for line in lines)
+        assert "  AI note check: 2 chapters checked, notes removed from 0." in lines
+
+
+# ── The library window ───────────────────────────────────────────
+
+
+def test_the_library_window_asks_for_the_status_bar(tmp_path, monkeypatch):
+    pytest.importorskip("wx")
+    from ficary.library.gui import LibraryFrame
+
+    from .library_fixtures import ficary_epub
+    from ficary.library.scanner import scan
+
+    root = tmp_path / "library"
+    root.mkdir()
+    ficary_epub(root, title="Story 101", url="https://www.fanfiction.net/s/101/1/", chapters=3, story_id=101)
+    scan(root)
+    asked = {}
+    monkeypatch.setattr(cli, "_run_update_queue", lambda queue, *args, **options: asked.update(options, queue=queue))
+    window = types.SimpleNamespace(_post_status=lambda line: None)
+    LibraryFrame._probe_one_root(
+        window, root.resolve(), force=True, refetch_all=False, recheck_interval=0,
+        cancel_event=threading.Event(),
+    )
+    assert asked["chapters_in_status_bar"] is True
+    assert [entry["title"] for entry in asked["queue"]] == ["Story 101"]
+
+
+@needs_display
+class TestTheStatusBars:
+    def test_the_main_window_has_one_that_follows_what_is_happening(self, wx_app):
+        import wx
+        from ficary import gui
+        from ficary.gui_status_bar import ActivityStatusBar, IDLE_TEXT
+
+        frame = gui.MainFrame()
+        try:
+            bar = frame.GetStatusBar()
+            assert isinstance(bar, ActivityStatusBar)
+            assert bar.GetStatusText() == IDLE_TEXT
+            with activity.Job('Updating 3 of 12: "First Story", chapter 21 of 25.'):
+                bar.refresh()
+                assert bar.GetStatusText() == 'Updating 3 of 12: "First Story", chapter 21 of 25.'
+            bar.refresh()
+            assert bar.GetStatusText() == IDLE_TEXT
+        finally:
+            frame._clip_timer.Stop()
+            frame.Destroy()
+            wx.SafeYield()
+
+    def test_it_keeps_up_on_its_own(self, wx_app):
+        import time
+
+        import wx
+        from ficary import gui
+
+        frame = gui.MainFrame()
+        try:
+            bar = frame.GetStatusBar()
+            with activity.Job("Checking for new chapters: 4 of 9 stories checked."):
+                deadline = time.monotonic() + 5
+                while bar.GetStatusText() != "Checking for new chapters: 4 of 9 stories checked." and time.monotonic() < deadline:
+                    wx.Yield()
+                    time.sleep(0.02)
+                assert bar.GetStatusText() == "Checking for new chapters: 4 of 9 stories checked."
+        finally:
+            frame._clip_timer.Stop()
+            frame.Destroy()
+            wx.SafeYield()
+
+    def test_it_never_shortens_a_long_sentence(self, wx_app):
+        """wx's default style puts "..." in place of what doesn't fit, and on Windows the screen reader reads the shortened text."""
+        import wx
+        from ficary import gui
+
+        frame = gui.MainFrame()
+        try:
+            bar = frame.GetStatusBar()
+            for flag in (wx.STB_ELLIPSIZE_END, wx.STB_ELLIPSIZE_MIDDLE, wx.STB_ELLIPSIZE_START, wx.STB_SHOW_TIPS):
+                assert not bar.HasFlag(flag)
+            sentence = 'Updating 1 of 2: "' + "A Very Long Title " * 20 + '", chapter 1 of 9.'
+            with activity.Job(sentence):
+                bar.refresh()
+                assert bar.GetStatusText() == sentence
+        finally:
+            frame._clip_timer.Stop()
+            frame.Destroy()
+            wx.SafeYield()
+
+    def test_the_library_window_has_one_and_says_where_it_is_once(self, wx_app, monkeypatch, tmp_path):
+        import wx
+        from ficary import gui
+        from ficary.gui_status_bar import ActivityStatusBar
+        from ficary.library import gui as library_gui
+
+        monkeypatch.setattr(library_gui.threading, "Thread", lambda *a, **k: type("NotStarted", (), {"start": lambda self: None})())
+        frame = gui.MainFrame()
+        library = library_gui.LibraryFrame(frame, frame.prefs)
+        try:
+            assert isinstance(library.GetStatusBar(), ActivityStatusBar)
+            monkeypatch.setattr(library, "_current_path", lambda: tmp_path)
+            library._on_check_updates(None)
+            library._update_running = False
+            library._set_busy(False)
+            library._on_check_updates(None)
+            library.status_ctrl.flush()
+            assert library.status_ctrl.GetValue().count(library_gui.STATUS_BAR_HINT) == 1
+        finally:
+            library._update_running = False
+            library.Destroy()
+            frame._clip_timer.Stop()
+            frame.Destroy()
+            wx.SafeYield()
+
+    def test_the_library_windows_result_stays_in_the_bar(self, wx_app, monkeypatch):
+        import wx
+        from ficary import gui
+        from ficary.library import gui as library_gui
+
+        frame = gui.MainFrame()
+        library = library_gui.LibraryFrame(frame, frame.prefs)
+        try:
+            library._update_summaries = [
+                "Library update complete — 2 updated, 5 up to date, 0 failed, 1 skipped.",
+                "Library update complete — 0 updated, 3 up to date, 0 failed, 0 skipped.",
+            ]
+            library._update_finished()
+            assert activity.current() == " ".join([
+                "Library update complete — 2 updated, 5 up to date, 0 failed, 1 skipped.",
+                "Library update complete — 0 updated, 3 up to date, 0 failed, 0 skipped.",
+            ])
+        finally:
+            library.Destroy()
+            frame._clip_timer.Stop()
+            frame.Destroy()
+            wx.SafeYield()

@@ -405,6 +405,14 @@ class TestTheWindow:
         window._run_story_check([tmp_path])
         assert logged(window).strip() == launch_check.waiting_summary(3)
 
+    def test_the_result_stays_in_the_status_bar(self, window, monkeypatch, tmp_path):
+        """For NVDA+End, once the line in the status pane has scrolled away."""
+        from ficary import activity
+
+        monkeypatch.setattr(launch_check, "check_for_new_chapters", lambda roots, cancel_event: 3)
+        window._run_story_check([tmp_path])
+        assert activity.current() == launch_check.waiting_summary(3)
+
     def announced(self, monkeypatch):
         from ficary import announce
 

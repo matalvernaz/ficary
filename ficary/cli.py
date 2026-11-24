@@ -10,6 +10,7 @@ import threading
 from pathlib import Path
 from typing import TYPE_CHECKING, Callable
 
+from . import activity
 from . import legacy as _legacy
 from .ao3 import AO3LockedError
 from .download_queue import DownloadQueues
@@ -956,6 +957,56 @@ def _raise_if_download_cancelled(cancel_event) -> None:
         raise DownloadCancelled("Stopped part-way through the story.")
 
 
+class BriefReport:
+    """How a library update in the desktop app wants one story reported by :func:`_download_one`.
+
+    Its status pane used to get a line for every chapter and then the story's details, and with a dozen stories updating, the name of the one being updated was lost among them. With this, the pane gets one line when the story ends, naming it. What the download is doing meanwhile ("chapter 21 of 25", "saving") goes to ``now``, which the window shows in its status bar.
+    """
+
+    def __init__(self, name: str, now: Callable[[str], None]):
+        self.name = name
+        self.now = now
+
+
+def _story_name(entry: dict) -> str:
+    """What an update calls a story: its title from the library index, on one line, or the file's name without its extension when the index has none."""
+    title = " ".join(str(entry.get("title") or "").split())
+    if title:
+        return title
+    return Path(str(entry["rel"])).stem
+
+
+def _chapters(count: int) -> str:
+    """'1 chapter', '5 chapters'."""
+    return f"{count} chapter" if count == 1 else f"{count} chapters"
+
+
+def _new_chapters(count: int) -> str:
+    """'1 new chapter', '5 new chapters'."""
+    return f"{count} new chapter" if count == 1 else f"{count} new chapters"
+
+
+def _check_verdict(local: int, remote: int) -> str:
+    """What the site's chapter count means for the copy in the library."""
+    if remote == local:
+        return f"up to date, {_chapters(remote)}"
+    if remote > local:
+        return f"{_new_chapters(remote - local)}, {remote} on the site"
+    return (
+        f"the site has {_chapters(remote)}, fewer than the {local} here, "
+        "so it is left alone"
+    )
+
+
+def _checking_sentence(checked: int, total: int, waiting: int) -> str:
+    """The status bar while an update asks the sites for chapter counts."""
+    stories = "story" if total == 1 else "stories"
+    sentence = f"Checking for new chapters: {checked} of {total} {stories} checked"
+    if waiting:
+        sentence += f", {waiting} with new chapters so far"
+    return sentence + "."
+
+
 def _download_one(
     url: str,
     args: argparse.Namespace,
@@ -966,6 +1017,7 @@ def _download_one(
     status_callback: Callable[[str], None] | None = None,
     on_export: Callable[[Path], None] | None = None,
     cancel_event: "threading.Event | None" = None,
+    brief: BriefReport | None = None,
 ) -> bool:
     """Download and export a single story. Returns True on success, False on error.
 
@@ -986,6 +1038,14 @@ def _download_one(
     once it is set, by raising :class:`DownloadCancelled`. An audiobook
     render stops the same way, between pieces of speech. A story whose
     chapters have all arrived is still saved.
+
+    ``brief`` (a library update in the desktop app): each chapter, and
+    then saving, goes to ``brief.now`` instead of a status line; the
+    lines that only repeat what the update's own lines say (which
+    story, its details, where it was saved) and the AI note check's
+    line per chapter go to the debug log instead; and the story ends
+    with one line naming it: updated, nothing new after all, or why it
+    could not be.
     """
     scraper = _build_scraper(url, args)
     status = status_callback if status_callback is not None else print
@@ -1003,6 +1063,31 @@ def _download_one(
         else:
             print(msg, file=sys.stderr)
 
+    def routine(line: str) -> None:
+        """A line the status pane gets unless ``brief`` asked for one line per story. Debug level, since the root logger is shown in the main window's status log from INFO up."""
+        if brief is None:
+            status(line)
+        elif line.strip():
+            logger.debug("%s", line.strip())
+
+    def brief_export_line(line: str) -> None:
+        """A line from the exporter when ``brief`` is on. The AI note check says something about every chapter, an update's old ones included, which put a long run of lines back between the story's name and its outcome; those are tagged "[AI notes]" and go to the debug log. Its one-line tally at the end, and anything else, still goes to the pane."""
+        if line.lstrip().startswith("[AI notes]"):
+            routine(line)
+        else:
+            status(line)
+
+    def report_failure(kind: str, exc: BaseException) -> None:
+        """Say why the story could not be downloaded, naming it when ``brief`` is on, since its lines are no longer grouped under a heading."""
+        if brief is None:
+            report_error(f"{kind}: {exc}")
+            return
+        doing = "update" if update_path else "download"
+        if kind == "Error":
+            report_error(f'Could not {doing} "{brief.name}": {exc}')
+        else:
+            report_error(f'Could not {doing} "{brief.name}". {kind}: {exc}')
+
     # Set once the progress callback below has raised to stop the
     # download. A scraper that caught that (a broad ``except`` around a
     # helper that reports progress) would hand back a story short of
@@ -1010,8 +1095,11 @@ def _download_one(
     stopped_part_way: list[int] = []
 
     def progress(current, total, title, cached):
-        tag = " (cached)" if cached else ""
-        status(f"  [{current}/{total}] {title}{tag}")
+        if brief is not None:
+            brief.now(f"chapter {current} of {total}")
+        else:
+            tag = " (cached)" if cached else ""
+            status(f"  [{current}/{total}] {title}{tag}")
         # Scrapers report each chapter right after saving it to the
         # cache, so a cancel lands between chapters and keeps
         # everything fetched so far.
@@ -1023,12 +1111,12 @@ def _download_one(
         check_format_deps(args.format)
         story_id = scraper.parse_story_id(url)
         if update_path:
-            status(
+            routine(
                 f"Checking story {story_id} on {scraper.site_name} "
                 f"(existing file has {existing_chapters} chapters)..."
             )
         else:
-            status(f"Downloading story {story_id} from {scraper.site_name}...")
+            routine(f"Downloading story {story_id} from {scraper.site_name}...")
 
         chapter_spec = parse_chapter_spec(getattr(args, "chapters", None))
         # Fresh-copies updates re-fetch every chapter, so skipping the
@@ -1075,7 +1163,7 @@ def _download_one(
             0 if (refetch_all_update or legacy_format) else existing_chapters
         )
         if refetch_all_update:
-            status(
+            routine(
                 "  Fresh-copies mode — re-downloading every chapter."
             )
 
@@ -1137,22 +1225,28 @@ def _download_one(
         story_status = story.metadata.get("status", "Unknown")
 
         if update_path and new_count == 0:
-            status("\n  Up to date — no new chapters.")
+            if brief is not None:
+                # The update said this story had new chapters; the site
+                # gave none when asked for them.
+                status(f'"{brief.name}" had no new chapters after all.')
+            else:
+                status("\n  Up to date — no new chapters.")
             return True
 
-        status("")
-        status(f"  Title:    {story.title}")
-        status(f"  Author:   {story.author}")
+        routine("")
+        routine(f"  Title:    {story.title}")
+        routine(f"  Author:   {story.author}")
         if update_path and not refetch_all_update:
             # Stub refetches overlap the existing count — don't double-count.
             total = existing_chapters + new_count - stub_count
-            status(f"  Chapters: {total} ({new_count - stub_count} new)")
+            routine(f"  Chapters: {total} ({new_count - stub_count} new)")
         else:
             # Fresh-copies re-download and plain downloads both already
             # have the full chapter count in ``new_count`` — no math.
-            status(f"  Chapters: {new_count}")
-        status(f"  Words:    {words}")
-        status(f"  Status:   {story_status}")
+            total = new_count
+            routine(f"  Chapters: {new_count}")
+        routine(f"  Words:    {words}")
+        routine(f"  Status:   {story_status}")
 
         if (
             update_path
@@ -1166,7 +1260,7 @@ def _download_one(
             # cached existing chapters with the freshly-downloaded
             # new ones. We use the chapters from the pre-check rather
             # than re-reading the file.
-            status(
+            routine(
                 f"\n  Merging {len(existing_chapters_list)} existing "
                 f"chapter(s) with {len(story.chapters)} new."
             )
@@ -1174,7 +1268,7 @@ def _download_one(
                 existing_chapters_list, story.chapters
             )
             if duplicates:
-                status(
+                routine(
                     f"  ({duplicates} chapter(s) replaced by "
                     f"re-downloaded versions)"
                 )
@@ -1221,6 +1315,10 @@ def _download_one(
                 raise DownloadCancelled(str(exc)) from exc
         else:
             exporter = EXPORTERS[args.format]
+            export_progress = status
+            if brief is not None:
+                brief.now("saving")
+                export_progress = brief_export_line
             path = exporter(
                 story,
                 str(output_dir),
@@ -1232,7 +1330,7 @@ def _download_one(
                 html_style=getattr(args, "html_style", DEFAULT_HTML_STYLE),
                 chapter_notes=getattr(args, "chapter_notes", DEFAULT_CHAPTER_NOTES),
                 llm_config=_llm_strip_notes_config(args),
-                progress=status,
+                progress=export_progress,
                 # An update writes straight to the file it is updating.
                 # Exporting under the templated name first and renaming
                 # afterwards destroyed whatever unrelated book already
@@ -1250,10 +1348,16 @@ def _download_one(
                 f"\nThe existing file is {update_path.name}; the requested "
                 f"{args.format} export was written alongside it."
             )
-        status(f"\nSaved to: {path}")
+        routine(f"\nSaved to: {path}")
         _auto_index_exported(path)
         if on_export is not None:
             on_export(path)
+        if brief is not None:
+            status(_brief_ending(
+                brief.name, update=update_path is not None, total=total,
+                new=new_count - stub_count, refetched_all=refetch_all_update,
+                rewritten=legacy_format,
+            ))
 
         if getattr(args, "send_to_kindle", None):
             try:
@@ -1293,33 +1397,54 @@ def _download_one(
         return True
 
     except (ValueError, FileNotFoundError) as exc:
-        report_error(f"Error: {exc}")
+        report_failure("Error", exc)
         return False
     except StoryNotFoundError as exc:
-        report_error(f"Error: {exc}")
+        report_failure("Error", exc)
         return False
     except AO3LockedError as exc:
-        report_error(f"Locked: {exc}")
+        report_failure("Locked", exc)
         return False
     except WattpadPaidStoryError as exc:
-        report_error(f"Paywalled: {exc}")
+        report_failure("Paywalled", exc)
         return False
     except WebnovelLockedStoryError as exc:
-        report_error(f"Paywalled: {exc}")
+        report_failure("Paywalled", exc)
         return False
     except CloudflareBlockError as exc:
-        report_error(f"Blocked: {exc}")
+        report_failure("Blocked", exc)
         return False
     except SignInRequiredError as exc:
-        report_error(f"Members only: {exc}")
+        report_failure("Members only", exc)
         return False
     except RateLimitError as exc:
-        report_error(f"\nRate limited: {exc}")
-        report_error("Try increasing --delay-min / --delay-max or wait before retrying.")
+        if brief is not None:
+            # The advice names command-line options, which mean nothing
+            # in the desktop app.
+            report_failure("Rate limited", exc)
+        else:
+            report_error(f"\nRate limited: {exc}")
+            report_error("Try increasing --delay-min / --delay-max or wait before retrying.")
         return False
     except ImportError as exc:
-        report_error(f"Missing dependency: {exc}")
+        report_failure("Missing dependency", exc)
         return False
+
+
+def _brief_ending(
+    name: str, *, update: bool, total: int, new: int,
+    refetched_all: bool, rewritten: bool,
+) -> str:
+    """The line a brief report ends a saved story with. Counts come from the download itself, not from the update's earlier check, which can be out of date by then."""
+    if not update:
+        return f'Downloaded "{name}": {_chapters(total)}.'
+    if refetched_all:
+        return f'Updated "{name}": downloaded all {_chapters(total)} again.'
+    if rewritten:
+        # The old file could not be read, so every chapter was fetched
+        # and how many are new is unknown. The line before says why.
+        return f'Updated "{name}": {_chapters(total)}.'
+    return f'Updated "{name}": {_chapters(total)}, {new} new.'
 
 
 def _read_batch_file(path: str) -> list[str]:
@@ -1788,6 +1913,7 @@ def _run_update_queue(
     on_download_complete=None,
     cancel_event: "threading.Event | None" = None,
     probe_guard=None,
+    chapters_in_status_bar: bool = False,
 ) -> int:
     """Run the probe + download cycle on a pre-built queue.
 
@@ -1822,6 +1948,15 @@ def _run_update_queue(
     a site gets. If the guard raises ``DownloadCancelled`` (it was
     waiting and the run was cancelled), the story counts as cancelled.
 
+    What the run is doing goes to :mod:`ficary.activity` as well, for
+    the windows' status bars: how many stories have been checked, then
+    which story is being updated. ``chapters_in_status_bar`` is for a
+    caller that shows that (the library window): each story's chapter
+    by chapter progress and details then stay out of ``progress``,
+    which gets one line when the story starts and one when it ends,
+    both naming it (see :class:`BriefReport`). The command line leaves
+    it off and keeps a line per chapter, its only sign of life.
+
     A site that serves ``_CF_BREAKER_THRESHOLD`` consecutive Cloudflare
     interactive challenges trips a per-site breaker: its remaining
     probes and queued downloads are skipped for this run (reported as
@@ -1834,11 +1969,12 @@ def _run_update_queue(
 
     updated: list[str] = []
     up_to_date: list[str] = []
-    # ``failed`` is a list of ``(relpath, reason)`` tuples so the
+    # ``failed`` is a list of ``(name, reason, relpath)`` tuples so the
     # end-of-run summary can show *why* each story failed, not just
     # which ones — previously users had to scroll back through the
-    # log and re-correlate names with exceptions by hand.
-    failed: list[tuple[str, str]] = []
+    # log and re-correlate names with exceptions by hand. The summary
+    # names the story; the log gives its file as well.
+    failed: list[tuple[str, str, str]] = []
     would_update: list[tuple[str, int, int]] = []
     # Cloudflare-challenge circuit-breaker state per site class, filled
     # in Phase 2 (empty when there's nothing to probe). Phase 3 reads it
@@ -1856,7 +1992,8 @@ def _run_update_queue(
     # global ``workers`` value is now an upper cap, not a fan-out count.
     if probe_queue:
         total = len(probe_queue)
-        progress(f"\nProbing {total} stories for new chapters...")
+        stories = "story" if total == 1 else "stories"
+        progress(f"\nChecking {total} {stories} for new chapters...")
 
         _PROBE_EXPECTED_ERRORS = (
             RateLimitError, CloudflareBlockError, StoryNotFoundError,
@@ -1900,6 +2037,19 @@ def _run_update_queue(
         # runs inside ThreadPoolExecutor workers.
         probe_progress_lock = threading.Lock()
         completed_count = [0]
+        waiting_count = [0]
+        checking = activity.Job(_checking_sentence(0, total, 0))
+
+        def count_checked(entry) -> None:
+            """Count ``entry`` as checked, and say so in the status bar. The caller holds ``probe_progress_lock``."""
+            completed_count[0] += 1
+            remote = entry.get("remote")
+            if isinstance(remote, int) and remote > entry["local"]:
+                waiting_count[0] += 1
+            checking.say(_checking_sentence(completed_count[0], total, waiting_count[0]))
+
+        def check_line(entry, outcome: str) -> str:
+            return f'  {completed_count[0]} of {total}: "{_story_name(entry)}", {outcome}'
 
         def probe_entry(scraper, entry, breaker):
             # Caller-requested abort: drop out before the HTTP call so
@@ -1908,7 +2058,7 @@ def _run_update_queue(
                 entry["error"] = "cancelled"
                 entry["cancelled"] = True
                 with probe_progress_lock:
-                    completed_count[0] += 1
+                    count_checked(entry)
                 return
             # ``probe_answered`` = we got a definitive answer from upstream,
             # whether the story exists (chapter count) or is confirmed gone
@@ -1921,13 +2071,9 @@ def _run_update_queue(
             # (remote_chapter_count in the index beats local → skip probe).
             if "remote" in entry:
                 with probe_progress_lock:
-                    completed_count[0] += 1
-                    progress(
-                        f"  [probe {completed_count[0]}/{total}] "
-                        f"{entry['rel']}: "
-                        f"{entry['remote']} chapter(s) upstream "
-                        "(from index — probe skipped)"
-                    )
+                    count_checked(entry)
+                    verdict = _check_verdict(entry["local"], entry["remote"])
+                    progress(check_line(entry, f"{verdict} (found by an earlier check)"))
                 return
             # Site breaker tripped: don't contact the site, don't print a
             # per-entry line (the trip notice + group summary cover it),
@@ -1935,7 +2081,7 @@ def _run_update_queue(
             with probe_progress_lock:
                 if breaker["tripped"]:
                     entry["cf_skipped"] = True
-                    completed_count[0] += 1
+                    count_checked(entry)
                     breaker["skipped"] += 1
                     return
             remote_count: int | None = None
@@ -1946,7 +2092,7 @@ def _run_update_queue(
                 ):
                     entry["remote"] = scraper.probe_chapter_count(entry["url"])
                 remote_count = entry["remote"]
-                outcome = f"{entry['remote']} chapter(s) upstream"
+                outcome = _check_verdict(entry["local"], entry["remote"])
                 probe_answered = True
             except DownloadCancelled:
                 # The guard gave up waiting for its turn: the run was
@@ -1954,26 +2100,23 @@ def _run_update_queue(
                 entry["error"] = "cancelled"
                 entry["cancelled"] = True
                 with probe_progress_lock:
-                    completed_count[0] += 1
+                    count_checked(entry)
                 return
             except StoryNotFoundError as exc:
                 entry["error"] = exc
                 entry["upstream_missing"] = True
-                outcome = f"no longer on upstream: {exc}"
+                outcome = f"gone from the site: {exc}"
                 probe_answered = True
             except _PROBE_EXPECTED_ERRORS as exc:
                 entry["error"] = exc
-                outcome = f"probe failed: {_failure_reason(exc)}"
+                outcome = f"could not be checked: {_failure_reason(exc)}"
             except (OSError, RuntimeError) as exc:
                 logger.debug("Chapter-count probe failed", exc_info=True)
                 entry["error"] = exc
-                outcome = f"probe failed: {_failure_reason(exc)}"
+                outcome = f"could not be checked: {_failure_reason(exc)}"
             with probe_progress_lock:
-                completed_count[0] += 1
-                progress(
-                    f"  [probe {completed_count[0]}/{total}] "
-                    f"{entry['rel']}: {outcome}"
-                )
+                count_checked(entry)
+                progress(check_line(entry, outcome))
                 if probe_answered:
                     breaker["streak"] = 0
                 elif isinstance(entry.get("error"), CloudflareChallengeError):
@@ -2007,9 +2150,9 @@ def _run_update_queue(
             breaker = breakers[site_cls]
             site_workers = max(1, min(workers, scraper.concurrency))
             progress(
-                f"  Probing {len(entries)} {site_cls.site_name} "
-                f"stor{'y' if len(entries) == 1 else 'ies'} "
-                f"(concurrency={site_workers})..."
+                f"  Checking {len(entries)} {site_cls.site_name} "
+                f"stor{'y' if len(entries) == 1 else 'ies'}, "
+                f"{site_workers} at a time..."
             )
             with ThreadPoolExecutor(
                 max_workers=site_workers,
@@ -2025,22 +2168,25 @@ def _run_update_queue(
                     "remaining probe(s) without contacting the site."
                 )
 
-        if len(by_site) == 1:
-            cls, entries = next(iter(by_site.items()))
-            run_site_group(cls, entries)
-        else:
-            # Run every site group in parallel so a slow-rate-limited
-            # group (e.g. FFN, serialised) doesn't gate the others.
-            with ThreadPoolExecutor(
-                max_workers=len(by_site),
-                thread_name_prefix="probe-site",
-            ) as outer:
-                site_futures = [
-                    outer.submit(run_site_group, cls, entries)
-                    for cls, entries in by_site.items()
-                ]
-                for fut in site_futures:
-                    fut.result()
+        # The status bar's sentence ends with the checking, however it
+        # ends: a sentence left behind says something is still going on.
+        with checking:
+            if len(by_site) == 1:
+                cls, entries = next(iter(by_site.items()))
+                run_site_group(cls, entries)
+            else:
+                # Run every site group in parallel so a slow-rate-limited
+                # group (e.g. FFN, serialised) doesn't gate the others.
+                with ThreadPoolExecutor(
+                    max_workers=len(by_site),
+                    thread_name_prefix="probe-site",
+                ) as outer:
+                    site_futures = [
+                        outer.submit(run_site_group, cls, entries)
+                        for cls, entries in by_site.items()
+                    ]
+                    for fut in site_futures:
+                        fut.result()
         progress("")
 
     # Phase 3 (per-site fan-out): partition the downloadable entries
@@ -2080,11 +2226,14 @@ def _run_update_queue(
     # challenge guidance paragraph) for what can be hundreds of entries.
     cf_skipped_probes: dict[str, int] = {}
     cf_skipped_downloads: dict[str, int] = {}
-    for i, entry in enumerate(probe_queue, 1):
-        rel = entry["rel"]
+    #
+    # Nothing is said here about each story: its line from the checking
+    # above already gave its answer, and saying it again, numbered
+    # differently from the downloads below, doubled the lines to wade
+    # through.
+    for entry in probe_queue:
+        name = _story_name(entry)
         if entry.get("cancelled"):
-            progress(f"[{i}/{total}] {rel}")
-            progress("  Cancelled before probe.")
             # A sweep stopped during probing has checked nothing. Record
             # it, or the summary reports "complete — 0 updated, 0 up to
             # date", which reads as "your library is current".
@@ -2095,35 +2244,17 @@ def _run_update_queue(
             cf_skipped_probes[site] = cf_skipped_probes.get(site, 0) + 1
             continue
         if "error" in entry:
-            progress(f"[{i}/{total}] {rel}")
-            progress(f"  Probe failed: {entry['error']}")
-            failed.append((rel, f"probe: {entry['error']}"))
+            failed.append((name, f"could not be checked: {entry['error']}", entry["rel"]))
             continue
 
         local = entry["local"]
         remote = entry["remote"]
         if remote <= local:
-            msg = (
-                "up to date"
-                if remote == local
-                else (
-                    f"remote has fewer chapters ({remote} < {local}) "
-                    "— leaving alone"
-                )
-            )
-            progress(f"[{i}/{total}] {rel}")
-            progress(f"  {local} local / {remote} remote — {msg}")
-            up_to_date.append(rel)
+            up_to_date.append(name)
             continue
 
-        new_count = remote - local
         if args.dry_run:
-            progress(f"[{i}/{total}] {rel}")
-            progress(
-                f"  {local} local / {remote} remote — "
-                f"{new_count} new chapter(s)"
-            )
-            would_update.append((rel, local, remote))
+            would_update.append((name, local, remote))
             continue
 
         # A tripped breaker means the site is challenging every request
@@ -2155,6 +2286,12 @@ def _run_update_queue(
     download_total = len(downloadable)
     started_count = [0]
 
+    def say_failure(name: str, reason: str) -> None:
+        if chapters_in_status_bar:
+            progress(f'Could not update "{name}": {reason}')
+        else:
+            progress(f"  Download failed: {reason}")
+
     def run_entry(entry):
         """Download one story. Runs on a ``dlq-<site>`` worker thread
         so the GUI's ``_log`` helpers auto-prefix output with
@@ -2175,18 +2312,24 @@ def _run_update_queue(
                 no_story_running.notify_all()
 
     def _run_entry_counted(entry):
-        rel = entry["rel"]
-        local = entry["local"]
-        remote = entry["remote"]
-        new_count = remote - local
+        name = _story_name(entry)
         with result_lock:
             started_count[0] += 1
             position = started_count[0]
-        progress(f"[{position}/{download_total}] {rel}")
-        progress(
-            f"  {local} local / {remote} remote — "
-            f"{new_count} new chapter(s)"
-        )
+        doing = f'Updating {position} of {download_total}: "{name}"'
+        # Its sentence in the status bar goes when the story is done,
+        # however it ends.
+        with activity.Job(f"{doing}.") as story_job:
+            update_story(entry, name=name, doing=doing, story_job=story_job)
+
+    def update_story(entry, *, name, doing, story_job):
+        local = entry["local"]
+        remote = entry["remote"]
+        new_count = remote - local
+        plan = _new_chapters(new_count)
+        if getattr(args, "refetch_all", False):
+            plan += ", downloading every chapter again"
+        progress(f"{doing}, {plan}.")
         path = entry["path"]
         # Clone args so concurrent sites don't race on the shared
         # namespace's ``format``/``output`` fields. Only those two
@@ -2198,12 +2341,20 @@ def _run_update_queue(
         per_args.output = str(path.parent)
         ok = False
         failure_reason: str | None = None
+        # Passed only when asked for, so the command line calls
+        # _download_one exactly as before.
+        brief_report = {}
+        if chapters_in_status_bar:
+            brief_report["brief"] = BriefReport(
+                name, lambda now: story_job.say(f"{doing}, {now}."),
+            )
         try:
             ok = _download_one(
                 entry["url"], per_args, Path(per_args.output),
                 update_path=path, existing_chapters=local,
                 status_callback=progress,
                 cancel_event=cancel_event,
+                **brief_report,
             )
             if not ok:
                 # _download_one swallowed an error and logged it; we
@@ -2215,12 +2366,18 @@ def _run_update_queue(
             # Re-raise so the outer wait loop sees the cancel.
             raise
         except DownloadCancelled:
-            progress(
-                "  Stopped part-way through this story; its file was not "
-                "changed. The next update carries on with it."
-            )
+            if chapters_in_status_bar:
+                progress(
+                    f'Stopped part-way through "{name}"; its file was not '
+                    "changed. The next update carries on with it."
+                )
+            else:
+                progress(
+                    "  Stopped part-way through this story; its file was not "
+                    "changed. The next update carries on with it."
+                )
             with result_lock:
-                stopped.append(rel)
+                stopped.append(name)
             return
         except Exception as exc:
             if isinstance(exc, OSError):
@@ -2237,16 +2394,16 @@ def _run_update_queue(
                     f" (at {frames[-1].filename}:{frames[-1].lineno}"
                     f" in {frames[-1].name})" if frames else ""
                 )
-                progress(f"  Download failed: {exc}{site}")
+                say_failure(name, f"{exc}{site}")
             else:
                 logger.debug("Phase 3 download raised", exc_info=True)
-                progress(f"  Download failed: {exc}")
+                say_failure(name, str(exc))
             failure_reason = f"{type(exc).__name__}: {exc}"
         with result_lock:
             if ok:
-                updated.append(rel)
+                updated.append(name)
             else:
-                failed.append((rel, failure_reason or "unknown failure"))
+                failed.append((name, failure_reason or "unknown failure", entry["rel"]))
         # Library-update hands us a callback here that re-hashes the
         # freshly-written file and persists the list to the library
         # index — that way ``--scan-edits`` always has a current
@@ -2345,6 +2502,12 @@ def _run_update_queue(
         # (unexpected), don't leave them orphaned on the queue —
         # cancel pending, let running ones finish naturally.
         cancel_queued()
+    # A cancel that lands during the last story stops it before the loop
+    # above looks at the event again, so the loop can end without having
+    # seen it. The run was still cancelled, and must not be summed up
+    # as complete.
+    if cancel_event is not None and cancel_event.is_set():
+        cancelled = True
 
     progress(f"\n{'='*60}")
     if args.dry_run:
@@ -2366,11 +2529,13 @@ def _run_update_queue(
         stopped_note = (
             f", {len(stopped)} stopped part-way" if stopped else ""
         )
-        progress(
+        outcome = (
             f"{headline} — {len(updated)} updated, "
             f"{len(up_to_date)} up to date, {len(failed)} failed, "
             f"{skipped_count} skipped{stopped_note}."
         )
+        progress(outcome)
+        activity.finished(outcome)
         if cancelled:
             remaining = total - (
                 len(updated) + len(up_to_date) + len(failed) + skipped_count
@@ -2392,17 +2557,9 @@ def _run_update_queue(
         )
     if failed:
         progress("Failed:")
-        for entry in failed:
-            # Entries are ``(relpath, reason)`` tuples; fall back to
-            # ``str(entry)`` if anything older snuck in during the
-            # transition so the summary never crashes on a malformed
-            # failure list.
-            if isinstance(entry, tuple) and len(entry) == 2:
-                name, reason = entry
-                progress(f"  {name}")
-                progress(f"    → {reason}")
-            else:
-                progress(f"  {entry}")
+        for name, reason, _relpath in failed:
+            progress(f"  {name}")
+            progress(f"    → {reason}")
     # The whole run so far has spoken only through ``progress``, which
     # the library window points at its status pane and nowhere else, so
     # the record of which stories failed and why died with the window.
@@ -2412,11 +2569,8 @@ def _run_update_queue(
         "%s: %d updated, %d up to date, %d failed, %d skipped.",
         label, len(updated), len(up_to_date), len(failed), skipped_count,
     )
-    for entry in failed:
-        if isinstance(entry, tuple) and len(entry) == 2:
-            logger.warning("%s failed: %s", entry[0], entry[1])
-        else:
-            logger.warning("%s failed.", entry)
+    for _name, reason, relpath in failed:
+        logger.warning("%s failed: %s", relpath, reason)
     progress('='*60)
     return 0 if not failed else 1
 

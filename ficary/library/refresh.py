@@ -125,7 +125,8 @@ def build_refresh_queue(
 ) -> tuple[list[dict], list[str]]:
     """Build (probe_queue, skipped) from the library index for ``root``.
 
-    Each queue entry has ``path``, ``rel`` (display name), ``url``,
+    Each queue entry has ``path``, ``rel`` (display name), ``title``
+    (from the index, which an update names the story by), ``url``,
     ``local`` — the same shape ``cli._run_update_queue`` expects.
     Chapter counts come from disk when we can read them; fall back
     to the index's recorded count so foreign-format files (where
@@ -297,6 +298,7 @@ def build_refresh_queue(
                 "url": url,
                 "local": local,
                 "remote": pending_remote,
+                "title": entry.get("title"),
             })
             continue
 
@@ -342,9 +344,10 @@ def build_refresh_queue(
                     skipped.append(display_rel)
                     continue
 
-        probe_queue.append(
-            {"path": path, "rel": display_rel, "url": url, "local": local}
-        )
+        probe_queue.append({
+            "path": path, "rel": display_rel, "url": url, "local": local,
+            "title": entry.get("title"),
+        })
 
     return probe_queue, skipped
 

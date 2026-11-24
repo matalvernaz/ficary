@@ -348,6 +348,8 @@ from .download_queue import (
     site_from_thread_name,
 )
 from .gui_help import set_help, is_own_destroy
+from . import activity
+from .gui_status_bar import add_activity_status_bar
 from .library.scanner import IMPORT_EXISTING_FOLDER
 from .gui_dialogs import (
     OptionalFeaturesDialog,
@@ -1017,6 +1019,11 @@ class MainFrame(wx.Frame):
         self._log_timer = wx.Timer(self)
         self.Bind(wx.EVT_TIMER, self._on_log_flush, self._log_timer)
         self._log_timer.Start(_LOG_FLUSH_INTERVAL_MS)
+
+        # What's happening now, in a sentence, for NVDA+End. Chapter
+        # progress goes there rather than into the status log, where it
+        # buried the name of the story it belonged to.
+        self.status_bar = add_activity_status_bar(self)
 
         # No frame-level accelerator table: the download/update/watch
         # buttons moved into the Add Story window, taking their old
@@ -2272,6 +2279,7 @@ class MainFrame(wx.Frame):
             return
         summary = waiting_summary(waiting)
         self._log(summary)
+        activity.finished(summary)
         if waiting > 0:
             # Said as well, like a finished download (chosen by the
             # maintainer): a line in the status pane is easy to miss at
