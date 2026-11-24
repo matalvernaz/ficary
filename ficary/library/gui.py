@@ -57,7 +57,10 @@ class LibraryFrame(wx.Frame):
         super().__init__(
             parent,
             title="Library",
-            size=(640, 460),
+            # Room for the buttons on three lines, the status pane and
+            # the status bar. At 640 by 460 the buttons ran off the right
+            # edge, and once they wrapped there was no room for the pane.
+            size=(760, 640),
             style=wx.DEFAULT_FRAME_STYLE,
         )
         self._prefs = prefs
@@ -257,7 +260,12 @@ class LibraryFrame(wx.Frame):
         self.status_bar = add_activity_status_bar(self)
 
         # ── Action buttons ──────────────────────────────
-        btn_row = wx.BoxSizer(wx.HORIZONTAL)
+        # Wraps onto as many lines as the window's width needs. On one
+        # line the row was far wider than the window, so most of it was
+        # drawn past the right-hand edge. Tab order follows the order
+        # the controls are made in, not where they land, so it is the
+        # same either way.
+        btn_row = wx.WrapSizer(wx.HORIZONTAL)
         # Was "Scan Library". Alt+I; Alt+S is not used in this window now.
         self.scan_btn = wx.Button(panel, label=f"&{IMPORT_EXISTING_FOLDER}")
         set_help(
@@ -269,7 +277,7 @@ class LibraryFrame(wx.Frame):
             "menu of the main window.",
         )
         self.scan_btn.Bind(wx.EVT_BUTTON, self._on_scan)
-        btn_row.Add(self.scan_btn, 0, wx.RIGHT, 6)
+        btn_row.Add(self.scan_btn, 0, wx.RIGHT | wx.BOTTOM, 6)
 
         self.reorg_btn = wx.Button(panel, label="&Reorganize...")
         set_help(
@@ -278,7 +286,7 @@ class LibraryFrame(wx.Frame):
             "sorting rules. Shows the planned moves first before applying.",
         )
         self.reorg_btn.Bind(wx.EVT_BUTTON, self._on_reorganize)
-        btn_row.Add(self.reorg_btn, 0, wx.RIGHT, 6)
+        btn_row.Add(self.reorg_btn, 0, wx.RIGHT | wx.BOTTOM, 6)
 
         # The quick one first: only what is already known to be waiting.
         self.download_new_btn = wx.Button(panel, label="Download New Cha&pters")
@@ -289,7 +297,7 @@ class LibraryFrame(wx.Frame):
             "asking the sites about any other story.",
         )
         self.download_new_btn.Bind(wx.EVT_BUTTON, self._on_download_new_chapters)
-        btn_row.Add(self.download_new_btn, 0, wx.RIGHT, 6)
+        btn_row.Add(self.download_new_btn, 0, wx.RIGHT | wx.BOTTOM, 6)
 
         self.update_btn = wx.Button(panel, label="Check All Stories for &Updates")
         set_help(
@@ -298,7 +306,7 @@ class LibraryFrame(wx.Frame):
             "merge any it finds. Finished and abandoned stories are skipped.",
         )
         self.update_btn.Bind(wx.EVT_BUTTON, self._on_check_updates)
-        btn_row.Add(self.update_btn, 0, wx.RIGHT, 6)
+        btn_row.Add(self.update_btn, 0, wx.RIGHT | wx.BOTTOM, 6)
 
         # Update-mode modifiers live next to the button so keyboard
         # users can tab from Update → Force recheck → Fresh copies and
@@ -317,7 +325,7 @@ class LibraryFrame(wx.Frame):
         )
         btn_row.Add(
             self.force_recheck_chk, 0,
-            wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 6,
+            wx.ALIGN_CENTER_VERTICAL | wx.RIGHT | wx.BOTTOM, 6,
         )
 
         self.refetch_all_chk = wx.CheckBox(
@@ -334,7 +342,7 @@ class LibraryFrame(wx.Frame):
         )
         btn_row.Add(
             self.refetch_all_chk, 0,
-            wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 6,
+            wx.ALIGN_CENTER_VERTICAL | wx.RIGHT | wx.BOTTOM, 6,
         )
 
         self.review_btn = wx.Button(panel, label="Review &Ambiguous...")
@@ -344,7 +352,7 @@ class LibraryFrame(wx.Frame):
             "correct their details by hand.",
         )
         self.review_btn.Bind(wx.EVT_BUTTON, self._on_review)
-        btn_row.Add(self.review_btn, 0, wx.RIGHT, 6)
+        btn_row.Add(self.review_btn, 0, wx.RIGHT | wx.BOTTOM, 6)
 
         self.browse_stories_btn = wx.Button(panel, label="&Open Story Browser...")
         set_help(
@@ -353,7 +361,7 @@ class LibraryFrame(wx.Frame):
             "you can read, update, mark adult, abandon, or delete.",
         )
         self.browse_stories_btn.Bind(wx.EVT_BUTTON, self._on_open_browser)
-        btn_row.Add(self.browse_stories_btn, 0, wx.RIGHT, 6)
+        btn_row.Add(self.browse_stories_btn, 0, wx.RIGHT | wx.BOTTOM, 6)
 
         # Cancel button sits next to Check for Updates so the stop
         # action is adjacent to the start action. Disabled unless a
@@ -366,14 +374,12 @@ class LibraryFrame(wx.Frame):
         )
         self.cancel_btn.Bind(wx.EVT_BUTTON, self._on_cancel_update)
         self.cancel_btn.Disable()
-        btn_row.Add(self.cancel_btn, 0, wx.RIGHT, 6)
-
-        btn_row.AddStretchSpacer(1)
+        btn_row.Add(self.cancel_btn, 0, wx.RIGHT | wx.BOTTOM, 6)
 
         close_btn = wx.Button(panel, id=wx.ID_CLOSE, label="&Close")
         set_help(close_btn, "Close the library window.")
         close_btn.Bind(wx.EVT_BUTTON, lambda e: self.Close())
-        btn_row.Add(close_btn, 0)
+        btn_row.Add(close_btn, 0, wx.BOTTOM, 6)
         sizer.Add(btn_row, 0, wx.EXPAND | wx.ALL, 8)
 
         panel.SetSizer(sizer)

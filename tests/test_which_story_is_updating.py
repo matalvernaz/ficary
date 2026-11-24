@@ -836,3 +836,36 @@ class TestTheMainWindowsSaving:
             )
             assert activity.current() == 'Making the audiobook of "The Loaf", chapter 2 of 2.'
 
+
+@needs_display
+def test_the_library_windows_controls_all_fit_in_it(wx_app):
+    """The buttons were one row far wider than the window, so most of them were drawn past its right-hand edge; and the status bar made the window shorter still."""
+    import wx
+    from ficary import gui
+    from ficary.library.gui import LibraryFrame
+
+    frame = gui.MainFrame()
+    library = LibraryFrame(frame, frame.prefs)
+    try:
+        library.Show()
+        library.Layout()
+        for _ in range(5):
+            wx.SafeYield()
+        width = library.GetClientSize().width
+        controls = [
+            library.scan_btn, library.reorg_btn, library.download_new_btn, library.update_btn,
+            library.force_recheck_chk, library.refetch_all_chk, library.review_btn,
+            library.browse_stories_btn, library.cancel_btn, library.FindWindowById(wx.ID_CLOSE),
+        ]
+        for control in controls:
+            # Squeezed is as bad as off the edge: GTK shrinks what does
+            # not fit, down to nothing.
+            assert control.GetSize().width >= control.GetBestSize().width - 2, control.GetLabel()
+            assert control.GetRect().GetRight() <= width, control.GetLabel()
+        # Room left for the status pane to be read.
+        assert library.status_ctrl.GetSize().height >= 80
+    finally:
+        library.Destroy()
+        frame._clip_timer.Stop()
+        frame.Destroy()
+        wx.SafeYield()

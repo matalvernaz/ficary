@@ -35,6 +35,15 @@
 * The command line keeps its line per chapter, since it has no status
   bar, and names each story the same way.
 
+**The Library window's buttons fit in it**
+
+* Its buttons were one row far wider than the window, so most of them
+  (Check All Stories for Updates, Review Ambiguous, Open Story Browser,
+  Cancel Update and Close) were drawn squeezed to nothing or past the
+  right-hand edge. They wrap onto three lines now, and the window opens
+  a little bigger so the status pane keeps its room. The keyboard order
+  is unchanged.
+
 ## 2.20.19 — 2026-11-24
 
 **Whole StoriesOnline stories with a free account**
