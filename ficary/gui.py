@@ -348,7 +348,7 @@ from .download_queue import (
     site_from_thread_name,
 )
 from .gui_help import set_help, is_own_destroy
-from .gui_layout import fit_on_screen
+from .gui_layout import fit_on_screen, grow_to_fit
 from .sites import site_display_name
 from . import activity
 from .gui_status_bar import HINT as STATUS_BAR_HINT, add_activity_status_bar
@@ -1702,6 +1702,9 @@ class MainFrame(wx.Frame):
         self.llm_settings_btn.Show(is_llm)
         self.attribution_install_btn.Show(not is_llm)
         self.audio_panel.Layout()
+        # The status and buttons here change with the backend (an AI
+        # model's name runs long), so the window grows to fit them.
+        wx.CallAfter(grow_to_fit, self.add_story_frame)
         if is_llm:
             _announce_label(self.attribution_status, self._llm_status_label())
             return

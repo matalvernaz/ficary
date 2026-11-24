@@ -14,7 +14,7 @@ import threading
 import time
 
 import wx
-from ..gui_layout import fit_to_contents
+from ..gui_layout import fit_to_contents, grow_to_fit
 
 from ..audio.engine import describe_unavailable, get_engine
 from ..audio.events import Event, ReaderEvent
@@ -652,6 +652,9 @@ class ReaderFrame(wx.Frame):
             label = f"Voice: {short} ({provider})"
         try:
             status.SetLabel(label)
+            # "Voice: en-GB-RyanNeural (edge)" is longer than "Voice: not
+            # started"; the window grows to fit it.
+            grow_to_fit(self)
         except RuntimeError:
             pass
 

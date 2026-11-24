@@ -660,3 +660,80 @@ def test_a_button_given_a_fixed_width_too_small_for_its_label_is_found(wx_app):
     finally:
         frame.Destroy()
         _settle(wx)
+
+
+# ── Windows whose contents change after they open ────────────────
+#
+# Each window is fitted as it opens; one whose contents then grow (a
+# backend chosen, a voice speaking) grows again to fit them.
+
+
+@needs_display
+def test_add_story_shows_whole_with_every_attribution_backend(main_window):
+    """With BookNLP its Size drop-down appears, and with the AI backend its status names the model, which runs long; both were cut off."""
+    import wx
+
+    from ficary import prefs as prefs_module
+
+    main_window.prefs.set(prefs_module.KEY_LLM_PROVIDER, "anthropic")
+    main_window.prefs.set(prefs_module.KEY_LLM_MODEL, "claude-sonnet-4-5-20250929")
+    window = main_window.add_story_frame
+    choice = main_window.format_ctrl
+    try:
+        window.Show()
+        choice.SetSelection(choice.FindString("audio"))
+        main_window._update_audio_panel_visibility()
+        for index, backend in enumerate(main_window._attribution_choices):
+            main_window.attribution_ctrl.SetSelection(index)
+            main_window._on_attribution_change(None)
+            _settle(wx)
+            assert misfits(window, wx) == [], backend
+    finally:
+        choice.SetSelection(choice.FindString("epub"))
+        main_window._update_audio_panel_visibility()
+        window.Hide()
+
+
+@needs_display
+def test_ai_settings_shows_whole_with_every_provider(main_window):
+    """Ollama brings buttons of its own; "Download Ollama..." was cut off once the text was larger, in a dialog opened on another provider and measured without them."""
+    import wx
+
+    from ficary import gui_dialogs
+    from ficary import prefs as prefs_module
+
+    main_window.prefs.set(prefs_module.KEY_LLM_PROVIDER, "anthropic")
+    dialog = gui_dialogs.LlmSettingsDialog(main_window, main_window.prefs)
+    try:
+        dialog.Show()
+        for index in range(dialog.provider_ctrl.GetCount()):
+            dialog.provider_ctrl.SetSelection(index)
+            event = wx.CommandEvent(wx.EVT_CHOICE.typeId, dialog.provider_ctrl.GetId())
+            event.SetEventObject(dialog.provider_ctrl)
+            dialog.provider_ctrl.GetEventHandler().ProcessEvent(event)
+            _settle(wx)
+            assert misfits(dialog, wx) == [], dialog.provider_ctrl.GetString(index)
+    finally:
+        dialog.Destroy()
+        _settle(wx)
+
+
+@needs_display
+def test_the_reader_shows_whole_once_a_voice_is_speaking(main_window):
+    """"Voice: en-GB-RyanNeural (edge)" is longer than "Voice: not started", at the end of a row that was already full."""
+    import wx
+
+    from ficary.reader.gui import ReaderFrame
+    from ficary.reader.source import StorySource
+
+    reader = ReaderFrame(main_window, main_window.prefs, StorySource.from_file(main_window.made_up_books[0]))
+    try:
+        reader.Show()
+        _settle(wx)
+        reader._last_voice = "edge:en-GB-ThomasNeural-VeryLongVoiceName"
+        reader._update_voice_status()
+        _settle(wx)
+        assert misfits(reader, wx) == []
+    finally:
+        reader.Destroy()
+        _settle(wx)

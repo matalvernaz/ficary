@@ -81,6 +81,15 @@ main_window = gui.MainFrame()
 main_window.prefs.set(prefs_module.KEY_LIBRARY_PATH, str(library_root))
 main_window.Show()
 report = [f"display: {wx.GetDisplaySize().width}x{wx.GetDisplaySize().height}, platform: {wx.PlatformInfo[1]}"]
+if wx.Platform == "__WXMSW__":
+    # Whether the process scales itself for the display or Windows
+    # stretches it: a process Windows stretches is laid out as at 100%.
+    import ctypes
+
+    awareness = ctypes.c_int(-1)
+    ctypes.windll.shcore.GetProcessDpiAwareness(None, ctypes.byref(awareness))
+    meaning = {0: "unaware (Windows stretches it)", 1: "system aware", 2: "per-monitor aware"}.get(awareness.value, "unknown")
+    report.append(f"process DPI awareness: {awareness.value} {meaning}; main window DPI scale {main_window.GetDPIScaleFactor()}")
 
 
 def settle(seconds=0.6):
@@ -150,13 +159,28 @@ def find_notebook(window):
     return None
 
 
+def describe_focus(window):
+    """The control that has the focus, if it is in ``window``."""
+    focused = wx.Window.FindFocus()
+    if focused is None:
+        return "nothing"
+    if focused.GetTopLevelParent() is not window:
+        return "elsewhere"
+    return describe(focused)
+
+
 def walk(name, make, *, pages=False, keep=False, then=None):
     """Open a window, screenshot it (each page of its notebook with ``pages``), list its controls, and close it unless ``keep``. ``then`` is called with the window for any extra states to capture."""
     try:
         window = make()
+        from ficary import gui_layout
+
+        # Measured on first show (notebook pages not sized yet), or as built.
+        deferred = gui_layout._pages_unsized(window)
         if not window.IsShown():
             window.Show()
         settle()
+        report.append(f"{name}: measured {'on first show' if deferred else 'as built'}; focus on {describe_focus(window)}")
         (controls / f"{name}.txt").write_text("\n".join(tab_order(window)) + "\n", encoding="utf-8")
         notebook = find_notebook(window) if pages else None
         if notebook is not None:

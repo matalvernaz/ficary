@@ -109,6 +109,11 @@ _SHORTENED = wx.ST_ELLIPSIZE_START | wx.ST_ELLIPSIZE_MIDDLE | wx.ST_ELLIPSIZE_EN
 # Room added beyond the shortfall, so a control isn't drawn hard against the edge.
 _SPARE = 8
 
+# A shortfall this small is rounding, not a control cut off (the window
+# checks allow the same): at fractional scaling it grew windows a few
+# pixels a round.
+_TOLERANCE = 2
+
 
 def _room_asked(control) -> wx.Size:
     """The room a control needs: a label or button the size of its text, even where it was given a fixed size (a fixed 120 pixels cut "AI settings..." off inside its button once the text was larger); a drop-down the width it asks for, since one given a fixed width shows a long item cut short and its list shows it whole."""
@@ -167,7 +172,10 @@ def _shortfall(window) -> tuple[int, int]:
             look(child, scrolled)
 
     look(window, None)
-    return max(need_width, 0), max(need_height, 0)
+    return (
+        need_width if need_width > _TOLERANCE else 0,
+        need_height if need_height > _TOLERANCE else 0,
+    )
 
 
 def _notebooks_in(window) -> list:
@@ -195,6 +203,7 @@ def _page_borders(window) -> dict:
 def _shortfall_on_every_page(window, borders) -> tuple[int, int]:
     """``_shortfall`` on each page of every notebook in ``window``, which shows one at a time; the page that was showing is put back. Each page is given the room the notebook has for it now, less ``borders``: the toolkit resizes only the showing page, and on Linux not straight away."""
     width, height = _shortfall(window)
+    focused = wx.Window.FindFocus()
     for notebook, (border_width, border_height) in borders.items():
         if not notebook:
             continue
@@ -213,6 +222,10 @@ def _shortfall_on_every_page(window, borders) -> tuple[int, int]:
             notebook.ChangeSelection(showing)
             notebook.GetPage(showing).SetSize(room)
             notebook.GetPage(showing).Layout()
+    # Hiding a page while measuring can move the focus out of it; a
+    # screen reader would then start somewhere else.
+    if focused and wx.Window.FindFocus() is not focused:
+        focused.SetFocus()
     return width, height
 
 
@@ -225,8 +238,8 @@ def _pages_unsized(window) -> bool:
     return False
 
 
-def _grow_to_fit(window) -> None:
-    """Grow ``window`` by whatever in it would be cut off, then fit it on the screen."""
+def grow_to_fit(window) -> None:
+    """Grow ``window`` by whatever in it would be cut off, then fit it on the screen. Called again after a window's contents change (a longer status, a control shown): it was measured as it opened."""
     if not window:
         return
     window.Layout()
@@ -263,14 +276,14 @@ def fit_to_contents(window, minimum) -> None:
     if (width, height) != (size.width, size.height):
         window.SetSize(width, height)
     if not _pages_unsized(window):
-        _grow_to_fit(window)
+        grow_to_fit(window)
         return
 
     def on_first_show(event):
         event.Skip()
         if event.IsShown():
             window.Unbind(wx.EVT_SHOW, handler=on_first_show)
-            wx.CallAfter(_grow_to_fit, window)
+            wx.CallAfter(grow_to_fit, window)
 
     window.Bind(wx.EVT_SHOW, on_first_show)
     fit_on_screen(window)

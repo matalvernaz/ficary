@@ -23,7 +23,7 @@ import urllib.error
 import wx
 from pathlib import Path
 
-from .gui_layout import WrappingText, fit_to_contents
+from .gui_layout import WrappingText, fit_to_contents, grow_to_fit
 from .gui_status_log import StatusLogCtrl
 
 logger = logging.getLogger(__name__)
@@ -2011,6 +2011,8 @@ class LlmSettingsDialog(wx.Dialog):
             has_model = bool(self.model_ctrl.GetValue().strip())
             self.pull_btn.Enable(has_model and not self._busy)
         self.Layout()
+        # Ollama has buttons of its own; the window grows to fit them.
+        grow_to_fit(self)
 
     def _set_busy(self, busy: bool) -> None:
         self._busy = busy
