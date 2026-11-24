@@ -89,22 +89,37 @@ def _book_item(chapter: Chapter, titles_from_author: bool, site_has_untitled: bo
     return _Item(chapter.site_id, keys, title or heading, says_nothing)
 
 
-def _looks_renamed(first: _Item, second: _Item) -> bool:
-    """Whether two chapters' titles look like one chapter renamed: the same chapter numbers in both ("Chapter 404" and "404. The Fall"); one title starting or ending the other, its numbers too ("The Fall" and "Chapter 404 - The Fall"); or, numbers aside, the two nearly the same ("The Fal" and "The Fall")."""
-    a, b = first.name, second.name
+# Words that only say where a chapter goes, not what it is.
+_PLACE_WORDS_RE = re.compile(r"\b(?:chapter|chap|ch|part|pt|episode|ep|book|volume|vol)\b|\d+|[^\w\s]")
+
+
+def _own_words(name: str) -> str:
+    """A normalised title's own words: without its numbers, its punctuation, and words like "Chapter" that only say where it goes."""
+    return " ".join(_PLACE_WORDS_RE.sub(" ", name).split())
+
+
+def _looks_renamed(book: _Item, other: _Item) -> bool:
+    """Whether the book's chapter and the other list's look like one chapter renamed.
+
+    Where the book's title has no words of its own ("Chapter 5"), the same chapter numbers are all there is to go on: "Chapter 5" and "Part 5", or "Chapter 5: Ambush". Otherwise the words must agree, numbers and words like "Chapter" aside: the same ("404. The Fall" and "Chapter 404 - The Fall"), one starting or ending the other ("Arrival" and "Arrival, revised"), or nearly the same ("The Grand Batle" and "The Grand Battle"); and where both have numbers they must be the same. "Chapter 5 - Ambush" and "Chapter 5 - Rewritten" are different chapters: an author taking chapters down and posting new ones under the same numbers. Taking them for one would skip the new one for good; taking a renamed one for new puts it in twice, which at least can be heard and fixed.
+    """
+    a, b = book.name, other.name
     if not a or not b:
         return False
     numbers_a, numbers_b = _NUMBER_RE.findall(a), _NUMBER_RE.findall(b)
-    if numbers_a and numbers_a == numbers_b:
+    if numbers_a and numbers_b and numbers_a != numbers_b:
+        return False
+    words_a, words_b = _own_words(a), _own_words(b)
+    if not words_a:
+        return bool(numbers_a) and numbers_a == numbers_b
+    if not words_b:
+        return False
+    if words_a == words_b:
         return True
-    shorter, longer = sorted((a, b), key=len)
-    numbers_short, numbers_long = _NUMBER_RE.findall(shorter), _NUMBER_RE.findall(longer)
-    if len(shorter) >= 4:
-        if longer.startswith(shorter) and numbers_long[: len(numbers_short)] == numbers_short:
-            return True
-        if longer.endswith(shorter) and numbers_long[len(numbers_long) - len(numbers_short):] == numbers_short:
-            return True
-    return numbers_a == numbers_b and SequenceMatcher(None, a, b).ratio() >= 0.85
+    shorter, longer = sorted((words_a, words_b), key=len)
+    if len(shorter) >= 4 and (longer.startswith(shorter) or longer.endswith(shorter)):
+        return True
+    return SequenceMatcher(None, words_a, words_b).ratio() >= 0.85
 
 
 def _align(book: list[_Item], other: list[_Item]) -> dict[int, int]:

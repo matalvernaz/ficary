@@ -639,6 +639,40 @@ def test_a_typo_fixed_in_the_last_chapters_title_is_not_a_new_chapter():
     assert chapter_match.plan_update(book, site).new_positions == [4]
 
 
+REPOSTED = ["Chapter 1 - Dawn", "Chapter 2 - Road", "Chapter 3 - Inn", "Chapter 4 - Storm", "Chapter 5 - Ambush", "Chapter 6 - Retreat"]
+REPOSTED_ON_THE_SITE = REPOSTED[:4] + ["Chapter 5 - Rewritten", "Chapter 6 - Aftermath"]
+
+
+def test_chapters_taken_down_and_new_ones_posted_under_the_same_numbers_are_new(tmp_path):
+    """The author takes "Chapter 5 - Ambush" and "Chapter 6 - Retreat" down and posts "Chapter 5 - Rewritten" and "Chapter 6 - Aftermath". The same numbers don't make them the same chapters: taken for renames, the new ones would never be downloaded, and their ids would be written onto the old ones for good."""
+    book = a_real_book(tmp_path, REPOSTED)
+    site = listed(REPOSTED_ON_THE_SITE, ["a", "b", "c", "d", "x5", "x6"])
+    new, after = update(book, site)
+    assert new == [5, 6]
+    assert [chapter.title for chapter in after][4:] == ["Chapter 5 - Ambush", "Chapter 6 - Retreat", "Chapter 5 - Rewritten", "Chapter 6 - Aftermath"]
+    assert chapter_match.plan_update(after, site).new_positions == []
+
+
+def test_a_fresh_copy_keeps_chapters_reposted_under_the_same_numbers(tmp_path):
+    book = a_real_book(tmp_path, REPOSTED)
+    fresh = fresh_chapters(REPOSTED_ON_THE_SITE, ids=["a", "b", "c", "d", "x5", "x6"])
+    merged = chapter_match.keep_taken_down(book, fresh, titles_from_author=True)
+    assert [chapter.title for chapter in merged][4:] == ["Chapter 5 - Ambush", "Chapter 6 - Retreat", "Chapter 5 - Rewritten", "Chapter 6 - Aftermath"]
+    assert chapter_match.dropped(book, merged, titles_from_author=True) == []
+
+
+def test_titles_that_differ_only_in_their_number_are_different_chapters(tmp_path):
+    book = a_real_book(tmp_path, ["Prologue", "Day 1", "Day 2", "Day 3"])
+    site = listed(["Prologue", "Day 1", "Day 2", "Day 4"], ["p", "a", "b", "d"])
+    assert chapter_match.plan_update(book, site).new_positions == [4]
+
+
+def test_a_subtitle_added_to_the_last_chapter_is_not_a_new_chapter():
+    book = [Chapter(number=n, title=title, html=f"<p>{n}</p>") for n, title in enumerate(["Alpha", "Beta"], 1)]
+    site = [SiteChapter(n, f"id-{n}", title) for n, title in enumerate(["Alpha", "Beta (revised)", "Gamma"], 1)]
+    assert chapter_match.plan_update(book, site).new_positions == [3]
+
+
 # ── Fresh copies: titles a site makes up from the chapter's place ──
 
 

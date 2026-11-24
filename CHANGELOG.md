@@ -18,7 +18,11 @@
 * Titles are matched the way the book wrote them ("Chapter 3. Foo"
   comes back from a book as "Foo"), a renamed chapter is taken for the
   same chapter, and chapters whose titles say nothing (a bare number,
-  or none) are matched by their place between the others. A book none
+  or none) are matched by their place between the others. A chapter
+  posted under the number of one the site took down, with a different
+  title ("Chapter 5 - Rewritten" for "Chapter 5 - Ambush"), is a new
+  chapter, not a rename: the book keeps the old one and gets the new
+  one. A book none
   of whose chapters can be found on the site is updated by chapter
   count, as before, instead of failing every check.
 * The check before an update says so: "up to date, 404 chapters; your
