@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 2.20.26 — 2026-11-24
 
 **Fewer lines to wade through in an update, sites by their names, chapter titles in the reader**
 
