@@ -147,9 +147,24 @@ class SexStoriesScraper(BaseScraper):
             raise ValueError("Could not find SexStories story body.")
         pieces: list[str] = []
         for block in blocks:
+            if block.find("div", class_="count_comments") is not None:
+                # The readers' comments, in a panel of their own after the
+                # story. Joined in, other people's comments became part of
+                # the book.
+                continue
             h2 = block.find("h2")
             if h2:
                 h2.extract()
+            # The site's stats and vote list sit inside the story's own
+            # panel: "Read 60531 times | Rated 98.7 % | 156 votes", then
+            # every voter's name and "POSITIVE". They went into the book
+            # (and an audiobook read the voters out). The rule before
+            # them goes too.
+            for info in block.find_all("div", class_="story_info"):
+                previous = info.find_previous_sibling()
+                if previous is not None and previous.name == "hr":
+                    previous.decompose()
+                info.decompose()
             pieces.append(block.decode_contents())
         return "\n<hr />\n".join(pieces)
 
@@ -192,6 +207,13 @@ class SexStoriesScraper(BaseScraper):
             return story
 
         cached = self._load_chapter_cache(story_id, 1)
+        if cached is not None and any(
+            furniture in (cached.html or "")
+            for furniture in ('class="story_info"', 'class="count_comments"')
+        ):
+            # Cached before the site's votes and comments were left out:
+            # read the page again.
+            cached = None
         if cached is not None:
             story.chapters.append(cached)
             if progress_callback:

@@ -238,3 +238,26 @@ class TestEpubcheckOnLinksAndRealWork:
 
     def test_the_real_ao3_work_with_a_word_bookmark_passes(self, tmp_path):
         assert _epubcheck_problems(export_epub(_ao3_fixture_story(), output_dir=str(tmp_path))) == []
+
+
+class TestLinksToTheStorySite:
+    """SOL wraps the cover in a link back to the story page,
+    ``/s/40467/...#cont``: relative to the site, so it points at nothing
+    in the EPUB (epubcheck RSC-007)."""
+
+    def test_a_link_relative_to_the_site_keeps_its_text(self):
+        out = _xhtml_sanitize('<p><a href="/s/40467/ouroboros-dorm-dipping#cont">Cover</a> then text.</p>')
+        assert out == "<p>Cover then text.</p>"
+
+    def test_a_javascript_link_keeps_its_text(self):
+        out = _xhtml_sanitize('<p><a href="javascript:report(1)">Report</a></p>')
+        assert out == "<p>Report</p>"
+
+    def test_a_protocol_relative_link_becomes_https(self):
+        out = _xhtml_sanitize('<p><a href="//example.invalid/x">there</a></p>')
+        assert '<a href="https://example.invalid/x">there</a>' in out
+
+    @pytest.mark.parametrize("address", ["https://example.invalid/x", "http://example.invalid/y", "mailto:someone@example.invalid"])
+    def test_web_and_mail_links_stay(self, address):
+        out = _xhtml_sanitize(f'<p><a href="{address}">here</a></p>')
+        assert f'<a href="{address}">here</a>' in out

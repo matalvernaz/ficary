@@ -2377,6 +2377,9 @@ _BARE_AMP_RE = re.compile(
 # the chapter "scripted" (epubcheck OPF-014), and some readers run it.
 _XHTML_CODE_ELEMENTS = ("script", "noscript")
 
+# Link addresses that lead somewhere from inside an EPUB: the web and mail.
+_OUTSIDE_ADDRESS_RE = re.compile(r"(?:https?|mailto):", re.IGNORECASE)
+
 # Attributes that only mean something on a link with an address.
 _LINK_ONLY_ATTRS = ("rel", "target", "hreflang", "type", "download", "ping", "referrerpolicy")
 
@@ -2395,7 +2398,8 @@ def _tidy_links_and_ids(soup) -> None:
       does; one with text keeps the text.
     * A link to ``#something`` that is not in the chapter keeps its text
       and loses the link: each chapter is its own file, so the target
-      (an end note, say) is not there.
+      (an end note, say) is not there. So does a link relative to the
+      story's site, or a ``javascript:`` one.
     * An id used twice in a chapter keeps only its first use.
     """
     for element in soup.find_all(list(_XHTML_CODE_ELEMENTS)):
@@ -2434,8 +2438,17 @@ def _tidy_links_and_ids(soup) -> None:
             anchor.decompose()
 
     for link in soup.find_all("a", href=True):
-        target = link["href"]
-        if target.startswith("#") and target[1:] not in seen_ids:
+        target = link["href"].strip()
+        if target.startswith("#"):
+            if target[1:] not in seen_ids:
+                link.unwrap()
+        elif target.startswith("//"):
+            # Protocol-relative: an outside address all the same.
+            link["href"] = "https:" + target
+        elif not _OUTSIDE_ADDRESS_RE.match(target):
+            # Relative to the story site (SOL's cover links back to the
+            # story page), or javascript:. Either points at nothing in
+            # the EPUB (epubcheck RSC-007).
             link.unwrap()
 
 

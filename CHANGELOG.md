@@ -1,5 +1,23 @@
 # Changelog
 
+## Unreleased
+
+**SexStories books are just the story**
+
+* A SexStories book ended with the site's own page furniture: how many
+  times the story was read, its rating, the full list of voters with
+  "POSITIVE" after each name, a prompt to log in and rate it, and the
+  readers' comments. An audiobook read the voters' names out. Ficary
+  now leaves all of that out. A story downloaded before is read again
+  from the site rather than taken from Ficary's chapter cache.
+
+**More EPUBs pass the standard EPUB check**
+
+* Links in a story that lead back to the story's own site (StoriesOnline
+  links its cover to the story page) pointed at nothing inside the EPUB
+  and made it invalid. They now keep their text without the link, as
+  do `javascript:` links. Links to other web pages are kept.
+
 ## 2.20.18 — 2026-11-24
 
 **The check at launch is quicker, and new chapters have their own command**
