@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 2.20.20 — 2026-11-24
 
 **Which story an update is on, said where it can be found**
 
