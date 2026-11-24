@@ -9,6 +9,16 @@
   FanFiction.net chapter. It keeps to the normal level now; DEBUG only
   adds detail to the saved log file.
 
+**Books an update can't check are skipped with a note**
+
+* A SubscribeStar story saved from the creator's page, before Ficary
+  kept one address per story, failed at every update and every check
+  at launch, since its address doesn't say which story it is. It is
+  skipped now, with a note saying to download it again from the
+  creator's page (Add Story, then pick it) and delete the old copy.
+* An AO3 series saved as one book is skipped the same way, with a note
+  saying to download the series again to get new parts.
+
 **The status bar keeps its sentence**
 
 * While a menu was open, the status bar went blank: wx wrote the menu

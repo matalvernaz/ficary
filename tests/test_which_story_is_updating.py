@@ -1158,3 +1158,57 @@ class TestDebugAndTheStatusBar:
             bar.SetStatusText("")
             bar.refresh()
             assert bar.GetStatusText() == "Checking for new chapters: 4 of 9 stories checked."
+
+
+# ── Books an update can't check ──────────────────────────────────
+
+
+class TestBooksAnUpdateCannotCheck:
+    """Matt's log, 2026-11-24: a SubscribeStar book saved under the creator's page "failed" at every check, launch included. He chose a note, counted as skipped. AO3 series saved as one book get one too: updates can only check Literotica series for new parts."""
+
+    def queue_for(self, tmp_path, url):
+        from ficary.library.index import LibraryIndex
+        from ficary.library.refresh import build_refresh_queue
+        from ficary.library.scanner import scan
+
+        from .library_fixtures import ficary_epub
+
+        root = tmp_path / "library"
+        root.mkdir()
+        ficary_epub(root, title="A Book", url="https://www.fanfiction.net/s/101/1/", chapters=3, story_id=101)
+        scan(root)
+        index = LibraryIndex.load()
+        stories = index.library_state(root.resolve())["stories"]
+        (old_url, entry), = stories.items()
+        stories[url] = stories.pop(old_url)
+        index.save()
+        lines: list[str] = []
+        queue, skipped = build_refresh_queue(root.resolve(), skip_complete=False, progress=lines.append)
+        return queue, skipped, lines
+
+    def test_a_book_saved_under_a_subscribestar_creators_page_is_skipped_with_a_note(self, tmp_path):
+        queue, skipped, lines = self.queue_for(tmp_path, "https://subscribestar.adult/someone")
+        assert queue == []
+        assert len(skipped) == 1
+        assert any(
+            "saved from the creator's page, before Ficary kept one address per story" in line
+            and "download it again from the creator's page (Add Story, then pick it) and delete this copy" in line
+            for line in lines
+        )
+
+    def test_an_ao3_series_saved_as_one_book_is_skipped_with_a_note(self, tmp_path):
+        queue, skipped, lines = self.queue_for(tmp_path, "https://archiveofourown.org/series/12345")
+        assert queue == []
+        assert any("an AO3 series saved as one book" in line for line in lines)
+
+    @pytest.mark.parametrize(
+        "url",
+        [
+            "https://subscribestar.adult/someone/story/A%20Story",
+            "https://subscribestar.adult/posts/12345",
+            "https://archiveofourown.org/works/12345",
+        ],
+    )
+    def test_a_storys_own_address_is_checked_as_before(self, tmp_path, url):
+        queue, skipped, _lines = self.queue_for(tmp_path, url)
+        assert [entry["url"] for entry in queue] == [url]

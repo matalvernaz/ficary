@@ -51,6 +51,29 @@ def _human_duration(seconds: float) -> str:
     return f"{s // 86400}d"
 
 
+def _why_updates_cannot_check(url: str) -> str | None:
+    """Why an update can't ask the site about the story saved under ``url``, in a sentence for the user, or None when it can.
+
+    These used to be asked anyway and "failed" at every check, launch included: the site's adapter could not read the address (Matt's log, 2026-11-24). He chose a note for them, counted as skipped.
+    """
+    from ..ao3 import AO3Scraper
+    from ..subscribestar import SubscribeStarScraper
+
+    if AO3Scraper.is_series_url(url):
+        return (
+            "an AO3 series saved as one book, which updates can't check "
+            "for new parts yet; download the series again to get them"
+        )
+    if SubscribeStarScraper.is_author_url(url):
+        return (
+            "saved from the creator's page, before Ficary kept one address "
+            "per story, so updates can't tell which story it is; download "
+            "it again from the creator's page (Add Story, then pick it) and "
+            "delete this copy"
+        )
+    return None
+
+
 def _cached_chapter_count(path: Path, entry: dict) -> int | None:
     """Return the index entry's cached chapter_count when we can trust it.
 
@@ -185,6 +208,12 @@ def build_refresh_queue(
 
         if not path.exists():
             progress(f"  [skip] {display_rel}: file missing on disk")
+            skipped.append(display_rel)
+            continue
+
+        cannot_check = _why_updates_cannot_check(url)
+        if cannot_check:
+            progress(f"  [skip] {display_rel}: {cannot_check}")
             skipped.append(display_rel)
             continue
 
