@@ -10,6 +10,7 @@ import sys
 import threading
 import time
 import types
+import weakref
 from pathlib import Path
 
 import pytest
@@ -34,16 +35,19 @@ class Backend:
         self.said = said
 
     def output(self, text, interrupt=True):
-        self.said.append(("output", text, interrupt, threading.current_thread().name))
+        self.said.append(("output", text, interrupt, threading.current_thread().name, self.name))
 
     def speak(self, text, interrupt=True):
-        self.said.append(("speak", text, interrupt, threading.current_thread().name))
+        self.said.append(("speak", text, interrupt, threading.current_thread().name, self.name))
 
 
 def fake_prism(said: list, **backend_options):
     """A prism module whose best backend is described by ``backend_options``."""
     module = types.ModuleType("prism")
     module.contexts = []
+    # Weak references to every backend made, oldest first: whether one is
+    # still alive says whether Ficary kept it.
+    module.made = []
 
     class Context:
         def __init__(self):
@@ -53,10 +57,18 @@ def fake_prism(said: list, **backend_options):
             if backend_options.get("raise_on_create"):
                 raise ValueError("Invalid or unsupported backend")
             options = {key: value for key, value in backend_options.items() if key != "raise_on_create"}
-            return Backend(said, **options)
+            backend = Backend(said, **options)
+            module.made.append(weakref.ref(backend))
+            return backend
 
     module.Context = Context
     return module
+
+
+@pytest.fixture(autouse=True)
+def quick_check(monkeypatch):
+    """The check command waits a second after speaking; not in these tests unless one asks."""
+    monkeypatch.setattr(announce, "_CHECK_SETTLE_SECONDS", 0, raising=False)
 
 
 @pytest.fixture
@@ -179,6 +191,53 @@ class TestSpeaking:
         assert wait_for(lambda: said)
         assert said[0][1] == "Somebody hears this."
 
+    def test_one_backend_is_kept_for_every_message(self, fresh_speaker, monkeypatch):
+        """prism's VoiceOver backend says a message a moment after the call
+        returns, and freeing the backend before then cancels it. A new
+        backend for each message would also have VoiceOver announce the
+        window every time."""
+        said = []
+        module = fake_prism(said)
+        monkeypatch.setitem(sys.modules, "prism", module)
+        for number in range(3):
+            announce.announce(f"Message {number}.")
+        assert wait_for(lambda: len(said) == 3)
+        assert len(module.made) == 1
+        assert module.made[0]() is not None, "the backend was freed straight after speaking"
+
+    def test_a_reader_that_stops_answering_is_found_again(self, fresh_speaker, monkeypatch):
+        """NVDA's backend does not reconnect after NVDA restarts: the call
+        fails, and the message goes through a new backend."""
+        said = []
+        module = fake_prism(said)
+        monkeypatch.setitem(sys.modules, "prism", module)
+        announce.announce("Before the restart.")
+        assert wait_for(lambda: len(said) == 1)
+
+        def restarted(text, interrupt=True):
+            raise RuntimeError("The RPC server is unavailable.")
+
+        module.made[0]().output = restarted
+        announce.announce("After the restart.")
+        assert wait_for(lambda: len(said) == 2)
+        assert said[1][1] == "After the restart."
+        assert len(module.made) == 2
+        assert module.made[1]() is not None
+
+    def test_the_computers_own_voice_is_not_kept(self, fresh_speaker, monkeypatch):
+        """With no screen reader at the first message, the speech engine is
+        not kept: the screen reader started afterwards says the next one."""
+        said = []
+        module = fake_prism(said)
+        backends = iter([Backend(said, name="SAPI", screen_reader=False), Backend(said, name="NVDA")])
+        module.Context.create_best = lambda self: next(backends)
+        monkeypatch.setitem(sys.modules, "prism", module)
+        announce.announce("Nobody hears this.")
+        announce.announce("NVDA says this.")
+        assert wait_for(lambda: said)
+        time.sleep(0.1)
+        assert said == [("output", "NVDA says this.", False, "ficary-announce", "NVDA")]
+
 
 class TestTheCheck:
     def test_a_screen_reader_is_sent_the_test_sentence(self, monkeypatch):
@@ -187,6 +246,33 @@ class TestTheCheck:
         result = announce.check()
         assert result.working and result.screen_reader and result.backend == "NVDA"
         assert said[0][1] == "Ficary can talk to your screen reader."
+
+    def test_the_check_waits_for_the_reader_before_exiting(self, monkeypatch):
+        """VoiceOver says the sentence a moment after the call returns, and
+        the command exits as soon as the check is done."""
+        monkeypatch.setitem(sys.modules, "prism", fake_prism([]))
+        monkeypatch.setattr(announce, "_CHECK_SETTLE_SECONDS", 0.3)
+        started = time.monotonic()
+        assert announce.check().screen_reader
+        assert time.monotonic() - started >= 0.3
+
+    @pytest.mark.parametrize(
+        "options",
+        [{"name": "SAPI", "screen_reader": False}, {"output": False, "speak": False}],
+        ids=["no screen reader", "a reader that cannot take it"],
+    )
+    def test_the_check_does_not_wait_when_nothing_was_said(self, monkeypatch, options):
+        monkeypatch.setitem(sys.modules, "prism", fake_prism([], **options))
+        monkeypatch.setattr(announce, "_CHECK_SETTLE_SECONDS", 5)
+        started = time.monotonic()
+        announce.check()
+        assert time.monotonic() - started < 1
+
+    def test_the_check_uses_one_backend(self, monkeypatch):
+        module = fake_prism([])
+        monkeypatch.setitem(sys.modules, "prism", module)
+        announce.check()
+        assert len(module.made) == 1
 
     def test_no_screen_reader_running(self, monkeypatch):
         said = []

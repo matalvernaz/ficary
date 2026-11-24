@@ -19,10 +19,16 @@ it by name, and ``create_best`` never picks it. Two rules shape it:
   into it live on a single daemon thread fed by a queue. ``announce()``
   only puts the message on the queue, so it never holds up the caller.
 
-A fresh backend is made for each message (``create_best``, never
-``acquire_best``, which can hand back a reader that has since restarted
-and no longer listens). Messages are rare, a few a minute at most, so
-that costs nothing worth saving.
+One backend is kept and used for every message. Keeping it matters on
+a Mac: prism's VoiceOver backend says a message a moment after the call
+returns, and freeing the backend before then cancels the message, while
+making a new backend for each message would have VoiceOver announce the
+window again every time. When the kept backend fails (its screen reader
+was closed or restarted, and NVDA's never reconnects by itself), a new
+one is made with ``create_best`` and the message is said through that.
+``acquire_best`` is never used: it can hand back the same dead backend.
+A backend that is not a screen reader is not kept, so a screen reader
+started after Ficary is found with the next message.
 
 Anything that goes wrong, prism missing from a source install included,
 is logged at debug level and the message goes unsaid.
@@ -32,6 +38,7 @@ from __future__ import annotations
 import logging
 import queue
 import threading
+import time
 from dataclasses import dataclass
 from typing import Optional
 
@@ -40,6 +47,11 @@ logger = logging.getLogger(__name__)
 _queue: "queue.Queue[Optional[str]]" = queue.Queue()
 _thread: Optional[threading.Thread] = None
 _thread_lock = threading.Lock()
+
+# How long the check command keeps its backend after sending the test
+# sentence. VoiceOver says it a moment after the call returns, and the
+# command exits straight afterwards.
+_CHECK_SETTLE_SECONDS = 1.0
 
 
 def _clean(text: str) -> str:
@@ -68,6 +80,8 @@ def _ensure_thread() -> None:
 
 def _speak_forever() -> None:
     context = None
+    # The screen reader's backend, kept from one message to the next.
+    reader = None
     unavailable = False
     while True:
         message = _queue.get()
@@ -80,7 +94,7 @@ def _speak_forever() -> None:
                 import prism  # optional: the "announce" extra
 
                 context = prism.Context()
-            _speak_with(context, message)
+            reader = _say_through(context, reader, message)
         except ImportError:
             # Not installed (a source install without the extra). It will
             # not appear while the program runs, so stop trying.
@@ -88,15 +102,32 @@ def _speak_forever() -> None:
             unavailable = True
         except Exception:  # noqa: BLE001 - a message that cannot be said is just not said
             logger.debug("Could not announce %r", message, exc_info=True)
+            reader = None
 
 
-def _speak_with(context, message: str) -> bool:
-    """Say ``message`` through the best backend if it is a screen reader.
-    Returns whether it was said."""
+def _say_through(context, reader, message: str):
+    """Say ``message`` through ``reader``, or through a screen reader
+    found afresh when there is none or it fails. Returns the backend to
+    keep for the next message: None when no screen reader is running."""
+    if reader is not None:
+        try:
+            if _say(reader, message):
+                return reader
+        except Exception:  # noqa: BLE001 - closed or restarted; look again below
+            logger.debug("The screen reader stopped answering; looking for it again", exc_info=True)
     backend = context.create_best()
+    if not backend.features.is_screen_reader:
+        # The computer's own voice: never used, and not kept.
+        return None
+    if not _say(backend, message):
+        return None
+    return backend
+
+
+def _say(backend, message: str) -> bool:
+    """Send ``message`` to a screen reader's backend, after whatever it
+    is saying. Returns whether the backend could take it."""
     features = backend.features
-    if not features.is_screen_reader:
-        return False
     if features.supports_output:
         # Speech and, where the reader has a display, braille.
         backend.output(message, interrupt=False)
@@ -140,7 +171,10 @@ def check(message: str = "Ficary can talk to your screen reader.") -> AnnounceCh
     try:
         if not backend.features.is_screen_reader:
             return AnnounceCheck(working=True, backend=name)
-        said = _speak_with(context, message)
+        said = _say(backend, message)
+        if said:
+            # Keep the backend until the reader has had time to say it.
+            time.sleep(_CHECK_SETTLE_SECONDS)
     except Exception as error:  # noqa: BLE001
         return AnnounceCheck(working=True, backend=name, screen_reader=True, detail=f"{type(error).__name__}: {error}")
     return AnnounceCheck(working=True, backend=name, screen_reader=said)
