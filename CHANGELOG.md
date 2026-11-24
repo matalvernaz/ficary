@@ -1,5 +1,24 @@
 # Changelog
 
+## Unreleased
+
+**Fewer lines to wade through in an update, sites by their names, chapter titles in the reader**
+
+* Check All Stories for Updates no longer lists every story it skips as
+  finished, abandoned or checked recently (hundreds of lines, many
+  naming command-line options) before anything useful: its summary line
+  counts them. A skip that means something is wrong with a book, such
+  as a missing file, still has its own line, and stories an update
+  can't check are listed once, at the end. The summary line no longer
+  claims Force recheck includes the abandoned ones; with Force recheck
+  on, it counts the abandoned stories it still skips.
+* Library update lines no longer start with the site's code name, like
+  "[royalroad]": each line names its story. Sites are named as they go
+  by everywhere else too: "Checking 12 Royal Road stories", and in the
+  main window's download lines.
+* The reader's chapter list and Jump to show each chapter's heading,
+  like "Chapter 3. The Inn", instead of just "Chapter 3".
+
 ## 2.20.25 — 2026-11-24
 
 **Every window shows all of its text and controls**
