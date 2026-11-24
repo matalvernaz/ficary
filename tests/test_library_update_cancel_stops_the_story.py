@@ -291,7 +291,7 @@ class TestTheUpdate:
 
     def test_the_stories_left_are_counted_without_the_stopped_one(self, tmp_path, monkeypatch, no_real_reading):
         _site, lines, _code = self.cancel_part_way(tmp_path, monkeypatch)
-        assert any("2 of 3 entries were not checked" in line for line in lines)
+        assert any("2 of 3 stories were not checked" in line for line in lines)
 
     def test_the_wait_for_the_story_is_said_out_loud(self, tmp_path, monkeypatch, no_real_reading):
         _site, lines, _code = self.cancel_part_way(tmp_path, monkeypatch)

@@ -370,7 +370,7 @@ class TestTheChecking:
         cancel.set()
         lines = update(queue, site, cancel=cancel, dry_run=False)
         assert not any('"Story A"' in line or '"Story B"' in line for line in lines)
-        assert any("2 of 2 entries were not checked" in line for line in lines)
+        assert any("2 of 2 stories were not checked" in line for line in lines)
         assert activity.current().startswith("Library update cancelled")
 
 
@@ -943,3 +943,82 @@ def test_at_debug_the_launch_checks_lines_do_not_reach_the_main_windows_log(capl
     launch_check._quiet("  [skip] Some Story.epub: checked 2h ago")
     assert shown_in_the_main_window(caplog.records) == []
     assert [record.getMessage() for record in caplog.records] == ["  [skip] Some Story.epub: checked 2h ago"]
+
+
+# ── A story the site says is gone ────────────────────────────────
+
+
+class TestNotFoundOnTheSite:
+    """Matt's log, 2026-11-24: two FanFiction.net stories the site had taken down were "failed" in every check. Nothing failed: the copies are fine."""
+
+    def run(self, tmp_path, monkeypatch, answers, *, dry_run=False):
+        from ficary.scraper import StoryNotFoundError
+
+        site = TitledSite()
+        plug_in(monkeypatch, site)
+        queue = stories(tmp_path, *[f"Story {letter}" for letter in "AB"[:len(answers)]], remote=None)
+        for entry, answer in zip(queue, answers):
+            site.counts[entry["url"]] = StoryNotFoundError("Story does not exist or has been removed.") if answer == "gone" else answer
+        lines: list[str] = []
+        code = cli._run_update_queue(
+            queue, DownloadJob(skip_complete=False, dry_run=dry_run), workers=1,
+            skipped_count=0, label="Library update", progress=lines.append,
+            cancel_event=threading.Event(), chapters_in_status_bar=True,
+        )
+        wait_until_idle(site.site_name)
+        return lines, code
+
+    def test_it_is_counted_apart_from_failures(self, tmp_path, monkeypatch):
+        lines, code = self.run(tmp_path, monkeypatch, ["gone", 1])
+        summary = next(line for line in lines if line.startswith("Library update complete"))
+        assert summary == "Library update complete — 0 updated, 1 up to date, 0 failed, 1 not found on the site, 0 skipped."
+        assert "Failed:" not in lines
+        assert code == 0
+
+    def test_it_is_listed_with_word_that_the_copy_is_kept(self, tmp_path, monkeypatch):
+        lines, _code = self.run(tmp_path, monkeypatch, ["gone", 1])
+        heading = lines.index(
+            "Not found on the site. The copies here are kept, and the next "
+            "update asks again in case the site was only having trouble:"
+        )
+        assert lines[heading + 1] == "  Story A"
+
+    def test_a_dry_run_counts_it_the_same_way(self, tmp_path, monkeypatch):
+        lines, code = self.run(tmp_path, monkeypatch, ["gone"], dry_run=True)
+        assert "Dry run — would update 0, 0 up to date, 0 failed, 1 not found on the site, 0 skipped." in lines
+        assert code == 0
+
+    def test_the_log_names_its_file(self, tmp_path, monkeypatch, caplog):
+        caplog.set_level(logging.INFO, logger="ficary.cli")
+        self.run(tmp_path, monkeypatch, ["gone"])
+        assert "Fandom/story-1.epub is not on the site any more: Story does not exist or has been removed." in caplog.text
+        assert "1 not found on the site" in caplog.text
+
+    def test_a_cancelled_run_does_not_count_it_as_unchecked(self, tmp_path, monkeypatch):
+        from ficary.scraper import StoryNotFoundError
+
+        cancel = threading.Event()
+
+        class CancelsOnTheSecond(TitledSite):
+            def probe_chapter_count(self, url):
+                if url.endswith("/2"):
+                    cancel.set()
+                return super().probe_chapter_count(url)
+
+        site = CancelsOnTheSecond()
+        plug_in(monkeypatch, site)
+        queue = stories(tmp_path, "Story A", "Story B", "Story C", remote=None)
+        site.counts.update({
+            queue[0]["url"]: StoryNotFoundError("Story does not exist or has been removed."),
+            queue[1]["url"]: 1,
+            queue[2]["url"]: 1,
+        })
+        lines: list[str] = []
+        cli._run_update_queue(
+            queue, DownloadJob(skip_complete=False), workers=1, skipped_count=0,
+            label="Library update", progress=lines.append, cancel_event=cancel,
+            chapters_in_status_bar=True,
+        )
+        wait_until_idle(site.site_name)
+        # One left: "was", not "were", and never the old "1 of 3 entry were".
+        assert "1 of 3 stories was not checked. Run the update again to carry on." in lines

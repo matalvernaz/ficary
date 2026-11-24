@@ -305,9 +305,9 @@ def test_the_failure_summary_reaches_the_log_not_only_the_screen(
     from pathlib import Path
 
     from ficary import cli
-    from ficary.scraper import StoryNotFoundError
+    from ficary.scraper import RateLimitError
 
-    fake = _fake_scraper([StoryNotFoundError("story gone"), 10])
+    fake = _fake_scraper([RateLimitError("too many requests"), 10])
     monkeypatch.setattr(cli, "_build_scraper", lambda url, args: fake)
     monkeypatch.setattr(cli, "_detect_site", lambda url: _FakeSiteClass)
 
@@ -331,4 +331,4 @@ def test_the_failure_summary_reaches_the_log_not_only_the_screen(
     # And the failure has to be named, or the count alone is no more
     # use than the empty "probe failed:" line was.
     assert "x1.epub failed" in text
-    assert "story gone" in text
+    assert "too many requests" in text

@@ -1979,6 +1979,11 @@ def _run_update_queue(
     # names the story; the log gives its file as well.
     failed: list[tuple[str, str, str]] = []
     would_update: list[tuple[str, int, int]] = []
+    # Stories the site answered "not found" for, as ``(name, reason,
+    # relpath)``. Not failures: the copy here is fine, and nothing went
+    # wrong on this side. They are asked about again next time, since a
+    # site having trouble can say "not found" for a story that is there.
+    not_found: list[tuple[str, str, str]] = []
     # Cloudflare-challenge circuit-breaker state per site class, filled
     # in Phase 2 (empty when there's nothing to probe). Phase 3 reads it
     # to suppress downloads against a site that is challenging us.
@@ -2243,6 +2248,9 @@ def _run_update_queue(
         if entry.get("cf_skipped"):
             site = _detect_site(entry["url"]).site_name
             cf_skipped_probes[site] = cf_skipped_probes.get(site, 0) + 1
+            continue
+        if entry.get("upstream_missing"):
+            not_found.append((name, str(entry["error"]), entry["rel"]))
             continue
         if "error" in entry:
             failed.append((name, f"could not be checked: {entry['error']}", entry["rel"]))
@@ -2511,11 +2519,14 @@ def _run_update_queue(
         cancelled = True
 
     progress(f"\n{'='*60}")
+    not_found_note = (
+        f", {len(not_found)} not found on the site" if not_found else ""
+    )
     if args.dry_run:
         progress(
             f"Dry run — would update {len(would_update)}, "
-            f"{len(up_to_date)} up to date, {len(failed)} failed, "
-            f"{skipped_count} skipped."
+            f"{len(up_to_date)} up to date, {len(failed)} failed"
+            f"{not_found_note}, {skipped_count} skipped."
         )
         if would_update:
             progress("Would update:")
@@ -2532,21 +2543,22 @@ def _run_update_queue(
         )
         outcome = (
             f"{headline} — {len(updated)} updated, "
-            f"{len(up_to_date)} up to date, {len(failed)} failed, "
-            f"{skipped_count} skipped{stopped_note}."
+            f"{len(up_to_date)} up to date, {len(failed)} failed"
+            f"{not_found_note}, {skipped_count} skipped{stopped_note}."
         )
         progress(outcome)
         activity.finished(outcome)
         if cancelled:
             remaining = total - (
                 len(updated) + len(up_to_date) + len(failed) + skipped_count
-                + len(stopped)
+                + len(stopped) + len(not_found)
             )
             if remaining > 0:
+                stories = "story" if total == 1 else "stories"
+                were = "was" if remaining == 1 else "were"
                 progress(
-                    f"{remaining} of {total} entr"
-                    f"{'y' if remaining == 1 else 'ies'} were not checked. "
-                    "Re-run to continue."
+                    f"{remaining} of {total} {stories} {were} not checked. "
+                    "Run the update again to carry on."
                 )
     for site in sorted(set(cf_skipped_probes) | set(cf_skipped_downloads)):
         probes = cf_skipped_probes.get(site, 0)
@@ -2561,17 +2573,27 @@ def _run_update_queue(
         for name, reason, _relpath in failed:
             progress(f"  {name}")
             progress(f"    → {reason}")
+    if not_found:
+        progress(
+            "Not found on the site. The copies here are kept, and the "
+            "next update asks again in case the site was only having "
+            "trouble:"
+        )
+        for name, _reason, _relpath in not_found:
+            progress(f"  {name}")
     # The whole run so far has spoken only through ``progress``, which
     # the library window points at its status pane and nowhere else, so
     # the record of which stories failed and why died with the window.
     # Someone asking "a few of those failed, which ones?" afterwards had
     # nothing to read. Counts and failures go to the log as well.
     logger.info(
-        "%s: %d updated, %d up to date, %d failed, %d skipped.",
-        label, len(updated), len(up_to_date), len(failed), skipped_count,
+        "%s: %d updated, %d up to date, %d failed, %d not found on the site, %d skipped.",
+        label, len(updated), len(up_to_date), len(failed), len(not_found), skipped_count,
     )
     for _name, reason, relpath in failed:
         logger.warning("%s failed: %s", relpath, reason)
+    for _name, reason, relpath in not_found:
+        logger.info("%s is not on the site any more: %s", relpath, reason)
     progress('='*60)
     return 0 if not failed else 1
 

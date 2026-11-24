@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+**Stories taken down by their site are not called failures**
+
+* A story the site says no longer exists was counted as "failed" in
+  every update and every check at launch, though nothing had gone
+  wrong and the copy in the library is fine. It is counted apart now,
+  "1 not found on the site", and listed after the summary with word
+  that the copy is kept and that the next update asks again, in case
+  the site was only having trouble.
+* A cancelled update said "1 of 3 entry were not checked"; it says
+  "1 of 3 stories was not checked" now, and no longer counts a story
+  the site said was gone among the ones not checked.
+
 ## 2.20.20 — 2026-11-24
 
 **Which story an update is on, said where it can be found**
