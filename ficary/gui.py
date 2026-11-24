@@ -792,7 +792,9 @@ class MainFrame(wx.Frame):
         from . import attribution as _attribution_module
         self._attribution_module = _attribution_module
         self.audio_panel = wx.Panel(form)
-        audio_sizer = wx.BoxSizer(wx.HORIZONTAL)
+        # Wraps, as the option row above does, where the window is
+        # narrower than the row (fitted to a small screen).
+        audio_sizer = wx.WrapSizer(wx.HORIZONTAL, wx.REMOVE_LEADING_SPACES)
 
         audio_sizer.Add(
             wx.StaticText(self.audio_panel, label="Speech &rate:"),

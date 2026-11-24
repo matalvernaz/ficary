@@ -207,6 +207,22 @@ def scrolled_to_the_end(window):
     snap(f"{window.GetTitle().lower().replace(' ', '-')}-scrolled-to-the-end", window)
 
 
+def last_button_focused(window):
+    """Optional Features scrolled back to the top, then the last Install button given the focus, as Tab gives it: it should come into view."""
+    for area in scrolled_areas(window):
+        area.Scroll(0, 0)
+    settle()
+    last = list(window._buttons.values())[-1]
+    last.SetFocus()
+    settle()
+    snap("optional-features-last-button-focused", window)
+
+
+def optional_features_states(window):
+    scrolled_to_the_end(window)
+    last_button_focused(window)
+
+
 # The main window, the Add Story window and the Library window.
 walk("main-window", lambda: main_window, keep=True)
 walk("add-story-window", lambda: main_window.add_story_frame, keep=True, then=audiobook_format)
@@ -253,7 +269,7 @@ walk("series-parts", lambda: gui_dialogs.SeriesPartsDialog(main_window, "A Made-
     {"title": "Part One", "author": "Someone Writes", "words": "12,000", "rating": "T", "url": "https://example.org/1"},
     {"title": "Part Two", "author": "Someone Writes", "words": "15,500", "rating": "T", "url": "https://example.org/2"},
 ]))
-walk("optional-features", lambda: gui_dialogs.OptionalFeaturesDialog(main_window), then=scrolled_to_the_end)
+walk("optional-features", lambda: gui_dialogs.OptionalFeaturesDialog(main_window), then=optional_features_states)
 walk("tts-providers", lambda: gui_dialogs.TtsProvidersDialog(main_window, main_window.prefs))
 walk("ai-settings", lambda: gui_dialogs.LlmSettingsDialog(main_window, main_window.prefs))
 walk("add-from-url-list", lambda: gui_dialogs.AddFromUrlListDialog(main_window))

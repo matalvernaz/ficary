@@ -350,3 +350,95 @@ def test_the_library_window_lays_itself_out_without_waiting_to_be_resized(main_w
     finally:
         window.Destroy()
 
+
+
+@needs_display
+def test_the_main_and_add_story_windows_open_no_bigger_than_the_screen(wx_app, monkeypatch):
+    """Both are fitted to the screen they open on. Here the screen is made 300 pixels tall, shorter than either."""
+    import wx
+
+    from ficary import gui, gui_layout
+
+    real_fit = gui_layout.fit_on_screen
+    monkeypatch.setattr(gui, "fit_on_screen", lambda window, area=None: real_fit(window, area=wx.Rect(0, 0, 1024, 300)))
+    frame = gui.MainFrame()
+    try:
+        assert frame.GetSize().height <= 300
+        assert frame.add_story_frame.GetSize().height <= 300
+    finally:
+        frame._clip_timer.Stop()
+        frame.Destroy()
+        _settle(wx)
+
+
+@needs_display
+def test_an_install_that_changes_a_features_labels_lays_them_out_again(main_window, monkeypatch):
+    """A status or button label that grows (Install to Reinstall, a status to "(unsupported on this build)") was drawn at its old width, cut off."""
+    import wx
+
+    from ficary import gui_dialogs
+
+    dialog = gui_dialogs.OptionalFeaturesDialog(main_window)
+    try:
+        dialog.Show()
+        _settle(wx)
+        feature = list(dialog._buttons)[0]
+        monkeypatch.setattr(dialog, "_status_text", lambda feature: "(unsupported on this build, and a good deal longer than before)")
+        monkeypatch.setattr(dialog, "_button_label", lambda feature: "&Reinstall this feature with a much longer label than it had...")
+        dialog._refresh_feature_row(feature)
+        _settle(wx)
+        assert misfits(dialog, wx) == []
+    finally:
+        dialog.Destroy()
+        _settle(wx)
+
+
+@needs_display
+def test_the_checker_finds_a_label_cut_off_and_a_button_past_the_edge(wx_app):
+    """The checker every window test relies on: a label too long for its window, and a button placed past the right-hand edge."""
+    import wx
+
+    frame = wx.Frame(None, size=(240, 200))
+    panel = wx.Panel(frame)
+    sizer = wx.BoxSizer(wx.VERTICAL)
+    sizer.Add(wx.StaticText(panel, label="A label far too long to fit in a window this narrow, cut off at its edge"), 0, wx.ALL, 8)
+    panel.SetSizer(sizer)
+    wx.Button(panel, label="Past the edge", pos=(220, 120))
+    try:
+        frame.Show()
+        _settle(wx)
+        problems = misfits(frame, wx)
+        assert any(problem.startswith("StaticText") for problem in problems)
+        assert any(problem.startswith("Button past the right-hand edge") for problem in problems)
+    finally:
+        frame.Destroy()
+        _settle(wx)
+
+
+def test_a_voice_list_that_cant_be_fetched_is_said_plainly():
+    """Offline, the TTS providers window showed the raw error, which named an SSL object at a memory address."""
+    import socket
+    import urllib.error
+
+    from ficary.gui_dialogs import _voice_list_problem
+
+    for failure in (ConnectionRefusedError("refused"), socket.gaierror("no such host"), urllib.error.URLError("down"), TimeoutError()):
+        said = _voice_list_problem(failure)
+        assert "no connection to the voice service" in said
+        assert "Check the internet connection" in said
+    aiohttp = pytest.importorskip("aiohttp")
+    assert "no connection to the voice service" in _voice_list_problem(aiohttp.ClientConnectionError("Cannot connect to host speech.platform.bing.com:443 ssl:<ssl.SSLContext object at 0xffff68724dd0>"))
+    other = _voice_list_problem(ValueError("the catalog's format changed"))
+    assert "the catalog's format changed" in other
+    assert "no connection" not in other
+
+
+@needs_display
+def test_the_add_story_window_is_not_a_long_strip(main_window):
+    """Its option rows, the audiobook settings among them, wrap, so the window is an ordinary shape. With the audiobook settings on one line it opened 1,225 pixels wide and under 300 tall."""
+    import wx
+
+    window = main_window.add_story_frame
+    size = window.GetSize()
+    assert size.width < 900, size
+    assert size.height > 250, size

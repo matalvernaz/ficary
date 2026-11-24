@@ -16,17 +16,19 @@
   picker, the genre picker, a series' parts and TTS providers now wrap
   to the window, and wrap again when it is resized.
 * The main window opens no bigger than the screen: 820 pixels tall, it
-  ran under the taskbar of a 768-pixel laptop screen. The Add Story
-  window fits the screen too, its options wrapping onto a second line
-  where needed.
+  ran under the taskbar of a 768-pixel laptop screen.
+* The Add Story window is an ordinary shape instead of a strip over a
+  thousand pixels wide: its options, and the audiobook settings with
+  them, wrap onto more lines, and its height fits them. It opens no
+  bigger than the screen either.
 * Buttons that wrap onto another line keep their own width (Rescan and
   AI settings were stretched to the end of their line), and on Linux the
   library list's last buttons and the story picker's Select None are no
   longer squeezed out of sight.
 * TTS providers says what to do when it can't fetch the voice list, in
   place of a raw error naming an SSL object.
-* Nothing a screen reader meets has changed: every control is made in
-  the same order with the same label.
+* Apart from that TTS providers line, nothing a screen reader meets has
+  changed: every control is made in the same order with the same label.
 * For checking: tools/visual_walk.py opens every window with a made-up
   library and saves a screenshot of each, and the Visual walk workflow
   runs it on Windows.
