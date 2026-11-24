@@ -1104,3 +1104,57 @@ def test_the_hint_names_the_laptop_layouts_key():
     from ficary.gui_status_bar import HINT
 
     assert "NVDA+End reads it (NVDA+Shift+End with NVDA's laptop keyboard layout)" in HINT
+
+
+@needs_display
+class TestDebugAndTheStatusBar:
+    @pytest.fixture
+    def main_frame(self, wx_app):
+        import wx
+        from ficary import gui
+
+        # The window sets the level of the whole process's log; put it back.
+        level = logging.getLogger().level
+        frame = gui.MainFrame()
+        yield frame
+        frame._clip_timer.Stop()
+        frame.Destroy()
+        wx.SafeYield()
+        logging.getLogger().setLevel(level)
+
+    def test_at_debug_the_status_log_keeps_to_the_normal_level(self, main_frame):
+        """Matt chose 2026-11-24: Debug adds detail to the log file only."""
+        main_frame._set_log_level_idx(0)  # DEBUG
+        assert logging.getLogger().level == logging.DEBUG, "the log file still gets the detail"
+        assert main_frame._wx_log_handler.level == logging.INFO
+        with main_frame._log_lock:
+            main_frame._log_queue.clear()
+        logging.getLogger("ficary.scraper").debug("Fetching chapter 5/40")
+        logging.getLogger("ficary.scraper").info("Downloading a story")
+        import wx
+
+        wx.SafeYield()
+        with main_frame._log_lock:
+            shown = "".join(main_frame._log_queue)
+        assert "Fetching chapter" not in shown
+        assert "Downloading a story" in shown
+
+    def test_a_quieter_level_still_applies_to_the_status_log(self, main_frame):
+        main_frame._set_log_level_idx(2)  # WARNING
+        assert main_frame._wx_log_handler.level == logging.WARNING
+
+    def test_an_open_menu_does_not_blank_the_status_bar(self, main_frame):
+        bar = main_frame.GetStatusBar()
+        with activity.Job('Updating 1 of 2: "First Story", chapter 3 of 9.'):
+            bar.refresh()
+            # What wx does as the highlight moves through a menu whose items have no help text.
+            main_frame.DoGiveHelp("", True)
+            assert bar.GetStatusText() == 'Updating 1 of 2: "First Story", chapter 3 of 9.'
+
+    def test_the_bar_puts_its_sentence_back_if_something_writes_over_it(self, main_frame):
+        bar = main_frame.GetStatusBar()
+        with activity.Job("Checking for new chapters: 4 of 9 stories checked."):
+            bar.refresh()
+            bar.SetStatusText("")
+            bar.refresh()
+            assert bar.GetStatusText() == "Checking for new chapters: 4 of 9 stories checked."

@@ -1329,7 +1329,12 @@ class MainFrame(wx.Frame):
             self._wx_log_handler = _WxLogHandler(self._log)
             self._wx_log_handler.setFormatter(logging.Formatter("%(message)s"))
             root.addHandler(self._wx_log_handler)
-        self._wx_log_handler.setLevel(level)
+        # The status log shows the normal level at most: Debug adds detail
+        # to the log file only (chosen by the maintainer, 2026-11-24). At
+        # Debug the status log also got Ficary's internal notes, a line
+        # per chapter from FanFiction.net among them, which is what the
+        # status bar was meant to take out of it.
+        self._wx_log_handler.setLevel(max(level, logging.INFO))
 
         want_file = self._log_to_file_enabled
         have_file = self._file_log_handler is not None

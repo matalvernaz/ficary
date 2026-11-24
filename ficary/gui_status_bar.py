@@ -32,7 +32,6 @@ class ActivityStatusBar(wx.StatusBar):
 
     def __init__(self, parent: wx.Window):
         super().__init__(parent, style=STYLE)
-        self._shown: str | None = None
         self.refresh()
         self._timer = wx.Timer(self)
         self.Bind(wx.EVT_TIMER, self._on_timer, self._timer)
@@ -42,12 +41,15 @@ class ActivityStatusBar(wx.StatusBar):
         self.Bind(wx.EVT_WINDOW_DESTROY, self._on_destroy)
 
     def refresh(self) -> None:
-        """Show the current sentence now, if it has changed since the last look."""
+        """Show the current sentence now, unless the bar already says it.
+
+        Compared with what the bar says rather than with what was last
+        set, so a sentence something else wrote over is put back.
+        """
         text = activity.current() or IDLE_TEXT
-        if text == self._shown:
+        if text == self.GetStatusText():
             return
         self.SetStatusText(text)
-        self._shown = text
 
     def _on_timer(self, event) -> None:
         self.refresh()
@@ -62,4 +64,8 @@ def add_activity_status_bar(frame: wx.Frame) -> ActivityStatusBar:
     """Give ``frame`` the status bar and return it."""
     bar = ActivityStatusBar(frame)
     frame.SetStatusBar(bar)
+    # wx otherwise writes a menu item's help text into the status bar
+    # while a menu is open, and Ficary's menu items have none, so the bar
+    # went blank whenever a menu was open.
+    frame.SetStatusBarPane(-1)
     return bar

@@ -1,5 +1,21 @@
 # Changelog
 
+## Unreleased
+
+**Debug adds detail to the log file only**
+
+* With View > Log Level set to DEBUG, the main window's status log
+  showed Ficary's internal notes too, including a line for every
+  FanFiction.net chapter. It keeps to the normal level now; DEBUG only
+  adds detail to the saved log file.
+
+**The status bar keeps its sentence**
+
+* While a menu was open, the status bar went blank: wx wrote the menu
+  item's help text there, and Ficary's menu items have none. It is left
+  alone now, and the bar puts its sentence back if anything else writes
+  over it.
+
 ## 2.20.21 — 2026-11-24
 
 **An update is over when it says so**
