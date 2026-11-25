@@ -191,7 +191,7 @@ def test_unreachable_counts_as_the_voice_being_out_and_is_explained(monkeypatch)
 
 def test_speech_is_asked_for_the_openai_way(voice_server, provider, monkeypatch, tmp_path):
     written = {}
-    monkeypatch.setattr(server_provider, "_write_mp3", lambda audio, path: written.update(audio=audio, path=path))
+    monkeypatch.setattr(server_provider, "_write_audio", lambda audio, path: written.update(audio=audio, path=path))
     provider.synthesize(text="Hello there.", voice="eloquence-en-us-reed", output_path=tmp_path / "a.mp3", rate="+20%", pitch="+5Hz")
     method, path, body = voice_server.requests[-1]
     assert (method, path) == ("POST", "/v1/audio/speech")
@@ -672,7 +672,7 @@ def test_the_provider_takes_the_servers_own_top_speed(voice_server, provider, mo
     voice_server.voices_reply = (200, {"voices": ELOQUENCE_VOICES, "max_speed": 12})
     provider.list_voices()
     assert provider.max_speed() == 12.0
-    monkeypatch.setattr(server_provider, "_write_mp3", lambda audio, path: None)
+    monkeypatch.setattr(server_provider, "_write_audio", lambda audio, path: None)
     provider.synthesize(text="Fast.", voice="eloquence-en-us-reed", output_path=tmp_path / "a.mp3", rate="+234%")
     assert json.loads(voice_server.requests[-1][2])["speed"] == pytest.approx(3.34)
     # A server that says nothing stays at OpenAI's 4.
@@ -704,9 +704,58 @@ def test_every_maker_of_audio_uses_the_books_rate():
     source = Path(tts.__file__).read_text(encoding="utf-8")
     m4b = source[source.index("def _build_m4b_inner("):]
     m4b = m4b[:m4b.index("\ndef ")]
-    assert '"-c:a", "aac", "-b:a", "64k", "-ar", str(AUDIO_SAMPLE_RATE)' in m4b, "the book's rate is set, not inherited"
+    assert '"-c:a", "aac", "-b:a", audio_bitrate, "-ar", str(AUDIO_SAMPLE_RATE)' in m4b, "the book's rate is set, not inherited"
     silence = source[source.index("def _make_silence_clip("):]
     assert 'anullsrc=r={AUDIO_SAMPLE_RATE}' in silence[:1500]
     piper = (Path(tts.__file__).parent / "tts_providers" / "piper.py").read_text(encoding="utf-8")
     assert '"-ar", str(AUDIO_SAMPLE_RATE), "-ac", "1",' in piper
     assert tts.AUDIO_SAMPLE_RATE == 24000, "Edge's own rate, so its pieces need no conversion"
+
+
+# ── Uncompressed samples, and books that keep their p's and s's ───
+
+
+@pytest.mark.skipif(shutil.which("ffmpeg") is None or shutil.which("ffprobe") is None, reason="needs ffmpeg")
+def test_a_sample_asked_for_as_wav_is_uncompressed(voice_server, tmp_path):
+    """MP3 smeared the clicks and hiss of p and s in formant voices; a sample to judge a voice by
+    comes as it was made, at the book's rate."""
+    import subprocess
+
+    out = tmp_path / "sample.wav"
+    tts_providers.synthesize("server:eloquence-en-us-reed", "Peter picked a pepper.", out)
+    probe = subprocess.run(
+        ["ffprobe", "-v", "error", "-select_streams", "a:0", "-show_entries", "stream=codec_name,sample_rate",
+         "-of", "csv=p=0", str(out)], capture_output=True, text=True, check=True,
+    )
+    assert probe.stdout.strip() == f"pcm_s16le,{tts.AUDIO_SAMPLE_RATE}"
+
+
+def test_pieces_are_made_at_lames_best_quality():
+    server = (Path(tts.__file__).parent / "tts_providers" / "server.py").read_text(encoding="utf-8")
+    assert '_BEST_MP3 = ("-codec:a", "libmp3lame", "-qscale:a", "0")' in server
+    piper = (Path(tts.__file__).parent / "tts_providers" / "piper.py").read_text(encoding="utf-8")
+    assert '"-codec:a", "libmp3lame", "-qscale:a", "0"' in piper and '"-qscale:a", "4"' not in piper
+
+
+def test_a_book_with_uncompressed_voices_gets_the_higher_bitrate(monkeypatch):
+    class Lossless(_CatalogProvider):
+        lossless = True
+
+    monkeypatch.setattr(tts_providers, "_REGISTRY_BUILT", True)
+    monkeypatch.setattr(tts_providers, "_REGISTRY", {
+        "edge": _CatalogProvider("edge", EDGE_CATALOG),
+        "server": Lossless("server", SERVER_CATALOG),
+    })
+    assert tts._book_bitrate({"edge:en-US-AriaNeural", "en-US-GuyNeural"}) == tts.AUDIOBOOK_BITRATE == "64k"
+    assert tts._book_bitrate({"edge:en-US-AriaNeural", "server:eloquence-en-us-reed"}) == "96k"
+    source = Path(tts.__file__).read_text(encoding="utf-8")
+    assert '"-c:a", "aac", "-b:a", audio_bitrate, "-ar", str(AUDIO_SAMPLE_RATE)' in source
+    assert "audio_bitrate=_book_bitrate({narrator, *mapper.mapping.values()})" in source
+
+
+def test_the_sample_endpoint_asks_lossless_providers_for_wav():
+    page = (WEB_VOICES_PATH.parent / "app.py").read_text(encoding="utf-8")
+    sample = page[page.index("def voice_sample("):page.index('@app.post("/download")')]
+    assert 'lossless = getattr(tts_providers.get_provider(info.provider), "lossless", False)' in sample
+    assert 'path = folder / ("sample.wav" if lossless else "sample.mp3")' in sample
+    assert 'media_type = "audio/wav" if lossless else "audio/mpeg"' in sample

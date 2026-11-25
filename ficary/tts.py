@@ -88,6 +88,14 @@ logger = logging.getLogger(__name__)
 # audio at another rate convert to this one.
 AUDIO_SAMPLE_RATE = 24000
 
+# The audiobook's AAC bitrate. Edge sends its speech as 48 kbps MP3, which 64 kbps keeps. Voices
+# whose provider gives the audio uncompressed (``lossless``: a speech server, Piper) are worth
+# more: formant voices like Eloquence make sharp clicks for p and t and bursts of noise for s, and
+# at 64 kbps those came out smeared (measured on Eloquence: about 15 dB clean between 2 and 5 kHz
+# through the old MP3-then-64k path, about 30 dB at 96k).
+AUDIOBOOK_BITRATE = "64k"
+AUDIOBOOK_BITRATE_FOR_LOSSLESS_VOICES = "96k"
+
 # ── Voice pools ───────────────────────────────────────────────────
 
 # Narrator voice — calm, clear storytelling voice
@@ -3061,7 +3069,7 @@ def _run_ffmpeg(cmd, *, step, timeout=_FFMPEG_BUILD_TIMEOUT_S):
 
 
 def build_m4b(chapter_files, story, output_path, cover_path=None, intro_file=None,
-              *, cancel_event=None):
+              *, cancel_event=None, audio_bitrate=AUDIOBOOK_BITRATE):
     """Merge per-chapter MP3s into a single M4B with chapter markers.
 
     The audiobook is made under a temporary name beside ``output_path``
@@ -3107,6 +3115,7 @@ def build_m4b(chapter_files, story, output_path, cover_path=None, intro_file=Non
         with atomic_path(output_path, suffix=".m4b", shared=True) as partial:
             _build_m4b_locked(
                 chapter_files, story, partial, cover_path, intro_file,
+                audio_bitrate=audio_bitrate,
             )
             _raise_if_cancelled(
                 cancel_event,
@@ -3115,7 +3124,8 @@ def build_m4b(chapter_files, story, output_path, cover_path=None, intro_file=Non
         return output_path
 
 
-def _build_m4b_locked(chapter_files, story, output_path, cover_path, intro_file):
+def _build_m4b_locked(chapter_files, story, output_path, cover_path, intro_file,
+                      *, audio_bitrate=AUDIOBOOK_BITRATE):
 
     # Normalise to (path, title) tuples internally.
     normalised: list[tuple[Path, str]] = []
@@ -3137,6 +3147,7 @@ def _build_m4b_locked(chapter_files, story, output_path, cover_path, intro_file)
         return _build_m4b_inner(
             chapter_files, story, output_path, tmp_dir,
             cover_path=cover_path, intro_file=intro_file,
+            audio_bitrate=audio_bitrate,
         )
     finally:
         # _run_ffmpeg raises RuntimeError on failure or timeout. Without
@@ -3147,7 +3158,7 @@ def _build_m4b_locked(chapter_files, story, output_path, cover_path, intro_file)
 
 def _build_m4b_inner(
     chapter_files, story, output_path, tmp_dir,
-    *, cover_path=None, intro_file=None,
+    *, cover_path=None, intro_file=None, audio_bitrate=AUDIOBOOK_BITRATE,
 ):
 
     # Build ffmpeg concat list. Paths must be absolute: ffmpeg resolves
@@ -3269,7 +3280,7 @@ def _build_m4b_inner(
         # The rate is set rather than taken from the first piece, so chapter audio made before
         # every provider converted to it (still in the chapter cache) cannot bring a book down
         # to 11 kHz.
-        "-c:a", "aac", "-b:a", "64k", "-ar", str(AUDIO_SAMPLE_RATE),
+        "-c:a", "aac", "-b:a", audio_bitrate, "-ar", str(AUDIO_SAMPLE_RATE),
         "-movflags", "+faststart",
         str(output_path),
     ])
@@ -4293,6 +4304,18 @@ def _format_incomplete_report(incomplete, total) -> str:
     )
 
 
+def _book_bitrate(voices) -> str:
+    """The audiobook's AAC bitrate for the voices in it: higher when any of them comes from a
+    provider that gives its audio uncompressed (``lossless``), whose detail 64 kbps would lose."""
+    from . import tts_providers
+
+    for voice in voices:
+        provider_name, _ = tts_providers.parse_voice_id(_namespace_legacy(voice))
+        if getattr(tts_providers.get_provider(provider_name), "lossless", False):
+            return AUDIOBOOK_BITRATE_FOR_LOSSLESS_VOICES
+    return AUDIOBOOK_BITRATE
+
+
 def _generate_audiobook_inner(
     *,
     story, output_dir, build_tmp, cache_root,
@@ -4524,6 +4547,7 @@ def _generate_audiobook_inner(
     build_m4b(
         chapter_files, story, m4b_path, cover_path, intro_file=intro_path,
         cancel_event=cancel_event,
+        audio_bitrate=_book_bitrate({narrator, *mapper.mapping.values()}),
     )
 
     if cancel_event is not None and cancel_event.is_set():

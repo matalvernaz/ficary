@@ -68,6 +68,10 @@ REQUEST_MODEL = "tts-1"
 # How long ffmpeg may take to turn one piece of speech into MP3.
 CONVERT_TIMEOUT_SECONDS = 120
 
+# ffmpeg's output settings: plain 16-bit PCM for a WAV, LAME's highest VBR quality for an MP3.
+_UNCOMPRESSED = ("-codec:a", "pcm_s16le")
+_BEST_MP3 = ("-codec:a", "libmp3lame", "-qscale:a", "0")
+
 _GENDERS = {"male": "Male", "m": "Male", "female": "Female", "f": "Female"}
 
 
@@ -189,6 +193,9 @@ class ServerProvider:
 
     name = PROVIDER_NAME
     display_name = DISPLAY_NAME
+    # The server sends WAV, so a sample can be heard uncompressed and a book can afford a higher
+    # bitrate (tts._book_bitrate).
+    lossless = True
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
@@ -296,7 +303,7 @@ class ServerProvider:
             raise RuntimeError(f"The voice server could not say this: {_error_message(exc)}") from exc
         if not audio or _wav_has_no_samples(audio):
             raise RuntimeError("The voice server sent back no audio for this text.")
-        _write_mp3(audio, Path(output_path))
+        _write_audio(audio, Path(output_path))
 
 
 def _wav_has_no_samples(audio: bytes) -> bool:
@@ -312,11 +319,13 @@ def _wav_has_no_samples(audio: bytes) -> bool:
     return True
 
 
-def _write_mp3(audio: bytes, output_path: Path) -> None:
-    """The server's audio as an MP3 at ``output_path``, at the rate every piece of a book is made
-    at (``tts.AUDIO_SAMPLE_RATE``): an 11 kHz voice joined as it was made muffled the whole book.
-    ffmpeg works out what it was sent, so a server that answers in another format than the WAV
-    asked for still works."""
+def _write_audio(audio: bytes, output_path: Path) -> None:
+    """The server's audio at ``output_path``, at the rate every piece of a book is made at
+    (``tts.AUDIO_SAMPLE_RATE``; an 11 kHz voice joined as it was made muffled the whole book):
+    uncompressed WAV when the path ends in .wav (a sample to listen to), otherwise MP3 at LAME's
+    best quality, since the book is encoded again from it and its p's and s's suffered at the old
+    setting. ffmpeg works out what it was sent, so a server that answers in another format than
+    the WAV asked for still works."""
     from ..tts import AUDIO_SAMPLE_RATE, _find_tool
 
     ffmpeg = _find_tool("ffmpeg")
@@ -330,7 +339,7 @@ def _write_mp3(audio: bytes, output_path: Path) -> None:
                 ffmpeg, "-y", "-loglevel", "error",
                 "-i", str(source),
                 "-ar", str(AUDIO_SAMPLE_RATE), "-ac", "1",
-                "-codec:a", "libmp3lame", "-qscale:a", "4",
+                *(_UNCOMPRESSED if output_path.suffix.lower() == ".wav" else _BEST_MP3),
                 str(output_path),
             ],
             # ffmpeg otherwise inherits the terminal and can wait on it (see tts._run_silent).

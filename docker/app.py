@@ -901,11 +901,14 @@ def voice_sample(voice: str = Form(...), speed: float | None = Form(None), speec
     started = time.monotonic()
     if not _SAMPLE_SLOTS.acquire(blocking=False):
         raise HTTPException(429, "Other samples are being made. Try again in a moment.")
+    # Uncompressed where the voice's provider has it: MP3 smeared the clicks and hiss of p and s
+    # sounds in formant voices like Eloquence. Edge only ever sends MP3.
+    lossless = getattr(tts_providers.get_provider(info.provider), "lossless", False)
     folder = None
     try:
         # Made inside the try, so a full or unwritable disk cannot keep the slot taken for good.
         folder = Path(tempfile.mkdtemp(prefix="ficary-sample-"))
-        path = folder / "sample.mp3"
+        path = folder / ("sample.wav" if lossless else "sample.mp3")
         tts_providers.synthesize(info.id, text, path, rate=rate)
     except Exception as exc:
         if folder is not None:
@@ -921,7 +924,8 @@ def voice_sample(voice: str = Form(...), speed: float | None = Form(None), speec
         time.monotonic() - started,
     )
     cleanup = BackgroundTask(shutil.rmtree, folder, ignore_errors=True)
-    return FileResponse(path, media_type="audio/mpeg", filename="sample.mp3", background=cleanup)
+    media_type = "audio/wav" if lossless else "audio/mpeg"
+    return FileResponse(path, media_type=media_type, filename=path.name, background=cleanup)
 
 
 @app.post("/download")

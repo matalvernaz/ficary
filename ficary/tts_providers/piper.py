@@ -435,6 +435,8 @@ class PiperProvider:
     """Local Piper TTS provider exposing the same interface as Edge."""
 
     name = "piper"
+    # Piper makes WAV here, so a sample can be uncompressed and a book can afford a higher bitrate.
+    lossless = True
 
     def is_installed(self) -> bool:
         return piper_executable() is not None
@@ -503,7 +505,10 @@ class PiperProvider:
                     ffmpeg, "-y", "-loglevel", "error",
                     "-i", str(wav_tmp),
                     "-ar", str(AUDIO_SAMPLE_RATE), "-ac", "1",
-                    "-codec:a", "libmp3lame", "-qscale:a", "4",
+                    # WAV for a sample asked for as .wav; otherwise LAME's best, since the book
+                    # is encoded again from it.
+                    *(("-codec:a", "pcm_s16le") if output_path.suffix.lower() == ".wav"
+                      else ("-codec:a", "libmp3lame", "-qscale:a", "0")),
                     str(output_path),
                 ],
                 # stdin=DEVNULL: ffmpeg inherits the parent tty stdin

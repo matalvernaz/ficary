@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased
+
+**Cleaner p's and s's from speech-server and Piper voices**
+
+* The web page's Listen sample of a speech-server or Piper voice is
+  uncompressed. As MP3 it smeared the sharp clicks of p and t and the
+  hiss of s that formant voices such as Eloquence make.
+* An audiobook with any speech-server or Piper voice in it is encoded
+  at 96 kbps instead of 64, and its pieces at the best MP3 quality
+  before that. Measured on Eloquence, the 2 to 5 kHz range, where those
+  sounds are, comes through about twice as clean (30 dB against 15).
+  Books read only by Edge voices stay at 64 kbps.
+
 ## 2.20.30 — 2026-11-24
 
 **Audiobooks narrated by an 11 kHz voice are no longer muffled**
