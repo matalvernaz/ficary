@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 2.20.27 — 2026-11-24
 
 **Voices from a speech server, a voice picker on the web page, and one-voice audiobooks**
 
