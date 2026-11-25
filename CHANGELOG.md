@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 2.20.29 — 2026-11-24
 
 **Speed in times normal, and as fast as a screen reader**
 
