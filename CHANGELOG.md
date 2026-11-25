@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 2.20.28 — 2026-11-24
 
 **The voice sample follows the speech rate**
 
