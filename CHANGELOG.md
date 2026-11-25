@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 2.20.31 — 2026-11-24
 
 **Cleaner p's and s's from speech-server and Piper voices**
 
