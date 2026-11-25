@@ -460,7 +460,8 @@ Three voice providers are built in, and you can use any of them:
   `GET /v1/audio/voices`. A voice listed with a `locale`, a `gender`
   and a `group` (its engine) can be given to characters of the right
   gender and language; one without a gender only to characters whose
-  gender isn't known.
+  gender isn't known. A server that can speak faster than OpenAI's
+  limit of 4 times normal says so with `max_speed` in that list.
 
 Voice names carry their provider as a prefix —
 `edge:en-US-AvaNeural`, `piper:en_GB-alan-medium`,

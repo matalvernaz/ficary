@@ -1,5 +1,20 @@
 # Changelog
 
+## Unreleased
+
+**Speed in times normal, and as fast as a screen reader**
+
+* The web page's speech rate box is now Speed, in times normal: 1 is
+  normal speed, 2 twice as fast. It goes up to 12, and the page
+  remembers it. A percent change used to top out at twice normal for
+  every voice, so a much larger number was quietly cut down to that.
+* Each voice goes as fast as its provider can: Edge and Piper voices
+  stop at twice normal, and the page says so beside the speed when it
+  is set higher; a speech server's voices go as fast as the server says
+  in its voice list (`max_speed`), past the 4 times OpenAI's API allows.
+* Each sample and each audiobook job is logged with its voice and the
+  speed asked for and used.
+
 ## 2.20.28 — 2026-11-24
 
 **The voice sample follows the speech rate**

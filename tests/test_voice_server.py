@@ -447,7 +447,7 @@ def test_the_page_gets_each_voices_family():
     page = web_voices.voices_for_page(EDGE_CATALOG[:1] + SERVER_CATALOG[:1])
     assert page["default"] == "edge:en-US-AriaNeural"
     assert [v["group"] for v in page["voices"]] == ["Microsoft Edge", "Eloquence"]
-    assert set(page["voices"][1]) == {"id", "name", "locale", "gender", "group"}
+    assert set(page["voices"][1]) == {"id", "name", "locale", "gender", "group", "max_speed"}
 
 
 def test_a_sample_is_in_the_voices_own_language():
@@ -589,19 +589,94 @@ def test_the_providers_window_names_the_server_when_it_cannot_be_reached():
 
 
 @pytest.mark.parametrize("percent, rate", [(0, None), (20, "+20%"), (-30, "-30%"), (-200, "-95%"), (500, "+100%")])
-def test_a_sample_is_spoken_at_the_forms_speech_rate(percent, rate):
-    """The same rate and clamp the book's narration gets, so the sample sounds as the book will."""
+def test_a_sample_is_spoken_at_the_forms_speed(percent, rate):
+    """The same rate and clamp the book's narration gets, so the sample sounds as the book will.
+    With no voice named, the ceiling is Edge's: twice normal."""
     assert web_voices.sample_rate(percent) == rate
 
 
-def test_the_page_sends_the_speech_rate_with_a_sample_and_drops_a_stale_one():
+def test_the_page_sends_the_speed_with_a_sample_and_drops_a_stale_one():
     page = (WEB_VOICES_PATH.parent / "app.py").read_text(encoding="utf-8")
     endpoint = page[page.index("def voice_sample("):page.index('@app.post("/download")')]
-    assert "speech_rate: int = Form(0)" in endpoint
-    assert "rate=web_voices.sample_rate(speech_rate)" in endpoint
+    assert "speed: float | None = Form(None)" in endpoint and "speech_rate: int = Form(0)" in endpoint
+    assert "rate = web_voices.sample_rate(percent, info.id)" in endpoint
     listen = page[page.index('listenButton.addEventListener("click"'):page.index("loadVoices();\n")]
-    assert 'fd.set("speech_rate", rateInput.value || "0")' in listen
-    assert 'rateInput.addEventListener("input", () => dropSample())' in page
+    assert 'fd.set("speed", speedInput.value || "1")' in listen
+    speed_listener = page[page.index('speedInput.addEventListener("input"'):]
+    assert "dropSample();" in speed_listener[:200]
     for handler in ('engineSelect.addEventListener("change"', 'voiceSelect.addEventListener("change"'):
         block = page[page.index(handler):page.index("});", page.index(handler))]
-        assert "dropSample();" in block, handler
+        assert "dropSample();" in block and "showSpeedCap();" in block, handler
+
+
+@pytest.mark.parametrize("speed, percent", [(1, 0), (3.34, 234), (2, 100), (0.1, -50), (40, 1100)])
+def test_the_pages_speed_becomes_a_percent_change(speed, percent):
+    assert web_voices.percent_from_speed(speed) == percent
+
+
+def test_the_page_offers_a_speed_in_times_normal_and_remembers_it():
+    page = (WEB_VOICES_PATH.parent / "app.py").read_text(encoding="utf-8")
+    assert '<input type="number" name="speed" value="1" min="0.5" max="12" step="any" aria-describedby="speed-hint">' in page
+    assert 'id="speed-hint"' in page and 'id="speed-cap"' in page
+    assert 'name="speech_rate"' not in page, "the page no longer sends a percent"
+    assert "remember(SPEED_KEY, speedInput.value)" in page
+    loader = page[page.index("async function loadVoices()"):page.index('fetch("/voices")')]
+    assert "speedInput.value = savedSpeed" in loader, "the speed is put back before the voice list loads"
+    jobs = page[page.index("def start_job("):page.index('@app.get("/jobs/{job_id}")')]
+    assert "speed: float | None = Form(None)" in jobs
+    assert "speech_rate = web_voices.percent_from_speed(speed)" in jobs
+
+
+def test_samples_and_jobs_are_logged_with_their_voice_and_speed():
+    """A report that a voice was too slow has to be checkable in the log afterwards."""
+    page = (WEB_VOICES_PATH.parent / "app.py").read_text(encoding="utf-8")
+    sample = page[page.index("def voice_sample("):page.index('@app.post("/download")')]
+    assert 'logger.info(\n        "sample: %s, speed asked %s, made at %s, in %.1f s"' in sample
+    jobs = page[page.index("def start_job("):page.index('@app.get("/jobs/{job_id}")')]
+    assert '"audiobook job %s: %s; narrator %s; characters from %s; speed %+d%%; attribution %s"' in jobs
+
+
+class _FastProvider(_CatalogProvider):
+    """A voice server's provider that says how fast it can go."""
+
+    def __init__(self, name, voices, fastest):
+        super().__init__(name, voices)
+        self._fastest = fastest
+
+    def max_speed(self):
+        return self._fastest
+
+
+def test_each_provider_has_its_own_speed_ceiling(monkeypatch):
+    """Edge stops at twice normal; a voice server that makes 12 times normal may be asked for it."""
+    monkeypatch.setattr(tts_providers, "_REGISTRY_BUILT", True)
+    monkeypatch.setattr(tts_providers, "_REGISTRY", {
+        "edge": _CatalogProvider("edge", EDGE_CATALOG),
+        "server": _FastProvider("server", SERVER_CATALOG, 12.0),
+    })
+    assert tts._rate_ceiling("edge:en-US-AriaNeural") == 100
+    assert tts._rate_ceiling("en-US-AriaNeural") == 100
+    assert tts._rate_ceiling("server:eloquence-en-us-reed") == 1100
+    segment = tts.Segment("Hello.", speaker=None)
+    assert tts._tts_kwargs_for_segment(segment, "server:eloquence-en-us-reed", speech_rate=234)["rate"] == "+234%"
+    assert tts._tts_kwargs_for_segment(segment, "edge:en-US-AriaNeural", speech_rate=234)["rate"] == "+100%"
+    assert web_voices.max_speed_of("server:eloquence-en-us-reed") == 12.0
+    assert web_voices.max_speed_of("edge:en-US-AriaNeural") == 2.0
+    assert web_voices.sample_rate(234, "server:eloquence-en-us-reed") == "+234%"
+    assert web_voices.sample_rate(234, "edge:en-US-AriaNeural") == "+100%"
+    page = web_voices.voices_for_page(EDGE_CATALOG[:1] + SERVER_CATALOG[:1])
+    assert [v["max_speed"] for v in page["voices"]] == [2.0, 12.0]
+
+
+def test_the_provider_takes_the_servers_own_top_speed(voice_server, provider, monkeypatch, tmp_path):
+    voice_server.voices_reply = (200, {"voices": ELOQUENCE_VOICES, "max_speed": 12})
+    provider.list_voices()
+    assert provider.max_speed() == 12.0
+    monkeypatch.setattr(server_provider, "_write_mp3", lambda audio, path: None)
+    provider.synthesize(text="Fast.", voice="eloquence-en-us-reed", output_path=tmp_path / "a.mp3", rate="+234%")
+    assert json.loads(voice_server.requests[-1][2])["speed"] == pytest.approx(3.34)
+    # A server that says nothing stays at OpenAI's 4.
+    voice_server.voices_reply = (200, {"voices": ELOQUENCE_VOICES})
+    fresh = server_provider.ServerProvider()
+    fresh.list_voices()
+    assert fresh.max_speed() == server_provider.FASTEST_SPEED == 4.0

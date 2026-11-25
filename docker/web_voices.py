@@ -65,6 +65,7 @@ def voices_for_page(voices: list) -> dict:
                 "locale": voice.locale,
                 "gender": voice.gender,
                 "group": tts_providers.group_of(voice),
+                "max_speed": max_speed_of(voice.id),
             }
             for voice in voices
         ],
@@ -72,12 +73,32 @@ def voices_for_page(voices: list) -> dict:
     }
 
 
-def sample_rate(percent: int) -> str | None:
-    """The form's speech rate as the rate a sample is spoken at, clamped as an audiobook clamps it,
-    so the sample is as fast as the book's narration will be: 20 -> "+20%", 0 -> None."""
+# The speeds the page offers, as multiples of normal. Screen reader users listen far faster than
+# twice normal (NVDA's Eloquence at 60% is about 3.3), so the top is where a voice server can go.
+SLOWEST_SPEED = 0.5
+FASTEST_SPEED = 12.0
+
+
+def percent_from_speed(speed: float) -> int:
+    """The page's speed (times normal) as the percent change the audiobook pipeline takes."""
+    return round((max(SLOWEST_SPEED, min(FASTEST_SPEED, float(speed))) - 1.0) * 100)
+
+
+def max_speed_of(voice_id: str) -> float:
+    """The fastest a voice can be made, as a multiple of normal: twice normal for Edge and Piper,
+    whatever its voice server says for a server voice."""
     from ficary import tts
 
-    return tts._rate_str(tts._clamp_rate(percent))
+    return round(1.0 + tts._rate_ceiling(voice_id) / 100.0, 2)
+
+
+def sample_rate(percent: int, voice_id: str | None = None) -> str | None:
+    """The form's speed as the rate a sample is spoken at, clamped as the audiobook clamps it for
+    that voice, so the sample is as fast as the book's narration will be: 20 -> "+20%", 0 -> None."""
+    from ficary import tts
+
+    ceiling = tts._rate_ceiling(voice_id) if voice_id else tts._RATE_CLAMP_MAX
+    return tts._rate_str(tts._clamp_rate(percent, ceiling))
 
 
 def sample_text(voice) -> str:

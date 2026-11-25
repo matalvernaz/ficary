@@ -21,6 +21,7 @@ import os
 import shutil
 import tempfile
 import threading
+import time
 import uuid
 from pathlib import Path
 from typing import Any
@@ -250,10 +251,11 @@ LANDING = """<!doctype html>
 __MODEL_SIZE_OPTIONS__
     </select>
    </label>
-   <label>Speech rate %
-    <input type="number" name="speech_rate" value="0" min="-50" max="100">
+   <label>Speed
+    <input type="number" name="speed" value="1" min="0.5" max="12" step="any" aria-describedby="speed-hint">
    </label>
   </div>
+  <p id="speed-hint">Times normal: 1 is normal speed, 2 is twice as fast, up to 12. <span id="speed-cap"></span></p>
   <div class="row">
    <label><input type="checkbox" name="strip_notes"> strip author notes</label>
    <label><input type="checkbox" name="hr_as_stars" checked> scene dividers as silence</label>
@@ -365,7 +367,9 @@ const engineSelect = $("#voice-engine");
 const voiceSelect = $("#narrator-voice");
 const castSelect = $("#character-voices");
 const listenButton = $("#listen");
-const rateInput = document.querySelector('#audio-form input[name="speech_rate"]');
+const speedInput = document.querySelector('#audio-form input[name="speed"]');
+const speedCap = $("#speed-cap");
+const SPEED_KEY = "ficary-speed";
 const sampleAudio = $("#sample-audio");
 const NARRATOR_KEY = "ficary-narrator-voice";
 const CAST_KEY = "ficary-character-voices";
@@ -437,6 +441,8 @@ async function loadVoices() {
   const savedCast = remembered(CAST_KEY);
   if (savedCast === "engine" || savedCast === "any" || savedCast === "narrator") castSelect.value = savedCast;
   showCastChoice();
+  const savedSpeed = remembered(SPEED_KEY);
+  if (savedSpeed && !isNaN(parseFloat(savedSpeed))) speedInput.value = savedSpeed;
   let body;
   try {
     const reply = await fetch("/voices");
@@ -469,6 +475,7 @@ async function loadVoices() {
   const start = savedVoice || allVoices.find((v) => v.id === body.default) || allVoices[0];
   engineSelect.value = start.group;
   fillVoices(start.group, start.id);
+  showSpeedCap();
   engineSelect.disabled = false;
   voiceSelect.disabled = false;
   listenButton.disabled = false;
@@ -495,17 +502,39 @@ engineSelect.addEventListener("change", () => {
   fillVoices(engineSelect.value, null);
   remember(NARRATOR_KEY, voiceSelect.value);
   dropSample();
+  showSpeedCap();
 });
 voiceSelect.addEventListener("change", () => {
   remember(NARRATOR_KEY, voiceSelect.value);
   // A choice made answers the "choose a narrator" request, so that sentence goes.
   if (voiceSelect.value) sampleStatus.textContent = "";
   dropSample();
+  showSpeedCap();
 });
-// The sample is made at the speech rate in the form, so a sample made before the rate changed is
-// out of date; it goes, and Listen makes a new one. It is not replayed by itself, which would
-// talk over a screen reader saying the number being typed.
-rateInput.addEventListener("input", () => dropSample());
+// The sample is made at the speed in the form, so a sample made before the speed changed is out of
+// date; it goes, and Listen makes a new one. It is not replayed by itself, which would talk over a
+// screen reader saying the number being typed.
+speedInput.addEventListener("input", () => {
+  dropSample();
+  showSpeedCap();
+});
+speedInput.addEventListener("change", () => {
+  remember(SPEED_KEY, speedInput.value);
+  // Said once the number is settled, not at every keystroke.
+  if (speedCap.textContent) announce(speedCap.textContent);
+});
+
+// Says, beside the speed, when the chosen voice can't go as fast as asked (Edge stops at twice
+// normal), rather than quietly making it slower.
+function showSpeedCap() {
+  const voice = allVoices.find((v) => v.id === voiceSelect.value);
+  const speed = parseFloat(speedInput.value);
+  if (voice && voice.max_speed && speed > voice.max_speed) {
+    speedCap.textContent = voice.group + " voices go up to " + voice.max_speed + " times normal, so this one would be made at " + voice.max_speed + ".";
+  } else {
+    speedCap.textContent = "";
+  }
+}
 // With one voice the attribution choices do nothing, so they are switched off and say why.
 const attributionSelect = document.querySelector('#audio-form select[name="attribution"]');
 const modelSizeSelect = document.querySelector('#audio-form select[name="model_size"]');
@@ -548,7 +577,7 @@ listenButton.addEventListener("click", async () => {
   try {
     const fd = new FormData();
     fd.set("voice", option.value);
-    fd.set("speech_rate", rateInput.value || "0");
+    fd.set("speed", speedInput.value || "1");
     const reply = await fetch("/voices/sample", { method: "POST", body: fd });
     if (!reply.ok) {
       sampleProblem("The sample could not be played: " + await problemIn(reply));
@@ -857,15 +886,19 @@ def list_voices() -> dict:
 
 
 @app.post("/voices/sample")
-def voice_sample(voice: str = Form(...), speech_rate: int = Form(0)):
-    """A sentence in the chosen voice at the form's speech rate, as MP3, so a voice can be heard as
-    the book will sound before it is made."""
+def voice_sample(voice: str = Form(...), speed: float | None = Form(None), speech_rate: int = Form(0)):
+    """A sentence in the chosen voice at the form's speed, as MP3, so a voice can be heard as the
+    book will sound before it is made. ``speed`` is times normal; ``speech_rate``, a percent change,
+    is what it took before and is still taken when no speed is given."""
     from ficary import tts_providers
 
     info = tts_providers.voice_by_id(voice)
     if info is None:
         raise HTTPException(404, "That voice is not available on this server.")
+    percent = web_voices.percent_from_speed(speed) if speed is not None else speech_rate
+    rate = web_voices.sample_rate(percent, info.id)
     text = web_voices.sample_text(info)
+    started = time.monotonic()
     if not _SAMPLE_SLOTS.acquire(blocking=False):
         raise HTTPException(429, "Other samples are being made. Try again in a moment.")
     folder = None
@@ -873,14 +906,20 @@ def voice_sample(voice: str = Form(...), speech_rate: int = Form(0)):
         # Made inside the try, so a full or unwritable disk cannot keep the slot taken for good.
         folder = Path(tempfile.mkdtemp(prefix="ficary-sample-"))
         path = folder / "sample.mp3"
-        tts_providers.synthesize(info.id, text, path, rate=web_voices.sample_rate(speech_rate))
+        tts_providers.synthesize(info.id, text, path, rate=rate)
     except Exception as exc:
         if folder is not None:
             shutil.rmtree(folder, ignore_errors=True)
-        logger.warning("sample of %s failed: %s", voice, exc)
+        logger.warning("sample of %s at %s failed: %s", voice, rate or "normal speed", exc)
         raise HTTPException(502, tts_providers.explain_synthesis_error(exc, retry_hint="then press Listen again")) from exc
     finally:
         _SAMPLE_SLOTS.release()
+    # Which voice and speed were asked for and what the speed became, so a "too slow" can be looked up.
+    logger.info(
+        "sample: %s, speed asked %s, made at %s, in %.1f s",
+        voice, f"{speed:g}x" if speed is not None else f"{speech_rate:+d}%", rate or "normal speed",
+        time.monotonic() - started,
+    )
     cleanup = BackgroundTask(shutil.rmtree, folder, ignore_errors=True)
     return FileResponse(path, media_type="audio/mpeg", filename="sample.mp3", background=cleanup)
 
@@ -930,6 +969,8 @@ def start_job(
     # Same default as the desktop app, small, unless this server doesn't offer it.
     model_size: str = Form(ALLOWED_BOOKNLP_SIZES[0]),
     speech_rate: int = Form(0),
+    # Times normal, from the page; speech_rate (a percent change) is for scripts and older pages.
+    speed: float | None = Form(None),
     strip_notes: str = Form("false"),
     hr_as_stars: str = Form("true"),
     narrator_voice: str = Form(""),
@@ -968,6 +1009,8 @@ def start_job(
     except ImportError as exc:
         raise HTTPException(500, str(exc)) from exc
 
+    if speed is not None:
+        speech_rate = web_voices.percent_from_speed(speed)
     cast, mix_engines, only_providers = web_voices.character_cast(narrator_voice, character_voices, web_voices.available_voices())
     job = Job(
         id=uuid.uuid4().hex[:12],
@@ -984,6 +1027,10 @@ def start_job(
         tts_providers=only_providers,
     )
     JOBS.add(job)
+    logger.info(
+        "audiobook job %s: %s; narrator %s; characters from %s; speed %+d%%; attribution %s",
+        job.id, url, narrator_voice or "the default", character_voices, speech_rate, attribution,
+    )
     return JSONResponse({"id": job.id})
 
 

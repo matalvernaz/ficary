@@ -56,7 +56,8 @@ FAILED_LIST_KEEP_SECONDS = 15.0
 LIST_TIMEOUT_SECONDS = 10.0
 SPEECH_TIMEOUT_SECONDS = 180.0
 
-# The speed range OpenAI's API accepts, as a multiple of normal.
+# The speed range OpenAI's API accepts, as a multiple of normal. A server that can go faster says
+# so with "max_speed" in its voice list, and that is used instead.
 SLOWEST_SPEED = 0.25
 FASTEST_SPEED = 4.0
 
@@ -84,15 +85,16 @@ def address() -> str:
     return value
 
 
-def speed_from_rate(rate: str | None) -> float:
-    """An edge-style rate change ("+20%", "-10%") as a speed multiple (1.2, 0.9)."""
+def speed_from_rate(rate: str | None, fastest: float = FASTEST_SPEED) -> float:
+    """An edge-style rate change ("+20%", "-10%") as a speed multiple (1.2, 0.9), no faster than
+    ``fastest``."""
     if not rate:
         return 1.0
     try:
         percent = int(rate.strip().rstrip("%"))
     except ValueError:
         return 1.0
-    return max(SLOWEST_SPEED, min(FASTEST_SPEED, 1.0 + percent / 100.0))
+    return max(SLOWEST_SPEED, min(fastest, 1.0 + percent / 100.0))
 
 
 def _normal_locale(value) -> str:
@@ -193,9 +195,16 @@ class ServerProvider:
         self._voices: list[VoiceInfo] = []
         self._voices_from = ""
         self._voices_until = 0.0
+        # The fastest speed the server said it makes; OpenAI's 4 until its voice list says more.
+        self._max_speed = FASTEST_SPEED
         # What the last failed attempt said: its type and message, not the exception itself,
         # which would keep its traceback (and every request it touched) alive while remembered.
         self._failure: tuple[type, str] | None = None
+
+    def max_speed(self) -> float:
+        """The fastest speed the server makes, as a multiple of normal, from its last voice list.
+        No request is made for it."""
+        return self._max_speed
 
     def is_installed(self) -> bool:
         """True when an address is set. Whether the server answers is found out by list_voices,
@@ -241,6 +250,11 @@ class ServerProvider:
         entries = body.get("voices") if isinstance(body, dict) else body
         if not isinstance(entries, list):
             raise RuntimeError("The voice server's voice list was not a list of voices.")
+        advertised = body.get("max_speed") if isinstance(body, dict) else None
+        if isinstance(advertised, (int, float)) and not isinstance(advertised, bool) and advertised > 1:
+            self._max_speed = float(advertised)
+        else:
+            self._max_speed = FASTEST_SPEED
         voices: list[VoiceInfo] = []
         seen: set[str] = set()
         for entry in entries:
@@ -268,7 +282,7 @@ class ServerProvider:
             "input": text,
             "voice": voice,
             "response_format": "wav",
-            "speed": speed_from_rate(rate),
+            "speed": speed_from_rate(rate, self._max_speed),
         }).encode("utf-8")
         request = urllib.request.Request(
             f"{where}/v1/audio/speech",

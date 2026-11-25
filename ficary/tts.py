@@ -1605,7 +1605,26 @@ with ``-20`` "sad" emotion would otherwise emit ``-120%`` and the
 segment would come back empty."""
 
 
-def _combine_rate(base_pct, emotion_rate):
+def _rate_ceiling(voice) -> int:
+    """The fastest ``voice``'s provider may be asked to go, as a percent
+    change from normal. Edge turns large rates away (``_RATE_CLAMP_MAX``)
+    and Piper stops at twice normal, but a voice server says how fast it
+    can go in its voice list: screen reader users listen at three times
+    normal and more, NVDA's Eloquence at 60% being about 3.3."""
+    from . import tts_providers
+
+    provider_name, _ = tts_providers.parse_voice_id(_namespace_legacy(voice))
+    provider = tts_providers.get_provider(provider_name)
+    max_speed = getattr(provider, "max_speed", None)
+    if not callable(max_speed):
+        return _RATE_CLAMP_MAX
+    try:
+        return max(_RATE_CLAMP_MAX, round((float(max_speed()) - 1.0) * 100))
+    except (TypeError, ValueError):
+        return _RATE_CLAMP_MAX
+
+
+def _combine_rate(base_pct, emotion_rate, ceiling=_RATE_CLAMP_MAX):
     """Combine a user rate override with an emotion's own rate shift.
 
     emotion_rate comes from EMOTION_PROSODY as a string like '+10%' or
@@ -1615,18 +1634,19 @@ def _combine_rate(base_pct, emotion_rate):
     edge-tts's silent-rejection floor.
     """
     if not emotion_rate:
-        return _rate_str(_clamp_rate(base_pct or 0)) if base_pct else None
+        return _rate_str(_clamp_rate(base_pct or 0, ceiling)) if base_pct else None
     try:
         emo_pct = int(emotion_rate.rstrip("%"))
     except ValueError:
-        return _rate_str(_clamp_rate(base_pct or 0)) if base_pct else emotion_rate
-    total = _clamp_rate((base_pct or 0) + emo_pct)
+        return _rate_str(_clamp_rate(base_pct or 0, ceiling)) if base_pct else emotion_rate
+    total = _clamp_rate((base_pct or 0) + emo_pct, ceiling)
     return _rate_str(total) if total else None
 
 
-def _clamp_rate(pct: int) -> int:
-    """Clamp a percent rate delta to the provider-safe range."""
-    return max(_RATE_CLAMP_MIN, min(_RATE_CLAMP_MAX, int(pct)))
+def _clamp_rate(pct: int, ceiling: int = _RATE_CLAMP_MAX) -> int:
+    """Clamp a percent rate delta to the provider-safe range; ``ceiling``
+    is the voice's own top (``_rate_ceiling``)."""
+    return max(_RATE_CLAMP_MIN, min(ceiling, int(pct)))
 
 
 def _tts_kwargs_for_segment(segment, voice, speech_rate=0):
@@ -1639,7 +1659,7 @@ def _tts_kwargs_for_segment(segment, voice, speech_rate=0):
     emotion_prosody = {}
     if segment.emotion:
         emotion_prosody = EMOTION_PROSODY.get(segment.emotion, {})
-    rate = _combine_rate(speech_rate, emotion_prosody.get("rate"))
+    rate = _combine_rate(speech_rate, emotion_prosody.get("rate"), _rate_ceiling(voice))
     if rate:
         kwargs["rate"] = rate
     for key in ("volume", "pitch"):
