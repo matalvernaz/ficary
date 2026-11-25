@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 2.20.30 — 2026-11-24
 
 **Audiobooks narrated by an 11 kHz voice are no longer muffled**
 
