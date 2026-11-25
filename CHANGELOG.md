@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+**The voice sample follows the speech rate**
+
+* Listen on the web page plays the sample at the speech rate in the
+  form, as fast as the audiobook's narration will be. Changing the rate
+  or the voice puts away a sample made before, and Listen makes a new
+  one; it doesn't replay by itself, so it never talks over a screen
+  reader reading out the number being typed.
+* Choosing an engine starts on its main voice (the page's default for
+  Edge, otherwise the engine's first adult voice in the browser's
+  language) rather than the first name in the alphabet, which could be
+  a child's voice.
+
 ## 2.20.27 — 2026-11-24
 
 **Voices from a speech server, a voice picker on the web page, and one-voice audiobooks**

@@ -586,3 +586,22 @@ def test_the_providers_window_names_the_server_when_it_cannot_be_reached():
     )
     assert "http://voices:8000" in message and "running" in message
     assert "internet" not in message
+
+
+@pytest.mark.parametrize("percent, rate", [(0, None), (20, "+20%"), (-30, "-30%"), (-200, "-95%"), (500, "+100%")])
+def test_a_sample_is_spoken_at_the_forms_speech_rate(percent, rate):
+    """The same rate and clamp the book's narration gets, so the sample sounds as the book will."""
+    assert web_voices.sample_rate(percent) == rate
+
+
+def test_the_page_sends_the_speech_rate_with_a_sample_and_drops_a_stale_one():
+    page = (WEB_VOICES_PATH.parent / "app.py").read_text(encoding="utf-8")
+    endpoint = page[page.index("def voice_sample("):page.index('@app.post("/download")')]
+    assert "speech_rate: int = Form(0)" in endpoint
+    assert "rate=web_voices.sample_rate(speech_rate)" in endpoint
+    listen = page[page.index('listenButton.addEventListener("click"'):page.index("loadVoices();\n")]
+    assert 'fd.set("speech_rate", rateInput.value || "0")' in listen
+    assert 'rateInput.addEventListener("input", () => dropSample())' in page
+    for handler in ('engineSelect.addEventListener("change"', 'voiceSelect.addEventListener("change"'):
+        block = page[page.index(handler):page.index("});", page.index(handler))]
+        assert "dropSample();" in block, handler

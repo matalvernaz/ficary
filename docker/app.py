@@ -365,10 +365,12 @@ const engineSelect = $("#voice-engine");
 const voiceSelect = $("#narrator-voice");
 const castSelect = $("#character-voices");
 const listenButton = $("#listen");
+const rateInput = document.querySelector('#audio-form input[name="speech_rate"]');
 const sampleAudio = $("#sample-audio");
 const NARRATOR_KEY = "ficary-narrator-voice";
 const CAST_KEY = "ficary-character-voices";
 let allVoices = [];
+let defaultVoiceId = null;
 // "loading" until /voices answers, then "ready", or "failed" when there is no list to choose from.
 // Until it is ready the narrator list is switched off and sends nothing, so a saved narrator
 // would silently become the default.
@@ -414,7 +416,19 @@ function fillVoices(group, chosen) {
     const option = new Option(voiceLabel(v), v.id);
     voiceSelect.add(option);
   }
-  if (chosen && voices.some((v) => v.id === chosen)) voiceSelect.value = chosen;
+  if (chosen && voices.some((v) => v.id === chosen)) {
+    voiceSelect.value = chosen;
+    return;
+  }
+  // A newly chosen engine starts on its main voice rather than the first name in the alphabet,
+  // which for Eloquence is Bobby, a child: the page's default voice when it is this engine's,
+  // otherwise the first grown-up voice in the browser's language, in the engine's own order
+  // (Reed, DECtalk's Paul, Microsoft Sam).
+  const ownAdults = allVoices.filter((v) => v.group === group
+    && (v.gender === "Male" || v.gender === "Female")
+    && (v.locale || "").toLowerCase().split("-")[0] === ownLanguage);
+  const main = voices.find((v) => v.id === defaultVoiceId) || ownAdults[0];
+  if (main) voiceSelect.value = main.id;
 }
 
 async function loadVoices() {
@@ -434,6 +448,7 @@ async function loadVoices() {
     return;
   }
   allVoices = body.voices || [];
+  defaultVoiceId = body.default || null;
   if (!allVoices.length) {
     voicesState = "failed";
     voicesUnavailable("This server lists no voices, so the audiobook will use Ficary's default voices.");
@@ -479,12 +494,18 @@ function voicesUnavailable(text) {
 engineSelect.addEventListener("change", () => {
   fillVoices(engineSelect.value, null);
   remember(NARRATOR_KEY, voiceSelect.value);
+  dropSample();
 });
 voiceSelect.addEventListener("change", () => {
   remember(NARRATOR_KEY, voiceSelect.value);
   // A choice made answers the "choose a narrator" request, so that sentence goes.
   if (voiceSelect.value) sampleStatus.textContent = "";
+  dropSample();
 });
+// The sample is made at the speech rate in the form, so a sample made before the rate changed is
+// out of date; it goes, and Listen makes a new one. It is not replayed by itself, which would
+// talk over a screen reader saying the number being typed.
+rateInput.addEventListener("input", () => dropSample());
 // With one voice the attribution choices do nothing, so they are switched off and say why.
 const attributionSelect = document.querySelector('#audio-form select[name="attribution"]');
 const modelSizeSelect = document.querySelector('#audio-form select[name="model_size"]');
@@ -502,6 +523,16 @@ castSelect.addEventListener("change", () => {
 
 let sampleUrl = null;
 const sampleStatus = $("#sample-status");
+// Takes away a sample that no longer matches the chosen voice or speech rate.
+function dropSample() {
+  if (!sampleUrl) return;
+  sampleAudio.pause();
+  sampleAudio.removeAttribute("src");
+  sampleAudio.load();
+  sampleAudio.hidden = true;
+  URL.revokeObjectURL(sampleUrl);
+  sampleUrl = null;
+}
 // Kept apart from the job's status area, which a followed job rewrites every two seconds.
 function sampleProblem(text) {
   sampleStatus.textContent = text;
@@ -517,6 +548,7 @@ listenButton.addEventListener("click", async () => {
   try {
     const fd = new FormData();
     fd.set("voice", option.value);
+    fd.set("speech_rate", rateInput.value || "0");
     const reply = await fetch("/voices/sample", { method: "POST", body: fd });
     if (!reply.ok) {
       sampleProblem("The sample could not be played: " + await problemIn(reply));
@@ -825,8 +857,9 @@ def list_voices() -> dict:
 
 
 @app.post("/voices/sample")
-def voice_sample(voice: str = Form(...)):
-    """A sentence in the chosen voice, as MP3, so a voice can be heard before a book is made."""
+def voice_sample(voice: str = Form(...), speech_rate: int = Form(0)):
+    """A sentence in the chosen voice at the form's speech rate, as MP3, so a voice can be heard as
+    the book will sound before it is made."""
     from ficary import tts_providers
 
     info = tts_providers.voice_by_id(voice)
@@ -840,7 +873,7 @@ def voice_sample(voice: str = Form(...)):
         # Made inside the try, so a full or unwritable disk cannot keep the slot taken for good.
         folder = Path(tempfile.mkdtemp(prefix="ficary-sample-"))
         path = folder / "sample.mp3"
-        tts_providers.synthesize(info.id, text, path)
+        tts_providers.synthesize(info.id, text, path, rate=web_voices.sample_rate(speech_rate))
     except Exception as exc:
         if folder is not None:
             shutil.rmtree(folder, ignore_errors=True)

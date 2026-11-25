@@ -72,6 +72,14 @@ def voices_for_page(voices: list) -> dict:
     }
 
 
+def sample_rate(percent: int) -> str | None:
+    """The form's speech rate as the rate a sample is spoken at, clamped as an audiobook clamps it,
+    so the sample is as fast as the book's narration will be: 20 -> "+20%", 0 -> None."""
+    from ficary import tts
+
+    return tts._rate_str(tts._clamp_rate(percent))
+
+
 def sample_text(voice) -> str:
     """What the voice says when Listen is pressed, in its own language where there is a sentence."""
     sentence = SAMPLE_SENTENCES.get(voice.language.lower(), SAMPLE_SENTENCES["en"])
