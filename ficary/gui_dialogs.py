@@ -31,6 +31,10 @@ logger = logging.getLogger(__name__)
 
 def _voice_list_problem(exc: Exception) -> str:
     """What the TTS providers window says when a provider's voice list can't be fetched. A failed connection gets a plain sentence and what to do: its raw error named an SSL object at a memory address. Anything else is quoted, since it may say what is wrong."""
+    if type(exc).__name__ == "VoiceServerUnreachable":
+        # Its own message names the server, which is usually on the same network, so "the
+        # internet connection" below would point the wrong way.
+        return f"The voice list couldn't be fetched. {exc} Check that it is running, then open this window again."
     network_errors = [ConnectionError, TimeoutError, socket.gaierror, urllib.error.URLError]
     try:
         import aiohttp
@@ -1397,11 +1401,16 @@ class TtsProvidersDialog(wx.Dialog):
             from .tts_providers import server as _server
 
             where = _server.address()
+            if not where:
+                found = ", which isn't set."
+            elif err:
+                found = f": {where}."
+            else:
+                found = f": {where}, {len(voices)} voices."
             text = (
                 f"Voice server — every voice a speech server on your network "
                 f"offers. Its address comes from {_server.ADDRESS_VARIABLE}"
-                + (f": {where}, {len(voices)} voices." if where else ", which isn't set.")
-                + err
+                + found + err
             )
         else:
             text = f"{name}: {len(voices)} voices."

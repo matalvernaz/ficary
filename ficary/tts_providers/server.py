@@ -145,6 +145,20 @@ def _error_message(error: urllib.error.HTTPError) -> str:
     return f"HTTP {error.code} {error.reason}"
 
 
+def _plain_reason(reason) -> str:
+    """Why a connection failed, in words rather than an errno: "[Errno 111] Connection refused"
+    and the like mean nothing to someone choosing a voice."""
+    if isinstance(reason, ConnectionRefusedError):
+        return "nothing answered at that address"
+    if isinstance(reason, socket.gaierror):
+        return "its name could not be looked up"
+    if isinstance(reason, (socket.timeout, TimeoutError)):
+        return "it did not answer in time"
+    if isinstance(reason, OSError) and reason.strerror:
+        return reason.strerror[0].lower() + reason.strerror[1:]
+    return str(reason)
+
+
 def _fetch(request: urllib.request.Request, timeout: float, where: str) -> bytes:
     """The body of the server's answer. A server that cannot be reached, or stops answering
     part-way through, is reported as VoiceServerUnreachable; an answer that is an HTTP error is
@@ -156,7 +170,7 @@ def _fetch(request: urllib.request.Request, timeout: float, where: str) -> bytes
         raise
     except urllib.error.URLError as exc:
         raise VoiceServerUnreachable(
-            f"The voice server at {where} could not be reached ({exc.reason})."
+            f"The voice server at {where} could not be reached: {_plain_reason(exc.reason)}."
         ) from exc
     except (socket.timeout, TimeoutError) as exc:
         raise VoiceServerUnreachable(
@@ -164,7 +178,7 @@ def _fetch(request: urllib.request.Request, timeout: float, where: str) -> bytes
         ) from exc
     except OSError as exc:
         raise VoiceServerUnreachable(
-            f"The voice server at {where} could not be reached ({exc})."
+            f"The voice server at {where} could not be reached: {_plain_reason(exc)}."
         ) from exc
 
 

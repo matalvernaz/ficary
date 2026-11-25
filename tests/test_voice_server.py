@@ -170,6 +170,8 @@ def test_a_server_that_cannot_be_reached_says_so(monkeypatch, provider):
     with pytest.raises(server_provider.VoiceServerUnreachable) as caught:
         provider.list_voices()
     assert address in str(caught.value)
+    assert "nothing answered at that address" in str(caught.value)
+    assert "Errno" not in str(caught.value)
     # Remembered for a moment, so a render does not wait it out once per voice.
     asked = []
     real_fetch = provider._fetch_voices
@@ -573,3 +575,14 @@ def test_a_saved_narrator_is_never_dropped_by_starting_before_the_list_is_ready(
     assert guard < handler.index("new FormData(e.target)")
     loader = page[page.index("async function loadVoices()"):page.index("engineSelect.addEventListener")]
     assert loader.count('voicesState = "failed"') == 2 and 'voicesState = "ready"' in loader
+
+
+def test_the_providers_window_names_the_server_when_it_cannot_be_reached():
+    pytest.importorskip("wx")
+    from ficary import gui_dialogs
+
+    message = gui_dialogs._voice_list_problem(
+        server_provider.VoiceServerUnreachable("The voice server at http://voices:8000 could not be reached (refused).")
+    )
+    assert "http://voices:8000" in message and "running" in message
+    assert "internet" not in message
