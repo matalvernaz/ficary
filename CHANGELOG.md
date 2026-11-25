@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+**Audiobooks narrated by an 11 kHz voice are no longer muffled**
+
+* A book took its sample rate from its first piece of speech, so one
+  narrated by a voice made at 11 kHz (classic Eloquence, DECtalk and
+  the other speech-server voices) was encoded at 11 kHz throughout,
+  every voice in it included, and each piece lost its top on the way
+  to MP3. Every piece is now made at 24 kHz, Edge's own rate, before
+  the pieces are joined, and the book is always encoded at 24 kHz.
+  Piper's 22 kHz voices are converted the same way.
+
 ## 2.20.29 — 2026-11-24
 
 **Speed in times normal, and as fast as a screen reader**

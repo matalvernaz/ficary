@@ -680,3 +680,33 @@ def test_the_provider_takes_the_servers_own_top_speed(voice_server, provider, mo
     fresh = server_provider.ServerProvider()
     fresh.list_voices()
     assert fresh.max_speed() == server_provider.FASTEST_SPEED == 4.0
+
+
+# ── One sample rate for every piece of a book ─────────────────────
+
+
+@pytest.mark.skipif(shutil.which("ffmpeg") is None or shutil.which("ffprobe") is None, reason="needs ffmpeg")
+def test_a_server_voice_at_11_khz_comes_out_at_the_books_rate(voice_server, tmp_path):
+    """An 11 kHz voice joined as it was made gave the whole book its rate: AAC at 11 kHz."""
+    import subprocess
+
+    voice_server.speech_reply = (200, make_wav())  # 11,025 Hz, like Eloquence
+    out = tmp_path / "piece.mp3"
+    tts_providers.synthesize("server:eloquence-en-us-reed", "Hello there.", out)
+    probe = subprocess.run(
+        ["ffprobe", "-v", "error", "-select_streams", "a:0", "-show_entries", "stream=sample_rate,channels",
+         "-of", "csv=p=0", str(out)], capture_output=True, text=True, check=True,
+    )
+    assert probe.stdout.strip() == f"{tts.AUDIO_SAMPLE_RATE},1"
+
+
+def test_every_maker_of_audio_uses_the_books_rate():
+    source = Path(tts.__file__).read_text(encoding="utf-8")
+    m4b = source[source.index("def _build_m4b_inner("):]
+    m4b = m4b[:m4b.index("\ndef ")]
+    assert '"-c:a", "aac", "-b:a", "64k", "-ar", str(AUDIO_SAMPLE_RATE)' in m4b, "the book's rate is set, not inherited"
+    silence = source[source.index("def _make_silence_clip("):]
+    assert 'anullsrc=r={AUDIO_SAMPLE_RATE}' in silence[:1500]
+    piper = (Path(tts.__file__).parent / "tts_providers" / "piper.py").read_text(encoding="utf-8")
+    assert '"-ar", str(AUDIO_SAMPLE_RATE), "-ac", "1",' in piper
+    assert tts.AUDIO_SAMPLE_RATE == 24000, "Edge's own rate, so its pieces need no conversion"

@@ -78,6 +78,16 @@ from .exporters import (
 
 logger = logging.getLogger(__name__)
 
+# ── Audio format ──────────────────────────────────────────────────
+
+# The sample rate every piece of an audiobook is made at: Edge's own, and what the silence clips
+# are made at. A chapter's pieces are joined by copying (``_concat_mp3s``), so a piece at another
+# rate (an 11 kHz voice, a 22 kHz one) made a stream of mixed rates, and the book took its rate
+# from whichever piece came first: a book narrated by an 11 kHz voice was encoded at 11 kHz,
+# muffling every voice in it, and its MP3 pieces lost their top on the way. Providers that make
+# audio at another rate convert to this one.
+AUDIO_SAMPLE_RATE = 24000
+
 # ── Voice pools ───────────────────────────────────────────────────
 
 # Narrator voice — calm, clear storytelling voice
@@ -2152,9 +2162,9 @@ def _make_silence_clip(tmp_dir, duration_s):
         result = _run_silent(
             [
                 FFMPEG, "-y",
-                "-f", "lavfi", "-i", "anullsrc=r=24000:cl=mono",
+                "-f", "lavfi", "-i", f"anullsrc=r={AUDIO_SAMPLE_RATE}:cl=mono",
                 "-t", f"{duration_s}",
-                "-ac", "1", "-ar", "24000",
+                "-ac", "1", "-ar", str(AUDIO_SAMPLE_RATE),
                 "-codec:a", "libmp3lame", "-b:a", "48k",
                 str(path),
             ],
@@ -3256,7 +3266,10 @@ def _build_m4b_inner(
     else:
         cmd.extend(["-map_metadata", "1"])
     cmd.extend([
-        "-c:a", "aac", "-b:a", "64k",
+        # The rate is set rather than taken from the first piece, so chapter audio made before
+        # every provider converted to it (still in the chapter cache) cannot bring a book down
+        # to 11 kHz.
+        "-c:a", "aac", "-b:a", "64k", "-ar", str(AUDIO_SAMPLE_RATE),
         "-movflags", "+faststart",
         str(output_path),
     ])

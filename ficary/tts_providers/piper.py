@@ -481,7 +481,7 @@ class PiperProvider:
         # Piper writes WAV to stdout when --output_file is given. We
         # ask for an MP3 by piping into ffmpeg, matching the rest of
         # the audiobook pipeline (every chapter mp3 is concat'd).
-        from ..tts import _find_tool  # ffmpeg locator
+        from ..tts import AUDIO_SAMPLE_RATE, _find_tool  # ffmpeg locator, the book's rate
         ffmpeg = _find_tool("ffmpeg")
         wav_tmp = output_path.with_suffix(".piper.wav")
         try:
@@ -502,6 +502,7 @@ class PiperProvider:
                 [
                     ffmpeg, "-y", "-loglevel", "error",
                     "-i", str(wav_tmp),
+                    "-ar", str(AUDIO_SAMPLE_RATE), "-ac", "1",
                     "-codec:a", "libmp3lame", "-qscale:a", "4",
                     str(output_path),
                 ],

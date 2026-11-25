@@ -313,9 +313,11 @@ def _wav_has_no_samples(audio: bytes) -> bool:
 
 
 def _write_mp3(audio: bytes, output_path: Path) -> None:
-    """The server's audio as an MP3 at ``output_path``. ffmpeg works out what it was sent, so a
-    server that answers in another format than the WAV asked for still works."""
-    from ..tts import _find_tool
+    """The server's audio as an MP3 at ``output_path``, at the rate every piece of a book is made
+    at (``tts.AUDIO_SAMPLE_RATE``): an 11 kHz voice joined as it was made muffled the whole book.
+    ffmpeg works out what it was sent, so a server that answers in another format than the WAV
+    asked for still works."""
+    from ..tts import AUDIO_SAMPLE_RATE, _find_tool
 
     ffmpeg = _find_tool("ffmpeg")
     if not ffmpeg:
@@ -327,6 +329,7 @@ def _write_mp3(audio: bytes, output_path: Path) -> None:
             [
                 ffmpeg, "-y", "-loglevel", "error",
                 "-i", str(source),
+                "-ar", str(AUDIO_SAMPLE_RATE), "-ac", "1",
                 "-codec:a", "libmp3lame", "-qscale:a", "4",
                 str(output_path),
             ],
