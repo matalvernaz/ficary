@@ -507,9 +507,26 @@ class TestThePageAndTheImage:
         return (DOCKER_FOLDER / "app.py").read_text(encoding="utf-8")
 
     def test_the_image_includes_the_job_module(self):
-        """The page imports it. An image built without it would not start."""
+        """The page imports it, and the voice module. An image built without either would not start."""
         dockerfile = (DOCKER_FOLDER / "Dockerfile").read_text(encoding="utf-8")
-        assert "COPY docker/app.py docker/web_jobs.py /app/" in dockerfile
+        assert "COPY docker/app.py docker/web_jobs.py docker/web_voices.py /app/" in dockerfile
+
+    def test_every_route_the_page_and_scripts_use_is_there(self):
+        """The page's text form posts to /download when its script is off, and scripts use it too.
+        Moving code around once deleted it without any test noticing."""
+        source = self.page_source()
+        for route in (
+            '@app.get("/", response_class=HTMLResponse)',
+            '@app.get("/healthz")',
+            '@app.post("/download")',
+            '@app.post("/jobs")',
+            '@app.get("/jobs/{job_id}")',
+            '@app.get("/jobs/{job_id}/result")',
+            '@app.get("/voices")',
+            '@app.post("/voices/sample")',
+        ):
+            assert route in source, route
+        assert 'action="/download"' in source
 
     def test_jobs_go_through_the_registry_not_a_thread_each(self):
         source = self.page_source()

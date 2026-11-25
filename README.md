@@ -127,6 +127,12 @@ BookNLP's large model can need several gigabytes on a long chapter. On
 a server without that to spare, add
 `-e FICARY_WEB_BOOKNLP_SIZES=small` to offer only the small one.
 
+With `-e FICARY_VOICE_SERVER=http://...` the page also offers every
+voice that speech server has (see **Voices** below). The page lets you
+pick the engine and the narrator's voice, hear a sample, and choose
+whether characters get voices from the narrator's engine, from every
+engine, or none, the narrator reading the whole book.
+
 Audiobooks are made one at a time, and a second one waits its turn; the
 page says how many are ahead of it. On a server with memory for more,
 `-e FICARY_WEB_MAX_AUDIO_JOBS=2` runs two at once. Text files have a
@@ -435,7 +441,7 @@ the end of the next render. Set the environment variable
 
 ### Voices
 
-Two voice providers are built in, and you can use either or both:
+Three voice providers are built in, and you can use any of them:
 
 - **edge** — Microsoft's Edge neural voices. Online, free, no
   account or key, with broad coverage of English accents (US, UK,
@@ -447,9 +453,18 @@ Two voice providers are built in, and you can use either or both:
   Covers UK, Scottish, Irish, Welsh, Australian, and Indian English
   plus French, Spanish, German, Italian, Russian, Japanese, Polish,
   Portuguese, Dutch, and Swedish.
+- **server** — every voice a speech server on your network offers.
+  Set `FICARY_VOICE_SERVER` to its address (for example
+  `http://voices:8000`). Ficary speaks OpenAI's speech API to it, so a
+  server built for OpenAI's clients works, and lists its voices from
+  `GET /v1/audio/voices`. A voice listed with a `locale`, a `gender`
+  and a `group` (its engine) can be given to characters of the right
+  gender and language; one without a gender only to characters whose
+  gender isn't known.
 
 Voice names carry their provider as a prefix —
-`edge:en-US-AvaNeural`, `piper:en_GB-alan-medium`. Each story
+`edge:en-US-AvaNeural`, `piper:en_GB-alan-medium`,
+`server:eloquence-en-us-reed`. Each story
 remembers its voice casting in a small file next to the audiobook
 (`.ficary-voices-<id>.json`), which you can edit by hand; your
 choices survive re-renders.

@@ -61,7 +61,7 @@ RUN if pip list --format=freeze | grep -i -E '^(nvidia-|triton==)'; then \
     fi
 
 WORKDIR /app
-COPY docker/app.py docker/web_jobs.py /app/
+COPY docker/app.py docker/web_jobs.py docker/web_voices.py /app/
 
 # Import the server and everything the attribution backends load, once, so a dependency that
 # broke since the last release fails this build instead of the first audiobook. Importing the

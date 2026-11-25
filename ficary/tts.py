@@ -2253,6 +2253,8 @@ def _build_voice_pool(
     accents: dict[str, str],
     enabled_providers: list[str] | None,
     narrator_voice: str,
+    character_voices: list[str] | None = None,
+    mix_groups: bool = False,
 ) -> dict[str, list[str]]:
     """Build the per-character candidate voice list the VoiceMapper
     rotates through.
@@ -2261,7 +2263,26 @@ def _build_voice_pool(
 
     1. Per-character accent map override (``en-GB``, ``fr-FR``, ...).
     2. LLM-derived profile accent (when present).
-    3. No accent filter — use the whole pool of the right gender.
+    3. No accent known: any accent of the story's language, which is
+       taken to be the narrator voice's language. The curated
+       ``MALE_VOICES`` / ``FEMALE_VOICES`` come first, then the
+       narrator's own locale, then the language's other accents.
+
+    An accent with no voice falls back to the story's language and only
+    then to every voice of the right gender. Before this, a character
+    with no accent drew from the whole catalog in its alphabetical
+    order, so English stories gave their first speakers Afrikaans,
+    Albanian and Amharic voices.
+
+    ``character_voices``, when given, is the only voices characters may
+    have (the web page's "same engine as the narrator"). Inside it a
+    character whose gender has no voice gets any of them rather than
+    one from outside it, and with nothing else left, the narrator's.
+
+    ``mix_groups`` deals each pool out family by family (one Edge voice,
+    one Eloquence voice, one DECtalk voice, ...), for a cast drawn from
+    every engine. Without it the first family in the catalog would voice
+    nearly everyone.
 
     Gender comes from the profile when available, falling back to the
     name-based heuristic. The narrator voice is excluded from every
@@ -2274,12 +2295,22 @@ def _build_voice_pool(
     from . import tts_providers
 
     catalog = tts_providers.all_voices(providers=enabled_providers)
+    narrator_id = _namespace_legacy(narrator_voice)
+    if character_voices is not None:
+        allowed = {_namespace_legacy(v) for v in character_voices}
+        catalog = [v for v in catalog if v.id in allowed]
+        if not catalog:
+            # None of the chosen voices can be listed right now (a voice server not answering).
+            # An empty pool would hand characters the mapper's built-in Edge voices, so they get
+            # the narrator's instead; a one-voice book is exactly that anyway.
+            return {name: [narrator_id] for name in characters}
     if not catalog:
         return {}
 
     by_id = {v.id: v for v in catalog}
-    narrator_id = _namespace_legacy(narrator_voice)
     narrator_info = by_id.get(narrator_id)
+    story_language = _voice_language(narrator_id, narrator_info)
+    preferred = _preferred_order(narrator_id, narrator_info)
 
     def _gender_filter(target_gender: str):
         def _ok(v):
@@ -2306,11 +2337,22 @@ def _build_voice_pool(
 
         gender_ok = _gender_filter(gender)
 
+        def _story_language_voices():
+            """Voices of the right gender in the story's language, best
+            first; every voice of the right gender when the language is
+            unknown or has none."""
+            right_gender = [v for v in catalog if gender_ok(v)]
+            same_language = [
+                v for v in right_gender
+                if story_language and v.language.lower() == story_language
+            ]
+            return sorted(same_language, key=preferred) if same_language else right_gender
+
         # Three-tier preference: exact locale > language > any locale.
         # Take the best non-empty tier so a single en-GB pick beats a
         # noisy mix of en-US fallbacks polluting the rotation.
         if accent_lc in ("any", ""):
-            candidates = [v for v in catalog if gender_ok(v)]
+            candidates = _story_language_voices()
         else:
             tier_exact = [
                 v for v in catalog
@@ -2332,14 +2374,74 @@ def _build_voice_pool(
             else:
                 logger.info(
                     "Voice pool: no %s voices match accent %s for %s "
-                    "— falling back to any locale",
+                    "— falling back to the story's language",
                     gender, accent_lc, name,
                 )
-                candidates = [v for v in catalog if gender_ok(v)]
+                candidates = _story_language_voices()
+
+        if not candidates and character_voices is not None:
+            # Inside a chosen set of voices, a voice of the wrong gender
+            # is better than one from outside the set, and the narrator's
+            # is the last resort: an empty pool would send the mapper to
+            # its built-in Edge voices.
+            others = sorted((v for v in catalog if v.id != narrator_id), key=preferred)
+            out[name] = [v.id for v in others] or [narrator_id]
+            continue
 
         if candidates:
+            if mix_groups:
+                candidates = _interleave_groups(candidates)
             out[name] = [v.id for v in candidates]
     return out
+
+
+def _interleave_groups(voices):
+    """The voices dealt out one family at a time, each family keeping
+    its own order: [Edge 1, Eloquence 1, Edge 2, Eloquence 2, ...]."""
+    from . import tts_providers
+
+    families: dict[str, list] = {}
+    for voice in voices:
+        families.setdefault(tts_providers.group_of(voice), []).append(voice)
+    dealt = []
+    for round_index in range(max((len(f) for f in families.values()), default=0)):
+        for family in families.values():
+            if round_index < len(family):
+                dealt.append(family[round_index])
+    return dealt
+
+
+def _voice_language(narrator_id: str, narrator_info) -> str:
+    """The narrator voice's language ("en"), which is taken to be the
+    story's; "" when it cannot be told. A narrator missing from the
+    catalog (its provider switched off) is read from its Edge-style
+    name, "en-US-AriaNeural"."""
+    if narrator_info is not None and narrator_info.language:
+        return narrator_info.language.lower()
+    from . import tts_providers
+
+    provider, short = tts_providers.parse_voice_id(narrator_id)
+    if provider == "edge" and "-" in short:
+        return short.split("-", 1)[0].lower()
+    return ""
+
+
+def _preferred_order(narrator_id: str, narrator_info):
+    """A sort key putting the curated character voices first, in their
+    own order, then voices in the narrator's own locale, then the rest
+    in catalog order (the sort is stable)."""
+    curated = [_namespace_legacy(v) for v in NEUTRAL_VOICES]
+    rank = {voice: index for index, voice in enumerate(curated)}
+    narrator_locale = narrator_info.locale.lower() if narrator_info is not None else ""
+
+    def key(voice):
+        if voice.id in rank:
+            return (0, rank[voice.id])
+        if narrator_locale and voice.locale.lower() == narrator_locale:
+            return (1, 0)
+        return (2, 0)
+
+    return key
 
 
 # A render gives up on its voices when this many pieces of speech in a
@@ -3725,10 +3827,19 @@ def generate_audiobook(
     chapter_notes="keep",
     cancel_event=None,
     incomplete_callback=None,
+    character_voices=None,
+    mix_character_engines=False,
 ):
     """Generate an M4B audiobook from a Story with character voice mapping.
 
     narrator_voice overrides the default NARRATOR_VOICE constant.
+    character_voices, when given, is the list of voice ids characters
+    may be given (the web page's "same engine as the narrator"); None
+    leaves every voice of the enabled providers open to them. A voice a
+    loaded voice map already gave a character is kept either way.
+    mix_character_engines deals characters voices from each family in
+    turn (the web page's "every engine"), so one engine does not voice
+    the whole cast.
     speech_rate is an integer percent delta (-50..+100 sensible range)
     applied to every TTS synthesis call on top of any emotion prosody.
     attribution_backend selects the speaker-attribution refinement pass:
@@ -4055,6 +4166,8 @@ def generate_audiobook(
         accents=accents,
         enabled_providers=enabled_tts_providers,
         narrator_voice=narrator,
+        character_voices=character_voices,
+        mix_groups=mix_character_engines,
     )
     if pool:
         mapper.set_voice_pool(pool)

@@ -20,6 +20,7 @@ import logging
 import os
 import shutil
 import tempfile
+import threading
 import uuid
 from pathlib import Path
 from typing import Any
@@ -33,6 +34,7 @@ from ficary.exporters import EXPORTERS, check_format_deps
 from ficary.sites import detect_scraper
 
 import web_jobs
+import web_voices
 from web_jobs import Job
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -66,9 +68,15 @@ async def _lifespan(_app: FastAPI):
 
 app = FastAPI(title="ficary", version=ficary.__version__, lifespan=_lifespan)
 
+# How many voice samples may be made at once. A sample is one short sentence, but every one is a
+# trip to a voice service, and the button is easy to press repeatedly.
+MAX_SAMPLES_AT_ONCE = 2
+_SAMPLE_SLOTS = threading.BoundedSemaphore(MAX_SAMPLES_AT_ONCE)
+
 TEXT_FORMATS = ("epub", "html", "txt")
 AUDIO_FORMAT = "audio"
 ATTRIBUTION_BACKENDS = ("builtin", "fastcoref", "booknlp")
+
 
 # BookNLP model sizes the page offers, from FICARY_WEB_BOOKNLP_SIZES (comma-separated, default
 # both). The big model needs several times the memory and time of the small one, more than a
@@ -124,6 +132,10 @@ def _run_audio_job(job: Job) -> None:
             attribution_model_size=job.model_size or None,
             strip_notes=job.strip_notes,
             hr_as_stars=job.hr_as_stars,
+            narrator_voice=job.narrator_voice or None,
+            character_voices=job.character_voices,
+            mix_character_engines=job.mix_engines,
+            enabled_tts_providers=job.tts_providers,
         )
         _update(job, status="done", path=str(path), stage="complete", detail=Path(path).name)
     except Exception as exc:
@@ -183,6 +195,9 @@ LANDING = """<!doctype html>
  fieldset { margin-top: 1.5rem; }
  .row { display: flex; gap: .75rem; flex-wrap: wrap; }
  .row > label { flex: 1; min-width: 10rem; margin-top: 0; }
+ /* A list as wide as its longest choice ran past its column, under the next field or out of the
+    box; each field fills its own column instead. */
+ .row select, .row input[type=number] { width: 100%; box-sizing: border-box; }
  button { margin-top: 1.5rem; padding: .6rem 1.2rem; cursor: pointer; }
  #status { margin-top: 1.5rem; }
  progress { width: 100%; }
@@ -243,6 +258,34 @@ __MODEL_SIZE_OPTIONS__
    <label><input type="checkbox" name="strip_notes"> strip author notes</label>
    <label><input type="checkbox" name="hr_as_stars" checked> scene dividers as silence</label>
   </div>
+  <!-- Filled in by the script from /voices: the engines this server has, then the voices of the
+       chosen engine. Without the script the audiobook uses ficary's default voices. -->
+  <div class="row">
+   <label>Voice engine
+    <select id="voice-engine" disabled>
+     <option>Loading voices…</option>
+    </select>
+   </label>
+   <label>Narrator voice
+    <select name="narrator_voice" id="narrator-voice" disabled>
+     <option value="">Ficary's default</option>
+    </select>
+   </label>
+  </div>
+  <div class="row">
+   <label>Character voices
+    <select name="character_voices" id="character-voices">
+     <option value="engine" selected>From the narrator's engine</option>
+     <option value="any">From every engine, mixed</option>
+     <option value="narrator">None: the narrator reads everything</option>
+    </select>
+   </label>
+  </div>
+  <p id="one-voice-note" hidden>With one voice, speaker attribution is skipped: it only decides which voice says each line.</p>
+  <button type="button" id="listen" disabled>Listen to the narrator voice</button>
+  <audio id="sample-audio" controls hidden></audio>
+  <!-- What went wrong with a sample, for the eye; the screen reader hears it through #announce. -->
+  <p id="sample-status"></p>
   <button type="submit">Start audiobook job</button>
  </form>
  <!-- What a screen reader is told. It is in the page from the start and only its text ever
@@ -315,8 +358,194 @@ async function problemIn(reply) {
   return body || ("the server answered " + reply.status);
 }
 
+// ── Voices ──────────────────────────────────────────────────────
+// The engine list and the voice list for the chosen engine, from /voices. The narrator voice and
+// the character choice are remembered in this browser, so a favourite voice stays chosen.
+const engineSelect = $("#voice-engine");
+const voiceSelect = $("#narrator-voice");
+const castSelect = $("#character-voices");
+const listenButton = $("#listen");
+const sampleAudio = $("#sample-audio");
+const NARRATOR_KEY = "ficary-narrator-voice";
+const CAST_KEY = "ficary-character-voices";
+let allVoices = [];
+// "loading" until /voices answers, then "ready", or "failed" when there is no list to choose from.
+// Until it is ready the narrator list is switched off and sends nothing, so a saved narrator
+// would silently become the default.
+let voicesState = "loading";
+
+function remembered(key) {
+  try { return localStorage.getItem(key); } catch (error) { return null; }
+}
+function remember(key, value) {
+  try { localStorage.setItem(key, value); } catch (error) { /* Storage is off; nothing is remembered. */ }
+}
+
+// "en-GB" as "British English", in the browser's own language. A tag the browser does not know
+// is shown as it is.
+let languageNames = null;
+try { languageNames = new Intl.DisplayNames([navigator.language || "en"], { type: "language" }); } catch (error) { /* Older browser. */ }
+function languageOf(locale) {
+  if (!locale) return "";
+  try { return (languageNames && languageNames.of(locale)) || locale; } catch (error) { return locale; }
+}
+
+function voiceLabel(v) {
+  const parts = [v.name];
+  const language = languageOf(v.locale);
+  if (language) parts.push(language);
+  if (v.gender === "Male" || v.gender === "Female") parts.push(v.gender.toLowerCase());
+  return parts.join(", ");
+}
+
+// The browser's own language first, then the rest by language and name.
+const ownLanguage = (navigator.language || "en").split("-")[0].toLowerCase();
+function voiceOrder(a, b) {
+  const aOwn = (a.locale || "").toLowerCase().split("-")[0] === ownLanguage ? 0 : 1;
+  const bOwn = (b.locale || "").toLowerCase().split("-")[0] === ownLanguage ? 0 : 1;
+  if (aOwn !== bOwn) return aOwn - bOwn;
+  return languageOf(a.locale).localeCompare(languageOf(b.locale)) || a.name.localeCompare(b.name);
+}
+
+function fillVoices(group, chosen) {
+  voiceSelect.replaceChildren();
+  const voices = allVoices.filter((v) => v.group === group).sort(voiceOrder);
+  for (const v of voices) {
+    const option = new Option(voiceLabel(v), v.id);
+    voiceSelect.add(option);
+  }
+  if (chosen && voices.some((v) => v.id === chosen)) voiceSelect.value = chosen;
+}
+
+async function loadVoices() {
+  // The character choice does not depend on the voice list, so it is put back first: a list
+  // that fails to load must not turn a saved one-voice choice back into a cast.
+  const savedCast = remembered(CAST_KEY);
+  if (savedCast === "engine" || savedCast === "any" || savedCast === "narrator") castSelect.value = savedCast;
+  showCastChoice();
+  let body;
+  try {
+    const reply = await fetch("/voices");
+    if (!reply.ok) throw new Error(await problemIn(reply));
+    body = await reply.json();
+  } catch (error) {
+    voicesState = "failed";
+    voicesUnavailable("The voice list could not be loaded, so the audiobook will use Ficary's default voices.");
+    return;
+  }
+  allVoices = body.voices || [];
+  if (!allVoices.length) {
+    voicesState = "failed";
+    voicesUnavailable("This server lists no voices, so the audiobook will use Ficary's default voices.");
+    return;
+  }
+  voicesState = "ready";
+  const counts = new Map();
+  for (const v of allVoices) counts.set(v.group, (counts.get(v.group) || 0) + 1);
+  const defaultGroup = (allVoices.find((v) => v.id === body.default) || allVoices[0]).group;
+  const groups = [...counts.keys()].sort((a, b) => (a === defaultGroup ? -1 : b === defaultGroup ? 1 : a.localeCompare(b)));
+  engineSelect.replaceChildren();
+  for (const group of groups) {
+    const n = counts.get(group);
+    engineSelect.add(new Option(group + " (" + n + (n === 1 ? " voice)" : " voices)"), group));
+  }
+  const saved = remembered(NARRATOR_KEY);
+  const savedVoice = allVoices.find((v) => v.id === saved);
+  const start = savedVoice || allVoices.find((v) => v.id === body.default) || allVoices[0];
+  engineSelect.value = start.group;
+  fillVoices(start.group, start.id);
+  engineSelect.disabled = false;
+  voiceSelect.disabled = false;
+  listenButton.disabled = false;
+  if (saved && !savedVoice) {
+    // The narrator saved here is missing, usually because the speech server it lives on is not
+    // answering. Quietly starting on the default would send the story to a different voice
+    // service than the one chosen, so the list asks for a choice and the form will not go
+    // until one is made.
+    voiceSelect.add(new Option("Choose a narrator", ""), 0);
+    voiceSelect.value = "";
+    voiceSelect.required = true;
+    sampleProblem("The narrator saved in this browser isn't available right now; its speech server may be down. Choose a narrator before starting an audiobook.");
+  }
+}
+
+// Says why there is no voice choice, on the page and to a screen reader; text in a disabled list
+// is not reliably read out.
+function voicesUnavailable(text) {
+  engineSelect.replaceChildren(new Option("No voices to choose from"));
+  sampleProblem(text);
+}
+
+engineSelect.addEventListener("change", () => {
+  fillVoices(engineSelect.value, null);
+  remember(NARRATOR_KEY, voiceSelect.value);
+});
+voiceSelect.addEventListener("change", () => {
+  remember(NARRATOR_KEY, voiceSelect.value);
+  // A choice made answers the "choose a narrator" request, so that sentence goes.
+  if (voiceSelect.value) sampleStatus.textContent = "";
+});
+// With one voice the attribution choices do nothing, so they are switched off and say why.
+const attributionSelect = document.querySelector('#audio-form select[name="attribution"]');
+const modelSizeSelect = document.querySelector('#audio-form select[name="model_size"]');
+const oneVoiceNote = $("#one-voice-note");
+function showCastChoice() {
+  const oneVoice = castSelect.value === "narrator";
+  attributionSelect.disabled = oneVoice;
+  modelSizeSelect.disabled = oneVoice;
+  oneVoiceNote.hidden = !oneVoice;
+}
+castSelect.addEventListener("change", () => {
+  remember(CAST_KEY, castSelect.value);
+  showCastChoice();
+});
+
+let sampleUrl = null;
+const sampleStatus = $("#sample-status");
+// Kept apart from the job's status area, which a followed job rewrites every two seconds.
+function sampleProblem(text) {
+  sampleStatus.textContent = text;
+  announce(text);
+}
+listenButton.addEventListener("click", async () => {
+  const option = voiceSelect.selectedOptions[0];
+  if (!option || !option.value) return;
+  const name = option.textContent.split(",")[0];
+  sampleStatus.textContent = "";
+  announce("Getting a sample of " + name + ".");
+  listenButton.disabled = true;
+  try {
+    const fd = new FormData();
+    fd.set("voice", option.value);
+    const reply = await fetch("/voices/sample", { method: "POST", body: fd });
+    if (!reply.ok) {
+      sampleProblem("The sample could not be played: " + await problemIn(reply));
+      return;
+    }
+    if (sampleUrl) URL.revokeObjectURL(sampleUrl);
+    sampleUrl = URL.createObjectURL(await reply.blob());
+    sampleAudio.src = sampleUrl;
+    sampleAudio.hidden = false;
+    await sampleAudio.play();
+  } catch (error) {
+    sampleProblem("The sample could not be played: " + error);
+  } finally {
+    listenButton.disabled = false;
+  }
+});
+
+loadVoices();
+
 $("#audio-form").addEventListener("submit", async (e) => {
   e.preventDefault();
+  // A narrator chosen in this browser is only sent once the voice list has put it in the list.
+  // Someone who never chose one gets the default, as before.
+  if (voicesState !== "ready" && remembered(NARRATOR_KEY)) {
+    sampleProblem(voicesState === "loading"
+      ? "The voice list is still loading, so your narrator isn't set yet. Try again in a moment."
+      : "The voice list couldn't be loaded, so the narrator you chose can't be used. Reload the page to try again.");
+    return;
+  }
   const fd = new FormData(e.target);
   // checkboxes need explicit bool
   fd.set("strip_notes", e.target.strip_notes.checked ? "true" : "false");
@@ -589,6 +818,40 @@ def healthz() -> dict:
     return {"ok": True}
 
 
+@app.get("/voices")
+def list_voices() -> dict:
+    """The voices the audiobook form offers, with the family each belongs to."""
+    return web_voices.voices_for_page(web_voices.available_voices())
+
+
+@app.post("/voices/sample")
+def voice_sample(voice: str = Form(...)):
+    """A sentence in the chosen voice, as MP3, so a voice can be heard before a book is made."""
+    from ficary import tts_providers
+
+    info = tts_providers.voice_by_id(voice)
+    if info is None:
+        raise HTTPException(404, "That voice is not available on this server.")
+    text = web_voices.sample_text(info)
+    if not _SAMPLE_SLOTS.acquire(blocking=False):
+        raise HTTPException(429, "Other samples are being made. Try again in a moment.")
+    folder = None
+    try:
+        # Made inside the try, so a full or unwritable disk cannot keep the slot taken for good.
+        folder = Path(tempfile.mkdtemp(prefix="ficary-sample-"))
+        path = folder / "sample.mp3"
+        tts_providers.synthesize(info.id, text, path)
+    except Exception as exc:
+        if folder is not None:
+            shutil.rmtree(folder, ignore_errors=True)
+        logger.warning("sample of %s failed: %s", voice, exc)
+        raise HTTPException(502, tts_providers.explain_synthesis_error(exc, retry_hint="then press Listen again")) from exc
+    finally:
+        _SAMPLE_SLOTS.release()
+    cleanup = BackgroundTask(shutil.rmtree, folder, ignore_errors=True)
+    return FileResponse(path, media_type="audio/mpeg", filename="sample.mp3", background=cleanup)
+
+
 @app.post("/download")
 def download(url: str = Form(...), format: str = Form("epub")):
     """Make a text file while the request waits, and return it. Kept for scripts; the page uses
@@ -636,6 +899,8 @@ def start_job(
     speech_rate: int = Form(0),
     strip_notes: str = Form("false"),
     hr_as_stars: str = Form("true"),
+    narrator_voice: str = Form(""),
+    character_voices: str = Form(web_voices.CHARACTER_VOICES_FROM_ENGINE),
 ):
     if format in TEXT_FORMATS:
         try:
@@ -652,11 +917,25 @@ def start_job(
     if model_size not in ALLOWED_BOOKNLP_SIZES + ("",):
         raise HTTPException(400, f"model_size must be one of {ALLOWED_BOOKNLP_SIZES} on this server")
 
+    if character_voices not in web_voices.CHARACTER_VOICE_CHOICES:
+        raise HTTPException(400, f"character_voices must be one of {web_voices.CHARACTER_VOICE_CHOICES}")
+    if character_voices == web_voices.CHARACTER_VOICES_NARRATOR:
+        # Attribution only decides who says each line, and with one voice that changes nothing,
+        # so BookNLP's minutes and gigabyte are skipped.
+        attribution, model_size = "builtin", ""
+    narrator_voice = narrator_voice.strip()
+    if narrator_voice:
+        from ficary import tts_providers
+
+        if tts_providers.voice_by_id(narrator_voice) is None:
+            raise HTTPException(400, "That narrator voice is not available on this server.")
+
     try:
         check_format_deps(AUDIO_FORMAT)
     except ImportError as exc:
         raise HTTPException(500, str(exc)) from exc
 
+    cast, mix_engines, only_providers = web_voices.character_cast(narrator_voice, character_voices, web_voices.available_voices())
     job = Job(
         id=uuid.uuid4().hex[:12],
         url=url,
@@ -666,6 +945,10 @@ def start_job(
         speech_rate=speech_rate,
         strip_notes=strip_notes.lower() in ("1", "true", "yes", "on"),
         hr_as_stars=hr_as_stars.lower() in ("1", "true", "yes", "on"),
+        narrator_voice=narrator_voice,
+        character_voices=cast,
+        mix_engines=mix_engines,
+        tts_providers=only_providers,
     )
     JOBS.add(job)
     return JSONResponse({"id": job.id})

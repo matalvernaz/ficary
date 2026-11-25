@@ -4918,7 +4918,7 @@ def _build_parser() -> argparse.ArgumentParser:
         help=(
             "Comma-separated list of TTS providers to draw voices "
             "from when synthesising audiobooks (default: all "
-            "installed providers). Choices: 'edge', 'piper'. The "
+            "installed providers). Choices: 'edge', 'piper', 'server' (set FICARY_VOICE_SERVER). The "
             "voice catalog the VoiceMapper picks from is the union "
             "of every listed provider, filtered per-character by the "
             "accent map and detected gender."

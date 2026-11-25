@@ -1,6 +1,6 @@
 """Pluggable text-to-speech providers for audiobook synthesis.
 
-Two providers ship in-tree:
+Three providers ship in-tree:
 
 - ``edge`` — Microsoft Edge Neural Voices via ``edge-tts``. Cloud TTS
   (the same backend powering Edge's "Read aloud"), no API key, broad
@@ -10,6 +10,9 @@ Two providers ship in-tree:
   by default; voices are downloaded on first use into the portable
   ``piper_models/`` folder. Works fully offline once a model is in
   place.
+- ``server`` — whatever voices a voice server on the network offers,
+  through OpenAI's speech API. Off until ``FICARY_VOICE_SERVER`` names
+  the server (see ``server.py``).
 
 A provider exposes:
 
@@ -49,11 +52,32 @@ class VoiceInfo:
     gender: str       # "Male" / "Female" / "Neutral"
     display: str      # human-friendly label for UI
     description: str = ""
+    # The family of voices this one belongs to, as a listener would name
+    # it: "Eloquence", "DECtalk". A voice server reports one per voice;
+    # Edge and Piper voices leave it empty and are grouped by provider
+    # (see ``group_of``).
+    group: str = ""
 
     @property
     def language(self) -> str:
         """Two-letter language tag derived from ``locale`` ('en' from 'en-US')."""
         return self.locale.split("-", 1)[0] if self.locale else ""
+
+
+# What each provider is called where people read it.
+PROVIDER_LABELS = {
+    "edge": "Microsoft Edge",
+    "piper": "Piper",
+    "server": "Voice server",
+}
+
+
+def group_of(voice: VoiceInfo) -> str:
+    """The family a voice belongs to: the voice server's own name for
+    it ("Eloquence") or, for Edge and Piper, the provider's label. Used
+    to offer voices engine by engine and to give characters voices from
+    the same engine as the narrator."""
+    return voice.group or PROVIDER_LABELS.get(voice.provider, voice.provider)
 
 
 def voice_id(provider: str, short_name: str) -> str:
@@ -101,6 +125,11 @@ def _build_registry() -> None:
         _REGISTRY["piper"] = _piper_mod.PiperProvider()
     except Exception as exc:  # noqa: BLE001
         logger.warning("Piper TTS provider unavailable: %s", exc)
+    try:
+        from . import server as _server_mod
+        _REGISTRY["server"] = _server_mod.ServerProvider()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Voice server provider unavailable: %s", exc)
     _REGISTRY_BUILT = True
 
 
@@ -235,6 +264,10 @@ def explain_synthesis_error(
         return "The voice produced no audio."
     name = type(error).__name__
     text = str(error)
+    if name == "VoiceServerUnreachable":
+        # Its own message names the server, which "the internet
+        # connection" below would not: it is usually on the same network.
+        return f"{text} Check that it is running, {retry_hint}."
     if name == "WSServerHandshakeError" and "403" in text:
         return (
             "Microsoft's Edge voice service refused the request (403). "

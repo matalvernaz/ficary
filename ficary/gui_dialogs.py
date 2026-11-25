@@ -1332,6 +1332,8 @@ class TtsProvidersDialog(wx.Dialog):
             return f"{name} (unavailable)"
         if provider.is_installed():
             return f"{name} (installed)"
+        if name == "server":
+            return f"{name} (no address set)"
         return f"{name} (not installed)"
 
     def _refresh_rows(self):
@@ -1389,6 +1391,16 @@ class TtsProvidersDialog(wx.Dialog):
                 f"Piper TTS — local ONNX inference. "
                 f"Binary: {'installed' if installed else 'not installed'}. "
                 f"Catalog: {len(voices)} voices, {downloaded} downloaded."
+                + err
+            )
+        elif name == "server":
+            from .tts_providers import server as _server
+
+            where = _server.address()
+            text = (
+                f"Voice server — every voice a speech server on your network "
+                f"offers. Its address comes from {_server.ADDRESS_VARIABLE}"
+                + (f": {where}, {len(voices)} voices." if where else ", which isn't set.")
                 + err
             )
         else:

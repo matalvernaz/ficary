@@ -2,6 +2,33 @@
 
 ## Unreleased
 
+**Voices from a speech server, a voice picker on the web page, and one-voice audiobooks**
+
+* A third voice provider, `server`, uses every voice a speech server on
+  the network offers. Set `FICARY_VOICE_SERVER` to the server's
+  address. It speaks OpenAI's speech API, so servers made for OpenAI's
+  clients work, and reads each voice's language, gender and engine
+  from the server's voice list.
+* The web page lets you choose the narrator's voice, engine by engine,
+  and hear a sample of it first. Characters get voices from the
+  narrator's engine, from every engine on the server (taking turns, so
+  one engine doesn't voice everyone), or none at all: the narrator
+  reads the whole book in one voice, and speaker attribution is
+  skipped since it would change nothing. The page remembers the
+  choices.
+* With one engine or one voice chosen, an audiobook keeps to that
+  engine's provider, fallbacks included: a voice server that stops
+  answering part-way through stops the audiobook with a message saying
+  so, and the chapters already made are kept for the next try, instead
+  of the rest of the book coming out in Edge's default voice.
+* Characters whose accent isn't known get voices in the story's
+  language again. Since 2.2.0 they drew from the whole voice list in
+  alphabetical order, so the first speakers of an English story were
+  given Afrikaans, Albanian and Amharic voices. The usual English
+  character voices come first again, then the narrator's own accent,
+  then the language's other accents. A character given an accent no
+  voice has falls back to the story's language before any other.
+
 **Every window works with larger system text**
 
 * With the system's text set larger (Windows' larger text setting, or

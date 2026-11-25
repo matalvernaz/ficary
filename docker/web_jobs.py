@@ -47,6 +47,13 @@ class Job:
     speech_rate: int = 0
     strip_notes: bool = False
     hr_as_stars: bool = False
+    # The narrator's voice id ("" for ficary's default), the only voices characters may have
+    # (None for any), whether a cast drawn from every engine is mixed engine by engine, and the
+    # only providers the render may use (None for every installed one).
+    narrator_voice: str = ""
+    character_voices: list[str] | None = None
+    mix_engines: bool = False
+    tts_providers: list[str] | None = None
     status: str = STATUS_QUEUED  # queued | downloading | synthesizing | done | error
     stage: str = ""
     current: int = 0
