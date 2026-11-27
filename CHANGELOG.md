@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 2.20.32 — 2026-11-27
 
 **Stripping author's notes no longer takes the story with it**
 
