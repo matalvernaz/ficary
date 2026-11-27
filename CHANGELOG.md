@@ -17,8 +17,9 @@
 * With any provider, the sweep from a flag to the chapter's edge is
   not made over two or more lines of dialogue, nor when the block it
   would remove is too big to be a note (the limits the built-in
-  stripper uses). The flags themselves still stand, and a closing
-  note the model marked only here and there is still removed whole.
+  stripper uses). The flags themselves still stand. A closing note
+  the model marked only here and there is still removed whole when
+  it holds no more than one quoted line and is within those limits.
 * On the same book, the same flags now cost 523 words of story for 24
   lines of notes. What is still lost is narration at the very start or
   end of a chapter that the model marks as a note; a larger model
