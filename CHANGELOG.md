@@ -1,5 +1,57 @@
 # Changelog
 
+## Unreleased
+
+**Stripping author's notes no longer takes the story with it**
+
+* With "Strip author's notes" on, a chapter could lose most or all of
+  its text. One rule treated everything after a chapter's last scene
+  divider as a closing note if a stock note phrase turned up anywhere
+  in it. In a chapter whose only divider sits under its opening notes
+  or an epigraph, that is the whole chapter: a closing "Check out my…"
+  line with no divider above it, or a character saying "I subscribe
+  to…", removed every word of the story. It needed neither the AI
+  check nor an unusual site. Books, pages and audiobooks were all
+  affected, from the app, the command line and the web page, in every
+  version since 1.11.1.
+* What a rule is about to remove is now looked at first:
+  - Text with two or more lines of dialogue in it is story, wherever
+    it sits. Of 323 removals on 891 downloaded chapters, two were
+    whole chapters with over a hundred lines of dialogue each, and
+    the other 321 held none at all.
+  - A stock phrase spoken by a character does not count as a sign of
+    a note. In those chapters, 13 of the 342 scenes that lie between
+    two dividers hold one of the phrases.
+  - Nothing over 1,000 words goes at once. A labelled paragraph or
+    block may be 400 words. The text after the last divider may be
+    600 words, and a third of the chapter.
+
+  What fails stays in the book, and the debug log says what was left
+  and why.
+* The same mistake is closed in the other rules: a "Part 2" heading or
+  a book's "Chapter One:" line taken for the chapter's own heading;
+  "The End." closing a tale told inside the chapter; a wrapper, or a
+  block of lines, whose first line is labelled as a note; a chapter
+  posted as one paragraph that opens "Disclaimer:"; words in italics
+  inside a sentence ("the end") read as a marker in chapters laid out
+  with line breaks; a stock phrase in a line that had already been
+  removed; and text in languages written without spaces counting as
+  one word a paragraph.
+* Updating a saved story no longer puts its saved chapters through the
+  rules that go by position. Those are only right about a chapter as
+  it was downloaded: with the chapter's real heading already gone, the
+  next line that read like one was taken for it along with everything
+  above it, and an update could take more each time. Saved chapters
+  still lose paragraphs labelled as notes ("A/N:").
+* Long notes can be left in where they used to be removed: over 1,000
+  words above a chapter heading or under "The End", or over 600 words
+  after the last divider.
+* A chapter already saved without its text is not brought back by
+  this update, because an update reuses the chapters in the saved
+  file. To get it back, download the story again in full: File, then
+  Update File with Fresh Copy (Ctrl+Shift+R) in the app, or
+  `--refetch-all` on the command line.
+
 ## 2.20.31 — 2026-11-24
 
 **Cleaner p's and s's from speech-server and Piper voices**

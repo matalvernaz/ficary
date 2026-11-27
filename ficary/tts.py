@@ -73,6 +73,7 @@ def _run_silent(cmd, **kwargs):
 from .exporters import (
     _is_part_marker_divider,
     _story_ornament_tokens,
+    _structural_notes_for,
     strip_note_paragraphs,
 )
 
@@ -2083,8 +2084,13 @@ def _llm_note_check_failed(exc, note_check, chapter_label: str, text: str) -> st
 
 def _html_to_audiobook_text(html, strip_notes=False, hr_as_stars=False,
                             chapter_notes="keep",
-                            ornament_tokens=frozenset()):
+                            ornament_tokens=frozenset(),
+                            structural_notes=True):
     """HTML → plain text tuned for TTS, gated on the user-facing flags.
+
+    ``structural_notes`` False keeps note stripping to labelled
+    paragraphs, for a chapter read back from a saved file (see
+    ``exporters._structural_notes_for``).
 
     When ``strip_notes`` is set, paragraph-level author's notes are
     removed before synthesis. When ``hr_as_stars`` is set, every scene
@@ -2109,7 +2115,7 @@ def _html_to_audiobook_text(html, strip_notes=False, hr_as_stars=False,
     if chapter_notes == "omit":
         cleaned = _apply_chapter_notes_mode(cleaned, "omit")
     if strip_notes:
-        cleaned = strip_note_paragraphs(cleaned)
+        cleaned = strip_note_paragraphs(cleaned, structural=structural_notes)
     soup = BeautifulSoup(cleaned, "html.parser")
 
     for br in soup.find_all("br"):
@@ -3321,6 +3327,7 @@ def detect_voices(story, map_path=None, strip_notes=False, hr_as_stars=False,
             ch.html, strip_notes=strip_notes, hr_as_stars=hr_as_stars,
             chapter_notes=chapter_notes,
             ornament_tokens=ornament_tokens,
+            structural_notes=_structural_notes_for(ch),
         )
         full_text += text + "\n"
         all_segments.append(_segment_chapter_text(text))
@@ -4004,6 +4011,7 @@ def generate_audiobook(
             ch.html, strip_notes=strip_notes, hr_as_stars=hr_as_stars,
             chapter_notes=chapter_notes,
             ornament_tokens=ornament_tokens,
+            structural_notes=_structural_notes_for(ch),
         )
         if note_check.config is not None:
             # Backstop: regex-based strip_note_paragraphs may have left

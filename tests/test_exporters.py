@@ -491,6 +491,558 @@ class TestEndMarkerCutoff:
         assert "Patreon" not in out
 
 
+def _story_paragraphs(first: int, last: int) -> str:
+    """Made-up story paragraphs numbered ``first`` to ``last``, about
+    twenty words each and all narration. Every one carries a marker of
+    its own, so a test can say exactly which paragraphs came through."""
+    return "".join(
+        f"<p>Mira took road {number} of the long way to the lighthouse, "
+        f"counting gulls and thinking of nothing much (story-line-{number}).</p>"
+        for number in range(first, last + 1)
+    )
+
+
+def _scene_paragraphs(first: int, last: int) -> str:
+    """The same, as a scene with people in it: every third paragraph
+    is a line of dialogue."""
+    paragraphs = []
+    for number in range(first, last + 1):
+        if number % 3 == 0:
+            paragraphs.append(
+                f"<p>\"Road {number} already?\" said the keeper, who had "
+                f"been counting the gulls as well (story-line-{number}).</p>"
+            )
+        else:
+            paragraphs.append(
+                f"<p>Mira took road {number} of the long way to the "
+                "lighthouse, counting gulls and thinking of nothing much "
+                f"(story-line-{number}).</p>"
+            )
+    return "".join(paragraphs)
+
+
+def _note_paragraphs(count: int) -> str:
+    """Made-up note paragraphs of about fifty words, with none of the
+    stock phrases in them and no label, each with a marker."""
+    return "".join(
+        "<p>"
+        + "A word to readers about how this one was written and why it "
+        "took so long to get here. " * 2
+        + f"More of the same follows in every paragraph (note-line-{number}).</p>"
+        for number in range(1, count + 1)
+    )
+
+
+def _missing_story_lines(html: str, first: int, last: int) -> list[int]:
+    """Which of the numbered story paragraphs are not in ``html``."""
+    return [
+        number for number in range(first, last + 1)
+        if f"(story-line-{number})" not in html
+    ]
+
+
+class TestNoteStripperTakesOnlyNotes:
+    """What the note stripper removes has to be a note.
+
+    Each rule removes a span: a labelled block, everything above a
+    chapter banner, everything after the last divider, everything under
+    an end marker. Each used to judge the span by where it sat, and one
+    of them by a single stock phrase, never by what was in it. The
+    shapes here are the ones that cost a chapter its text, rebuilt with
+    made-up words:
+
+    * a chapter whose only divider follows its opening notes and whose
+      last line is a note: all of the story went (5,970 of 6,072 words
+      of one real chapter);
+    * a chapter with one divider under an epigraph, where a character
+      says "I subscribe to": all 6,192 words of story went;
+    * a saved chapter stripped again by an update, where a character
+      reads out a book's "Chapter One:" line: the 2,728 words above
+      that line went.
+    """
+
+    def _strip(self, html, structural=True):
+        from ficary.exporters import strip_note_paragraphs
+        return strip_note_paragraphs(html, structural=structural)
+
+    # ── The shapes that emptied real chapters ─────────────────────
+
+    def test_only_divider_at_head_and_note_as_last_line_keeps_the_story(self):
+        html = (
+            "<p>The Lighthouse Road</p>"
+            "<p>Chapter Thirteen: Gulls Galore!</p>"
+            "<p>WARNING : mild peril and worse puns.</p>"
+            "<p>Author's Notes : this is my first story, so be kind.</p>"
+            "<hr/>"
+            + _scene_paragraphs(1, 180)
+            + "<p>To Be Continued</p>"
+            "<p>Check out my forums where we can talk about the lighthouse.</p>"
+        )
+        out = self._strip(html)
+        assert _missing_story_lines(out, 1, 180) == []
+        # The notes are still taken: the labelled ones by their labels,
+        # the closing ones by the end marker above them.
+        assert "mild peril" not in out
+        assert "first story" not in out
+        assert "To Be Continued" not in out
+        assert "Check out my forums" not in out
+
+    def test_note_phrase_in_dialogue_does_not_take_the_chapter(self):
+        html = (
+            "<p>That which the tide can take, it will.</p>"
+            "<hr/>"
+            + _scene_paragraphs(1, 170)
+            + "<p>\"I subscribe to a bulletin about the tides,\" said the keeper.</p>"
+            + _scene_paragraphs(171, 200)
+        )
+        out = self._strip(html)
+        assert _missing_story_lines(out, 1, 200) == []
+        assert "I subscribe to a bulletin" in out
+
+    # ── Dialogue makes a span story, whatever its size ────────────
+
+    def test_last_scene_with_dialogue_and_a_stock_phrase_is_kept(self):
+        # Small enough, and a small enough share of the chapter, to pass
+        # for a closing note on size. The people talking in it are what
+        # says it is not one.
+        html = (
+            _scene_paragraphs(1, 80)
+            + "<hr/>"
+            + _scene_paragraphs(81, 90)
+            + "<p>It was the next chapter of her life, and she knew it.</p>"
+            + _scene_paragraphs(91, 100)
+        )
+        out = self._strip(html)
+        assert _missing_story_lines(out, 1, 100) == []
+        assert "next chapter of her life" in out
+
+    def test_stock_phrase_spoken_by_a_character_is_not_a_signal(self):
+        # One line of dialogue is not enough to call the span story, so
+        # this rests on the other rule: a phrase somebody says in the
+        # story is not the author's.
+        html = (
+            _story_paragraphs(1, 60)
+            + "<hr/>"
+            + _story_paragraphs(61, 64)
+            + "<p>\"I hope you enjoy your stay,\" said the innkeeper.</p>"
+            + _story_paragraphs(65, 68)
+        )
+        out = self._strip(html)
+        assert _missing_story_lines(out, 1, 68) == []
+        assert "enjoy your stay" in out
+
+    def test_the_end_of_a_tale_told_in_the_story_keeps_what_follows(self):
+        # Under a thousand words follow it, so size alone would let
+        # them go.
+        html = (
+            _scene_paragraphs(1, 60)
+            + "<p>The End.</p>"
+            + _scene_paragraphs(61, 90)
+        )
+        out = self._strip(html)
+        assert _missing_story_lines(out, 1, 90) == []
+        assert "The End." in out
+
+    def test_chapter_line_read_aloud_keeps_the_scene_above_it(self):
+        # No banner of the chapter's own, and a short scene above a
+        # book's chapter line that a character reads out.
+        html = (
+            _scene_paragraphs(1, 15)
+            + "<p>Chapter One: Simple Garden Charms.</p>"
+            + _scene_paragraphs(16, 100)
+        )
+        out = self._strip(html)
+        assert _missing_story_lines(out, 1, 100) == []
+
+    # ── Size limits, for story with nobody talking in it ──────────
+
+    def test_short_chapter_is_not_emptied(self):
+        html = (
+            "<p>A/N: a short one this week.</p>"
+            "<hr/>"
+            + _story_paragraphs(1, 12)
+            + "<p>Please review!</p>"
+        )
+        out = self._strip(html)
+        assert _missing_story_lines(out, 1, 12) == []
+        assert "a short one this week" not in out
+
+    def test_story_shorter_than_its_opening_notes_is_kept(self):
+        # The labelled notes go first and were the larger part of what
+        # was downloaded. The story is then all that is left, and it is
+        # not a closing note for being short.
+        notes = "".join(
+            "<p>A/N: "
+            + "a reply to a reader about last week's chapter, " * 11
+            + f"(note-line-{number}).</p>"
+            for number in range(1, 7)
+        )
+        html = (
+            notes
+            + "<hr/>"
+            + _story_paragraphs(1, 20)
+            + "<p>Please review!</p>"
+        )
+        out = self._strip(html)
+        assert _missing_story_lines(out, 1, 20) == []
+        assert "note-line-" not in out
+
+    def test_short_chapter_under_long_unlabelled_notes_is_kept(self):
+        # Nothing marks the notes as notes, so they stay. What must not
+        # happen is the story going in their place for being the
+        # smaller half and ending on a stock phrase.
+        html = (
+            _note_paragraphs(10)
+            + "<hr/>"
+            + _story_paragraphs(1, 20)
+            + "<p>Please review!</p>"
+        )
+        out = self._strip(html)
+        assert _missing_story_lines(out, 1, 20) == []
+
+    def test_text_after_the_last_divider_too_long_for_a_closing_note_is_kept(self):
+        # A small share of a long chapter, and still more words than
+        # any closing note measured.
+        html = (
+            _story_paragraphs(1, 400)
+            + "<hr/>"
+            + _story_paragraphs(401, 415)
+            + "<p>It was the next chapter of her life, and she knew it.</p>"
+            + _story_paragraphs(416, 432)
+        )
+        out = self._strip(html)
+        assert _missing_story_lines(out, 1, 432) == []
+
+    def test_chapter_line_deep_in_the_story_is_not_a_banner(self):
+        html = (
+            _story_paragraphs(1, 60)
+            + "<p>Chapter One: Simple Garden Charms.</p>"
+            + _story_paragraphs(61, 210)
+        )
+        out = self._strip(html)
+        assert _missing_story_lines(out, 1, 210) == []
+
+    def test_part_heading_after_a_divider_does_not_take_part_one(self):
+        # Rule 2a's shape, with a first part far too long to be a note.
+        html = (
+            _story_paragraphs(1, 50)
+            + "<p>It was the next chapter of her life, and she knew it.</p>"
+            + _story_paragraphs(51, 100)
+            + "<hr/>"
+            + "<p>Part 2</p>"
+            + _story_paragraphs(101, 200)
+        )
+        out = self._strip(html)
+        assert _missing_story_lines(out, 1, 200) == []
+
+    def test_end_marker_inside_the_story_does_not_take_the_rest(self):
+        # A tale told inside the chapter ends with "The End." well before
+        # the chapter does. The real end marker, further down, still
+        # takes the note under it.
+        html = (
+            _story_paragraphs(1, 40)
+            + "<p>The End.</p>"
+            + _story_paragraphs(41, 140)
+            + "<p>To be continued</p>"
+            + "<p>See you all next week, and do say what you thought.</p>"
+        )
+        out = self._strip(html)
+        assert _missing_story_lines(out, 1, 140) == []
+        assert "The End." in out
+        assert "To be continued" not in out
+        assert "See you all next week" not in out
+
+    # ── Labelled blocks that are more than the note ───────────────
+
+    def test_labelled_container_holding_the_chapter_is_kept(self):
+        # A wrapper whose text happens to begin with the note's label is
+        # not itself the note. The labelled paragraph inside it is.
+        html = (
+            "<div>"
+            "<p>A/N: thanks for waiting.</p>"
+            + _story_paragraphs(1, 80)
+            + "</div>"
+        )
+        out = self._strip(html)
+        assert _missing_story_lines(out, 1, 80) == []
+        assert "thanks for waiting" not in out
+
+    def test_labelled_container_of_centred_lines_is_kept(self):
+        # The blocks inside need not be paragraphs.
+        lines = "".join(
+            f"<center>Mira took road {number} (story-line-{number}), "
+            "counting gulls and thinking of nothing much at all.</center>"
+            for number in range(1, 61)
+        )
+        html = "<div><center>A/N: thanks for waiting.</center>" + lines + "</div>"
+        out = self._strip(html)
+        assert _missing_story_lines(out, 1, 60) == []
+
+    def test_chapter_posted_as_one_labelled_paragraph_is_kept(self):
+        # A wall of text that opens with a disclaimer and carries
+        # straight on into the story.
+        wall = " ".join(
+            f"Mira took road {number} of the long way (story-line-{number})."
+            for number in range(1, 81)
+        )
+        html = f"<p>Disclaimer: I don't own any of it. {wall}</p><p>More to come.</p>"
+        out = self._strip(html)
+        assert _missing_story_lines(out, 1, 80) == []
+
+    def test_labelled_block_of_lines_with_dialogue_in_it_is_kept(self):
+        # Short enough to pass for one long note. The lines of dialogue
+        # under the label say it is more than the note.
+        lines = "<br/>".join(
+            f"\"Road {number}?\" said Mira (story-line-{number})."
+            for number in range(1, 11)
+        )
+        html = (
+            f"<p>A/N: sorry this is late!<br/>{lines}</p>"
+            + _story_paragraphs(11, 40)
+        )
+        out = self._strip(html)
+        assert _missing_story_lines(out, 1, 40) == []
+
+    def test_labelled_paragraph_longer_than_a_very_short_story_is_taken(self):
+        # One paragraph that opens with a note's label is the note,
+        # even when the story under it is a hundred-word drabble.
+        html = (
+            "<p>A/N: "
+            + "written for a challenge, with thanks to everyone who helped, " * 20
+            + "(note-line-1).</p>"
+            + _story_paragraphs(1, 5)
+        )
+        out = self._strip(html)
+        assert _missing_story_lines(out, 1, 5) == []
+        assert "note-line-1" not in out
+
+    # ── Notes that are still taken ────────────────────────────────
+
+    def test_long_note_after_the_last_divider_is_still_taken(self):
+        # Thirteen paragraphs of numbered notes, over a fifth of the
+        # chapter, are still a note. This passed before any of the
+        # limits and has to keep passing.
+        notes = "".join(
+            f"<p>{number}. A note for readers about how this was written, "
+            "which sources it leans on, what was changed from the original, "
+            "and why the author chose to do it that way in the end "
+            f"(note-line-{number}).</p>"
+            for number in range(1, 12)
+        )
+        html = (
+            _scene_paragraphs(1, 70)
+            + "<hr/>"
+            + notes
+            + "<p>12. I don't own any of this, and I make no money from it.</p>"
+            + "<p>13. Thanks for reading!</p>"
+        )
+        out = self._strip(html)
+        assert _missing_story_lines(out, 1, 70) == []
+        assert "note-line-" not in out
+        assert "I don't own" not in out
+        assert "Thanks for reading" not in out
+
+    def test_long_notes_above_a_banner_go_and_the_shorter_chapter_stays(self):
+        # The notes are longer than the chapter under them. They are
+        # still what is above the banner, and the chapter is not a
+        # closing note for being the smaller half.
+        html = (
+            _note_paragraphs(9)
+            + "<hr/>"
+            + "<p>Chapter 5: The Tide</p>"
+            + _scene_paragraphs(1, 18)
+            + "<p>Thanks for reading!</p>"
+        )
+        out = self._strip(html)
+        assert _missing_story_lines(out, 1, 18) == []
+        assert "note-line-" not in out
+        assert "Chapter 5: The Tide" not in out
+
+    def test_one_quoted_line_in_the_notes_does_not_make_story_of_them(self):
+        # An epigraph in quotation marks above the disclaimer. One
+        # such line is not people talking.
+        html = (
+            "<p>\"That which the tide can take, it will.\"</p>"
+            "<p>I own none of this, and thanks to everyone who left a review.</p>"
+            "<p>Chapter 20</p>"
+            + _scene_paragraphs(1, 30)
+        )
+        out = self._strip(html)
+        assert _missing_story_lines(out, 1, 30) == []
+        assert "I own none of this" not in out
+        assert "Chapter 20" not in out
+
+    def test_afterword_longer_than_the_epilogue_above_it_is_taken(self):
+        html = (
+            _scene_paragraphs(1, 30)
+            + "<p>The End</p>"
+            + _note_paragraphs(14)
+        )
+        out = self._strip(html)
+        assert _missing_story_lines(out, 1, 30) == []
+        assert "note-line-" not in out
+        assert "The End" not in out
+
+    def test_a_comment_in_the_markup_is_not_counted_as_words(self):
+        # A long HTML comment beside a two-line closing note is not
+        # what the reader sees, and must not make the note look too big
+        # a share of a short chapter to be one.
+        comment = "<!-- " + "editor scaffolding left in the page " * 12 + "-->"
+        html = (
+            _story_paragraphs(1, 5)
+            + "<hr/>"
+            + comment
+            + "<p>Thanks for reading, and do leave a review if you liked it "
+            "or if you did not, since both are useful to know about.</p>"
+            + "<p>See you next chapter, which should be along in a week or "
+            "two if the day job allows it and the cat stays off the keys.</p>"
+        )
+        out = self._strip(html)
+        assert _missing_story_lines(out, 1, 5) == []
+        assert "Thanks for reading" not in out
+        assert "See you next chapter" not in out
+
+    # ── Counting, markup and signals ──────────────────────────────
+
+    def test_text_written_without_spaces_is_not_one_word_a_paragraph(self):
+        # Forty-five paragraphs of Chinese are forty-five "words" to a
+        # split on spaces, which is small enough to be anything.
+        def paragraphs(first, last):
+            return "".join(
+                f"<p>米拉沿着通往灯塔的长路走了第{number}段数着海鸥什么也没有想只是慢慢地向前走去"
+                f"(story-line-{number})</p>"
+                for number in range(first, last + 1)
+            )
+
+        html = (
+            paragraphs(1, 30)
+            + "<hr/>"
+            + paragraphs(31, 75)
+            + "<p>Patreon 上可以提前阅读下一章。</p>"
+        )
+        out = self._strip(html)
+        assert _missing_story_lines(out, 1, 75) == []
+
+    def test_stock_phrase_in_text_already_removed_is_not_a_signal(self):
+        # The banner pass takes the bare line above the banner. The
+        # stock phrase in that line then said nothing about the scene
+        # under it, but it was still read, and with a "Part 2" heading
+        # under the next divider the first scene went as well.
+        html = (
+            "Please review this one!"
+            "<p>Chapter 1</p>"
+            + _story_paragraphs(1, 15)
+            + "<hr/>"
+            + "<p>Part 2</p>"
+            + _story_paragraphs(16, 40)
+        )
+        out = self._strip(html)
+        assert _missing_story_lines(out, 1, 40) == []
+        assert "Please review this one" not in out
+
+    def test_words_in_italics_inside_a_sentence_are_not_an_end_marker(self):
+        # A chapter laid out as bare text with line breaks. The italic
+        # words are a child of the chapter, as a paragraph would be.
+        def lines(first, last):
+            return "".join(
+                f"Mira took road {number} of the long way (story-line-{number}).<br/><br/>"
+                for number in range(first, last + 1)
+            )
+
+        html = (
+            lines(1, 30)
+            + "It was not <i>the end</i>, she told herself.<br/><br/>"
+            + lines(31, 40)
+        )
+        out = self._strip(html)
+        assert _missing_story_lines(out, 1, 40) == []
+
+    def test_words_in_italics_inside_a_sentence_are_not_a_banner(self):
+        def lines(first, last):
+            return "".join(
+                f"Mira took road {number} of the long way (story-line-{number}).<br/><br/>"
+                for number in range(first, last + 1)
+            )
+
+        html = (
+            lines(1, 10)
+            + "She opened the book at <i>Chapter Three</i> and read.<br/><br/>"
+            + lines(11, 40)
+        )
+        out = self._strip(html)
+        assert _missing_story_lines(out, 1, 40) == []
+
+    def test_banner_in_bold_with_its_title_beside_it_is_still_a_banner(self):
+        # The other side of the two tests above: a banner that opens
+        # its line, with the chapter's title after it on the same line.
+        lines = "".join(
+            f"Mira took road {number} of the long way (story-line-{number}).<br/><br/>"
+            for number in range(1, 31)
+        )
+        html = (
+            "A new series starts here<br/><br/>"
+            "<b>Chapter 74</b> – <u>The Lighthouse</u><br/><br/>"
+            + lines
+        )
+        out = self._strip(html)
+        assert _missing_story_lines(out, 1, 30) == []
+        assert "A new series starts here" not in out
+        assert "Chapter 74" not in out
+
+    # ── A saved chapter is not judged by position again ───────────
+
+    def test_saved_chapter_keeps_what_the_position_rules_would_take(self):
+        # Narration only, and short enough above the chapter line for
+        # every limit: as a fresh download this loses its first scene
+        # (the residue the limits cannot tell from front matter). Read
+        # back from a saved file it is left alone, apart from labels.
+        html = (
+            "<p>A/N: left in by an older program.</p>"
+            + _story_paragraphs(1, 15)
+            + "<p>Chapter One: Simple Garden Charms.</p>"
+            + _story_paragraphs(16, 60)
+        )
+        as_downloaded = self._strip(html)
+        assert _missing_story_lines(as_downloaded, 1, 60) == list(range(1, 16))
+        as_saved = self._strip(html, structural=False)
+        assert _missing_story_lines(as_saved, 1, 60) == []
+        assert "left in by an older program" not in as_saved
+
+    def test_update_does_not_run_the_position_rules_on_saved_chapters(self, tmp_path):
+        from ficary import updater
+
+        chapter_html = (
+            _story_paragraphs(1, 15)
+            + "<p>Chapter One: Simple Garden Charms.</p>"
+            + _story_paragraphs(16, 60)
+        )
+        story = _make_story()
+        story.chapters[:] = [
+            Chapter(number=1, title="Saved", html=chapter_html, from_existing_file=True),
+            Chapter(number=2, title="New", html=chapter_html.replace("story-line-", "new-line-")),
+        ]
+        path = export_html(story, str(tmp_path), strip_notes=True)
+        saved, new = updater.read_chapters(path)
+        assert _missing_story_lines(saved.html, 1, 60) == []
+        # The same text as a newly downloaded chapter goes through the
+        # position rules, which is what shows the saved one did not.
+        assert "(new-line-1)" not in new.html
+        assert "(new-line-16)" in new.html
+
+    def test_audiobook_text_of_a_saved_chapter_keeps_it_too(self):
+        from ficary.tts import _html_to_audiobook_text
+
+        html = (
+            _story_paragraphs(1, 15)
+            + "<p>Chapter One: Simple Garden Charms.</p>"
+            + _story_paragraphs(16, 60)
+        )
+        fresh = _html_to_audiobook_text(html, strip_notes=True)
+        assert "story-line-1)" not in fresh
+        saved = _html_to_audiobook_text(html, strip_notes=True, structural_notes=False)
+        assert _missing_story_lines(saved, 1, 60) == []
+
+
 class TestNewLabelStripping:
     """Prefix-pass labels added in 2.2.4 to plug the leaks the regex
     used to miss in real FFN files (Disclaimer, Quick Note,

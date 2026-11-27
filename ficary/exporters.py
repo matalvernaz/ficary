@@ -441,6 +441,23 @@ def _note_check_config_for(note_check, chapter) -> dict | None:
     return note_check.config
 
 
+def _structural_notes_for(chapter) -> bool:
+    """Whether the note stripper's position-based passes may run on
+    ``chapter``. Only on a chapter as it was downloaded.
+
+    An update merges the saved file's chapters with the new ones and
+    exports the lot again. A saved chapter has been through those
+    passes already, and they are not safe to repeat: the first run
+    takes the chapter's banner and its closing note, and a second run
+    finds the next line that reads like a banner, or the scene that is
+    now last, and takes story. A saved chapter still gets the label
+    pass, which is what strips the obvious "A/N:" paragraphs out of a
+    file that came from another program, and which finds nothing the
+    second time round.
+    """
+    return not getattr(chapter, "from_existing_file", False)
+
+
 def _report_note_check(
     note_check, progress: Callable[[str], None] | None,
 ) -> None:
@@ -477,6 +494,7 @@ def _prepare_chapter_html(
     story_id=None,
     chapter_number: int | None = None,
     progress: Callable[[str], None] | None = None,
+    structural_notes: bool = True,
 ) -> str:
     """Apply optional chapter-level transformations in the right order.
 
@@ -491,11 +509,13 @@ def _prepare_chapter_html(
     ``chapter_number`` are forwarded into the LLM helper's per-story
     disk cache so re-exports don't re-spend tokens. ``note_check`` is
     the book's running tally of that pass, when one is being kept.
+    ``structural_notes`` False keeps the regex strip to labelled
+    paragraphs: see :func:`_structural_notes_for`.
     """
     html = _apply_chapter_notes_mode(html, chapter_notes)
     html = _normalize_chapter_markup(html)
     if strip_notes:
-        html = strip_note_paragraphs(html)
+        html = strip_note_paragraphs(html, structural=structural_notes)
         if llm_config:
             html = strip_an_via_llm(
                 html,
@@ -528,6 +548,7 @@ def _prepare_chapter_html_with_llm_fallback(
     story_id,
     chapter_number: int | None,
     progress: Callable[[str], None] | None,
+    structural_notes: bool = True,
 ) -> str:
     """Run the chapter pipeline, and get the chapter into the book
     whatever the LLM author's-note pass does.
@@ -566,6 +587,7 @@ def _prepare_chapter_html_with_llm_fallback(
             story_id=story_id,
             chapter_number=chapter_number,
             progress=progress,
+            structural_notes=structural_notes,
         )
 
     if not llm_config:
@@ -633,6 +655,7 @@ def export_txt(
             note_check=note_check,
             site_name=site_name, story_id=story.id,
             chapter_number=ch.number, progress=progress,
+            structural_notes=_structural_notes_for(ch),
         )
         buf.write(html_to_text(html))
     _report_note_check(note_check, progress)
@@ -791,6 +814,7 @@ def export_html(
             story_id=story.id,
             chapter_number=ch.number,
             progress=progress,
+            structural_notes=_structural_notes_for(ch),
         )
         buf.write(chapter_html)
         buf.write("\n</div><hr>\n")
@@ -1557,27 +1581,34 @@ def _block_has_hard_note_keyword(items):
     "fully bold" + "patreon/disclaimer/I do not own" is virtually never
     real prose.
     """
-    for kind, node in items:
-        text = node.get_text(" ", strip=True) if kind == "tag" else str(node)
-        if not text:
-            continue
-        lower = text.lower()
-        if any(kw in lower for kw in _HARD_NOTE_KEYWORDS):
-            return True
-    return False
+    return _narration_holds_any(items, _HARD_NOTE_KEYWORDS)
 
 
 def _block_has_note_keyword(items):
     """Return True if any paragraph's text in ``items`` (a slice of the
     top_level list produced by ``strip_note_paragraphs``) contains a
     note keyword."""
-    for kind, node in items:
-        text = node.get_text(" ", strip=True) if kind == "tag" else str(node)
-        if not text:
-            continue
-        lower = text.lower()
-        if any(kw in lower for kw in _NOTE_KEYWORDS):
-            return True
+    return _narration_holds_any(items, _NOTE_KEYWORDS)
+
+
+def _narration_holds_any(items, phrases) -> bool:
+    """Whether any line in ``items`` that is not a line of dialogue
+    holds one of ``phrases``.
+
+    A stock phrase spoken by a character is the character speaking,
+    not the author: "I subscribe to a bulletin," said by somebody in
+    the story, once cost a chapter all of its text. Lines that open
+    with a quotation mark are left out of the search, and so are
+    comments and scripts, which no reader sees.
+    """
+    for _kind, node in items:
+        for line in _paragraph_lines(node):
+            stripped = line.strip()
+            if not stripped or stripped[:1] in _OPENING_QUOTES:
+                continue
+            lower = stripped.lower()
+            if any(phrase in lower for phrase in phrases):
+                return True
     return False
 
 
@@ -1620,7 +1651,215 @@ def _block_is_all_bold(items):
     return saw_tag
 
 
-def strip_note_paragraphs(html: str) -> str:
+# ── What the note stripper may remove ─────────────────────────────
+#
+# Every rule in ``strip_note_paragraphs`` removes a span: a labelled
+# block, everything above a chapter banner, everything after the last
+# divider, everything under an end marker. Each used to judge its span
+# by where it sat, and one of them by a single stock phrase, never by
+# what was in it. A chapter whose only divider sat under its opening
+# notes lost all 5,970 words of its story to a closing "Check out my
+# forums", and another lost 6,192 to a character saying "I subscribe
+# to".
+#
+# Measured over 891 cached chapters from nine sites. The rules removed
+# 323 spans. Two were the chapters above, with 124 and 116 paragraphs
+# that open with a quotation mark. The other 321 held no such
+# paragraph at all, and the longest of them was 859 words. In those
+# chapters, 13 of the 342 scenes that lie between two dividers hold
+# one of the stock phrases ("until next", "hope you enjoy", "next
+# chapter"), so a phrase alone says very little.
+
+# A span holding this many lines of dialogue is story, whatever else
+# is in it. Two, so that one quoted line in a note (an epigraph, a
+# reader's question) does not make story of it.
+_STORY_DIALOGUE_LINES = 2
+# What a line of dialogue opens with.
+_OPENING_QUOTES = "\"“„«‹「『‘'"
+# The most words one removal may hold. The longest note measured was
+# 859 words.
+_NOTE_MAX_WORDS = 1000
+# The most words one labelled paragraph or block may hold and still be
+# taken for the note its label names. The longest measured was 210. A
+# chapter posted as one wall of text that opens "Disclaimer:" is
+# several times that.
+_LABELLED_BLOCK_MAX_WORDS = 400
+# The text after a chapter's last divider is taken for a closing note
+# on the strength of one stock phrase in it, which is the weakest
+# evidence any pass goes on, so it gets the tightest limits. It may
+# hold this many words: the longest closing note measured was 569,
+# apart from one AO3 end-notes block of 859, and ``--chapter-notes``
+# is the setting for those.
+_CLOSING_NOTE_MAX_WORDS = 600
+# And it may be this share of its chapter: one part in three. The
+# largest closing note measured was 27% of its chapter (thirteen
+# numbered notes under a short story). Text after the only divider of
+# a chapter with long notes above it is the story, and it is most of
+# the chapter.
+_CLOSING_NOTE_SHARE = 3
+# A removal this small is allowed whatever share of the chapter it is:
+# a two-line chapter with a one-line note under it is still a chapter
+# with a note.
+_NOTE_ALWAYS_SMALL_WORDS = 50
+
+# Characters of scripts written without spaces between words. To
+# ``str.split`` a paragraph of Chinese is one word, which would let a
+# whole chapter pass for a fifty-word note, so each of these counts as
+# a word of its own.
+_SPACELESS_SCRIPT_CHARS = (
+    "぀-ヿ"                           # kana
+    "㐀-䶿一-鿿豈-﫿"  # CJK ideographs
+    "฀-๿຀-໿"              # Thai, Lao
+    "က-႟ក-៿"              # Myanmar, Khmer
+)
+_WORD_RE = re.compile(
+    f"[{_SPACELESS_SCRIPT_CHARS}]|[^\\s{_SPACELESS_SCRIPT_CHARS}]+"
+)
+# Tags whose contents are not text a reader sees.
+_UNSEEN_TEXT_TAGS = frozenset({"script", "style", "template"})
+# Tags that make a block of their own inside another block.
+_INNER_BLOCK_TAGS = [
+    "p", "div", "blockquote", "center", "li", "pre", "tr",
+    "h1", "h2", "h3", "h4", "h5", "h6",
+]
+
+
+# Tags that mark up words inside a line, not a block of their own.
+_INLINE_TAGS = frozenset({
+    "a", "b", "big", "cite", "code", "em", "font", "i", "s", "small",
+    "span", "strike", "strong", "sub", "sup", "tt", "u",
+})
+
+
+def _is_inside_a_line(node, words_after_count: bool = True) -> bool:
+    """Whether ``node`` is inline markup with words of the same line
+    beside it: a word in italics in the middle of a sentence.
+
+    In a chapter laid out as bare text with line breaks, such a tag is
+    a child of the chapter like any paragraph. "It was not <i>the
+    end</i>, she told herself" then offers "the end" as a paragraph of
+    its own, and the end-marker pass took the rest of the chapter. A
+    marker set in bold on a line by itself has line breaks, blocks or
+    nothing around it, not words.
+
+    ``words_after_count`` False asks only about words before the tag.
+    That is for a chapter banner, which may have its title after it on
+    the same line ("<b>Chapter 74</b> – <u>The Title</u>") but opens
+    the line it is on.
+    """
+    if not isinstance(node, Tag) or node.name not in _INLINE_TAGS:
+        return False
+    sides = [node.previous_siblings]
+    if words_after_count:
+        sides.append(node.next_siblings)
+    for neighbours in sides:
+        for neighbour in neighbours:
+            if isinstance(neighbour, Tag):
+                # A line break or a block ends the line on this side;
+                # more inline markup with words in it carries it on.
+                if neighbour.name in _INLINE_TAGS and _seen_text(neighbour):
+                    return True
+                break
+            if _seen_text(neighbour):
+                return True
+    return False
+
+
+def _word_count(text: str) -> int:
+    """How many words ``text`` holds."""
+    return len(_WORD_RE.findall(text))
+
+
+def _seen_text(node) -> str:
+    """The text of ``node`` that a reader sees. Nothing for a comment,
+    a script or a style sheet, which a plain ``str(node)`` or
+    ``get_text`` on the tag itself would hand back as words."""
+    if isinstance(node, Tag):
+        if node.name in _UNSEEN_TEXT_TAGS:
+            return ""
+        return node.get_text(" ", strip=True)
+    # Comments, doctypes and the like are NavigableString subclasses.
+    if type(node) is NavigableString:
+        return str(node).strip()
+    return ""
+
+
+def _lines_broken_by_br(node) -> list[str]:
+    """The lines of one block, split at its line breaks."""
+    if not isinstance(node, Tag):
+        return [_seen_text(node)]
+    lines = []
+    current = []
+    for piece in node.descendants:
+        if isinstance(piece, Tag):
+            if piece.name == "br":
+                lines.append("".join(current))
+                current = []
+            continue
+        if type(piece) is NavigableString:
+            parent = piece.parent
+            if parent is not None and parent.name in _UNSEEN_TEXT_TAGS:
+                continue
+            current.append(str(piece))
+    lines.append("".join(current))
+    return lines
+
+
+def _paragraph_lines(node) -> list[str]:
+    """The paragraph-sized pieces of text inside ``node``: the
+    innermost blocks it holds, each split at its line breaks. A chapter
+    kept as one block of lines, and a wrapper around many paragraphs,
+    both come apart into the lines a reader would hear as separate."""
+    if not isinstance(node, Tag):
+        return [_seen_text(node)]
+    if node.name in _UNSEEN_TEXT_TAGS:
+        return []
+    inner_blocks = node.find_all(_INNER_BLOCK_TAGS)
+    innermost = [
+        block for block in inner_blocks
+        if block.find(_INNER_BLOCK_TAGS) is None
+    ]
+    lines = []
+    for block in innermost or [node]:
+        lines.extend(_lines_broken_by_br(block))
+    return lines
+
+
+def _dialogue_line_count(nodes) -> int:
+    """How many paragraph-sized lines in ``nodes`` open with a
+    quotation mark."""
+    count = 0
+    for node in nodes:
+        for line in _paragraph_lines(node):
+            if line.lstrip()[:1] in _OPENING_QUOTES and line.strip():
+                count += 1
+    return count
+
+
+def _is_note_sized(span_words: int, words_left_after: int) -> bool:
+    """Whether a span is small enough, beside what would be left of its
+    chapter, to be an author's note.
+
+    ``words_left_after`` is how much text the chapter would still hold
+    with the span gone. No note is longer than :data:`_NOTE_MAX_WORDS`,
+    and past :data:`_NOTE_ALWAYS_SMALL_WORDS` it may not be more than
+    it leaves behind.
+
+    This is the test for a span nothing vouches for but a label on its
+    first line or a model's say-so: a wrapper around a whole chapter,
+    a block of lines, a run of paragraphs a model flagged. A span that
+    fails is left in the chapter. A note left in costs the reader a few
+    lines. Story taken out is gone from the saved book, and nothing
+    says so.
+    """
+    if span_words > _NOTE_MAX_WORDS:
+        return False
+    if span_words <= _NOTE_ALWAYS_SMALL_WORDS:
+        return True
+    return span_words <= words_left_after
+
+
+def strip_note_paragraphs(html: str, structural: bool = True) -> str:
     """Drop paragraph-level author's notes from chapter HTML.
 
     Three passes, each independent:
@@ -1647,18 +1886,75 @@ def strip_note_paragraphs(html: str) -> str:
        top's ``Chapter N`` signal.
 
     Chapters without any divider go through unchanged.
+
+    Whatever a pass decides, the span it would remove is then looked
+    at for what it holds (see the constants above
+    :func:`_word_count`): a span with lines of dialogue in it is story,
+    a span over :data:`_NOTE_MAX_WORDS` is too long to be a note, and
+    text after the last divider that is more than a third of the
+    chapter is the chapter. Such a span stays, and the debug log says
+    which and why.
+
+    ``structural`` False runs the prefix pass alone. That is for a
+    chapter read back from a saved file. The other passes judge by
+    position, and they are only right about a chapter as it was
+    downloaded: once the real banner has gone, the next line that
+    reads like one (a character reading out "Chapter One: ...") is
+    taken for it, and each update took another piece of the story.
     """
     from bs4 import BeautifulSoup
 
     soup = BeautifulSoup(html, "html.parser")
 
+    def _words_in_chapter() -> int:
+        """How many words the chapter holds at this moment, with
+        everything removed so far left out."""
+        return sum(_word_count(_seen_text(child)) for child in soup.children)
+
+    def _refused(span_words: int, where: str, why: str) -> None:
+        """Put on record that a span was left in, so "why is that note
+        still in my book" has an answer in the log."""
+        logger.debug(
+            "Note stripping left %d words %s in place: %s "
+            "(the chapter has %d).",
+            span_words, where, why, _words_in_chapter(),
+        )
+
     # Pass 1: prefix-based stripping (safe, label-only).
     for tag in soup.find_all(["p", "div", "blockquote"]):
-        text = tag.get_text(" ", strip=True)
+        text = _seen_text(tag)
         if not text:
             continue
-        if _AN_MARKER_RE.match(text):
-            tag.decompose()
+        if not _AN_MARKER_RE.match(text):
+            continue
+        where = "in a block that opens with a note's label"
+        block_words = _word_count(text)
+        if block_words > _LABELLED_BLOCK_MAX_WORDS:
+            _refused(block_words, where, "too long to be one note")
+            continue
+        one_paragraph = (
+            tag.name == "p"
+            and tag.find("br") is None
+            and tag.find(_INNER_BLOCK_TAGS) is None
+        )
+        if not one_paragraph:
+            # A block that holds other blocks, or lines of its own, is
+            # labelled only as far as its first line. It may be a
+            # wrapper around the whole chapter, or a chapter kept in
+            # one block with line breaks. When it stays, a labelled
+            # paragraph inside it is still reached on its own, later
+            # in this loop.
+            if _dialogue_line_count([tag]) >= _STORY_DIALOGUE_LINES:
+                _refused(block_words, where, "it holds lines of dialogue")
+                continue
+            words_left_after = _words_in_chapter() - block_words
+            if not _is_note_sized(block_words, words_left_after):
+                _refused(block_words, where, "it is most of the chapter")
+                continue
+        tag.decompose()
+
+    if not structural:
+        return str(soup)
 
     # Build a top-level view for the structural passes so we can index
     # into dividers without re-scanning after deletions.
@@ -1683,12 +1979,50 @@ def strip_note_paragraphs(html: str) -> str:
 
     divider_indexes = [i for i, it in enumerate(top_level) if _item_is_divider(it)]
 
+    # Nodes the passes below have already removed, by identity. A span
+    # can reach back over them. They must not be counted again, and a
+    # stock phrase in one of them is not a signal about what is left.
+    dropped: set[int] = set()
+
     def _drop(item):
         kind, node = item
+        dropped.add(id(node))
         if kind == "tag":
             node.decompose()
         else:
             node.extract()
+
+    def _still_there(items) -> list:
+        """``items`` without the ones already removed."""
+        return [item for item in items if id(item[1]) not in dropped]
+
+    def _may_remove(items, where: str, closing_note: bool = False) -> bool:
+        """Whether what is left of ``items`` may be removed as a note.
+        ``where`` names the span for the log when it may not.
+
+        ``closing_note`` is for the one pass with nothing but a stock
+        phrase to go on: its span must also be shorter, and the
+        smaller part of the chapter by a wide margin.
+        """
+        nodes = [node for _kind, node in _still_there(items)]
+        span_words = sum(_word_count(_seen_text(node)) for node in nodes)
+        if span_words > _NOTE_MAX_WORDS:
+            _refused(span_words, where, "more words than a note holds")
+            return False
+        if _dialogue_line_count(nodes) >= _STORY_DIALOGUE_LINES:
+            _refused(span_words, where, "it holds lines of dialogue")
+            return False
+        if closing_note and span_words > _CLOSING_NOTE_MAX_WORDS:
+            _refused(span_words, where, "more words than a closing note holds")
+            return False
+        if closing_note and span_words > _NOTE_ALWAYS_SMALL_WORDS:
+            if span_words * _CLOSING_NOTE_SHARE > _words_in_chapter():
+                _refused(
+                    span_words, where,
+                    "it is more than a third of the chapter",
+                )
+                return False
+        return True
 
     top_drop_end = -1  # last index the top pass consumed (-1 = untouched)
 
@@ -1707,8 +2041,21 @@ def strip_note_paragraphs(html: str) -> str:
             if kind != "tag":
                 continue
             text = node.get_text(" ", strip=True)
-            if text and _is_chapter_header_paragraph(text):
-                for it in top_level[: i + 1]:
+            if (
+                text
+                and _is_chapter_header_paragraph(text)
+                and not _is_inside_a_line(node, words_after_count=False)
+            ):
+                front_matter = top_level[: i + 1]
+                # With story above it, this is not the chapter's
+                # banner. It is a line of the story that reads like
+                # one (a book's "Chapter One: ..." read out, a "Part
+                # 2" heading inside the chapter). Any banner further
+                # down has more story above it still, so the search
+                # ends here.
+                if not _may_remove(front_matter, "above a chapter banner"):
+                    break
+                for it in front_matter:
                     _drop(it)
                 top_drop_end = i
                 break
@@ -1719,15 +2066,21 @@ def strip_note_paragraphs(html: str) -> str:
         banner_idx = None
         if first + 1 < len(top_level):
             kind, node = top_level[first + 1]
-            if kind == "tag":
+            if (
+                kind == "tag"
+                and id(node) not in dropped
+                and not _is_inside_a_line(node, words_after_count=False)
+            ):
                 banner_text = node.get_text(" ", strip=True)
                 if banner_text and _TOP_BANNER_RE.match(banner_text):
                     banner_idx = first + 1
 
         if banner_idx is not None:
-            pre = top_level[:first]
+            pre = _still_there(top_level[:first])
             if pre and (
                 _block_is_all_bold(pre) or _block_has_note_keyword(pre)
+            ) and _may_remove(
+                top_level[: banner_idx + 1], "above the first divider",
             ):
                 for item in top_level[: banner_idx + 1]:
                     _drop(item)
@@ -1754,6 +2107,10 @@ def strip_note_paragraphs(html: str) -> str:
             and len(pre) <= _MAX_PRE_DIVIDER_PARAGRAPHS
             and _block_is_all_bold(pre)
             and _block_has_hard_note_keyword(pre)
+            # Three paragraphs can still be a first scene: a bold block
+            # of lines that opens "Disclaimer:" and carries on into
+            # the story.
+            and _may_remove(top_level[: first + 1], "above the first divider")
         ):
             # Drop the pre-block and the divider itself so the chapter
             # opens cleanly on the first prose paragraph.
@@ -1766,17 +2123,28 @@ def strip_note_paragraphs(html: str) -> str:
         last = divider_indexes[-1]
         # Skip if the top pass already consumed (or overlaps) this divider.
         if last > top_drop_end:
-            post = top_level[last + 1:]
+            post = _still_there(top_level[last + 1:])
             if post and _block_has_note_keyword(post):
                 outro_start = last
                 if last - 1 > top_drop_end:
                     kind, node = top_level[last - 1]
-                    if kind == "tag":
+                    if kind == "tag" and not _is_inside_a_line(node):
                         banner_text = node.get_text(" ", strip=True)
                         if banner_text and _END_BANNER_RE.match(banner_text):
                             outro_start = last - 1
-                for item in top_level[outro_start:]:
-                    _drop(item)
+                outro = top_level[outro_start:]
+                # "After the last divider" is the end of the chapter
+                # only when the chapter has a divider near its end.
+                # When its last divider is the one under the opening
+                # notes, or the one before the final scene, what
+                # follows is story, and a stock phrase in it (a closing
+                # line with no divider of its own, or a line of
+                # dialogue) is no reason to take it.
+                if _may_remove(
+                    outro, "after the last divider", closing_note=True,
+                ):
+                    for item in outro:
+                        _drop(item)
 
     # Pass 4 (tail): end-marker cutoff. If the chapter has a
     # standalone "-End" / "Fin" / "TBC" paragraph past the first
@@ -1808,8 +2176,19 @@ def strip_note_paragraphs(html: str) -> str:
             if not getattr(node, "name", None):
                 continue
             text = node.get_text(" ", strip=True)
-            if text and _is_end_marker_paragraph(text):
-                for it in top_level[i:]:
+            if (
+                text
+                and _is_end_marker_paragraph(text)
+                and not _is_inside_a_line(node)
+            ):
+                back_matter = top_level[i:]
+                # With story under it, this is an ending inside the
+                # story (a tale told within the chapter closing on
+                # "The End."). The chapter's own end marker, if it
+                # has one, is further down: keep looking.
+                if not _may_remove(back_matter, "under an end marker"):
+                    continue
+                for it in back_matter:
                     _drop(it)
                 break
 
@@ -2724,6 +3103,7 @@ def export_epub(
             story_id=story.id,
             chapter_number=ch.number,
             progress=progress,
+            structural_notes=_structural_notes_for(ch),
         )
         # Sanitise AFTER the strip-notes / LLM pass so those regexes see
         # the raw markup they were tuned against; only the EPUB path
