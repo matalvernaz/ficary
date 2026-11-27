@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 2.20.33 — 2026-11-27
 
 **The AI note check no longer takes story on a small model's word**
 
