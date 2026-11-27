@@ -1352,11 +1352,14 @@ _AN_MARKER_RE = re.compile(
             | author[’'`´]?s?\s+comment(?:ary|s)?(?=\s*[:\-—–])  # "Author's Commentary:" / "Author's Comments:"
             | author[’'`´]?s?\s+(?:ramble|rambles|rambling|ramblings)(?=\s*[:\-—–])  # "Author's Rambles:" / "Author's Ramblings:"
             | from\s+the\s+author(?=\s*[:\-—–])  # "From the Author:"
-            | disclaimer(?=\s*[:\-—–])         # "Disclaimer:" — extremely common
+            | disclai?mer(?=\s*[:\-—–])        # "Disclaimer:" — extremely common
                                                 # FFN chapter prefix that the
                                                 # structural passes used to miss
                                                 # because the post-divider para
                                                 # was prose, not a Chapter banner.
+                                                # Also as it is often misspelt,
+                                                # "Disclamer:", which opened every
+                                                # chapter of one long story.
             | quick\s+notes?(?=\s*[:\-—–])     # "Quick Note:" / "Quick Notes:"
             | side[\s\-]?notes?(?=\s*[:\-—–])  # "Side Note:" / "Sidenote:"
             | foot[\s\-]?notes?(?=\s*[:\-—–])  # "Footnote:" / "Foot Note:"

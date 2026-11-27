@@ -1087,6 +1087,22 @@ class TestNewLabelStripping:
         assert "HelpfulFriend" not in out
         assert "day continued" in out
 
+    def test_strips_misspelt_disclaimer_label(self):
+        html = (
+            "<p>Disclamer: Not mine, and no money made.</p>"
+            "<p>The tide went out at noon.</p>"
+        )
+        out = self._strip(html)
+        assert "Not mine" not in out
+        assert "tide went out" in out
+
+    def test_keeps_misspelt_word_in_prose(self):
+        html = (
+            "<p>The disclamer printed on the box was misspelt as well.</p>"
+            "<p>She squinted at it for a moment.</p>"
+        )
+        assert self._strip(html).count("<p>") == 2
+
     def test_keeps_word_disclaimer_in_prose(self):
         # Without the colon/dash separator it's just a sentence — the
         # regex must NOT eat narrative text that mentions the word.

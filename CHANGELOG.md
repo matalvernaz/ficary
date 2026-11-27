@@ -51,6 +51,8 @@
   file. To get it back, download the story again in full: File, then
   Update File with Fresh Copy (Ctrl+Shift+R) in the app, or
   `--refetch-all` on the command line.
+* "Disclamer:", as it is often misspelt, is recognised at the start of
+  a paragraph in the same way as "Disclaimer:".
 
 ## 2.20.31 — 2026-11-24
 
