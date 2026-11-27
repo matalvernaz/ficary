@@ -1,5 +1,35 @@
 # Changelog
 
+## Unreleased
+
+**The AI note check no longer takes story on a small model's word**
+
+* With "Use AI to catch missed A/N" on and a local model (Ollama), a
+  few wrong flags could remove a whole scene. A small model takes
+  lines of dialogue for the author speaking, and the app kept every
+  flag in the first 15% and last 30% of a chapter, then removed
+  everything from the outermost of them to the chapter's edge. On one
+  35-chapter book that took about 11,300 words of story to catch 30
+  lines of notes: twelve flags in a 300-paragraph chapter became 96
+  paragraphs removed.
+* A local model's flags on lines of dialogue are now ignored. On that
+  book, 91 of its 139 flags were on such lines.
+* With any provider, the sweep from a flag to the chapter's edge is
+  not made over two or more lines of dialogue, nor when the block it
+  would remove is too big to be a note (the limits the built-in
+  stripper uses). The flags themselves still stand, and a closing
+  note the model marked only here and there is still removed whole.
+* On the same book, the same flags now cost 523 words of story for 24
+  lines of notes. What is still lost is narration at the very start or
+  end of a chapter that the model marks as a note; a larger model
+  makes fewer of those mistakes.
+* The status lines say when flags were dropped for being on lines of
+  dialogue.
+* A book made with the AI check and a local model before this version
+  may be missing scenes. To have them back, download it again in
+  full: File, then Update File with Fresh Copy (Ctrl+Shift+R) in the
+  app, or `--refetch-all` on the command line.
+
 ## 2.20.32 — 2026-11-27
 
 **Stripping author's notes no longer takes the story with it**

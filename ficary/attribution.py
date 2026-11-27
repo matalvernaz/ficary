@@ -3710,7 +3710,67 @@ def constrain_an_to_boundaries(
     return {i for i in flagged if i < head_end or i >= tail_start}
 
 
-def expand_an_block(flagged: set[int], n_paragraphs: int) -> set[int]:
+def _opens_with_a_quote(paragraph: str) -> bool:
+    """Whether ``paragraph`` is a line of dialogue: it opens with a
+    quotation mark. The same test the regex stripper uses."""
+    from .exporters import _OPENING_QUOTES
+
+    return paragraph.lstrip()[:1] in _OPENING_QUOTES and bool(paragraph.strip())
+
+
+def drop_an_flags_on_dialogue(
+    flagged: set[int], paragraphs: list[str],
+) -> set[int]:
+    """The flags that are left once those on lines of dialogue are
+    taken out.
+
+    For the same models as :func:`constrain_an_to_boundaries`. What a
+    small local model most often takes for an author's note is a
+    character speaking to another character: on one real run
+    (qwen2.5:7b, 34 chapters of one book) 91 of its 139 flags were on
+    paragraphs that open with a quotation mark. The author speaking to
+    the reader does not come in quotation marks.
+
+    A flag past the end of ``paragraphs`` is left for the caller's
+    other checks. Returns a new set; the input is not changed.
+    """
+    return {
+        index for index in flagged
+        if not (
+            0 <= index < len(paragraphs)
+            and _opens_with_a_quote(paragraphs[index])
+        )
+    }
+
+
+def _sweep_is_a_note(block: set[int], paragraphs: list[str]) -> bool:
+    """Whether the paragraphs a sweep would take, flags and all, can
+    be one block of notes: not story with people talking in it, and
+    not more than a note holds.
+
+    A sweep fills in what lies between two flags and the chapter's
+    edge on the guess that it is all one block. The windows it works
+    in are shares of the chapter, and 30% of a long chapter is
+    thousands of words, so the guess needs checking against what the
+    block holds. These are the tests the regex stripper puts to every
+    span it removes (see ``exporters._is_note_sized``).
+    """
+    from .exporters import _STORY_DIALOGUE_LINES, _is_note_sized, _word_count
+
+    dialogue_lines = sum(
+        1 for index in block if _opens_with_a_quote(paragraphs[index])
+    )
+    if dialogue_lines >= _STORY_DIALOGUE_LINES:
+        return False
+    block_words = sum(_word_count(paragraphs[index]) for index in block)
+    all_words = sum(_word_count(paragraph) for paragraph in paragraphs)
+    return _is_note_sized(block_words, all_words - block_words)
+
+
+def expand_an_block(
+    flagged: set[int], n_paragraphs: int,
+    paragraphs: list[str] | None = None,
+) -> set[int]:
     """Expand the LLM-flagged set across the natural A/N boundaries
     (chapter head and tail).
 
@@ -3733,6 +3793,12 @@ def expand_an_block(flagged: set[int], n_paragraphs: int) -> set[int]:
     * No effect on chapters with fewer than
       :data:`_AN_EXPAND_MIN_PARAGRAPHS` paragraphs (too short for
       boundary heuristics to be meaningful).
+    * With ``paragraphs`` (the text of each paragraph), a sweep is
+      only made when what it would take can be one block of notes:
+      see :func:`_sweep_is_a_note`. Twelve wrong flags in a
+      300-paragraph chapter were once swept into 96 paragraphs of
+      story. Each end of the chapter is judged on its own, and when a
+      sweep is not made the flags stand as they were.
 
     Returns a new set; the input set is not mutated.
     """
@@ -3752,8 +3818,9 @@ def expand_an_block(flagged: set[int], n_paragraphs: int) -> set[int]:
     bottom_window = int(n_paragraphs * (1 - _TAIL_BOUNDARY_FRAC))
     if any(i >= bottom_anchor for i in flagged):
         earliest = min(i for i in flagged if i >= bottom_window)
-        for i in range(earliest, n_paragraphs):
-            expanded.add(i)
+        tail_block = set(range(earliest, n_paragraphs))
+        if paragraphs is None or _sweep_is_a_note(tail_block, paragraphs):
+            expanded |= tail_block
 
     # Leading block — same logic, mirrored. Authors front-load
     # disclaimers and "I own nothing" lines in the top few
@@ -3763,8 +3830,9 @@ def expand_an_block(flagged: set[int], n_paragraphs: int) -> set[int]:
     top_window = max(2, int(n_paragraphs * _HEAD_BOUNDARY_FRAC))
     if any(i < top_anchor for i in flagged):
         latest = max(i for i in flagged if i < top_window)
-        for i in range(0, latest + 1):
-            expanded.add(i)
+        head_block = set(range(0, latest + 1))
+        if paragraphs is None or _sweep_is_a_note(head_block, paragraphs):
+            expanded |= head_block
 
     # Hard cap — refuse to drop more than _AN_EXPAND_MAX_FRAC of the
     # chapter, no matter how persuasive the heuristic seems.

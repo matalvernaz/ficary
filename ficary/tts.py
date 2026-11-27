@@ -1998,10 +1998,12 @@ def _llm_strip_an_paragraphs(
 
     * Provider-aware boundary constraint — Ollama flags outside the
       head/tail windows are dropped (small local models'
-      mid-chapter false positives are the dominant failure mode).
+      mid-chapter false positives are the dominant failure mode),
+      and so are its flags on lines of dialogue.
     * Block expansion — once a flag lands in the natural head/tail
       A/N region, sweep its neighbours so the listener doesn't hear
-      a half-stripped outro.
+      a half-stripped outro. Not over lines of dialogue, and not past
+      what a note holds.
 
     ``note_check`` is the render's running tally
     (:class:`~ficary.attribution.NoteCheckRun`). When one is given it
@@ -2041,10 +2043,13 @@ def _llm_strip_an_paragraphs(
     if flagged:
         provider = (llm_config.get("provider") or "")
         if attribution.should_constrain_an_to_boundaries(provider):
+            flagged = attribution.drop_an_flags_on_dialogue(flagged, paragraphs)
             flagged = attribution.constrain_an_to_boundaries(
                 flagged, len(paragraphs),
             )
-        flagged = attribution.expand_an_block(flagged, len(paragraphs))
+        flagged = attribution.expand_an_block(
+            flagged, len(paragraphs), paragraphs,
+        )
 
     if note_check is not None:
         if incomplete is None:

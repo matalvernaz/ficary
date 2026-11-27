@@ -411,6 +411,171 @@ class TestExpandAnBlock:
         expected = {0, 1, 60} | set(range(103, 117))
         assert result == expected
 
+    def test_sweep_over_dialogue_is_not_made(self):
+        # The flags of the tail-anchor test above, with the text of the
+        # paragraphs: two of the lines the sweep would take in are
+        # somebody talking, so it is story between two wrong flags.
+        paragraphs = [f"Narration, line {number}." for number in range(100)]
+        paragraphs[80] = '"Are we nearly there?" asked Mira.'
+        paragraphs[90] = '"Nearly," said the keeper.'
+        result = attribution.expand_an_block({75, 95}, 100, paragraphs)
+        assert result == {75, 95}
+
+    def test_one_quoted_line_does_not_stop_a_sweep(self):
+        paragraphs = [f"A note for readers, line {number}." for number in range(100)]
+        paragraphs[80] = '"Great chapter!" said one reviewer, and thank you.'
+        result = attribution.expand_an_block({75, 95}, 100, paragraphs)
+        assert result == set(range(75, 100))
+
+    def test_sweep_bigger_than_a_note_is_not_made(self):
+        # Twenty-five paragraphs of sixty words are 1,500 words.
+        paragraphs = ["word " * 60 for _ in range(100)]
+        result = attribution.expand_an_block({75, 95}, 100, paragraphs)
+        assert result == {75, 95}
+
+    def test_oversized_head_sweep_does_not_stop_a_tail_sweep(self):
+        # Each end is judged on its own.
+        paragraphs = ["word " * 400] * 4 + ["A short note line."] * 96
+        result = attribution.expand_an_block({0, 3, 95, 99}, 100, paragraphs)
+        assert result == {0, 3} | set(range(95, 100))
+
+    def test_closing_note_marked_here_and_there_is_still_swept(self):
+        """The chapter this sweep was written for (see the test above),
+        with text in it: story with people talking, then fourteen
+        paragraphs of closing notes of which the model marked three."""
+        paragraphs = []
+        for number in range(103):
+            if number % 3 == 0:
+                paragraphs.append(f'"Line {number}," said Mira.')
+            else:
+                paragraphs.append(f"Story narration, line {number}.")
+        paragraphs += [f"A note for readers, line {number}." for number in range(103, 117)]
+        paragraphs[1] = "Thanks to everyone who left a note on the last one."
+        result = attribution.expand_an_block({1, 60, 103, 110, 116}, 117, paragraphs)
+        assert result == {0, 1, 60} | set(range(103, 117))
+
+
+class TestFlagsOnDialogue:
+    """A model that cannot be trusted mid-chapter is not trusted on
+    lines of dialogue either.
+
+    On one real run (qwen2.5:7b, 34 chapters of one book) 91 of the
+    model's 139 flags were on paragraphs that open with a quotation
+    mark: characters speaking to each other, taken for the author
+    speaking to the reader."""
+
+    def test_flags_on_lines_of_dialogue_are_dropped(self):
+        paragraphs = [
+            "Disclaimer of a sort, with no label on it.",
+            "Mira took the long road.",
+            '"Please, don\'t stop on my account," said the ghost.',
+            "The gulls went on counting.",
+            "'Again?' This puzzled her.",
+            "Thanks for reading, all of you.",
+        ]
+        result = attribution.drop_an_flags_on_dialogue({0, 2, 4, 5}, paragraphs)
+        assert result == {0, 5}
+
+    def test_curly_quotes_and_leading_space_count(self):
+        paragraphs = ["  “Hello,” she said.", "«Bonjour», dit-il.", "Plain narration."]
+        result = attribution.drop_an_flags_on_dialogue({0, 1, 2}, paragraphs)
+        assert result == {2}
+
+    def test_flag_past_the_end_is_left_for_others_to_judge(self):
+        assert attribution.drop_an_flags_on_dialogue({0, 7}, ["Narration."]) == {0, 7}
+
+    def test_input_set_is_not_changed(self):
+        original = {0, 1}
+        result = attribution.drop_an_flags_on_dialogue(original, ['"Hello."', "Narration."])
+        assert result == {1}
+        assert original == {0, 1}
+
+
+class TestWeakModelFlagsThroughTheExport:
+    """The two rules above, seen from the export, with a local model.
+    Every third paragraph of the chapter is a line of dialogue."""
+
+    PARAGRAPHS = 100
+
+    def _paragraph(self, number):
+        if number % 3 == 0:
+            return f"<p>\"Road {number} already?\" said the keeper (story-line-{number}).</p>"
+        return f"<p>Mira took road {number} of the long way (story-line-{number}).</p>"
+
+    def _chapter(self, notes_from=None):
+        paragraphs = []
+        for number in range(1, self.PARAGRAPHS + 1):
+            if notes_from is not None and number >= notes_from:
+                paragraphs.append(
+                    f"<p>A word to readers about how this one was written "
+                    f"(story-line-{number}).</p>"
+                )
+            else:
+                paragraphs.append(self._paragraph(number))
+        return "".join(paragraphs)
+
+    def _replies(self, flagged_numbers):
+        """The model's answers for one chapter, one per batch. A local
+        model is asked about 40 paragraphs at a time, and each batch
+        numbers its paragraphs from 1."""
+        batch_size = attribution._AN_BATCH_SIZE
+        replies = []
+        for start in range(0, self.PARAGRAPHS, batch_size):
+            size = min(batch_size, self.PARAGRAPHS - start)
+            verdicts = {
+                str(local): (start + local) in flagged_numbers
+                for local in range(1, size + 1)
+            }
+            replies.append(json.dumps(verdicts))
+        return replies
+
+    def _missing_after(self, tmp_path, monkeypatch, flagged_numbers, notes_from=None):
+        _isolate_cache_dir(monkeypatch, tmp_path)
+        calls = _stub_llm(monkeypatch, self._replies(flagged_numbers))
+        out = exporters.strip_an_via_llm(
+            self._chapter(notes_from), llm_config=_llm_config(),
+            site_name="ffn", story_id=1, chapter_number=1,
+        )
+        # Every batch was asked for, so the flags are the ones the
+        # model is taken to have made.
+        assert len(calls) == 3
+        return [
+            number for number in range(1, self.PARAGRAPHS + 1)
+            if f"(story-line-{number})" not in out
+        ]
+
+    def test_flags_on_dialogue_near_the_end_take_nothing(self, tmp_path, monkeypatch):
+        # Paragraphs 75, 81 and 90 are all lines of dialogue. The old
+        # rule kept the flags and swept from 75 to the end.
+        assert self._missing_after(tmp_path, monkeypatch, {75, 81, 90}) == []
+
+    def test_flags_on_narration_take_those_lines_and_no_more(self, tmp_path, monkeypatch):
+        # 76 and 98 are narration, so the flags stand. Between them are
+        # seven lines of dialogue, so nothing is swept in.
+        assert self._missing_after(tmp_path, monkeypatch, {76, 98}) == [76, 98]
+
+    def test_closing_note_marked_here_and_there_is_still_swept(self, tmp_path, monkeypatch):
+        # The last ten paragraphs are notes, and the model marks three.
+        missing = self._missing_after(tmp_path, monkeypatch, {91, 95, 100}, notes_from=91)
+        assert missing == list(range(91, 101))
+
+    def test_audiobook_text_gets_the_same_treatment(self, monkeypatch):
+        from ficary import tts
+
+        paragraphs = []
+        for number in range(1, 101):
+            if number % 3 == 0:
+                paragraphs.append(f'"Road {number} already?" said the keeper (story-line-{number}).')
+            else:
+                paragraphs.append(f"Mira took road {number} of the long way (story-line-{number}).")
+        text = "\n\n".join(paragraphs)
+        monkeypatch.setattr(
+            attribution, "classify_authors_notes_via_llm",
+            lambda *_args, **_kwargs: {74, 80, 89},  # zero-based: paragraphs 75, 81 and 90
+        )
+        out = tts._llm_strip_an_paragraphs(text, llm_config=_llm_config())
+        assert out == text
+
 
 # ── Cache wiring ──────────────────────────────────────────────────
 

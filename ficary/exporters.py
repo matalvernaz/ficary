@@ -2663,6 +2663,20 @@ def strip_an_via_llm(
     if flagged:
         from . import attribution
         if attribution.should_constrain_an_to_boundaries(provider):
+            # The same providers are not trusted on lines of dialogue:
+            # a character speaking is what they most often take for
+            # the author. See ``attribution.drop_an_flags_on_dialogue``.
+            before = len(flagged)
+            flagged = attribution.drop_an_flags_on_dialogue(
+                flagged, paragraph_texts,
+            )
+            if len(flagged) < before:
+                _emit(
+                    progress,
+                    f"  [AI notes] {chapter_label}: dropped "
+                    f"{before - len(flagged)} AI flag(s) on lines of "
+                    f"dialogue ({provider} boundary-only mode)",
+                )
             before = len(flagged)
             flagged = attribution.constrain_an_to_boundaries(
                 flagged, len(paragraph_texts),
@@ -2678,12 +2692,15 @@ def strip_an_via_llm(
     # Block expansion: the LLM picks individual paragraphs but A/Ns
     # come in contiguous runs at chapter head/tail, so any flagged
     # paragraph in those regions anchors a sweep of its neighbours.
-    # Bounded by a 50% cap so a runaway expansion can't gut a real
-    # chapter. See ``attribution.expand_an_block`` for the gates.
+    # Not made over lines of dialogue, nor past what a note holds, so
+    # a few wrong flags cannot take a scene with them. See
+    # ``attribution.expand_an_block`` for the gates.
     if flagged:
         from . import attribution
         before = len(flagged)
-        flagged = attribution.expand_an_block(flagged, len(paragraph_texts))
+        flagged = attribution.expand_an_block(
+            flagged, len(paragraph_texts), paragraph_texts,
+        )
         if len(flagged) > before:
             _emit(
                 progress,
