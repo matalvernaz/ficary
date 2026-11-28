@@ -57,17 +57,23 @@ jobs:
         # Small single-server host like John Van Sickle's; same retry
         # rationale as build-linux.yml — one transient connection
         # timeout shouldn't fail the release.
+        #
+        # The file names carry FFmpeg's version (91 is 9.1), and the
+        # site takes the old files down when a new version comes out:
+        # ffmpeg9arm.zip answered 404 on 2026-11-28 and failed the
+        # 2.20.34 build. When this step fails with a 404, the current
+        # names are the "arm" links on https://www.osxexperts.net/.
         run: |
           set -e
           mkdir -p ffmpeg_bin
           curl -L --fail \
             --retry 5 --retry-delay 15 --retry-all-errors \
             --connect-timeout 30 --max-time 300 \
-            -o ffmpeg.zip https://www.osxexperts.net/ffmpeg9arm.zip
+            -o ffmpeg.zip https://www.osxexperts.net/ffmpeg91arm.zip
           curl -L --fail \
             --retry 5 --retry-delay 15 --retry-all-errors \
             --connect-timeout 30 --max-time 300 \
-            -o ffprobe.zip https://www.osxexperts.net/ffprobe9arm.zip
+            -o ffprobe.zip https://www.osxexperts.net/ffprobe91arm.zip
           unzip -o ffmpeg.zip -d ffmpeg_bin/
           unzip -o ffprobe.zip -d ffmpeg_bin/
           rm -rf ffmpeg_bin/__MACOSX

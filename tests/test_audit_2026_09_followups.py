@@ -271,7 +271,13 @@ def test_every_docker_build_runs_both_attribution_backends():
 
 
 def test_the_macos_build_fetches_an_arm64_ffmpeg():
-    """The bundle is arm64; a translated helper needs Rosetta 2."""
+    """The bundle is arm64; a translated helper needs Rosetta 2.
+
+    The download site puts FFmpeg's version in its file names and takes
+    the old ones down (ffmpeg9arm.zip became ffmpeg91arm.zip), so this
+    checks which kind of build is fetched, not which version.
+    """
+    import re
     from pathlib import Path
 
     workflow = (
@@ -285,7 +291,11 @@ def test_the_macos_build_fetches_an_arm64_ffmpeg():
     assert not any("evermeet.cx" in line for line in downloads), (
         "Evermeet publishes Intel binaries only"
     )
-    assert "ffmpeg9arm.zip" in workflow and "ffprobe9arm.zip" in workflow
+    assert any(re.search(r"/ffmpeg\d+arm\.zip\b", line) for line in downloads)
+    assert any(re.search(r"/ffprobe\d+arm\.zip\b", line) for line in downloads)
+    assert not any("intel" in line.lower() for line in downloads), (
+        "the site's Intel builds need Rosetta 2"
+    )
     assert "lipo -archs" in workflow, "the architecture must be verified"
 
 
