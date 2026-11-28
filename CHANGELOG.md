@@ -1,5 +1,68 @@
 # Changelog
 
+## 2.20.34 — 2026-11-27
+
+**AI requests can run on a Claude plan, through Claude Code**
+
+* AI settings has a new provider, "Claude Code". It runs the Claude
+  Code program installed on the computer, on the Claude plan that
+  program is signed in to. The AI note check and AI speaker detection
+  then need no API key and are not billed per request; they count
+  against the plan's usage limits instead.
+* Claude Code has to be installed and signed in first
+  (<https://code.claude.com/docs/en/setup>, then run `claude` in a
+  terminal once). "Test connection" finds the program, says which plan
+  it is signed in with, and asks the model one short question with the
+  same command a chapter gets, so a problem shows before a download
+  does.
+* Each request is one question and nothing else. The model has no
+  tools, and the CLAUDE.md, hooks, plugins, MCP servers and settings
+  files of the Claude Code setup on the computer are left out of it.
+  Ficary does not read or store the sign-in.
+* A request is made on the plan or not at all. An API key or another
+  address in the environment is not passed on, because Claude Code
+  would use it in place of the plan. Before the first chapter goes to
+  Claude Code, it is asked one short question with no story in it; its
+  answer says whether a key was used and whether the request went to
+  Anthropic, and if it went any other way, no story is sent and the
+  check stops. Every answer after that is checked the same way. The
+  question costs a few hundred tokens of the plan, once per run.
+* The model starts as `sonnet`; `haiku` answers a little sooner and
+  uses less of the plan. On two chapters of one book (482 paragraphs)
+  neither removed any story; of seven note lines the built-in stripper
+  had left, sonnet caught six and haiku four.
+* From the command line: `--llm-provider claude-code`. `--llm-model`
+  is `sonnet` unless given, and `--llm-endpoint` is the path to the
+  `claude` program, for when it is not found by itself.
+* Nobody signed in, a model the plan cannot use, or a Claude Code too
+  old to know an option Ficary passes: each is said once, in plain
+  words, and ends the AI check for that book. The book is still
+  written, with the built-in note stripping.
+* On Windows only the program itself, `claude.exe`, is run, never a
+  batch file. Where Claude Code was installed with npm, which leaves a
+  batch file on the search path, the program npm keeps beside it is
+  used.
+* A request that gets no answer within the time limit is stopped,
+  along with anything it started.
+* The web version does not offer this provider. A plan sign-in is for
+  its owner's own use, and the web page can be used by other people.
+* Tested against Claude Code 2.1.332 on Linux, and on Windows with a
+  stand-in for the program. Not yet run against the real program on
+  Windows. What Claude Code prints when a plan's usage limit is
+  reached has not been seen, so that failure is not recognised as
+  such: the check stops after three chapters in a row.
+* Claude Code's manual says a later release will make its "bare" mode
+  the default for requests like these, and bare mode does not use a
+  plan sign-in. When that arrives, requests will answer "not signed
+  in" until Ficary is updated.
+
+**AI settings: the line under the fields stays wrapped**
+
+* On Windows, changing the provider in AI settings left the line of
+  explanation under the fields as one long line. The window grew to
+  fit it, and with a long enough line reached the width of the screen
+  with the end cut off. The line is wrapped again after every change.
+
 ## 2.20.33 — 2026-11-27
 
 **The AI note check no longer takes story on a small model's word**
