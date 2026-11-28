@@ -131,7 +131,9 @@ KEY_ATTRIBUTION_BACKEND = "attribution_backend"
 KEY_ATTRIBUTION_MODEL_SIZE = "attribution_model_size"
 # LLM attribution settings — only consulted when
 # KEY_ATTRIBUTION_BACKEND == "llm". Provider is one of
-# "ollama", "openai", "anthropic", "openai-compatible".
+# "ollama", "openai", "anthropic", "claude-code", "openai-compatible"
+# (attribution.LLM_PROVIDERS). For "claude-code" there is no key, and
+# the endpoint is where the claude program is.
 # api_key is plain-text in the config file (the same store already
 # holds Pushover/Discord secrets); endpoint blank means the provider's
 # default (Ollama: localhost:11434, OpenAI: api.openai.com/v1, ...).

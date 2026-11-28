@@ -1547,18 +1547,62 @@ class LlmSettingsDialog(wx.Dialog):
     because new model names ship every couple of weeks.
     """
 
-    _PROVIDER_KEYS = ["ollama", "openai", "anthropic", "openai-compatible"]
+    # The same list, in the same order, as attribution.LLM_PROVIDERS
+    # and the command line's --llm-provider (a test holds the three
+    # together). Every provider here needs an entry in each table below.
+    _PROVIDER_KEYS = ["ollama", "openai", "anthropic", "claude-code", "openai-compatible"]
     _PROVIDER_LABELS = {
         "ollama": "Ollama (local, no API key)",
         "openai": "OpenAI (api.openai.com)",
         "anthropic": "Anthropic (api.anthropic.com)",
+        "claude-code": "Claude Code (your Claude plan, no API key)",
         "openai-compatible": "OpenAI-compatible (Groq, OpenRouter, vLLM, ...)",
     }
     _DEFAULT_ENDPOINTS = {
         "ollama": "http://localhost:11434",
         "openai": "https://api.openai.com/v1",
         "anthropic": "https://api.anthropic.com/v1",
+        # Not an address: where the claude program is. Blank = find it.
+        "claude-code": "",
         "openai-compatible": "",
+    }
+    # Providers that are never sent a key, so saving without one is
+    # not worth a warning.
+    _KEYLESS_PROVIDERS = frozenset({"ollama", "claude-code"})
+    # The line under the fields, per provider. ``{endpoint}`` is the
+    # provider's default endpoint.
+    _HINTS = {
+        "ollama": (
+            "Default endpoint: {endpoint} — leave Endpoint "
+            "blank to use it. Pick any model already pulled into "
+            "Ollama (e.g. 'llama3.1:8b', 'qwen2.5:14b'). API key is "
+            "ignored."
+        ),
+        "openai": (
+            "Default endpoint: {endpoint}. Set Model to a "
+            "valid OpenAI model id (e.g. 'gpt-4o-mini'). API key "
+            "is required."
+        ),
+        "anthropic": (
+            "Default endpoint: {endpoint}. Set Model to a "
+            "Claude model id (e.g. 'claude-haiku-4-5', "
+            "'claude-sonnet-4-6'). API key is required."
+        ),
+        "claude-code": (
+            "Runs the Claude Code program installed on this computer, "
+            "on the Claude plan it is signed in to. An API key is not "
+            "used. Install Claude Code and sign in first (run claude "
+            "in a terminal). Model is sonnet, haiku or opus, or a full "
+            "model name; haiku is the quickest and the lightest on the "
+            "plan. Leave Program location blank to have the program "
+            "found."
+        ),
+        "openai-compatible": (
+            "OpenAI-compatible — point Endpoint at the provider's "
+            "base URL (e.g. 'https://api.groq.com/openai/v1' or "
+            "'https://openrouter.ai/api/v1'). Set Model to whatever "
+            "the provider exposes. API key usually required."
+        ),
     }
 
     # Curated starter list of models per provider. Picked for the
@@ -1595,6 +1639,10 @@ class LlmSettingsDialog(wx.Dialog):
             "claude-sonnet-4-6",
             "claude-opus-4-7",
         ],
+        # Claude Code's own short names, which it keeps pointed at the
+        # current model of each size. A new setup starts with
+        # claude_code.DEFAULT_MODEL.
+        "claude-code": ["haiku", "sonnet", "opus"],
         "openai-compatible": [],  # too vendor-specific to curate
     }
 
@@ -1625,7 +1673,8 @@ class LlmSettingsDialog(wx.Dialog):
                 "Send each chapter to a Large Language Model and ask it "
                 "to label each line of dialogue. Pick Ollama for a local "
                 "model (no API key) or one of the cloud providers (key "
-                "required)."
+                "required). Claude Code uses a Claude plan you are signed "
+                "in to, with no key."
             ),
         )
         intro.Wrap(580)
@@ -1673,10 +1722,11 @@ class LlmSettingsDialog(wx.Dialog):
         self.api_key_ctrl.SetName("API key")
         grid.Add(self.api_key_ctrl, 1, wx.EXPAND)
 
-        grid.Add(
-            wx.StaticText(root, label="&Endpoint:"),
-            0, wx.ALIGN_CENTER_VERTICAL,
-        )
+        # Kept, because for Claude Code this box is not an address but
+        # where the program is, and the label says so
+        # (``_refresh_fields``).
+        self.endpoint_label = wx.StaticText(root, label="&Endpoint:")
+        grid.Add(self.endpoint_label, 0, wx.ALIGN_CENTER_VERTICAL)
         self.endpoint_ctrl = wx.TextCtrl(root)
         self.endpoint_ctrl.SetName("Endpoint URL")
         self.endpoint_ctrl.SetHint("(blank = provider default)")
@@ -1801,7 +1851,27 @@ class LlmSettingsDialog(wx.Dialog):
         except (TypeError, ValueError):
             timeout = 0
         self.timeout_ctrl.SetValue(max(0, min(3600, timeout)))
+        self._refresh_fields()
         self._refresh_hint()
+
+    def _refresh_fields(self) -> None:
+        """Label the fields for the provider that is showing.
+
+        Claude Code has no address and takes no key. Its "endpoint" is
+        where the claude program is, so the box is named for that, and
+        the key box is switched off so that nothing can be typed, or
+        left behind from another provider, and saved with it.
+        """
+        is_claude_code = self._selected_provider() == "claude-code"
+        if is_claude_code:
+            self.endpoint_label.SetLabel("Program &location:")
+            self.endpoint_ctrl.SetName("Path to the Claude Code program")
+            self.endpoint_ctrl.SetHint("(blank = find it automatically)")
+        else:
+            self.endpoint_label.SetLabel("&Endpoint:")
+            self.endpoint_ctrl.SetName("Endpoint URL")
+            self.endpoint_ctrl.SetHint("(blank = provider default)")
+        self.api_key_ctrl.Enable(not is_claude_code)
 
     def _load_provider_into_fields(self, provider: str) -> None:
         """Populate model / api-key / endpoint fields with the saved
@@ -1842,6 +1912,14 @@ class LlmSettingsDialog(wx.Dialog):
                     api_key = self._prefs.get(self._p.KEY_LLM_API_KEY) or ""
                 if not endpoint:
                     endpoint = self._prefs.get(self._p.KEY_LLM_ENDPOINT) or ""
+
+        if provider == "claude-code":
+            # Never a key, whatever the saved settings hold, and a
+            # model to start with so the first Save is one press.
+            api_key = ""
+            if not model:
+                from .claude_code import DEFAULT_MODEL
+                model = DEFAULT_MODEL
 
         self._populate_model_choices(provider, current=model)
         self.api_key_ctrl.SetValue(api_key)
@@ -1906,6 +1984,7 @@ class LlmSettingsDialog(wx.Dialog):
             self._stash_provider_from_fields(outgoing)
         self._displayed_provider = new_provider
         self._load_provider_into_fields(new_provider)
+        self._refresh_fields()
         self._refresh_hint()
         self._refresh_actions()
 
@@ -1917,34 +1996,16 @@ class LlmSettingsDialog(wx.Dialog):
 
     def _refresh_hint(self):
         provider = self._selected_provider()
-        default_ep = self._DEFAULT_ENDPOINTS.get(provider, "")
-        if provider == "ollama":
-            text = (
-                "Default endpoint: " + default_ep + " — leave Endpoint "
-                "blank to use it. Pick any model already pulled into "
-                "Ollama (e.g. 'llama3.1:8b', 'qwen2.5:14b'). API key is "
-                "ignored."
-            )
-        elif provider == "openai":
-            text = (
-                "Default endpoint: " + default_ep + ". Set Model to a "
-                "valid OpenAI model id (e.g. 'gpt-4o-mini'). API key "
-                "is required."
-            )
-        elif provider == "anthropic":
-            text = (
-                "Default endpoint: " + default_ep + ". Set Model to a "
-                "Claude model id (e.g. 'claude-haiku-4-5', "
-                "'claude-sonnet-4-6'). API key is required."
-            )
-        else:
-            text = (
-                "OpenAI-compatible — point Endpoint at the provider's "
-                "base URL (e.g. 'https://api.groq.com/openai/v1' or "
-                "'https://openrouter.ai/api/v1'). Set Model to whatever "
-                "the provider exposes. API key usually required."
-            )
+        template = self._HINTS.get(provider, self._HINTS["openai-compatible"])
+        text = template.format(endpoint=self._DEFAULT_ENDPOINTS.get(provider, ""))
         self.hint.SetLabel(text)
+        # wxWidgets 3.3 remembers the width a label was last wrapped to
+        # and does nothing when asked for that width again, though the
+        # text has changed. Asking for no wrapping first makes it wrap
+        # the new text. Without it, on Windows, every change of
+        # provider left this line unwrapped: the window grew to fit it,
+        # as far as the width of the screen, and the rest was cut off.
+        self.hint.Wrap(-1)
         self.hint.Wrap(520)
         self.Layout()
 
@@ -1961,7 +2022,7 @@ class LlmSettingsDialog(wx.Dialog):
                 "Model required", wx.OK | wx.ICON_WARNING, self,
             )
             return
-        if provider != "ollama" and not api_key:
+        if provider not in self._KEYLESS_PROVIDERS and not api_key:
             choice = wx.MessageBox(
                 f"The {provider} provider needs an API key. Save without "
                 "one anyway?",
@@ -2099,7 +2160,14 @@ class LlmSettingsDialog(wx.Dialog):
         provider = self._selected_provider()
         endpoint = self.endpoint_ctrl.GetValue().strip()
         api_key = self.api_key_ctrl.GetValue().strip()
-        self._append_status(f"Testing {provider} endpoint...")
+        model = self.model_ctrl.GetValue().strip()
+        if provider == "claude-code":
+            self._append_status(
+                "Testing Claude Code: finding the program, then asking "
+                "the model one short question..."
+            )
+        else:
+            self._append_status(f"Testing {provider} endpoint...")
         self._set_busy(True)
 
         def worker():
@@ -2108,6 +2176,7 @@ class LlmSettingsDialog(wx.Dialog):
                     provider=provider,
                     endpoint=endpoint,
                     api_key=api_key,
+                    model=model,
                 )
                 wx.CallAfter(self._on_test_done, provider, result)
             except Exception as exc:  # noqa: BLE001 — surface any bug

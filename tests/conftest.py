@@ -270,6 +270,35 @@ def fresh_activity():
     activity.reset()
 
 
+@pytest.fixture(autouse=True)
+def no_real_claude_code(tmp_path_factory, monkeypatch):
+    """Refuse to start any Claude Code program that is not a stand-in made by the tests, and fail the test that tried.
+
+    The real program, where one is installed and signed in, answers on its owner's Claude plan: a test that found it along the search path would spend that plan's allowance and pass or fail by who is signed in. A stand-in lives under pytest's own temporary folder, so that is what is allowed.
+    """
+    from ficary import claude_code
+
+    allowed = tmp_path_factory.getbasetemp().resolve()
+    real_run = claude_code._run
+    tried: list[str] = []
+
+    def run(command, **options):
+        program = Path(command[0]).resolve()
+        if allowed not in program.parents:
+            tried.append(str(program))
+            raise claude_code.ClaudeCodeUnavailable(f"tests may not start {program} (tests/conftest.py, no_real_claude_code)")
+        return real_run(command, **options)
+
+    monkeypatch.setattr(claude_code, "_run", run)
+    yield tried
+    if tried:
+        pytest.fail(
+            "This test tried to start " + ", ".join(sorted(set(tried)))
+            + ". Give it tests/claude_code_stand_in.py to run.",
+            pytrace=False,
+        )
+
+
 @pytest.fixture(scope="session")
 def wx_app():
     """A single ``wx.App`` shared by every GUI test in the session.

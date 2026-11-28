@@ -489,7 +489,8 @@ smartest — pick with `--attribution` or in the GUI's audio toolbar:
   published evaluations, well-prompted AI models beat BookNLP's best
   model at this. Set the provider, model, and key under "AI settings..."
   in the audio toolbar (or `--llm-provider`, `--llm-model`,
-  `--llm-api-key`, `--llm-endpoint`).
+  `--llm-api-key`, `--llm-endpoint`). With a Claude plan and no API
+  key, see "AI on a Claude plan" below.
 
 With AI speaker detection on, Ficary goes further than naming speakers.
 It reads the story and builds, per character: an emotion cue for each
@@ -509,6 +510,37 @@ format. Add `--llm-strip-notes` to also catch the disguised ones —
 outros, beta thanks, review shout-outs — using the same AI settings
 as above, one request per chapter, cached per story. In the Add Story
 window this is "Use AI to catch missed A/N".
+
+### AI on a Claude plan
+
+If you have a Claude plan (Pro, Max, Ultra, Team or Enterprise), the AI
+features can run on it instead of on an API key. Choose **Claude Code**
+as the provider in "AI settings..." (or `--llm-provider claude-code`).
+Ficary then runs the Claude Code program installed on your computer
+for each request, signed in as you are, and never sees the sign-in
+itself.
+
+Install Claude Code and sign in first: see
+<https://code.claude.com/docs/en/setup>, then run `claude` once in a
+terminal. "Test connection" in AI settings then checks it end to end
+by asking the model one short question. Model names are Claude Code's
+own: `sonnet`, `haiku`, `opus`. Ficary starts with `sonnet`; `haiku`
+answers sooner and uses less of the plan. Requests count against the
+plan's usage limits, not against any API credit.
+
+Requests are made on the plan or not at all. An API key or another
+address in the environment is not passed on to Claude Code, which
+would otherwise use it in place of the plan. Before the first chapter
+goes to it, Ficary asks it one short question with no story in it;
+Claude Code's answer says how the request was signed in, and if that
+was with a key or through another service, no story is sent. Every
+answer after that is checked the same way. On Windows only
+`claude.exe` itself is run: with an npm install, the program npm
+keeps beside its batch file is used.
+
+This is for the desktop app and the command line. The web version does
+not offer it: a plan sign-in is for its owner's own use, and the web
+page can be used by other people.
 
 ## Watching for new chapters
 

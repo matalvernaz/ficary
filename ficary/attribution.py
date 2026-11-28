@@ -67,6 +67,13 @@ class LLMUnavailable(RuntimeError):
     long input) and only trip the breaker after several consecutive
     ones."""
 
+    def explain(self) -> str:
+        """The failure as a phrase that reads naturally after
+        "chapter 4:" in a status line. Kinds of this failure that are
+        not about an address (a program that is not installed) say
+        their own."""
+        return f"endpoint unreachable ({self})"
+
 
 class LLMTimeout(LLMUnavailable):
     """The LLM endpoint accepted the connection but didn't reply
@@ -79,6 +86,9 @@ class LLMTimeout(LLMUnavailable):
     first and apply a consecutive-failure threshold — a single slow
     chapter on a 14B local model isn't grounds for disabling the LLM
     pass for the rest of the export."""
+
+    def explain(self) -> str:
+        return f"timeout ({self})"
 
 
 # HTTP statuses that mean the same thing for every later request in a
@@ -121,6 +131,7 @@ _LLM_PROVIDER_DISPLAY_NAMES = {
     "anthropic": "Anthropic",
     "openai": "OpenAI",
     "ollama": "Ollama",
+    "claude-code": "Claude Code",
 }
 _LLM_PROVIDER_DISPLAY_FALLBACK = "The AI server"
 
@@ -2044,15 +2055,29 @@ def _looks_quoted(text: str) -> bool:
     return False
 
 
+# Every AI provider, in the order the settings window lists them. The
+# settings window and the command line offer exactly these (a test
+# holds them to it): a provider one of them knew and this module did
+# not had its requests sent to an OpenAI-style address.
+#
+# "claude-code" is not a web service. It runs the Claude Code program
+# installed on the computer, signed in with a Claude plan, and its
+# "endpoint" is where that program is (see ``claude_code.py``).
+LLM_PROVIDERS = ("ollama", "openai", "anthropic", "claude-code", "openai-compatible")
+
+
 def _llm_provider_supported(provider: str) -> bool:
-    return provider in {"ollama", "openai", "anthropic", "openai-compatible"}
+    return provider in LLM_PROVIDERS
 
 
 # Cloud providers (frontier models, not edge-deployed local) — used
 # everywhere we want to upsize batches/chunks because the per-call
 # overhead and context-window assumptions are very different from a
-# CPU-bound 7–14B local model.
-_LLM_CLOUD_PROVIDERS = frozenset({"openai", "anthropic", "openai-compatible"})
+# CPU-bound 7–14B local model. Claude Code is one: the program is on
+# this computer, the model it asks is not.
+_LLM_CLOUD_PROVIDERS = frozenset(
+    {"openai", "anthropic", "claude-code", "openai-compatible"}
+)
 
 
 def _is_cloud_provider(provider: str) -> bool:
@@ -2077,6 +2102,11 @@ def _llm_default_endpoint(provider: str) -> str:
         return "https://api.openai.com/v1"
     if provider == "anthropic":
         return "https://api.anthropic.com/v1"
+    if provider == "claude-code":
+        # The program's plain name: ``claude_code.find_program`` then
+        # looks for it. Not blank, because callers read a blank
+        # endpoint as "nothing configured" and stop.
+        return "claude"
     return ""
 
 
@@ -2176,6 +2206,16 @@ def _llm_call(
       support over the ``/messages`` endpoint at the time of writing);
       the parser fallbacks handle the well-behaved JSON responses
       Claude already produces.
+    * **Claude Code** ignores it for the same reason, and ignores
+      ``api_key``, ``options`` and ``cache_system`` altogether: the
+      request is made by the person's own Claude Code program on the
+      plan it is signed in to (``claude_code.ask``), and a key must
+      never reach it. ``endpoint`` is where that program is. The
+      program has no option for the temperature, so ``options``
+      cannot pin it to 0 as it does elsewhere: two runs of the same
+      chapter can differ by a paragraph (seen on one chapter: five of
+      six note lines one time, six the next). A book stays the same
+      across exports because each chapter's answer is cached.
 
     ``cache_system`` opts the call into Anthropic prompt caching by
     sending ``system`` as a content list with a ``cache_control:
@@ -2197,6 +2237,15 @@ def _llm_call(
     import json as _json
     import urllib.error
     import urllib.request
+
+    if provider == "claude-code":
+        from . import claude_code
+
+        return claude_code.ask(
+            program=endpoint, model=model,
+            system_prompt=system_prompt, user_prompt=user_prompt,
+            timeout_s=_llm_request_timeout_s(request_timeout_s),
+        )
 
     headers = {"Content-Type": "application/json"}
 
@@ -2528,6 +2577,7 @@ def probe_llm_endpoint(
     endpoint: str | None,
     api_key: str | None = None,
     timeout: float = _LLM_PROBE_TIMEOUT_S,
+    model: str | None = None,
 ) -> LLMProbeResult:
     """Ping the configured LLM endpoint's inventory surface and report
     whether it's actually reachable, authenticated, and serving models.
@@ -2537,10 +2587,21 @@ def probe_llm_endpoint(
     instead of after kicking off a 100-chapter download. Pure helper —
     no GUI deps, no logging side effects, safe to call from a worker
     thread.
+
+    Claude Code has no inventory to ask for, so its test finds the
+    program and asks ``model`` one short question, with the command a
+    chapter gets (``claude_code.probe``). ``api_key`` and ``timeout``
+    play no part in it.
     """
     import json as _json
     import urllib.error
     import urllib.request
+
+    if provider == "claude-code":
+        from . import claude_code
+
+        logger.info("AI connection test: provider=%s", provider)
+        return claude_code.probe(program=endpoint, model=model)
 
     base = _llm_normalize_endpoint(provider, endpoint)
     logger.info("AI connection test: provider=%s endpoint=%s", provider, base or "(blank)")
@@ -3876,11 +3937,10 @@ NOTE_CHECK_MAX_CONSECUTIVE_FAILURES = 3
 def _note_check_failure_reason(exc: Exception) -> str:
     """Why the LLM could not check a chapter, as a phrase that reads
     naturally after "chapter 4:" and inside a longer sentence."""
-    if isinstance(exc, LLMTimeout):
-        return f"timeout ({exc})"
-    if isinstance(exc, LLMUnavailable):
-        return f"endpoint unreachable ({exc})"
-    if isinstance(exc, LLMRejected):
+    if isinstance(exc, (LLMUnavailable, LLMRejected)):
+        # Each says itself: "timeout (...)", "endpoint unreachable
+        # (...)", a provider's refusal in its own words, or that the
+        # Claude Code program was not found.
         return exc.explain()
     if isinstance(exc, LLMIncompleteAnswer):
         return f"the AI's reply could not be used ({exc.reason})"

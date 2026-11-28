@@ -335,6 +335,18 @@ def last_button_focused(window):
     snap("optional-features-last-button-focused", window)
 
 
+def ai_settings_claude_code(window):
+    """The AI settings window with Claude Code chosen: the key box is switched off and the address box is the program's location."""
+    choice = window.provider_ctrl
+    choice.SetSelection(window._PROVIDER_KEYS.index("claude-code"))
+    event = wx.CommandEvent(wx.EVT_CHOICE.typeId, choice.GetId())
+    event.SetEventObject(choice)
+    choice.GetEventHandler().ProcessEvent(event)
+    settle()
+    (controls / "ai-settings-claude-code.txt").write_text("\n".join(tab_order(window)) + "\n", encoding="utf-8")
+    snap("ai-settings-claude-code", window)
+
+
 def optional_features_states(window):
     scrolled_to_the_end(window)
     last_button_focused(window)
@@ -388,7 +400,7 @@ walk("series-parts", lambda: gui_dialogs.SeriesPartsDialog(main_window, "A Made-
 ]))
 walk("optional-features", lambda: gui_dialogs.OptionalFeaturesDialog(main_window), then=optional_features_states)
 walk("tts-providers", lambda: gui_dialogs.TtsProvidersDialog(main_window, main_window.prefs))
-walk("ai-settings", lambda: gui_dialogs.LlmSettingsDialog(main_window, main_window.prefs))
+walk("ai-settings", lambda: gui_dialogs.LlmSettingsDialog(main_window, main_window.prefs), then=ai_settings_claude_code)
 walk("add-from-url-list", lambda: gui_dialogs.AddFromUrlListDialog(main_window))
 voice_map = SimpleNamespace(mapping={"Harry": "en-GB-RyanNeural", "Hermione": "en-GB-SoniaNeural"}, save=lambda: None)
 walk("voice-preview", lambda: gui_dialogs.VoicePreviewDialog(main_window, [

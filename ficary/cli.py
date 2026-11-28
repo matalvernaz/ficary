@@ -137,6 +137,8 @@ def _llm_config_from_args(args: argparse.Namespace) -> dict | None:
             api_key = os.environ.get(env_var, "")
     if not api_key:
         api_key = cli_prefs.get(_prefs_mod.KEY_LLM_API_KEY) or ""
+    if provider == "claude-code":
+        model, endpoint, api_key = _claude_code_settings(args, cli_prefs, _prefs_mod)
 
     config = {
         "provider": provider,
@@ -148,6 +150,34 @@ def _llm_config_from_args(args: argparse.Namespace) -> dict | None:
     if timeout_s > 0:
         config["request_timeout_s"] = timeout_s
     return config
+
+
+def _claude_code_settings(args, cli_prefs, _prefs_mod) -> tuple[str, str, str]:
+    """Model, program location and key for the Claude Code provider.
+
+    The saved model, endpoint and key belong to whichever provider the
+    AI settings window last saved. Read for Claude Code regardless,
+    they handed it "llama3.1:8b" as its model and an Ollama address as
+    its program. So they are used only when Claude Code is that
+    provider; otherwise what the window keeps for Claude Code is used,
+    and with no model anywhere, the one a new setup starts with. There
+    is never a key: Claude Code uses the plan it is signed in to.
+    """
+    from .claude_code import DEFAULT_MODEL
+
+    saved_provider = (cli_prefs.get(_prefs_mod.KEY_LLM_PROVIDER) or "").strip()
+    if saved_provider == "claude-code":
+        saved_model = cli_prefs.get(_prefs_mod.KEY_LLM_MODEL) or ""
+        saved_endpoint = cli_prefs.get(_prefs_mod.KEY_LLM_ENDPOINT) or ""
+    else:
+        model_key, _key_key, endpoint_key = _prefs_mod.llm_provider_pref_keys(
+            "claude-code"
+        )
+        saved_model = cli_prefs.get(model_key) or ""
+        saved_endpoint = cli_prefs.get(endpoint_key) or ""
+    model = getattr(args, "llm_model", None) or saved_model or DEFAULT_MODEL
+    endpoint = getattr(args, "llm_endpoint", None) or saved_endpoint
+    return model, endpoint, ""
 
 
 def _resolve_llm_timeout(args, cli_prefs, _prefs_mod) -> int:
@@ -246,6 +276,8 @@ def _llm_strip_notes_config(args: argparse.Namespace) -> dict | None:
             api_key = os.environ.get(env_var, "")
     if not api_key:
         api_key = cli_prefs.get(_prefs_mod.KEY_LLM_API_KEY) or ""
+    if provider == "claude-code":
+        model, endpoint, api_key = _claude_code_settings(args, cli_prefs, _prefs_mod)
 
     config = {
         "provider": provider,
@@ -4859,13 +4891,18 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--llm-provider",
-        choices=["ollama", "openai", "anthropic", "openai-compatible"],
+        # The same list as attribution.LLM_PROVIDERS and the AI settings
+        # window (a test holds the three together). Written out here so
+        # that building the parser does not load the attribution module.
+        choices=["ollama", "openai", "anthropic", "claude-code", "openai-compatible"],
         default=None,
         help=(
             "AI provider when --attribution=llm. 'ollama' is local and "
             "needs no API key; 'openai' / 'anthropic' / 'openai-compatible' "
-            "use the provider's HTTPS API. Defaults to the GUI pref or "
-            "'ollama' if unset."
+            "use the provider's HTTPS API. 'claude-code' runs the Claude "
+            "Code program installed on this computer, on the Claude plan "
+            "it is signed in to, and needs no API key. Defaults to the "
+            "GUI pref or 'ollama' if unset."
         ),
     )
     parser.add_argument(
@@ -4874,8 +4911,10 @@ def _build_parser() -> argparse.ArgumentParser:
         metavar="MODEL",
         help=(
             "AI model identifier — e.g. 'llama3.1:8b' for Ollama, "
-            "'gpt-4o-mini' for OpenAI, 'claude-haiku-4-5' for Anthropic. "
-            "Defaults to the GUI pref."
+            "'gpt-4o-mini' for OpenAI, 'claude-haiku-4-5' for Anthropic, "
+            "'sonnet' or 'haiku' for Claude Code. Defaults to the GUI "
+            "pref; for Claude Code, to what AI settings keeps for it, "
+            "or 'sonnet'."
         ),
     )
     parser.add_argument(
@@ -4886,7 +4925,7 @@ def _build_parser() -> argparse.ArgumentParser:
             "API key for the chosen AI provider. Falls back to env "
             "vars OPENAI_API_KEY / ANTHROPIC_API_KEY / OPENROUTER_API_KEY "
             "when this flag is omitted, then to the GUI pref. Ignored "
-            "for Ollama."
+            "for Ollama and for Claude Code."
         ),
     )
     parser.add_argument(
@@ -4896,7 +4935,9 @@ def _build_parser() -> argparse.ArgumentParser:
         help=(
             "Override the AI provider's base URL. Useful for "
             "self-hosted Ollama on another machine, or any "
-            "OpenAI-compatible endpoint (Groq, OpenRouter, vLLM, ...)."
+            "OpenAI-compatible endpoint (Groq, OpenRouter, vLLM, ...). "
+            "For Claude Code it is the path to the claude program, "
+            "when it is not found by itself."
         ),
     )
     parser.add_argument(

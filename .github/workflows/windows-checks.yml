@@ -1,0 +1,49 @@
+name: Windows checks
+
+# Runs, on Windows, the tests of the part of Ficary that starts another
+# program: the Claude Code provider. Starting a program is where
+# Windows differs most. Text is not UTF-8 unless asked for; writing to
+# a program that is not reading has no time limit of its own; stopping
+# a program does not stop what it started; and a folder cannot be
+# removed while a program is still ending in it. The main test run is
+# on Linux only, so none of that is seen there.
+# Run by hand once this file is on master:
+#   gh workflow run windows-checks.yml --ref reader
+# or from any commit, by pushing it to the windows-checks branch:
+#   git push -f origin HEAD:refs/heads/windows-checks
+on:
+  workflow_dispatch:
+  push:
+    branches: [windows-checks]
+
+permissions:
+  contents: read
+
+jobs:
+  claude-code:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          # The version the Windows build uses.
+          python-version: "3.12"
+
+      - name: Install dependencies
+        # distlib makes the stand-in's claude.exe (the launcher pip
+        # puts in front of every command it installs). pip carries a
+        # copy of its own, which the tests fall back to; naming it here
+        # does not depend on that.
+        run: pip install ".[all,dev]" distlib
+
+      - name: Claude Code provider tests
+        # Claude Code is played by a real claude.exe that passes
+        # everything on to a stand-in. Ficary runs nothing but an .exe
+        # on Windows, so nothing less would test it.
+        env:
+          # The settings-window tests skip themselves when no display
+          # is named, which is how they know a Linux run has none.
+          # Windows always has one.
+          DISPLAY: windows
+        run: python -m pytest tests/test_claude_code_provider.py -v
